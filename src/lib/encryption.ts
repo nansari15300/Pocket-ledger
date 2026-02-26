@@ -81,8 +81,9 @@ export async function encryptData(secretData: string, password: string): Promise
       const encryptedChunks: Uint8Array[] = [];
       for (let offset = 0, idx = 0; offset < plainBytes.length; offset += CHUNK_SIZE, idx++) {
         const chunk = plainBytes.subarray(offset, offset + CHUNK_SIZE);
+        const chunkIv = new Uint8Array(ivForChunk(iv, idx));
         const enc = await window.crypto.subtle.encrypt(
-          { name: "AES-GCM", iv: ivForChunk(iv, idx) },
+          { name: "AES-GCM", iv: chunkIv },
           aesKey,
           chunk
         );
@@ -158,8 +159,9 @@ export async function decryptData(encryptedData: string, password: string): Prom
         const len = lengths[i];
         const encChunk = encryptedDataBuff.slice(ptr, ptr + len);
         ptr += len;
+        const chunkIv = new Uint8Array(ivForChunk(baseIv, i));
         const decChunk = await window.crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: ivForChunk(baseIv, i) },
+          { name: "AES-GCM", iv: chunkIv },
           aesKey,
           encChunk
         );
