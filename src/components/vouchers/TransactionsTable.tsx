@@ -518,7 +518,7 @@ export function TransactionsTable({
               className={cn(
                 "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
                 isPendingApproval
-                  ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50"
+                  ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
                   : "bg-card hover:bg-muted/30"
               )}
               onClick={() => onRowClick?.(t)}

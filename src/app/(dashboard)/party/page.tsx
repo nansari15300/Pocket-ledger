@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Search, User, AlertCircle } from "lucide-react";
+import { Search, User, AlertCircle, ArrowLeft, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -47,6 +47,8 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
+import { useBalanceMode } from "@/hooks/useBalanceMode";
+import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -90,7 +92,8 @@ export default function PartyPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
-  
+  const { balanceMode, setBalanceMode } = useBalanceMode();
+
   const [activeView, setActiveView] = useState("parties");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Party | Group>(`party_view_${activeView}`);
 
@@ -109,6 +112,18 @@ export default function PartyPage() {
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
+  const [overdueMobileSearchTerm, setOverdueMobileSearchTerm] = useState("");
+  const [overdueFilters, setOverdueFilters] = useState<Record<string, string>>({});
+  const [overdueActiveFilter, setOverdueActiveFilter] = useState<string | null>(null);
+  const [overdueFooterDialog, setOverdueFooterDialog] = useState<null | "payment_in" | "payment_out" | "sale">(null);
+  const [overdueShowNarration, setOverdueShowNarration] = useState(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return sessionStorage.getItem("showNarration") !== "false";
+    } catch {
+      return true;
+    }
+  });
 
   const selectedParty = activeView === 'parties' ? selected as Party : null;
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
@@ -127,6 +142,73 @@ export default function PartyPage() {
       companyId: companyId || "",
     };
   }, [hasOverdueTransactions, overdueTransactions, companyId]);
+
+  // Overdue mobile: map overdue rows to transaction-like for TransactionsTable (same UI as Party Details)
+  const overdueAsTransactions = useMemo(() => {
+    return overdueTransactions.map((row) => {
+      const v = vouchers.find((v) => v.id === row.id);
+      const out = Number(row.outstanding) ?? 0;
+      const signedOut =
+        row.type === "purchase" || row.type === "payment_out" || row.type === "direct_expense" ? -out : out;
+      return {
+        id: row.id,
+        type: row.type,
+        date: row.date,
+        voucherNumber: row.voucherNumber,
+        partyId: row.partyId,
+        debit: row.debit,
+        credit: row.credit,
+        outstanding: out,
+        runningBalance: signedOut,
+        balance: signedOut,
+        paymentStatus: row.paymentStatus,
+        userId: row.userId,
+        userName: row.userName,
+        narration: row.narration,
+        dueDate: row.dueDate,
+        isApproved: v?.isApproved,
+        partyName: row.partyName,
+      };
+    });
+  }, [overdueTransactions, vouchers]);
+
+  const overduePartyNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    overdueTransactions.forEach((r) => {
+      if (r.partyId) m[r.partyId] = r.partyName || m[r.partyId] || "";
+    });
+    return m;
+  }, [overdueTransactions]);
+
+  const mobileFilteredOverdue = useMemo(() => {
+    if (!overdueMobileSearchTerm.trim()) return overdueAsTransactions;
+    const q = overdueMobileSearchTerm.toLowerCase().trim();
+    return overdueAsTransactions.filter((t: any) => {
+      const amt = t.debit > 0 ? t.debit : t.credit;
+      const userStr = (mergedUserNames && t.userId && mergedUserNames[t.userId]) || t.userName || "";
+      return (
+        (t.voucherNumber || "").toLowerCase().includes(q) ||
+        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
+        (t.narration || "").toLowerCase().includes(q) ||
+        (t.partyName || "").toLowerCase().includes(q) ||
+        String(amt || 0).toLowerCase().includes(q) ||
+        userStr.toLowerCase().includes(q)
+      );
+    });
+  }, [overdueAsTransactions, overdueMobileSearchTerm, mergedUserNames]);
+
+  const overduePeriodDr = useMemo(
+    () => mobileFilteredOverdue.reduce((s, t) => s + (t.debit ?? 0), 0),
+    [mobileFilteredOverdue]
+  );
+  const overduePeriodCr = useMemo(
+    () => mobileFilteredOverdue.reduce((s, t) => s + (t.credit ?? 0), 0),
+    [mobileFilteredOverdue]
+  );
+  const overdueClosingBalance = useMemo(() => {
+    const totalOut = mobileFilteredOverdue.reduce((s, t) => s + (Number(t.outstanding) ?? 0), 0);
+    return -totalOut;
+  }, [mobileFilteredOverdue]);
 
   const partiesForList = processedPartiesForSelection;
   
@@ -353,7 +435,7 @@ export default function PartyPage() {
                     variant="outline"
                     size="sm"
                     className="h-7 px-2 text-xs font-medium border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
-                    onClick={() => setSelected(overdueVirtualParty)}
+                    onClick={() => handleSelect(overdueVirtualParty)}
                   >
                     <AlertCircle className="h-3.5 w-3 mr-1 shrink-0" />
                     Overdue Vouchers ({overdueTransactions.length})
@@ -410,6 +492,167 @@ export default function PartyPage() {
       {!selected && <div className="p-6 text-center text-muted-foreground">Select an item to see details</div>}
     </>
   );
+
+  // Mobile: full-screen Overdue view – same UI as Party Details (header, To Pay, search, cards, Bill wise bar)
+  if (isMobile && selectedParty?.id === OVERDUE_ACCOUNT_ID) {
+    const handleOverdueRowClick = (t: any) => {
+      const voucher = vouchers.find((v) => v.id === t.id);
+      if (voucher) setOverdueVoucherToEdit(voucher);
+    };
+    const handleOverdueHistory = (t: any) => {
+      const voucher = vouchers.find((v) => v.id === t.id);
+      if (voucher) setHistoryVoucher(voucher);
+    };
+    const handleOverdueAddLink = (t: any) => {
+      const voucher = vouchers.find((v) => v.id === t.id);
+      if (!voucher) return;
+      const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(voucher?.type);
+      if (isPaymentType) setLinkPaymentVoucher(voucher);
+      else setLinkAdvancesVoucher(voucher);
+    };
+    return (
+      <>
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+          {/* Row 1: Back | Title | Showing x of y */}
+          <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
+            <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={() => { setSelected(null); router.push("/party"); }}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <h1 className="text-base font-bold truncate flex-1 min-w-0">Overdue Vouchers</h1>
+            <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
+              Showing {mobileFilteredOverdue.length} of {overdueAsTransactions.length} voucher(s)
+            </span>
+          </div>
+          {/* Row 2: Overdue label */}
+          <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
+            <span className="text-xs font-medium text-muted-foreground">Overdue</span>
+          </div>
+          {/* To Pay total */}
+          <div className="px-3 py-3 border-b flex-shrink-0">
+            <p className="text-2xl font-bold text-center text-red-600">
+              To Pay {formatCurrency(Math.abs(overdueClosingBalance), { noSuffix: true })}
+            </p>
+          </div>
+          {/* Search */}
+          <div className="p-2 border-b flex-shrink-0">
+            <div className="flex items-stretch gap-2">
+              <div className="flex-1 min-w-0 h-9 relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
+                <Input
+                  placeholder="Search transactions"
+                  className="pl-8 h-9 text-sm w-full min-w-0"
+                  value={overdueMobileSearchTerm}
+                  onChange={(e) => setOverdueMobileSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          {/* Transaction list – mobile cards (Statement / Bill wise from context) */}
+          <div className="flex-1 min-h-0 overflow-auto">
+            <TransactionsTable
+              transactions={mobileFilteredOverdue}
+              context="party"
+              contextId={OVERDUE_ACCOUNT_ID}
+              openingBalance={0}
+              showNarration={overdueShowNarration}
+              userNames={mergedUserNames}
+              accountNames={overduePartyNames}
+              onRowClick={handleOverdueRowClick}
+              onHistoryVoucher={handleOverdueHistory}
+              onAddLink={handleOverdueAddLink}
+              filters={overdueFilters}
+              setFilters={setOverdueFilters}
+              activeFilter={overdueActiveFilter}
+              setActiveFilter={setOverdueActiveFilter}
+              periodDr={overduePeriodDr}
+              periodCr={overduePeriodCr}
+              closingBalance={overdueClosingBalance}
+              scrollOnlyTransactions
+              visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
+            />
+          </div>
+        </div>
+        {/* Fixed bottom: Bill wise / Statement, Receive, Pay, New Sale – same as Party Details */}
+        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+          <Button
+            className="flex-1 h-6 rounded-md text-xs font-medium shrink-0 min-w-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
+            onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+          >
+            {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
+          </Button>
+          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("payment_in")}>
+            Receive
+          </Button>
+          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("payment_out")}>
+            Pay
+          </Button>
+          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("sale")}>
+            New Sale
+          </Button>
+        </div>
+        <AddVoucherDialog
+          isOpen={!!overdueVoucherToEdit || !!overdueFooterDialog}
+          onOpenChange={(open: boolean) => {
+            if (!open) {
+              setOverdueVoucherToEdit(null);
+              setOverdueFooterDialog(null);
+            }
+          }}
+          voucher={overdueVoucherToEdit}
+          defaultTab={overdueFooterDialog || undefined}
+          defaultVoucherData={overdueVoucherToEdit ? undefined : {}}
+          onVoucherAction={() => { setOverdueVoucherToEdit(null); setOverdueFooterDialog(null); }}
+        />
+        <HistoryDialog
+          voucher={historyVoucher}
+          isOpen={!!historyVoucher}
+          onOpenChange={(open) => !open && setHistoryVoucher(null)}
+          onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
+        />
+        {linkAdvancesVoucher && (
+          <LinkAdvancesToVoucherDialog
+            isOpen={!!linkAdvancesVoucher}
+            onOpenChange={(open) => !open && setLinkAdvancesVoucher(null)}
+            mode={linkAdvancesVoucher.type === "purchase" || linkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
+            targetVoucherId={linkAdvancesVoucher.id}
+            targetPartyId={linkAdvancesVoucher.partyId ?? ""}
+            targetPartyName={processedParties?.find((p) => p.id === linkAdvancesVoucher.partyId)?.name ?? "Party"}
+            partyOpeningBalance={processedParties?.find((p) => p.id === linkAdvancesVoucher.partyId)?.openingBalance ?? 0}
+            balanceKind="all"
+            onDone={() => setLinkAdvancesVoucher(null)}
+          />
+        )}
+        {linkPaymentVoucher && (
+          <LinkPaymentToTxnsDialog
+            isOpen={!!linkPaymentVoucher}
+            onOpenChange={(open) => !open && setLinkPaymentVoucher(null)}
+            variant={linkPaymentVoucher.type === "payment_out" || linkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
+            partyId={linkPaymentVoucher.partyId ?? null}
+            partyName={processedParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.name ?? "Party"}
+            receivedAmount={Number(linkPaymentVoucher.amount ?? linkPaymentVoucher.total ?? 0)}
+            existingAllocations={Array.isArray(linkPaymentVoucher.allocations) ? linkPaymentVoucher.allocations : []}
+            paymentInId={["payment_in", "direct_income"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.id : undefined}
+            paymentOutId={["payment_out", "direct_expense"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.id : undefined}
+            paymentInVoucherNumber={["payment_in", "direct_income"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.voucherNumber : undefined}
+            paymentInDate={["payment_in", "direct_income"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.date : undefined}
+            paymentOutVoucherNumber={["payment_out", "direct_expense"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.voucherNumber : undefined}
+            paymentOutDate={["payment_out", "direct_expense"].includes(linkPaymentVoucher.type) ? linkPaymentVoucher.date : undefined}
+            partyOpeningBalance={processedParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.openingBalance ?? 0}
+            onDone={async (allocations, _amount) => {
+              if (!companyId || !linkPaymentVoucher?.id) return;
+              try {
+                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, linkPaymentVoucher.id), { allocations });
+                toast.success("Allocations updated.");
+                setLinkPaymentVoucher(null);
+              } catch (e: any) {
+                toast.error(e?.message || "Failed to update allocations.");
+              }
+            }}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
     <>

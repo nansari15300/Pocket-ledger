@@ -673,7 +673,7 @@ export const TransactionRow = React.memo(
           "transaction-main-row min-h-[28px] cursor-pointer",
           isNote && "bg-amber-50 hover:bg-amber-100",
           isPaid && "opacity-75 bg-muted/20",
-          isPendingApproval && "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50",
+          isPendingApproval && "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           isSelected &&
             "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:rounded-l-full [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-r-full [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
           isSelected && !showNarrationRow && "[&>td]:border-b-0",
