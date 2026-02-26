@@ -154,13 +154,15 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
   const pdfDoc = pdfMake.createPdf(docDefinition);
 
   try {
-    // pdfmake browser build: getBlob() is async and returns Promise<Blob>
-    const blob = await Promise.race([
-      (pdfDoc as unknown as { getBlob(): Promise<Blob> }).getBlob(),
-      new Promise<Blob>((_, reject) =>
+    // Use getBuffer() and build Blob ourselves to avoid "getBlob needs a callback" in some environments (callback-based builds or hooks)
+    const pdfDocApi = pdfDoc as unknown as { getBuffer(): Promise<Uint8Array | Buffer>; getBlob?(cb?: (b: Blob) => void): Promise<Blob> | void };
+    const buffer = await Promise.race([
+      pdfDocApi.getBuffer(),
+      new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Print timed out. Please try again.")), 60000)
       ),
     ]);
+    const blob = new Blob([buffer], { type: "application/pdf" });
     const blobUrl = URL.createObjectURL(blob);
 
     if (typeof iframeTargetIdOrNewTab === "string") {
@@ -222,8 +224,9 @@ export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
 
   const docDefinition = buildDocDefinition(processedPayload);
   const pdfDoc = pdfMake.createPdf(docDefinition);
-  const blob = await (pdfDoc as unknown as { getBlob(): Promise<Blob> }).getBlob();
-  return blob;
+  const pdfDocApi = pdfDoc as unknown as { getBuffer(): Promise<Uint8Array | Buffer> };
+  const buffer = await pdfDocApi.getBuffer();
+  return new Blob([buffer], { type: "application/pdf" });
 }
 
 // ------------ HELPERS ------------

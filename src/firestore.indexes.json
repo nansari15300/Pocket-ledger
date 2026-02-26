@@ -52,13 +52,6 @@
       ]
     },
     {
-      "collectionGroup": "payments",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "parties",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
@@ -136,13 +129,6 @@
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
         { "fieldPath": "name", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "unassigned_documents",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "uploadedAt", "order": "DESCENDING" }
       ]
     }
   ],

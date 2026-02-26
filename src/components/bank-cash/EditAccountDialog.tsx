@@ -527,7 +527,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         <CardContent className="p-0">
                            <SpecialAccountAccessControl
                                 users={usersForAccessControl}
-                                useFor={form.watch('useFor') || { in: [], out: [] }}
+                                useFor={{
+                                  in: form.watch('useFor')?.in ?? [],
+                                  out: form.watch('useFor')?.out ?? [],
+                                }}
                                 onUseForChange={(newUseFor) => form.setValue('useFor', newUseFor)}
                             />
                         </CardContent>
