@@ -123,7 +123,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const [daybookDate, setDaybookDate] = useState<Date | undefined>(undefined);
     const [daybookRowsPerPage, setDaybookRowsPerPage] = useState('all');
     const [daybookVoucherTypes, setDaybookVoucherTypes] = useState<string[]>(['all']);
-    const [showDaybookNarration, setShowDaybookNarration] = useState(false);
+    const [showDaybookNarration, setShowDaybookNarration] = useState(true);
     const [items, setItems] = useState<Item[]>([]);
     const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
@@ -245,7 +245,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
 
     useEffect(() => {
         const savedState = sessionStorage.getItem("showNarration");
-        setShowDaybookNarration(savedState === "true");
+        setShowDaybookNarration(savedState !== "false");
     }, []);
 
     const handleShowNarrationChange = (checked: boolean) => {

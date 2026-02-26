@@ -411,8 +411,8 @@ function BalanceModeSwitcher() {
   const { isMobile, hidePcIcon } = useMobileView();
   const { showBillWiseToggle: showBillWiseOnReportParty } = useReportPartyView();
 
-  // Pages that only use statement view: hide toggle and force statement mode (staff page shows toggle)
-  const statementOnlyPaths = ["/items", "/incomes", "/tax", "/dashboard", "/bank-cash"];
+  // Pages that only use statement view: hide toggle and force statement mode (parties, staff, bank show Statement/Bill wise in header)
+  const statementOnlyPaths = ["/items", "/incomes", "/tax", "/dashboard"];
   const isStatementOnlyPage = statementOnlyPaths.some((p) => pathname?.startsWith(p));
 
   // On reports: show toggle only when Group Statement or Accounts Statement has a party selected

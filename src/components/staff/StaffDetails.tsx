@@ -153,7 +153,7 @@ export function StaffDetails({
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -222,7 +222,7 @@ export function StaffDetails({
 
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const anyMobilePopupOpen =

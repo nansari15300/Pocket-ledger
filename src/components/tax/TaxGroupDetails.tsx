@@ -101,7 +101,7 @@ export function TaxGroupDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { balanceMode } = useBalanceMode();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -311,7 +311,7 @@ export function TaxGroupDetails({
 
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const handleShowNarrationChange = (checked: boolean) => {

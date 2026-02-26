@@ -107,7 +107,7 @@ export function ExpenseGroupDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -298,7 +298,7 @@ export function ExpenseGroupDetails({
 
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const handleShowNarrationChange = (checked: boolean) => {

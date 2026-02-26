@@ -139,7 +139,7 @@ export function ExpenseAccountDetails({
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { balanceMode } = useBalanceMode();
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -242,7 +242,7 @@ export function ExpenseAccountDetails({
 
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const handleShowNarrationChange = (checked: boolean) => {

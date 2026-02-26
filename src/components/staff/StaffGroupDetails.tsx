@@ -93,7 +93,7 @@ export function StaffGroupDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
@@ -179,7 +179,7 @@ export function StaffGroupDetails({
 
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const anyMobilePopupOpen = isMobile && (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen);

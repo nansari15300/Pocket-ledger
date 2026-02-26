@@ -129,11 +129,11 @@ export function OverdueAccountView({
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [showNarration, setShowNarration] = useState(() => {
-    if (typeof window === "undefined") return false;
+    if (typeof window === "undefined") return true;
     try {
-      return sessionStorage.getItem("showNarration") === "true";
+      return sessionStorage.getItem("showNarration") !== "false";
     } catch {
-      return false;
+      return true;
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);

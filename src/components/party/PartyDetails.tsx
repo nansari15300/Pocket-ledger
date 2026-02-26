@@ -227,7 +227,7 @@ export function PartyDetails({
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [showNarration, setShowNarration] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
     try {
@@ -282,7 +282,7 @@ export function PartyDetails({
   
   useEffect(() => {
     const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState === "true");
+    setShowNarration(savedState !== "false");
   }, []);
 
   const anyMobilePopupOpen = isMobile && (

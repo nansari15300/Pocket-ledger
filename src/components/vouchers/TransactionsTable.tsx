@@ -125,7 +125,7 @@ export function TransactionsTable({
   openingBalance = 0,
   openingBalanceOutstanding,
   openingBalanceLinkedVoucherNos,
-  showNarration = false,
+  showNarration = true,
   stockView = "amount",
   item,
   displayUnit,

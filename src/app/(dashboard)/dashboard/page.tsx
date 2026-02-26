@@ -497,7 +497,7 @@ export default function DashboardPage() {
     const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
     const [cashFlowOpen, setCashFlowOpen] = useState(false);
 
-    const [showRecentNarration, setShowRecentNarration] = useState(false);
+    const [showRecentNarration, setShowRecentNarration] = useState(true);
   
   const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
