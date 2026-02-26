@@ -236,7 +236,15 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       }
 
       sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
-      onAccountUpdated({ id: account.id, ...values, fileUrl: fileUrl || '' });
+      onAccountUpdated({
+        id: account.id,
+        ...values,
+        fileUrl: fileUrl || '',
+        useFor: {
+          in: values.useFor?.in || [],
+          out: values.useFor?.out || []
+        } as { in: string[]; out: string[] },
+      });
 
     } catch (error) {
       console.error("Error updating account:", error);
@@ -527,10 +535,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                         <CardContent className="p-0">
                            <SpecialAccountAccessControl
                                 users={usersForAccessControl}
-                                useFor={{
-                                  in: form.watch('useFor')?.in ?? [],
-                                  out: form.watch('useFor')?.out ?? [],
-                                }}
+                                useFor={(form.watch('useFor') as { in: string[]; out: string[] }) || { in: [], out: [] }}
                                 onUseForChange={(newUseFor) => form.setValue('useFor', newUseFor)}
                             />
                         </CardContent>
