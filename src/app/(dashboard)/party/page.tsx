@@ -92,7 +92,7 @@ export default function PartyPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
-  const { balanceMode, setBalanceMode } = useBalanceMode();
+  const { setBalanceMode } = useBalanceMode();
 
   const [activeView, setActiveView] = useState("parties");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Party | Group>(`party_view_${activeView}`);
@@ -333,6 +333,14 @@ export default function PartyPage() {
     setSearchTerm("");
   }, [companyId]);
 
+  // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
+  useEffect(() => {
+    if (isMobile && selectedParty?.id === OVERDUE_ACCOUNT_ID) {
+      setBalanceMode("bill_wise");
+      return () => setBalanceMode("bill_wise");
+    }
+  }, [isMobile, selectedParty?.id, setBalanceMode]);
+
   // Initial mount check
   useEffect(() => {
     if (isInitialMount.current) {
@@ -568,18 +576,12 @@ export default function PartyPage() {
               periodCr={overduePeriodCr}
               closingBalance={overdueClosingBalance}
               scrollOnlyTransactions
-              visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
+              visibleColumns={{ status: true }}
             />
           </div>
         </div>
-        {/* Fixed bottom: Bill wise / Statement, Receive, Pay, New Sale – same as Party Details */}
+        {/* Fixed bottom: Receive, Pay, New Sale (no Bill wise – overdue mobile is always bill-wise) */}
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          <Button
-            className="flex-1 h-6 rounded-md text-xs font-medium shrink-0 min-w-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
-            onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-          >
-            {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-          </Button>
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => setOverdueFooterDialog("payment_in")}>
             Receive
           </Button>

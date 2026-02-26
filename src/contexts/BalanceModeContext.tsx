@@ -23,9 +23,17 @@ type BalanceModeContextType = {
 
 const BalanceModeContext = createContext<BalanceModeContextType | null>(null);
 
+const BILL_WISE_DEFAULT_PATHS = ["/party", "/staff", "/bank-cash"];
+
+function getDefaultModeForPath(pathname: string | null): BalanceMode {
+  if (!pathname) return "statement";
+  const base = pathname.split("/").slice(0, 2).join("/");
+  return BILL_WISE_DEFAULT_PATHS.some((p) => base === p || pathname.startsWith(p + "/")) ? "bill_wise" : "statement";
+}
+
 export function BalanceModeProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const defaultMode: BalanceMode = "statement";
+  const defaultMode = getDefaultModeForPath(pathname);
   const storageKey = pathname ? `${STORAGE_KEY_PREFIX}${pathname}` : STORAGE_KEY_PREFIX + "default";
 
   const [balanceMode, setBalanceModeState] = useState<BalanceMode>(() =>
@@ -34,7 +42,7 @@ export function BalanceModeProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     setBalanceModeState(getStored(storageKey, defaultMode));
-  }, [storageKey]);
+  }, [storageKey, defaultMode]);
 
   const setBalanceMode = useCallback((mode: BalanceMode) => {
     setBalanceModeState(mode);
