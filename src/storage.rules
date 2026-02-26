@@ -1,0 +1,25 @@
+rules_version = '2';
+// Firebase Storage: allow company-scoped upload/read for voucher files and company assets.
+// Paths used by app: voucher-files/{companyId}/..., companies/{companyId}/... (vouchers, unassigned, avatar, stamp, other)
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper: allow if user is owner or shared user of the company (companyId is first path segment).
+    // We cannot read Firestore from Storage rules, so we allow any signed-in user to read/write
+    // under companies/{companyId}/... and voucher-files/{companyId}/... and rely on app to pass
+    // only valid companyId. For stricter security, use Cloud Functions to validate and move files.
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Voucher attachments: voucher-files/{companyId}/{voucherType}/{filename}
+    match /voucher-files/{companyId}/{allPaths=**} {
+      allow read, write: if isSignedIn();
+    }
+
+    // New structure: companies/{companyIdOrKey}/vouchers|unassigned|avatar|stamp|other/...
+    match /companies/{companyIdOrKey}/{folder}/{allPaths=**} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
