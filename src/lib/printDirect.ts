@@ -29,7 +29,34 @@ function getStoredDateFormatBS(): BSFormatKey {
 }
 
 
-pdfMake.vfs = pdfFonts.vfs;
+// pdfmake vs vfs_fonts type mismatch: vfs can be string in types but object at runtime; cast to satisfy TS
+(pdfMake as any).vfs = (pdfFonts as any).pdfMake?.vfs ?? (pdfFonts as any).vfs;
+
+/** Get PDF buffer from pdfmake doc. Always uses callback so hooks that require "getBuffer(cb)" work; also handles Promise return. */
+function getPdfBuffer(pdfDoc: unknown): Promise<Uint8Array | Buffer> {
+  return new Promise((resolve, reject) => {
+    const cb = (dataOrErr: Uint8Array | Buffer | Error, buf?: Uint8Array | Buffer) => {
+      if (dataOrErr instanceof Error) reject(dataOrErr);
+      else if (buf !== undefined) resolve(buf);
+      else resolve(dataOrErr as Uint8Array | Buffer);
+    };
+    try {
+      const result = (pdfDoc as { getBuffer(cb: (data: Uint8Array | Buffer) => void): Promise<Uint8Array | Buffer> | void }).getBuffer(cb);
+      if (result != null && typeof (result as Promise<unknown>).then === "function") {
+        (result as Promise<Uint8Array | Buffer>).then(resolve).catch(reject);
+      }
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function getPdfBufferWithTimeout(pdfDoc: unknown, ms: number): Promise<Uint8Array | Buffer> {
+  return Promise.race([
+    getPdfBuffer(pdfDoc),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Print timed out. Please try again.")), ms)),
+  ]);
+}
 
 export type Context =
   | "party" | "account" | "staff" | "tax" | "item"
@@ -154,14 +181,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
   const pdfDoc = pdfMake.createPdf(docDefinition);
 
   try {
-    // Use getBuffer() and build Blob ourselves to avoid "getBlob needs a callback" in some environments (callback-based builds or hooks)
-    const pdfDocApi = pdfDoc as unknown as { getBuffer(): Promise<Uint8Array | Buffer>; getBlob?(cb?: (b: Blob) => void): Promise<Blob> | void };
-    const buffer = await Promise.race([
-      pdfDocApi.getBuffer(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Print timed out. Please try again.")), 60000)
-      ),
-    ]);
+    const buffer = await getPdfBufferWithTimeout(pdfDoc, 60000);
     const blob = new Blob([buffer], { type: "application/pdf" });
     const blobUrl = URL.createObjectURL(blob);
 
@@ -224,8 +244,7 @@ export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
 
   const docDefinition = buildDocDefinition(processedPayload);
   const pdfDoc = pdfMake.createPdf(docDefinition);
-  const pdfDocApi = pdfDoc as unknown as { getBuffer(): Promise<Uint8Array | Buffer> };
-  const buffer = await pdfDocApi.getBuffer();
+  const buffer = await getPdfBuffer(pdfDoc);
   return new Blob([buffer], { type: "application/pdf" });
 }
 
