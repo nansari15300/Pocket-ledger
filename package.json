@@ -2,12 +2,15 @@
   "name": "pocket-ledger",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "ci": "npm ci && npm run build"
+    "ci": "npm install && npm run build"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",

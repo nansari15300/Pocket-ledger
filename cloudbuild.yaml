@@ -1,0 +1,15 @@
+# Google Cloud Build - Next.js
+# Use: gcloud builds submit --config=cloudbuild.yaml
+steps:
+  - name: 'node:20-bookworm'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        npm install --no-audit --no-fund
+        npm run build
+    dir: '.'
+    id: 'build'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
