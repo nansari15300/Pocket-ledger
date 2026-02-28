@@ -238,9 +238,8 @@ export function ManageDevices() {
                         variant="ghost"
                         size="sm"
                         className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => !isAdmin && setConfirmKick(device)}
-                        disabled={!!kickingId || isAdmin}
-                        title={isAdmin ? "Admin device cannot be removed" : undefined}
+                        onClick={() => setConfirmKick(device)}
+                        disabled={!!kickingId}
                       >
                         {kickingId === device.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                         <span className="ml-1">Kick out</span>

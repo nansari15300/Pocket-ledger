@@ -52,44 +52,31 @@ export async function registerDeviceAndCheckLimit(
   const deviceType = typeof navigator !== "undefined" && /Mobile|Android|iPhone|iPad|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? "mobile" : "desktop";
 
   const devicesRef = collection(firestore, "companies", companyId, "devices");
-  const q = query(devicesRef, where("userId", "==", userId));
-  const snap = await getDocs(q);
-  const existing = snap.docs.find((d) => d.id === deviceId);
-  const count = snap.size;
+  const allDevicesSnap = await getDocs(devicesRef);
+  const totalCount = allDevicesSnap.size;
+  const existing = allDevicesSnap.docs.find((d) => d.id === deviceId);
 
   // Single device per shared user: when userCanUseMultiDevice is false and this is a shared user on a new device
-  if (!userCanUseMultiDevice && !isOwner && !existing && count >= 1) {
-    const allDevicesSnap = await getDocs(collection(firestore, "companies", companyId, "devices"));
-    const totalCount = allDevicesSnap.size;
-    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, singleDeviceOnly: true };
+  if (!userCanUseMultiDevice && !isOwner && !existing) {
+    const myDevicesSnap = allDevicesSnap.docs.filter((d) => d.data()?.userId === userId);
+    if (myDevicesSnap.length >= 1) {
+      return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true, singleDeviceOnly: true };
+    }
   }
 
   if (existing) {
-    // When over limit, only allow the most recently active devices (by lastActive). Tie-break: prefer current device so at least one works.
-    if (count > maxDevices) {
-      const sorted = [...snap.docs].sort((a, b) => {
-        const ta = a.data()?.lastActive?.toMillis?.() ?? 0;
-        const tb = b.data()?.lastActive?.toMillis?.() ?? 0;
-        if (tb !== ta) return tb - ta;
-        if (a.id === deviceId) return -1;
-        if (b.id === deviceId) return 1;
-        return 0;
-      });
-      const allowedIds = new Set(sorted.slice(0, maxDevices).map((d) => d.id));
-      if (!allowedIds.has(deviceId)) {
-        return { allowed: false, count, limit: maxDevices, isNewDevice: false };
-      }
-    }
+    // Device already registered: allow heartbeat (update lastActive). Plan limit is company-wide; no per-user over-limit trim here.
     await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
       userId,
       lastActive: serverTimestamp(),
       deviceType,
     });
-    return { allowed: true, count, limit: maxDevices, isNewDevice: false };
+    return { allowed: true, count: totalCount, limit: maxDevices, isNewDevice: false };
   }
 
-  if (count >= maxDevices) {
-    return { allowed: false, count, limit: maxDevices, isNewDevice: true };
+  // New device: allow only if company total is under plan limit (admin + all users count together)
+  if (totalCount >= maxDevices) {
+    return { allowed: false, count: totalCount, limit: maxDevices, isNewDevice: true };
   }
 
   await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
@@ -97,7 +84,7 @@ export async function registerDeviceAndCheckLimit(
     lastActive: serverTimestamp(),
     deviceType,
   });
-  return { allowed: true, count: count + 1, limit: maxDevices, isNewDevice: true };
+  return { allowed: true, count: totalCount + 1, limit: maxDevices, isNewDevice: true };
 }
 
 export { getOrCreateDeviceId };

@@ -179,8 +179,8 @@ function DeviceLimitOverlay() {
                   <span className="font-mono truncate text-muted-foreground">...{d.id.slice(-8)}</span>
                 </span>
                 <span className="shrink-0 hidden sm:inline">{d.lastActive}</span>
-                {isAdminDevice(d) ? (
-                  <span className="text-muted-foreground shrink-0">{d.id === currentDeviceId ? "(this device)" : "—"}</span>
+                {isAdminDevice(d) && d.id === currentDeviceId ? (
+                  <span className="text-muted-foreground shrink-0">(this device)</span>
                 ) : (
                   <Button
                     size="sm"
