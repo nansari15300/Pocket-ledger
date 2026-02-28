@@ -61,6 +61,12 @@ export default function PermissionsManager({ selectedGroup }: { selectedGroup: P
       if (!prevConfig) return null;
       const newConfig = JSON.parse(JSON.stringify(prevConfig));
       newConfig.roles[selectedRole][permissionIndex] = checked;
+      // delete_approved_voucher and edit_approved_voucher always move together
+      if (permissionKey === 'delete_approved_voucher' || permissionKey === 'edit_approved_voucher') {
+        const other = permissionKey === 'delete_approved_voucher' ? 'edit_approved_voucher' : 'delete_approved_voucher';
+        const otherIdx = flattenedPermissions.indexOf(other);
+        if (otherIdx !== -1) newConfig.roles[selectedRole][otherIdx] = checked;
+      }
       return newConfig;
     });
   };

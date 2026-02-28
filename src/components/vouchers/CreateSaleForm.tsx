@@ -49,7 +49,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { saveVoucher, isVoucherLimitError } from "@/lib/voucherActionsClient";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
@@ -219,6 +220,7 @@ export function CreateSaleForm({
   editingDisabled = false,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
+  showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
 }: {
@@ -229,6 +231,7 @@ export function CreateSaleForm({
   editingDisabled?: boolean;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
+  showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
 }) {
@@ -253,6 +256,7 @@ export function CreateSaleForm({
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [files, setFiles] = useState<(File | string)[]>([]);
+  const initialFilesRef = useRef<string[]>([]);
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
@@ -273,8 +277,17 @@ export function CreateSaleForm({
 
   const [itemType, setItemType] = useState<"item" | "service">("item");
   const isCompanyAdmin = role === "owner" || customUser?.role === "CompanyAdmin" || customUser?.role === "SuperAdmin";
-  const showApprovalCheckbox = !isCompanyAdmin && can("approve_transactions");
+  const showApprovalCheckbox = false; // Approval is handled via the Approve button, not a checkbox
 
+const { isDirty: _isFormFieldsDirty } = form.formState;
+  const _isFileDirty = (() => {
+    const currentUrls = files.filter((f: any) => typeof f === 'string') as string[];
+    const newFiles    = files.filter((f: any) => f instanceof File);
+    if (newFiles.length > 0) return true;
+    const init = initialFilesRef.current;
+    return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
+  })();
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -425,6 +438,7 @@ export function CreateSaleForm({
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
+        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
       }
     } else if (voucher) {
       setSavedVoucherId(null);
@@ -433,6 +447,7 @@ export function CreateSaleForm({
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
+        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
       }
     }
   }, [voucher, form]);
@@ -602,7 +617,10 @@ export function CreateSaleForm({
     [form, watchedLineItems]
   );
   
-  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean } = {}) => {
+  // Ref so handleFormSubmit always calls the latest processAndSave without listing it as a dep
+  const processAndSaveRef = useRef<((data: any, opts?: any) => Promise<any>) | null>(null);
+
+  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) => {
       e.preventDefault();
       const isValid = await form.trigger();
       if (!isValid) {
@@ -642,14 +660,14 @@ export function CreateSaleForm({
         onVoucherAction?.('saved', options.saveAndNew);
       }, 100);
 
-      processAndSave(form.getValues(), options);
+      processAndSaveRef.current?.(form.getValues(), options);
       
   }, [form, onVoucherAction]);
 
    const processAndSave = useCallback(
     async (
       data: SaleFormValues,
-      { saveAndNew, print }: { saveAndNew?: boolean; print?: boolean } = {}
+      { saveAndNew, print, approveAfterSave }: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}
     ): Promise<string | null> => {
       const toastId = sonnerToast.loading("Saving sale...");
       if (isMounted.current) setIsLoading(true);
@@ -769,13 +787,16 @@ export function CreateSaleForm({
             docId = null; // Force creation of new voucher
         }
 
+        const isEditForApprove = !!voucher?.id && !originalVoucherIdToDelete;
+        const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
         const savedDoc = await saveVoucher(
           companyId,
           user.uid,
           finalData,
-          originalVoucherIdToDelete ? null : docId
+          originalVoucherIdToDelete ? null : docId,
+          approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
         );
-        
+
         if (savedDoc && savedDoc.id) {
             docId = savedDoc.id;
             if (isMounted.current) setSavedVoucherId(docId);
@@ -791,11 +812,17 @@ export function CreateSaleForm({
             throw new Error("Failed to save voucher and get ID.");
         }
 
-
-        sonnerToast.success("Success", {
-          id: toastId,
-          description: "Sale invoice saved successfully.",
-        });
+        if (approveAfterSave && savedDoc?.id) {
+          if (!isEditForApprove) {
+            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+          }
+          sonnerToast.success("Success", { id: toastId, description: isEditForApprove ? "Sale updated and approved." : "Sale saved and approved." });
+        } else {
+          sonnerToast.success("Success", {
+            id: toastId,
+            description: "Sale invoice saved successfully.",
+          });
+        }
 
         // Debounce triggerSync to prevent multiple rapid updates
         // Firestore onSnapshot will handle updates in background
@@ -1044,8 +1071,10 @@ export function CreateSaleForm({
     () =>
       company?.voucherPrefixes?.[primaryLineItemType === "service" ? "sale_service" : "sale"] ||
       [getVoucherPrefix(primaryLineItemType)],
-    [company, primaryLineItemType]
+    [company, primaryLineItemType, files]
   );
+  // Keep ref current so handleFormSubmit always calls latest version
+  processAndSaveRef.current = processAndSave;
 
   const [subTotal, total, tax, totalPurchasePrice] = useWatch({
     control: form.control,
@@ -2623,11 +2652,11 @@ export function CreateSaleForm({
             isMobile ? "mt-[3px] pt-[3px] pb-[3px] w-[calc(100%-4px)] mx-auto px-[2px]" : "pt-4 flex flex-row justify-between items-center px-[2px] gap-4"
           )}>
             {isMobile ? (
-              <div className="grid grid-cols-3 gap-2 w-full min-w-0 [&_button]:h-10 [&_button]:rounded-full [&_button:disabled]:opacity-45 [&_button:disabled]:shadow-[inset_0_4px_12px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(0,0,0,0.25)] [&_button:disabled]:brightness-50 [&_button:disabled]:saturate-50 [&_button:disabled]:scale-[0.98] [&_button:disabled]:cursor-not-allowed [&_button:disabled]:text-opacity-[0.70]">
+              <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked}>
+                    <Button type="button" variant="destructive" className="w-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                       Delete
                     </Button>
                   </AlertDialogTrigger>
@@ -2644,77 +2673,69 @@ export function CreateSaleForm({
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!isEditing || !showHistoryButton || !onOpenHistory} className="w-full bg-sky-600 hover:bg-sky-700 text-white border-0">
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!isEditing || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className="w-full bg-amber-600 hover:bg-amber-700 text-white border-0">
+                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
                 {/* Row 1: Cancel (left) | Approve (middle) | Save (right) */}
-                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className="w-full bg-pink-300 hover:bg-pink-400 text-pink-950 border-0">
+                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="button" onClick={onApprove ?? (() => {})} disabled={!showApproveButton || !onApprove || isApproving} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white border-0 hover:text-white">
-                  {isApproving ? "..." : "Approve"}
+                <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve"))}
                 </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled} className="w-full bg-green-200 hover:bg-green-300 text-green-900 dark:bg-green-800/60 dark:hover:bg-green-700/60 dark:text-green-100 border-0">
+                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
               </div>
             ) : (
               <>
-                <div className="flex gap-2 flex-wrap justify-start [&_button]:h-10">
-                  {isEditing && showHistoryButton && onOpenHistory && (
-                    <Button type="button" variant="outline" onClick={onOpenHistory}>
-                      <History className="mr-2 h-4 w-4" /> History
-                    </Button>
-                  )}
-                  {isEditing && (
-                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                      <AlertDialogTrigger asChild disabled={editingDisabled || deleteDisabledWhenLinked}>
-                        <Button type="button" variant="destructive" disabled={editingDisabled || deleteDisabledWhenLinked}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Delete
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                          <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                            Move to Bin
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  )}
+                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!isEditing || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                    <History className="mr-2 h-4 w-4" /> History
+                  </Button>
+                  <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                          Move to Bin
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
-                <div className="flex gap-2 flex-wrap justify-end [&_button]:h-10">
-                  <Button type="button" variant="outline" onClick={() => onVoucherAction?.('cancelled')}>
+                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                  <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  {!isEditing && (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled}>
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save &amp; New
-                    </Button>
-                  )}
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!isEditing || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save &amp; New
+                  </Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled}>
+                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  {showApproveButton && onApprove && (
-                    <Button type="button" variant="default" onClick={onApprove} disabled={isApproving} className="shrink-0">
-                      {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                      Approve
-                    </Button>
-                  )}
+                  <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                    {showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve")}
+                  </Button>
                 </div>
               </>
             )}
@@ -2766,3 +2787,7 @@ export function CreateSaleForm({
     </>
   );
 }
+
+
+
+

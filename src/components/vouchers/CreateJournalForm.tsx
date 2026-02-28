@@ -89,7 +89,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
-
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
 const lineSchema = z.object({
   accountId: z.string().min(1, "Select an account"),
@@ -189,7 +189,7 @@ export function CreateJournalForm({
   const { user, customUser } = useAuth();
   const { company, companyId, triggerSync } = useCompany();
   const { dateSystem, formatDate, formatCurrencyForPrint } = useDate();
-  const { can, canPerformBackdatedAction, canEditRecord, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { deviceLimitReached } = useDeviceLimitContext();
   const { vouchers, processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes } = useVouchers();
   const isMobile = useIsMobile();
@@ -202,6 +202,8 @@ export function CreateJournalForm({
   const [isCreateTaxOpen, setIsCreateTaxOpen] = React.useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  const initialFilesRef = useRef<string[]>([]);
+  const processAndSaveRef = useRef<((data: JournalFormValues, saveAndNew: boolean, approveAfterSave?: boolean) => Promise<void>) | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -222,7 +224,15 @@ export function CreateJournalForm({
     name: "lines",
   });
 
-  const { isDirty: isFormDirty } = form.formState;
+const { isDirty: _isFormFieldsDirty } = form.formState;
+  const _isFileDirty = (() => {
+    const currentUrls = files.filter((f: any) => typeof f === 'string') as string[];
+    const newFiles    = files.filter((f: any) => f instanceof File);
+    if (newFiles.length > 0) return true;
+    const init = initialFilesRef.current;
+    return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
+  })();
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.journal ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.journal ?? false;
@@ -266,7 +276,7 @@ export function CreateJournalForm({
         }
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
-        if(voucher.fileUrls) setFiles(voucher.fileUrls);
+        if(voucher.fileUrls) { setFiles(voucher.fileUrls); initialFilesRef.current = voucher.fileUrls; }
         if(voucher.unassignedFile) {
           form.setValue('unassignedFile', voucher.unassignedFile);
         }
@@ -289,18 +299,16 @@ export function CreateJournalForm({
 }, [processedPartiesForSelection, processedStaff]);
 
 
-async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
+  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
     e.preventDefault();
     const isValid = await form.trigger();
     if (!isValid) {
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
       return;
     }
-    
     onVoucherAction?.('saved', options.saveAndNew);
-    
-    processAndSave(form.getValues(), options.saveAndNew, options.approveAfterSave);
-  }
+    await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave);
+  }, [form, onVoucherAction]);
   
   async function processAndSave(data: JournalFormValues, saveAndNew: boolean = false, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -417,43 +425,34 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
         }
       }
       
-      const {
-        files: formFiles,
-        date,
-        updatedAt,
-        createdAt,
-        history,
-        lastEditedBy,
-        changedAt,
-        changedBy,
-        ...restOfData
-      } = data as any;
-
+      const date = data.date instanceof Date ? data.date : new Date((data as any).date);
+      // Build payload with only serializable fields (avoid form state carrying Timestamps/id that can break Firestore update)
       const submissionData = {
-        ...restOfData,
-        type: "journal",
-        date: date,
+        type: "journal" as const,
+        voucherNumber: (data as any).voucherNumber,
+        narration: (data as any).narration ?? "",
+        date: date.toISOString(),
         total: totalDebit,
-        entries: data.lines.map(line => ({
-            accountId: line.accountId,
-            debit: line.type === 'debit' ? line.amount : 0,
-            credit: line.type === 'credit' ? line.amount : 0,
+        entries: data.lines.map((line: any) => ({
+          accountId: line.accountId,
+          debit: line.type === "debit" ? line.amount : 0,
+          credit: line.type === "credit" ? line.amount : 0,
         })),
-        fileUrls
+        fileUrls,
       };
-      
-      delete (submissionData as any).lines;
 
       let originalVoucherIdToDelete: string | null = null;
       if (isEditingAndConverting && voucher.id) {
           originalVoucherIdToDelete = voucher.id;
       }
-      
+      const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
+      const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
         submissionData,
-        originalVoucherIdToDelete ? null : savedVoucherId
+        originalVoucherIdToDelete ? null : savedVoucherId,
+        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
@@ -470,12 +469,13 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
           throw new Error("Failed to save voucher and get ID.");
       }
 
-        if (approveAfterSave && savedDoc?.id && !voucher?.id) {
-          const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
-          await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
-          sonnerToast.success("Journal saved and approved.", { id: toastId });
+        if (approveAfterSave && savedDoc?.id) {
+          if (!isEdit) {
+            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+          }
+          sonnerToast.success(isEdit ? "Journal updated and approved." : "Journal saved and approved.", { id: toastId });
         } else {
-          sonnerToast.success("Journal voucher created!", { id: toastId });
+          sonnerToast.success(isEdit ? "Journal updated!" : "Journal voucher created!", { id: toastId });
         }
         triggerSync();
 
@@ -527,7 +527,7 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
         }
 
         if (approveAfterSave && voucher?.id) onApprove?.();
-    } catch (error) {
+    } catch (error: any) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { id: toastId, description: error.message });
       } else if (isVoucherLimitError(error)) {
@@ -537,13 +537,16 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
           action: { label: "Upgrade", onClick: () => window.location.assign("/billing") },
         });
       } else {
+        const message = error?.message || (typeof error === "string" ? error : "Unknown error");
         console.error("Error saving journal voucher:", error);
-        sonnerToast.error("Error saving voucher.", { id: toastId });
+        sonnerToast.error("Error saving voucher.", { id: toastId, description: message });
       }
     } finally {
         if (isMounted.current) setIsLoading(false);
     }
-  }
+  };
+
+  processAndSaveRef.current = processAndSave;
 
   const handleDelete = async () => {
     if (!savedVoucherId || !companyId) return;
@@ -1217,11 +1220,11 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
 
           {isFormEditing && <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden", isMobile ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4")}>
             {isMobile ? (
-              <div className="grid grid-cols-3 gap-2 w-full [&_button]:h-10 [&_button]:rounded-full [&_button:disabled]:opacity-45 [&_button:disabled]:shadow-[inset_0_4px_12px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(0,0,0,0.25)] [&_button:disabled]:brightness-50 [&_button:disabled]:saturate-50 [&_button:disabled]:scale-[0.98] [&_button:disabled]:cursor-not-allowed [&_button:disabled]:text-opacity-[0.70]">
+              <div className={cn("grid grid-cols-3 gap-2 w-full", VOUCHER_BUTTONS_CLASS)}>
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked}>
+                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                       Delete
                     </Button>
                   </AlertDialogTrigger>
@@ -1238,85 +1241,82 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className="w-full bg-sky-600 hover:bg-sky-700 text-white border-0">
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className="w-full bg-amber-600 hover:bg-amber-700 text-white border-0">
+                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
                 {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Save (always) - all 6 buttons */}
-                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className="w-full bg-pink-300 hover:bg-pink-400 text-pink-950 border-0">
+                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white border-0 hover:text-white">
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className="w-full bg-emerald-700 hover:bg-emerald-800 text-white border-0 hover:text-white">
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isLoading ? "..." : "Save & Approve"}
                   </Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={isLoading || editingDisabled} className="w-full bg-green-200 hover:bg-green-300 text-green-900 dark:bg-green-800/60 dark:hover:bg-green-700/60 dark:text-green-100 border-0">
+                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
               </div>
             ) : (
               <>
-                <div className="flex justify-center md:justify-start gap-2 [&_button]:h-10">
-                  {voucher && showHistoryButton && onOpenHistory && (
-                    <Button type="button" variant="outline" onClick={onOpenHistory}>
-                      <History className="mr-2 h-4 w-4" /> History
-                    </Button>
-                  )}
-                  {voucher && (
-                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                      <AlertDialogTrigger asChild disabled={editingDisabled || deleteDisabledWhenLinked}>
-                        <Button type="button" variant="destructive" className="w-full md:w-auto" disabled={editingDisabled || deleteDisabledWhenLinked}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Delete
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                          <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                            Move to Bin
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  )}
+                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                    <History className="mr-2 h-4 w-4" /> History
+                  </Button>
+                  <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                          Move to Bin
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </div>
-                <div className={cn("grid gap-2 md:flex md:gap-4 [&_button]:h-10", voucher ? "grid-cols-2" : "grid-cols-3")}>
-                  <Button type="button" variant="outline" onClick={() => onVoucherAction?.('cancelled')} className="w-full">
+                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                  <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  {!voucher && (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled} className="w-full">
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save & New
-                    </Button>
-                  )}
-                  <Button type="submit" disabled={isLoading || editingDisabled} className="w-full">
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save & New
+                  </Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                    <Printer className="mr-2 h-4 w-4" />
+                    Save & Print
+                  </Button>
+                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  {showSaveAndApproveOnCreate && (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className="w-full">
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save & Approve
-                    </Button>
-                  )}
-                  {showApproveButton && onApprove && (
-                    <Button type="button" variant="default" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove(); }} disabled={isApproving} className="w-full shrink-0">
+                  {voucher?.id ? (
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
+                    </Button>
+                  ) : (
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Save & Approve
                     </Button>
                   )}
                 </div>
@@ -1333,3 +1333,4 @@ async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: bool
     </>
   );
 }
+

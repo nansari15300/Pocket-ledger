@@ -86,6 +86,8 @@ export default function MessagesPage() {
   const [voucherToEdit, setVoucherToEdit] = useState<any>(null);
   const [voucherDialogOpen, setVoucherDialogOpen] = useState(false);
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
+  const [historyHighlightTimestamp, setHistoryHighlightTimestamp] = useState<any>(null);
+  const [historyHighlightUid, setHistoryHighlightUid] = useState<string | undefined>(undefined);
   
   const [conversations, setConversations] = useState<any[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
@@ -627,7 +629,7 @@ export default function MessagesPage() {
   );
 
   const handleOpenHistoryFromAlert = useCallback(
-    async (alertCompanyId: string, voucherId: string) => {
+    async (alertCompanyId: string, voucherId: string, notificationTimestamp?: any, changedByUid?: string) => {
       setCompanyId(alertCompanyId);
       try {
         const snap = await getDoc(doc(firestore, `companies/${alertCompanyId}/vouchers`, voucherId));
@@ -639,6 +641,15 @@ export default function MessagesPage() {
             ...d,
             date: dateVal?.toDate ? dateVal.toDate() : dateVal,
           };
+          // Convert Firestore Timestamp to plain ms number to avoid serialisation issues
+          const tsMs = notificationTimestamp?.toDate instanceof Function
+            ? notificationTimestamp.toDate().getTime()
+            : notificationTimestamp?._seconds != null
+            ? notificationTimestamp._seconds * 1000
+            : typeof notificationTimestamp === 'number' ? notificationTimestamp
+            : null;
+          setHistoryHighlightTimestamp(tsMs);
+          setHistoryHighlightUid(changedByUid ?? undefined);
           setHistoryVoucher(voucher);
         } else {
           toast.info("Voucher not found", { description: "It may have been deleted." });
@@ -709,8 +720,16 @@ export default function MessagesPage() {
         <HistoryDialog
           voucher={historyVoucher}
           isOpen={!!historyVoucher}
-          onOpenChange={(open) => !open && setHistoryVoucher(null)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setHistoryVoucher(null);
+              setHistoryHighlightTimestamp(null);
+              setHistoryHighlightUid(undefined);
+            }
+          }}
           onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+          highlightTimestamp={historyHighlightTimestamp}
+          highlightUid={historyHighlightUid}
         />
     </div>
   );

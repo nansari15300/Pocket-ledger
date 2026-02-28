@@ -406,6 +406,24 @@ service cloud.firestore {
         allow read, list: if isCompanyUser(companyId);
         allow create, update, delete: if isCompanyUser(companyId);
       }
+
+      /**
+       * @description Device registration for multi-device sync limit (plan-based).
+       * @path /companies/{companyId}/devices/{deviceId}
+       */
+      match /devices/{deviceId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update: if isCompanyUser(companyId) && request.resource.data.userId == request.auth.uid;
+        allow delete: if isCompanyOwner(companyId) || isAdmin()
+          || (isCompanyUser(companyId) && resource != null && resource.data.userId == request.auth.uid);
+      }
+
+      match /device_commands/{deviceId} {
+        allow read, delete: if isCompanyUser(companyId);
+        allow create, update: if isCompanyOwner(companyId) || isAdmin()
+          || (isCompanyUser(companyId) && exists(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId))
+            && get(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId)).data.userId == request.auth.uid);
+      }
     }
     
     /**

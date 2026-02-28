@@ -1,0 +1,312 @@
+
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user of the Pocket Ledger application.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the user entity."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the user.",
+          "format": "email"
+        },
+        "firstName": {
+          "type": "string",
+          "description": "First name of the user."
+        },
+        "lastName": {
+          "type": "string",
+          "description": "Last name of the user."
+        }
+      },
+      "required": [
+        "id",
+        "email",
+        "firstName",
+        "lastName"
+      ]
+    },
+    "Transaction": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Transaction",
+      "type": "object",
+      "description": "Represents a financial transaction.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the transaction entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Transaction)"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of the transaction.",
+          "format": "date-time"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount of the transaction."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the transaction."
+        },
+        "categoryId": {
+          "type": "string",
+          "description": "Reference to Category. (Relationship: Category 1:N Transaction)"
+        },
+        "transactionType": {
+          "type": "string",
+          "description": "The type of transaction. Valid values are 'income' or 'expense'."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "date",
+        "amount",
+        "description",
+        "categoryId",
+        "transactionType"
+      ]
+    },
+    "Category": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Category",
+      "type": "object",
+      "description": "Represents a category for transactions.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the category entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to User. (Relationship: User 1:N Category)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the category."
+        },
+        "description": {
+          "type": "string",
+          "description": "Description of the category."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "name",
+        "description"
+      ]
+    },
+    "Message": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Message",
+      "type": "object",
+      "description": "Represents a single chat message between users.",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The content of the message."
+        },
+        "senderId": {
+          "type": "string",
+          "description": "The UID of the user who sent the message."
+        },
+        "receiverId": {
+          "type": "string",
+          "description": "The UID of the user who received the message."
+        },
+        "company": {
+          "type": "string",
+          "description": "The name of the company from which the message was sent."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The time the message was sent."
+        }
+      },
+      "required": ["text", "senderId", "receiverId", "timestamp"]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "Stores user profile information.  Path-based ownership ensures only the authenticated user can access their own profile.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user, corresponding to their Firebase Auth UID."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/transactions/{transactionId}",
+        "definition": {
+          "entityName": "Transaction",
+          "schema": {
+            "$ref": "#/backend/entities/Transaction"
+          },
+          "description": "Stores transaction data for a specific user. Path-based ownership (under /users/{userId}) ensures only the user can access their transactions.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user who owns the transaction."
+            },
+            {
+              "name": "transactionId",
+              "description": "The unique identifier of the transaction."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/users/{userId}/categories/{categoryId}",
+        "definition": {
+          "entityName": "Category",
+          "schema": {
+            "$ref": "#/backend/entities/Category"
+          },
+          "description": "Stores categories defined by a specific user. Path-based ownership (under /users/{userId}) ensures only the user can access their categories.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user who owns the category."
+            },
+            {
+              "name": "categoryId",
+              "description": "The unique identifier of the category."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/conversations/{conversationId}/messages/{messageId}",
+        "definition": {
+          "entityName": "Message",
+          "schema": {
+            "$ref": "#/backend/entities/Message"
+          },
+          "description": "Stores messages for a specific conversation between two users. The conversationId is a composite of the two user UIDs.",
+          "params": [
+            {
+              "name": "conversationId",
+              "description": "A unique ID representing the chat between two users, formed by sorting and concatenating their UIDs."
+            },
+            {
+              "name": "messageId",
+              "description": "The unique identifier of the message."
+            }
+          ]
+        }
+      },
+       {
+        "path": "/companies/{companyId}/presence/{userId}",
+        "definition": {
+          "entityName": "Presence",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["online", "offline"]
+              },
+              "lastSeen": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "description": "Stores real-time presence information for users within a company.",
+          "params": [
+            {
+              "name": "companyId",
+              "description": "The unique identifier of the company."
+            },
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user."
+            }
+          ]
+        }
+      },
+       {
+        "path": "/companies/{companyId}/alarms/{alarmId}",
+        "definition": {
+          "entityName": "Alarm",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "datetime": { "type": "string", "format": "date-time" },
+              "users": { "type": "array", "items": { "type": "string" } },
+              "context": { "type": "string" },
+              "entityId": { "type": "string" },
+              "createdAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "description": "Stores alarms for a company.",
+          "params": [
+            {
+              "name": "companyId",
+              "description": "The unique identifier of the company."
+            },
+            {
+              "name": "alarmId",
+              "description": "The unique identifier of the alarm."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/admin_notifications/{notificationId}",
+        "definition": {
+          "entityName": "AdminNotification",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "recipientUserId": { "type": "string" },
+              "message": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" },
+              "isRead": { "type": "boolean" },
+              "companyId": { "type": "string" },
+              "context": { "type": "string" },
+              "entityId": { "type": "string" }
+            }
+          },
+          "description": "Stores notifications for specific admin users.",
+          "params": [
+            {
+              "name": "notificationId",
+              "description": "The unique identifier of the notification."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure is designed to ensure Authorization Independence, DBAC, and QAPs. User data is stored under `/users/{userId}`. Transactions and Categories are stored as subcollections under the user, enabling path-based ownership and simplifying security rules. Chat messages are stored in a top-level `conversations` collection, where each document is a conversation thread containing a `messages` subcollection. This allows for secure, scalable chat functionality where rules can verify that only participants of a conversation can read or write messages."
+  }
+}

@@ -12,8 +12,10 @@ import {
   where,
   getDocs,
   Timestamp,
+  runTransaction,
 } from "firebase/firestore";
-import { auth, firestore } from "@/lib/firebase";
+import { auth, firestore, storage } from "@/lib/firebase";
+import { ref as storageRef, deleteObject } from "firebase/storage";
 import { moveFilesToVoucherDateClient } from "./storageClient";
 import { getPlan, type PlanId } from "@/config/plans";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
@@ -124,11 +126,14 @@ export function isVoucherLimitError(error: unknown): error is Error & { isVouche
 /**
  * Client-only: Save or update voucher. Runs in browser so Firestore uses signed-in user auth (server action has no auth → 500).
  */
+export type SaveVoucherApproveOption = { approvedByUserId: string; approvedByName?: string | null };
+
 export async function saveVoucher(
   companyId: string,
   userId: string,
   voucherData: any,
-  voucherId?: string | null
+  voucherId?: string | null,
+  approveAfterSave?: SaveVoucherApproveOption
 ): Promise<{ id: string }> {
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
@@ -252,9 +257,15 @@ export async function saveVoucher(
   const oldData = oldSnap.data();
   const { createdAt, updatedAt, ...restOfOldData } = (oldData || {}) as any;
   const changedFields = getChanges(restOfOldData, cleanVoucherData);
-  if (Object.keys(changedFields).length === 0) return { id: voucherId! };
-  const shouldResetApproval = oldData?.isApproved === true;
-  if (shouldResetApproval) {
+  if (Object.keys(changedFields).length === 0 && !approveAfterSave) return { id: voucherId! };
+  const shouldResetApproval = oldData?.isApproved === true && !approveAfterSave;
+  if (approveAfterSave) {
+    const approverName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
+    changedFields.isApproved = { from: (oldData as any)?.isApproved === true, to: true };
+    changedFields.approvedByUserId = { from: (oldData as any)?.approvedByUserId ?? "N/A", to: approveAfterSave.approvedByUserId };
+    changedFields.approvedByUserName = { from: (oldData as any)?.approvedByUserName ?? "N/A", to: approverName };
+    changedFields.approvedAt = { from: (oldData as any)?.approvedAt ?? null, to: new Date() };
+  } else if (shouldResetApproval) {
     changedFields.isApproved = { from: true, to: false };
     if ((oldData as any)?.approvedByUserId != null) {
       changedFields.approvedByUserId = { from: (oldData as any).approvedByUserId, to: null };
@@ -318,7 +329,12 @@ export async function saveVoucher(
     updatedAt: serverTimestamp(),
     history: newHistory,
   };
-  if (shouldResetApproval) {
+  if (approveAfterSave) {
+    updatePayload.isApproved = true;
+    updatePayload.approvedByUserId = approveAfterSave.approvedByUserId;
+    updatePayload.approvedByUserName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
+    updatePayload.approvedAt = serverTimestamp();
+  } else if (shouldResetApproval) {
     updatePayload.isApproved = false;
     updatePayload.approvedByUserId = null;
     updatePayload.approvedByUserName = null;
@@ -336,6 +352,7 @@ export async function saveVoucher(
 
 /**
  * Approve a voucher and append a history entry with approver metadata.
+ * Uses a transaction so we read the latest doc (including any just-saved edit history) and append approval.
  */
 export async function approveVoucherWithHistory(
   companyId: string,
@@ -348,34 +365,183 @@ export async function approveVoucherWithHistory(
   }
 
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
+
+  await runTransaction(firestore, async (tx) => {
+    const snap = await tx.get(voucherRef);
+    if (!snap.exists()) throw new Error("Voucher not found.");
+
+    const voucher = snap.data() as any;
+    if (voucher?.isApproved === true) return;
+
+    const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
+    const approverName = approvedByName || approvedByUserId;
+    const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
+
+    const approvalEntry = {
+      changedAt: new Date(),
+      changedBy: approvedByUserId,
+      changes: {
+        isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
+        approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
+        approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
+        approvedBy: { from: previousApprover, to: approverName },
+      },
+    };
+
+    const newHistory = [approvalEntry, ...existingHistory].slice(0, 10);
+
+    tx.update(voucherRef, {
+      isApproved: true,
+      approvedByUserId: approvedByUserId,
+      approvedByUserName: approverName,
+      approvedAt: serverTimestamp(),
+      history: newHistory,
+    });
+  });
+}
+
+/**
+ * Reset (clear) voucher history. Runs on client so Firestore uses the logged-in user's auth.
+ * Also deletes from Firebase Storage any file URLs that were only referenced in history
+ * and are not in the current voucher's fileUrls.
+ */
+export async function resetVoucherHistory(
+  companyId: string,
+  voucherId: string
+): Promise<{ success: true }> {
+  const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const snap = await getDoc(voucherRef);
-  if (!snap.exists()) throw new Error("Voucher not found.");
+  if (!snap.exists()) throw new Error("Voucher not found");
+  const data = snap.data();
+  const existing: any[] = data.history ?? [];
 
-  const voucher = snap.data() as any;
-  if (voucher?.isApproved === true) return;
+  // URLs to keep = current voucher attachments
+  const keepUrls = new Set<string>();
+  for (const field of ["fileUrls", "fileUrl", "url"]) {
+    for (const u of toUrlArray(data[field])) keepUrls.add(u);
+  }
 
-  const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
-  const approverName = approvedByName || approvedByUserId;
-  const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
+  // All URLs that appear anywhere in history (from or to)
+  const urlsInHistory = new Set<string>();
+  for (const entry of existing) {
+    for (const field of ["fileUrls", "fileUrl", "url"]) {
+      const change = entry.changes?.[field];
+      if (!change) continue;
+      for (const u of [...toUrlArray(change.from), ...toUrlArray(change.to)]) {
+        urlsInHistory.add(u);
+      }
+    }
+  }
 
-  const approvalEntry = {
-    changedAt: new Date(),
-    changedBy: approvedByUserId,
-    changes: {
-      isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
-      approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
-      approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
-      approvedBy: { from: previousApprover, to: approverName },
-    },
+  // Delete from storage any URL that was only in history and not on the voucher
+  const toDeleteFromStorage = [...urlsInHistory].filter((u) => !keepUrls.has(u));
+  if (toDeleteFromStorage.length > 0) {
+    await Promise.all(toDeleteFromStorage.map((url) => tryDeleteStorageFile(url)));
+  }
+
+  await updateDoc(voucherRef, { history: [] });
+  return { success: true };
+}
+
+/** Normalise fileUrls field value (string | string[] | null) to a flat string[]. */
+function toUrlArray(val: any): string[] {
+  if (!val) return [];
+  if (Array.isArray(val)) return val.filter((u: any) => typeof u === "string" && u);
+  if (typeof val === "string" && val) return [val];
+  return [];
+}
+
+/** Get Firebase Storage path from a full download URL so we can use ref(storage, path). */
+function getStoragePathFromUrl(url: string): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    const encoded = parsed.pathname.split("/o/")[1];
+    if (encoded) return decodeURIComponent(encoded.split("?")[0]);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/** Delete a file from Firebase Storage by URL; swallows errors. */
+async function tryDeleteStorageFile(url: string): Promise<void> {
+  const path = getStoragePathFromUrl(url);
+  if (!path) return;
+  try {
+    await deleteObject(storageRef(storage, path));
+  } catch {
+    // File may already be deleted or URL not ours
+  }
+}
+
+/** Delete specific history entries by their changedAt millisecond timestamps.
+ *  Also deletes from Firebase Storage any file URLs that were in the removed
+ *  entries' "from" state and are no longer referenced by the voucher or remaining history. */
+export async function deleteHistoryEntries(
+  companyId: string,
+  voucherId: string,
+  changedAtMs: number[]
+): Promise<{ success: true }> {
+  const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
+  const snap = await getDoc(voucherRef);
+  if (!snap.exists()) throw new Error("Voucher not found");
+  const data = snap.data();
+  const existing: any[] = data.history ?? [];
+  const toDelete = new Set(changedAtMs);
+  const tsToMs = (c: any): number | null => {
+    if (!c) return null;
+    if (c?.toDate instanceof Function) return c.toDate().getTime();
+    if (c?._seconds != null) return c._seconds * 1000;
+    if (c?.seconds != null) return c.seconds * 1000;
+    if (typeof c === "number") return c;
+    const p = new Date(c);
+    return isNaN(p.getTime()) ? null : p.getTime();
   };
 
-  const newHistory = [approvalEntry, ...existingHistory].slice(0, 10);
-
-  await updateDoc(voucherRef, {
-    isApproved: true,
-    approvedByUserId: approvedByUserId,
-    approvedByUserName: approverName,
-    approvedAt: serverTimestamp(),
-    history: newHistory,
+  const entriesToDelete = existing.filter((h: any) => {
+    const ms = tsToMs(h.changedAt);
+    return ms !== null && toDelete.has(ms);
   });
+  const filtered = existing.filter((h: any) => {
+    const ms = tsToMs(h.changedAt);
+    return ms === null || !toDelete.has(ms);
+  });
+
+  // URLs that were removed in the deleted entries (in "from" but not in "to")
+  const candidateDeletedUrls = new Set<string>();
+  for (const entry of entriesToDelete) {
+    for (const field of ["fileUrls", "fileUrl", "url"]) {
+      const change = entry.changes?.[field];
+      if (!change) continue;
+      const fromUrls = toUrlArray(change.from);
+      const toUrls = new Set(toUrlArray(change.to));
+      for (const u of fromUrls) {
+        if (!toUrls.has(u)) candidateDeletedUrls.add(u);
+      }
+    }
+  }
+
+  if (candidateDeletedUrls.size > 0) {
+    const stillReferenced = new Set<string>();
+    for (const field of ["fileUrls", "fileUrl", "url"]) {
+      for (const u of toUrlArray(data[field])) stillReferenced.add(u);
+    }
+    for (const entry of filtered) {
+      for (const field of ["fileUrls", "fileUrl", "url"]) {
+        const change = entry.changes?.[field];
+        if (!change) continue;
+        for (const u of [...toUrlArray(change.from), ...toUrlArray(change.to)]) {
+          stillReferenced.add(u);
+        }
+      }
+    }
+    const toDeleteFromStorage = [...candidateDeletedUrls].filter((u) => !stillReferenced.has(u));
+    await Promise.all(toDeleteFromStorage.map((url) => tryDeleteStorageFile(url)));
+  }
+
+  await updateDoc(voucherRef, { history: filtered });
+  return { success: true };
 }

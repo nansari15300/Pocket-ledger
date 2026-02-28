@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "alarms",
       "queryScope": "COLLECTION",
       "fields": [

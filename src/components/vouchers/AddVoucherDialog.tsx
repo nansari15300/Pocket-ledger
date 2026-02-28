@@ -8,7 +8,7 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { doc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { firestore, storage } from "@/lib/firebase"; // storage आयात गरियो
 import { ref, deleteObject } from "firebase/storage"; // storage डिलिट गर्न आवश्यक
 
@@ -22,9 +22,10 @@ import { CreateJournalForm } from "./CreateJournalForm";
 import { CreateNoteForm } from "./CreateNoteForm";
 import { SalaryForm } from "./SalaryForm";
 import { CreateProductionForm } from "./CreateProductionForm";
-import { useVouchers } from "@/hooks/useVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
+import { useVouchers } from "@/hooks/useVouchers";
+import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -235,10 +236,12 @@ export function AddVoucherDialog(props: any) {
   const { children, isOpen, onOpenChange, voucher, defaultVoucherData, ...rest } = props;
   const { companyId, company } = useCompany();
   const { user, customUser } = useAuth();
-  const { can } = usePermissions();
+  const { can, canEditRecord } = usePermissions();
+  const { vouchers } = useVouchers();
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [isApproving, setIsApproving] = useState(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
+  const [editingDisabled, setEditingDisabled] = useState(false);
 
   // When editing, subscribe to voucher doc so unlink/allocations updates enable Save & convert
   useEffect(() => {
@@ -260,22 +263,49 @@ export function AddVoucherDialog(props: any) {
   const effectiveVoucher = liveVoucher ?? voucher;
   const hasLinks = !!effectiveVoucher?.id && hasPaymentLinks(effectiveVoucher);
 
+  // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
+  useEffect(() => {
+    if (!effectiveVoucher?.id) {
+      setEditingDisabled(false);
+      return;
+    }
+    const fetchVoucher = async (cid: string, vid: string) => {
+      const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
+      return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    };
+    let cancelled = false;
+    determineVoucherOwnership(
+      effectiveVoucher,
+      effectiveVoucher.id,
+      vouchers || [],
+      user?.uid || "",
+      companyId,
+      fetchVoucher
+    ).then((isOwnRecord) => {
+      if (!cancelled) {
+        const canEdit = canEditRecord(isOwnRecord, effectiveVoucher);
+        setEditingDisabled(!canEdit);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, companyId, user?.uid, vouchers, canEditRecord]);
+
+  // Show Approve / Save & Approve for any existing voucher if user can approve (approved voucher: enable when form has changes)
   const showApproveButton =
-    !!voucher?.id &&
-    (voucher?.isApproved !== true) &&
+    !!effectiveVoucher?.id &&
     can("approve_transactions");
 
   const showSaveAndApproveOnCreate =
-    !voucher?.id &&
+    !effectiveVoucher?.id &&
     can("approve_transactions") &&
     company?.notificationSettings?.approve?.on !== false;
 
   const handleApprove = useCallback(async () => {
-    if (!companyId || !voucher?.id || isApproving || !user?.uid) return;
+    if (!companyId || !effectiveVoucher?.id || isApproving || !user?.uid) return;
     setIsApproving(true);
     try {
       const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-      await approveVoucherWithHistory(companyId, voucher.id, user.uid, approverName);
+      await approveVoucherWithHistory(companyId, effectiveVoucher.id, user.uid, approverName);
       toast.success("Transaction approved.");
       props.onVoucherAction?.("saved");
       onOpenChange?.(false);
@@ -284,7 +314,7 @@ export function AddVoucherDialog(props: any) {
     } finally {
       setIsApproving(false);
     }
-  }, [companyId, voucher?.id, isApproving, user?.uid, user?.displayName, user?.email, customUser?.displayName, props.onVoucherAction, onOpenChange]);
+  }, [companyId, effectiveVoucher?.id, isApproving, user?.uid, user?.displayName, user?.email, customUser?.displayName, props.onVoucherAction, onOpenChange]);
 
   // ✅ handleAction मा pathsToDelete थपियो
   const handleAction = useCallback(async (
@@ -354,7 +384,7 @@ export function AddVoucherDialog(props: any) {
           onVoucherAction={handleAction}
           onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
           showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
-          editingDisabled={false}
+          editingDisabled={editingDisabled || hasLinks}
           restrictConvertWhenLinked={hasLinks}
           deleteDisabledWhenLinked={hasLinks}
           showApproveButton={showApproveButton}

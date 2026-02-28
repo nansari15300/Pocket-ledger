@@ -71,7 +71,7 @@ export function AlertsTab({
   /** When provided, "Open Voucher" opens voucher in edit (same page or navigate). */
   onOpenVoucher?: (companyId: string, voucherId: string) => void;
   /** When provided, "View changes" opens voucher history instead of edit. */
-  onOpenHistory?: (companyId: string, voucherId: string) => void;
+  onOpenHistory?: (companyId: string, voucherId: string, notificationTimestamp?: any, changedByUid?: string) => void;
 }) {
   const { user, customUser, loading: authLoading } = useAuth();
   const { company } = useCompany();
@@ -220,13 +220,20 @@ export function AlertsTab({
 
   const handleDeleteAll = async () => {
       setIsProcessing(true);
-      const batch = writeBatch(firestore);
-      notifications.forEach(n => {
-          const docRef = doc(firestore, "admin_notifications", n.id);
-          batch.delete(docRef);
-      });
       try {
-          await batch.commit();
+          // Firestore batch limit is 500; chunk into batches
+          const BATCH_SIZE = 500;
+          const toDelete = notifications.filter(
+            (n) => !user?.uid || (n as any).recipientUserId === user.uid
+          );
+          for (let i = 0; i < toDelete.length; i += BATCH_SIZE) {
+            const chunk = toDelete.slice(i, i + BATCH_SIZE);
+            const batch = writeBatch(firestore);
+            chunk.forEach((n) => {
+              batch.delete(doc(firestore, "admin_notifications", n.id));
+            });
+            await batch.commit();
+          }
           toast.success("All notifications deleted.");
       } catch (error) {
           console.error("Failed to delete all notifications:", error);
@@ -400,7 +407,7 @@ export function AlertsTab({
                             ? (
                                 <button
                                   type="button"
-                                  onClick={() => onOpenHistory((n as any).companyId, (n as any).voucherId)}
+                                  onClick={() => onOpenHistory((n as any).companyId, (n as any).voucherId, (n as any).timestamp, (n as any).attemptedBy?.uid)}
                                   className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
                                 >
                                   View changes

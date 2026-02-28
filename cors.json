@@ -1,0 +1,13 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000",
+      "https://studio-5452513410-a3f5b.web.app",
+      "https://studio-5452513410-a3f5b.firebaseapp.com",
+      "https://pocket-ledger.com",
+      "https://www.pocket-ledger.com"
+    ],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]

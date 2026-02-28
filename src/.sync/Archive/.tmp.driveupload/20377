@@ -1,0 +1,468 @@
+
+/**
+ * Core Philosophy: This ruleset enforces a strict user-ownership model where all data is isolated within a user's own data tree. A user can only read or write documents that are located under their unique user ID path (`/users/{userId}`).
+ * Data Structure: All application data is organized hierarchically under the `/users/{userId}` collection. Core user profile data is stored in the user document itself, while related data, such as transactions and categories, are stored in subcollections (`transactions`, `categories`). This structure enables simple, secure, and performant path-based authorization.
+ * Key Security Decisions:
+ *  - User Enumeration is explicitly disallowed by denying `list` access on the top-level `/users` collection.
+ *  - All data is private. There are no public or globally readable collections. Access is only granted if the requesting user's UID matches the `{userId}` in the document path.
+ *  - Relational integrity is enforced on create and update operations to ensure that internal ownership fields (e.g., `userId` on a transaction) correctly and immutably link back to the parent user document.
+ * Denormalization for Authorization: The hierarchical structure (`/users/{userId}/...`) acts as a form of path-based denormalization. The user's ID is part of the path for all their data, which allows security rules to make authorization decisions without needing to perform extra `get()` calls to other documents.
+ * Structural Segregation: The design uses structural segregation by default. Each user's data is entirely contained within their own document tree, providing a strong security boundary between users.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------
+    // --- Helper Functions ---
+    // ---------------------------
+
+    /**
+     * Returns true if the user is signed in.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * Checks if the authenticated user's UID matches the document's owner ID from the path.
+     * This is the primary function for enforcing user ownership.
+     */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    function isOneOf(userIds) {
+      return isSignedIn() && request.auth.uid in userIds;
+    }
+
+    /**
+     * A stricter version of isOwner() for update and delete operations.
+     * Ensures the document being modified actually exists before applying the ownership check.
+     */
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * Validates the creation of a new user profile document.
+     * Path can be userId (exact uid) or name_uid (e.g. john_abc123); doc must have uid and id == request.auth.uid.
+     */
+    function isValidUserCreate(userId) {
+      return isSignedIn() && request.resource.data.uid == request.auth.uid && request.resource.data.id == request.auth.uid;
+    }
+
+    /**
+     * Validates an update to a user profile document.
+     * Ensures the user is the owner and that the internal 'id' field remains unchanged.
+     */
+    function canUpdateUser(userId) {
+      return isExistingOwner(userId) && request.resource.data.id == resource.data.id;
+    }
+    // Same-email re-signup: allow update when doc email matches auth email (one doc per email). Path userId is the doc path.
+    function canUpdateUserByEmail(userId) {
+      return isSignedIn() && userId != null && request.auth.token.email != null && resource.data.email == request.auth.token.email;
+    }
+
+    // Presence/heartbeat: user doc may live at path users/slug_uid (e.g. john_abc123). Allow update when doc's id or uid equals auth.uid and id/uid are not changed.
+    function canUpdateUserDocByOwnership(userId) {
+      return request.auth != null
+        && (
+          (resource != null && (resource.data.get('id', '') == request.auth.uid || resource.data.get('uid', '') == request.auth.uid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['online', 'lastSeen']))
+          || (request.auth.uid == userId && resource != null && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['online', 'lastSeen']))
+        );
+    }
+    // Per-user settings (e.g. Animation & Effects): allow owner to update animationSettings when doc's uid or id matches auth.uid (works for users/slug_uid path).
+    function canUpdateOwnAnimationSettings(userId) {
+      return isSignedIn() && resource != null
+        && (resource.data.get('uid', '') == request.auth.uid || resource.data.get('id', '') == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['animationSettings']);
+    }
+
+    /**
+     * Validates the creation of a document in a user's subcollection (e.g., transaction, category).
+     * Ensures the creator is the owner and the document's internal 'userId' field matches the user's UID.
+     */
+    function isValidSubcollectionCreate(userId) {
+      return isOwner(userId) && request.resource.data.userId == userId;
+    }
+
+    /**
+     * Validates an update to a subcollection document.
+     * Ensures the user is the owner and that the internal 'userId' field is immutable.
+     */
+    function canUpdateSubcollection(userId) {
+      return isExistingOwner(userId) && request.resource.data.userId == resource.data.userId;
+    }
+    
+    // Company access: owner (ownerId or ownerEmail) or shared or handover. Subcollections use get(); company doc uses resource.
+    // ownerId match is primary. After edit: firebase deploy --only firestore:rules
+    function isCompanyUser(companyId) {
+      let c = get(/databases/$(database)/documents/companies/$(companyId));
+      return isSignedIn() && c != null && c.data != null && (
+        c.data.get('ownerId', '') == request.auth.uid ||
+        (request.auth.token.email != null && c.data.get('ownerEmail', '') == request.auth.token.email) ||
+        (request.auth.token.email != null && request.auth.token.email in c.data.get('sharedWithEmails', [])) ||
+        (request.auth.token.email != null && c.data.get('handoverTo', '') == request.auth.token.email)
+      );
+    }
+    function isCompanyOwner(companyId) {
+      let c = get(/databases/$(database)/documents/companies/$(companyId));
+      return isSignedIn() && c != null && c.data != null && (
+        c.data.get('ownerId', '') == request.auth.uid ||
+        (request.auth.token.email != null && c.data.get('ownerEmail', '') == request.auth.token.email)
+      );
+    }
+
+    /**
+     * True if the user has admin role (SuperAdmin or CompanyAdmin) for Firestore access (companies, vouchers).
+     * Checks: (1) doc at /users/{request.auth.uid} with role in [SuperAdmin, CompanyAdmin], or
+     * (2) app_settings/admin_config has superAdminEmails array containing request.auth.token.email, or
+     * (3) hardcoded fallback email.
+     */
+    function isAdmin() {
+      return isSignedIn() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['SuperAdmin', 'CompanyAdmin'])
+        || (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
+        || (exists(/databases/$(database)/documents/app_settings/admin_config) &&
+            request.auth.token.email != null &&
+            request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []))
+      );
+    }
+
+    /**
+     * Super Admin by email only (no get()). Use for vouchers read so collectionGroup works.
+     * Add your Super Admin login email below (same as Firebase Auth); deploy with: firebase deploy --only firestore:rules
+     */
+    function isSuperAdminEmail() {
+      return isSignedIn() && request.auth.token.email != null &&
+        (request.auth.token.email == 'nansari15300@gmail.com'
+         || request.auth.token.email == 'nabiullah.ansari@gmail.com');
+    }
+
+    // ---------------------------
+    // --- Collection Rules ---
+    // ---------------------------
+
+    /**
+     * @description Manages user profile documents.
+     * @path /users/{userId}
+     * @allow (get, update, delete) A signed-in user (auth.uid='user_abc') accesses their own document at `/users/user_abc`.
+     * @allow (create) A new user (auth.uid='user_xyz') creates their own profile document at `/users/user_xyz`.
+     * @deny (list) Any user attempting to list all documents in the `/users` collection to prevent user enumeration.
+     * @deny (get) A signed-in user (auth.uid='user_abc') attempts to access another user's document at `/users/user_xyz`.
+     * @principle Restricts access to a user's own data tree and prevents user data scraping.
+     */
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidUserCreate(userId);
+      allow update: if canUpdateUser(userId) || canUpdateUserByEmail(userId) || canUpdateUserDocByOwnership(userId) || canUpdateOwnAnimationSettings(userId);
+      allow delete: if isExistingOwner(userId);
+
+      /**
+       * @description Manages a user's private financial transactions.
+       * @path /users/{userId}/transactions/{transactionId}
+       * @allow (get, list, create, update, delete) A signed-in user (auth.uid='user_abc') manages their own transaction at `/users/user_abc/transactions/trans_123`.
+       * @deny (get) A signed-in user (auth.uid='user_abc') attempts to access a transaction at `/users/user_xyz/transactions/trans_456`.
+       * @deny (create) A signed-in user (auth.uid='user_abc') tries to create a transaction under another user's path at `/users/user_xyz/transactions/trans_789`.
+       * @principle Enforces path-based ownership for all CRUD and list operations on a user's private subcollection.
+       */
+      match /transactions/{transactionId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidSubcollectionCreate(userId);
+        allow update: if canUpdateSubcollection(userId);
+        allow delete: if isExistingOwner(userId);
+      }
+
+      /**
+       * @description Manages a user's private spending categories.
+       * @path /users/{userId}/categories/{categoryId}
+       * @allow (get, list, create, update, delete) A signed-in user (auth.uid='user_abc') manages their own category at `/users/user_abc/categories/cat_123`.
+       * @deny (get) A signed-in user (auth.uid='user_abc') attempts to access a category at `/users/user_xyz/categories/cat_456`.
+       * @deny (create) A signed-in user (auth.uid='user_abc') tries to create a category with a mismatched internal `userId` field.
+       * @principle Enforces path-based ownership and validates relational integrity between the subcollection document and its parent user.
+       */
+      match /categories/{categoryId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidSubcollectionCreate(userId);
+        allow update: if canUpdateSubcollection(userId);
+        allow delete: if isExistingOwner(userId);
+      }
+    }
+    
+    /**
+     * @description Manages chat conversations.
+     * @path /conversations/{conversationId}
+     * @principle Only participants of a conversation can read or write messages.
+     */
+    match /conversations/{conversationId} {
+      // Allow list for signed-in users (where clause filters by participants for security)
+      allow list: if isSignedIn();
+      // Allow get/create/update/delete only for participants
+      allow get, create, update, delete: if isOneOf(conversationId.split('_'));
+
+      match /messages/{messageId} {
+        // Allow list for participants (where clause filters results)
+        allow list: if isOneOf(conversationId.split('_'));
+        allow get: if isOneOf(conversationId.split('_'));
+        allow create: if request.auth.uid == request.resource.data.senderId && isOneOf(conversationId.split('_'));
+        // Receiver can mark read; any participant can add self to deletedFor for one-side hide.
+        allow update: if isOneOf(conversationId.split('_')) && (
+          request.auth.uid == resource.data.receiverId ||
+          request.auth.uid in request.resource.data.get('deletedFor', [])
+        );
+        // Sender can always delete; additionally allow hard delete after both participants deleted.
+        allow delete: if request.auth.uid == resource.data.senderId ||
+          (isOneOf(conversationId.split('_')) &&
+            resource.data.get('deletedFor', []).hasAll(conversationId.split('_')));
+      }
+    }
+
+    /**
+     * @description Admin config (e.g. superAdminEmails). Only admins can read/write.
+     * @path /app_settings/admin_config
+     */
+    match /app_settings/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    /**
+     * @description Manages company documents.
+     * @path /companies/{companyId}
+     * @principle Only company owner or shared users can access company data.
+     */
+    match /companies/{companyId} {
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      // Admin can list/get all companies; others only own or shared.
+      allow get, list: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.ownerId == request.auth.uid ||
+        (request.auth.token.email != null &&
+          'sharedWithEmails' in resource.data &&
+          request.auth.token.email in resource.data.sharedWithEmails) ||
+        (request.auth.token.email != null &&
+          resource.data.handoverTo == request.auth.token.email)
+      );
+
+      allow update: if isCompanyOwner(companyId) || isAdmin();
+      allow delete: if isCompanyOwner(companyId);
+
+      /**
+       * @description Manages vouchers (transactions) for a company.
+       * @path /companies/{companyId}/vouchers/{voucherId}
+       * collectionGroup("vouchers") hits this path. Check isSuperAdminEmail() first (no get()) so read always allows for that email.
+       */
+      match /vouchers/{voucherId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages parties (customers/suppliers) for a company.
+       * @path /companies/{companyId}/parties/{partyId}
+       */
+      match /parties/{partyId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages party groups for a company.
+       * @path /companies/{companyId}/groups/{groupId}
+       */
+      match /groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages staff members for a company.
+       * @path /companies/{companyId}/staff/{staffId}
+       */
+      match /staff/{staffId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages staff groups for a company.
+       * @path /companies/{companyId}/staff_groups/{groupId}
+       */
+      match /staff_groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages tax accounts for a company.
+       * @path /companies/{companyId}/taxes/{taxId}
+       */
+      match /taxes/{taxId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages tax groups for a company.
+       * @path /companies/{companyId}/tax_groups/{groupId}
+       */
+      match /tax_groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages expense accounts for a company.
+       * @path /companies/{companyId}/expense_accounts/{accountId}
+       */
+      match /expense_accounts/{accountId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages expense groups for a company.
+       * @path /companies/{companyId}/expense_groups/{groupId}
+       */
+      match /expense_groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages bank and cash accounts for a company.
+       * @path /companies/{companyId}/bank_accounts/{accountId}
+       */
+      match /bank_accounts/{accountId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages account groups for a company.
+       * @path /companies/{companyId}/account_groups/{groupId}
+       */
+      match /account_groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages items (inventory) for a company.
+       * @path /companies/{companyId}/items/{itemId}
+       */
+      match /items/{itemId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages item groups for a company.
+       * @path /companies/{companyId}/item_groups/{groupId}
+       */
+      match /item_groups/{groupId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages unassigned documents for a company.
+       * @path /companies/{companyId}/unassigned_documents/{docId}
+       */
+      match /unassigned_documents/{docId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages user presence in a company.
+       * @path /companies/{companyId}/presence/{userId}
+       */
+      match /presence/{userId} {
+        allow read: if isCompanyUser(companyId);
+        allow write: if request.auth.uid == userId;
+      }
+
+      /**
+       * @description Manages alarms/notifications for a company.
+       * @path /companies/{companyId}/alarms/{alarmId}
+       */
+      match /alarms/{alarmId} {
+        allow read, create, update, delete: if isCompanyUser(companyId);
+      }
+      
+      /**
+       * @description Manages subscription payments for a company.
+       * @path /companies/{companyId}/payments/{paymentId}
+       */
+      match /payments/{paymentId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId);
+      }
+    }
+    
+    /**
+     * @description Manages admin notifications.
+     * @path /admin_notifications/{notificationId}
+     */
+    match /admin_notifications/{notificationId} {
+      allow create: if isSignedIn();
+      // Allow list for signed-in users (where clause filters by recipientUserId)
+      allow list: if isSignedIn();
+      // Allow get/update/delete only for the recipient
+      allow get, update, delete: if request.auth.uid == resource.data.recipientUserId;
+    }
+    
+    /**
+     * @description Activity logs for admin auditing.
+     * @path /activity_logs/{logId}
+     */
+    match /activity_logs/{logId} {
+      allow create: if isSignedIn();
+      allow read, list: if isSignedIn();
+      allow update, delete: if false;
+    }
+    
+    /**
+     * @description Root payments collection (fallback for payment webhooks).
+     * @path /payments/{paymentId}
+     */
+    match /payments/{paymentId} {
+      allow read, list, create, update, delete: if isSignedIn();
+    }
+
+    /**
+     * @description Recycle bin config (quick delete, auto-delete days). Read by all signed-in users (user recycle bin). Written by admin only (enforced by app route).
+     * @path /config/recycleBin
+     */
+    match /config/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    /**
+     * @description App-wide settings: features, plans, payment_gateways, permissions. Sidebar/dashboard reads features; admin/billing read-write. Signed-in users can read; write allowed for app (admin routes protected by app).
+     * @path /app_settings/{docId}
+     */
+    match /app_settings/{docId} {
+      allow read, write: if isSignedIn();
+    }
+
+    /**
+     * @description Distributor / agent applications (signup). Any signed-in user can create. Applicants can read own; list used by admin (app may use Admin SDK or separate backend for full list).
+     * @path /distributor_applications/{applicationId}
+     */
+    match /distributor_applications/{applicationId} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.email == request.auth.token.email);
+      allow list: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}

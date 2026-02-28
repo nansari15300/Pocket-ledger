@@ -250,6 +250,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
     setEditablePermissionConfig(prevConfig => {
       const newConfig = JSON.parse(JSON.stringify(prevConfig));
       newConfig.roles[selectedRoleForPermissions][permissionIndex] = checked;
+      // delete_approved_voucher and edit_approved_voucher always move together
+      if (permissionKey === 'delete_approved_voucher' || permissionKey === 'edit_approved_voucher') {
+        const other = permissionKey === 'delete_approved_voucher' ? 'edit_approved_voucher' : 'delete_approved_voucher';
+        const otherIdx = flattenedPermissions.indexOf(other);
+        if (otherIdx !== -1) newConfig.roles[selectedRoleForPermissions][otherIdx] = checked;
+      }
       return newConfig;
     });
   };

@@ -1,0 +1,53 @@
+"use client";
+
+import { useState, useEffect, useMemo } from "react";
+import { useCompany } from "./useCompany";
+import { useAuth } from "./useAuth";
+import { useLivePlans, getPlanFromPlans } from "./useLivePlans";
+import { registerDeviceAndCheckLimit } from "@/lib/deviceLimitClient";
+
+export function useDeviceLimit() {
+  const { companyId, company } = useCompany();
+  const { user } = useAuth();
+  const livePlans = useLivePlans();
+
+  const [result, setResult] = useState<{
+    allowed: boolean;
+    count: number;
+    limit: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!companyId || !user?.uid || !company) {
+      setResult(null);
+      return;
+    }
+
+    const plan = getPlanFromPlans(livePlans, company.planId as any);
+    const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
+    const maxDevices = Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+
+    if (!hasMultiDeviceSync) {
+      setResult({ allowed: true, count: 1, limit: 1 });
+      return;
+    }
+
+    let cancelled = false;
+    registerDeviceAndCheckLimit(companyId, user.uid, maxDevices, hasMultiDeviceSync).then((r) => {
+      if (!cancelled) setResult({ allowed: r.allowed, count: r.count, limit: r.limit });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, user?.uid, company?.planId, livePlans, company]);
+
+  return useMemo(
+    () => ({
+      deviceLimitReached: result !== null && !result.allowed,
+      deviceCount: result?.count ?? 0,
+      maxDevices: result?.limit ?? 1,
+      loading: companyId && user && company && result === null,
+    }),
+    [result, companyId, user, company]
+  );
+}

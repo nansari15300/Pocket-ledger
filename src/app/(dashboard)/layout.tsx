@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { DisclaimerDialog } from "@/components/layout/DisclaimerDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
@@ -23,6 +23,22 @@ import { ReportListProvider } from "@/contexts/ReportListContext";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
+import { useCompany } from "@/hooks/useCompany";
+import { getOrCreateDeviceId } from "@/lib/deviceLimitClient";
+import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 function DeviceLimitBanner() {
   const { deviceLimitReached, deviceCount, maxDevices } = useDeviceLimitContext();
@@ -32,6 +48,303 @@ function DeviceLimitBanner() {
       <Smartphone className="h-4 w-4 shrink-0" />
       <span>Device limit reached ({deviceCount}/{maxDevices}). Sync from this device is blocked.</span>
       <Link href="/billing" className="underline font-semibold hover:no-underline">Upgrade to add more devices</Link>
+    </div>
+  );
+}
+
+type DeviceItem = { id: string; userId: string; lastActive: string; ts: number; deviceType?: "mobile" | "desktop" };
+
+function DeviceLimitOverlay() {
+  const pathname = usePathname();
+  const { user } = useAuth();
+  const { company, companyId } = useCompany();
+  const { toast } = useToast();
+  const { deviceLimitReached, singleDeviceOnly, deviceCount, maxDevices, refreshDeviceCheck } = useDeviceLimitContext();
+  const [deviceIdShort, setDeviceIdShort] = useState("");
+  const [activeDevices, setActiveDevices] = useState<DeviceItem[]>([]);
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [kickingId, setKickingId] = useState<string | null>(null);
+  const [confirmKick, setConfirmKick] = useState<DeviceItem | null>(null);
+
+  const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
+  const ownerId = company?.ownerId ?? "";
+  const currentDeviceId = typeof window !== "undefined" ? getOrCreateDeviceId() : "";
+
+  useEffect(() => {
+    const id = getOrCreateDeviceId();
+    setDeviceIdShort(id ? `...${id.slice(-8)}` : "");
+  }, []);
+
+  useEffect(() => {
+    if (!companyId || !deviceLimitReached) {
+      setActiveDevices([]);
+      return;
+    }
+    const devicesRef = collection(firestore, "companies", companyId, "devices");
+    const unsub = onSnapshot(devicesRef, (snap) => {
+      const list: DeviceItem[] = snap.docs.map((d) => {
+        const data = d.data();
+        const la = data?.lastActive;
+        const ts = la && typeof la.toMillis === "function" ? la.toMillis() : 0;
+        const lastActive = ts ? new Date(ts).toLocaleString() : "—";
+        const deviceType = (data?.deviceType === "mobile" || data?.deviceType === "desktop" ? data.deviceType : undefined) as DeviceItem["deviceType"];
+        return { id: d.id, userId: data?.userId ?? "", lastActive, ts, deviceType };
+      });
+      list.sort((a, b) => {
+        const aOwner = a.userId === ownerId;
+        const bOwner = b.userId === ownerId;
+        if (aOwner && !bOwner) return -1;
+        if (!aOwner && bOwner) return 1;
+        return b.ts - a.ts;
+      });
+      setActiveDevices(list);
+    });
+    return () => unsub();
+  }, [companyId, deviceLimitReached, ownerId]);
+
+  const userIdsKey = useMemo(() => activeDevices.map((d) => d.userId).filter(Boolean).sort().join(","), [activeDevices]);
+
+  useEffect(() => {
+    if (!isCompanyOwner || activeDevices.length === 0) return;
+    const userIds = [...new Set(activeDevices.map((d) => d.userId).filter(Boolean))];
+    let cancelled = false;
+    const map: Record<string, string> = {};
+    Promise.all(
+      userIds.map(async (uid) => {
+        if (cancelled) return;
+        const byId = await getDoc(doc(firestore, "users", uid));
+        let d: Record<string, unknown> | null = byId.exists() ? byId.data() : null;
+        if (!d) {
+          const byUid = await getDocs(query(collection(firestore, "users"), where("uid", "==", uid)));
+          d = byUid.docs[0]?.data() ?? null;
+        }
+        if (cancelled) return;
+        if (d) {
+          const raw = (d.displayName as string)?.trim() || (d.name as string)?.trim() || (d.email as string) || "";
+          map[uid] = raw && raw !== uid && !/^[a-zA-Z0-9]{20,32}$/.test(raw) ? raw : "—";
+        } else {
+          map[uid] = "—";
+        }
+      })
+    ).then(() => {
+      if (!cancelled) setUserNames((prev) => ({ ...prev, ...map }));
+    });
+    return () => { cancelled = true; };
+  }, [isCompanyOwner, userIdsKey]);
+
+  const handleKickOut = async (device: DeviceItem, onSuccess?: () => void) => {
+    if (!companyId) return;
+    setKickingId(device.id);
+    try {
+      await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
+      await setDoc(doc(firestore, "companies", companyId, "device_commands", device.id), { logout: true, at: serverTimestamp() });
+      toast({ title: "Device removed", description: "The device has been signed out. You can continue if within limit." });
+      setConfirmKick(null);
+      onSuccess?.();
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to remove device", variant: "destructive" });
+    } finally {
+      setKickingId(null);
+    }
+  };
+
+  const isAdminDevice = (d: DeviceItem) => d.userId === ownerId;
+  const myDevices = activeDevices.filter((d) => d.userId === user?.uid);
+  const isNewUserNoSlot = !isCompanyOwner && myDevices.length === 0;
+
+  if (!deviceLimitReached) return null;
+  if (pathname?.startsWith("/billing") || pathname?.startsWith("/settings")) return null;
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background/95 backdrop-blur-sm p-6 overflow-y-auto">
+      <Smartphone className="h-12 w-12 text-amber-500 shrink-0" />
+      <p className="text-center font-medium text-lg">
+        Device limit reached ({deviceCount}/{maxDevices})
+      </p>
+      <div className="w-full max-w-sm rounded-lg border bg-muted/50 px-3 py-2 text-left text-xs text-muted-foreground space-y-1">
+        <p><span className="font-medium text-foreground">User:</span> {user?.email || user?.displayName || "—"}</p>
+        <p><span className="font-medium text-foreground">Company:</span> {company?.name || "—"}</p>
+        <p><span className="font-medium text-foreground">This device:</span> {deviceIdShort || "—"}</p>
+      </div>
+
+      {isCompanyOwner && activeDevices.length > 0 && (
+        <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
+          <p className="text-xs font-semibold text-foreground mb-2">All synced devices — remove one to free a slot</p>
+          <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+            {activeDevices.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                  <span className="font-medium text-foreground truncate">{isAdminDevice(d) ? "Admin" : (userNames[d.userId] ?? "—")}</span>
+                  <span className="font-mono truncate text-muted-foreground">...{d.id.slice(-8)}</span>
+                </span>
+                <span className="shrink-0 hidden sm:inline">{d.lastActive}</span>
+                {isAdminDevice(d) ? (
+                  <span className="text-muted-foreground shrink-0">{d.id === currentDeviceId ? "(this device)" : "—"}</span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="shrink-0 h-7 text-xs"
+                    onClick={() => setConfirmKick(d)}
+                    disabled={!!kickingId}
+                  >
+                    {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    <span className="ml-1">Kick out</span>
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <Link
+            href="/settings?view=devices"
+            className="inline-flex items-center gap-1.5 mt-2 text-xs font-medium text-primary hover:underline"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Device settings
+          </Link>
+        </div>
+      )}
+
+      {!isCompanyOwner && myDevices.length > 0 && !singleDeviceOnly && (
+        <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
+          <p className="text-xs font-semibold text-foreground mb-2">Your device(s) using the limit — kick one to free a slot for this device</p>
+          <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+            {myDevices.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                  <span className="font-mono truncate">...{d.id.slice(-8)}</span>
+                </span>
+                <span className="shrink-0">{d.lastActive}</span>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="shrink-0 h-7 text-xs"
+                  onClick={() => setConfirmKick(d)}
+                  disabled={!!kickingId}
+                >
+                  {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                  <span className="ml-1">Kick out</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {singleDeviceOnly && !isCompanyOwner && myDevices.length > 0 && (
+        <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
+          <p className="text-xs font-semibold text-foreground mb-2">You can only use one device. The following device is already signed in. Please log out from this device, or replace it with this device.</p>
+          <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+            {myDevices.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                  <span className="font-mono truncate">...{d.id.slice(-8)}</span>
+                </span>
+                <span className="shrink-0">{d.lastActive}</span>
+                <Button
+                  size="sm"
+                  className="shrink-0 h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90"
+                  onClick={() => setConfirmKick(d)}
+                  disabled={!!kickingId}
+                >
+                  {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  <span className="ml-1">Replace with this device</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {isCompanyOwner && activeDevices.length === 0 && (
+        <Link
+          href="/settings?view=devices"
+          className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
+        >
+          <Settings className="h-4 w-4" />
+          Device settings
+        </Link>
+      )}
+
+      {isCompanyOwner ? (
+        <>
+          <p className="text-center text-muted-foreground text-sm max-w-sm">
+            This device is not allowed for this company. Remove a device above or switch company or upgrade your plan.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Link
+              href="/company"
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            >
+              Switch company
+            </Link>
+            <Link
+              href="/billing"
+              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              Upgrade to add more devices
+            </Link>
+            <Link
+              href="/settings?view=devices"
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            >
+              <Settings className="h-4 w-4 mr-1.5" />
+              Device settings
+            </Link>
+          </div>
+        </>
+      ) : singleDeviceOnly ? (
+        <p className="text-center text-muted-foreground text-sm max-w-sm">
+          Log out from this device or use &quot;Replace with this device&quot; above to use this device instead.
+        </p>
+      ) : isNewUserNoSlot ? (
+        <>
+          <p className="text-center text-muted-foreground text-sm max-w-sm">
+            This device is not allowed for this company. Contact your company admin to add more devices or switch to another company.
+          </p>
+          <Link
+            href="/company"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Switch company
+          </Link>
+        </>
+      ) : (
+        <p className="text-center text-muted-foreground text-sm max-w-sm">
+          Kick out one of your devices above to free a slot for this device.
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={() => signOut(auth)}
+        className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-2"
+      >
+        Logout
+      </button>
+
+      <AlertDialog open={!!confirmKick} onOpenChange={(open) => !open && setConfirmKick(null)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>{singleDeviceOnly && myDevices.some((d) => d.id === confirmKick?.id) ? "Replace with this device?" : "Remove device?"}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {singleDeviceOnly && myDevices.some((d) => d.id === confirmKick?.id)
+              ? "The other device will be signed out. This device will then be used for this company."
+              : "This device will be signed out and removed from the list. The user can sign in again if within the device limit."}
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmKick && handleKickOut(confirmKick, singleDeviceOnly && myDevices.some((d) => d.id === confirmKick.id) ? refreshDeviceCheck : undefined)}
+              className={singleDeviceOnly && myDevices.some((d) => d.id === confirmKick?.id) ? undefined : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
+            >
+              {singleDeviceOnly && myDevices.some((d) => d.id === confirmKick?.id) ? "Replace with this device" : "Kick out"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -144,14 +457,14 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <ReportListProvider>
               <ReportPartyViewProvider>
                 <DeviceLimitProvider>
-                  <DeviceLimitBanner />
-                  <div id="app-container" className="flex h-screen bg-background">
+                  <div id="app-container" className="relative flex h-screen bg-background">
                     <AppSidebar />
                     <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l")}>
                       <AppHeader />
                       <main className={cn("flex-1 overflow-y-auto")}>{children}</main>
                       <MobileFloatingButton />
                     </div>
+                    <DeviceLimitOverlay />
                   </div>
                 </DeviceLimitProvider>
               </ReportPartyViewProvider>
