@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { DisclaimerDialog } from "@/components/layout/DisclaimerDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
@@ -24,7 +24,7 @@ import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
-import { getOrCreateDeviceId } from "@/lib/deviceLimitClient";
+import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/deviceLimitClient";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
@@ -59,12 +59,17 @@ function DeviceLimitOverlay() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { toast } = useToast();
-  const { deviceLimitReached, singleDeviceOnly, deviceCount, maxDevices, refreshDeviceCheck } = useDeviceLimitContext();
+  const router = useRouter();
+  const { deviceLimitReached, singleDeviceOnly, replaceOffer, noPermissionNewDevice, kickedAndBlocked, deviceCount, maxDevices, refreshDeviceCheck, performReplaceAndRefresh, clearKickedAndRefresh } = useDeviceLimitContext();
+  const [replacing, setReplacing] = useState(false);
   const [deviceIdShort, setDeviceIdShort] = useState("");
+  const [thisDeviceLabel, setThisDeviceLabel] = useState("");
   const [activeDevices, setActiveDevices] = useState<DeviceItem[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [kickingId, setKickingId] = useState<string | null>(null);
   const [confirmKick, setConfirmKick] = useState<DeviceItem | null>(null);
+  const [rejoining, setRejoining] = useState(false);
+  const [showReplaceDeviceSelect, setShowReplaceDeviceSelect] = useState(false);
 
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
   const ownerId = company?.ownerId ?? "";
@@ -73,10 +78,11 @@ function DeviceLimitOverlay() {
   useEffect(() => {
     const id = getOrCreateDeviceId();
     setDeviceIdShort(id ? `...${id.slice(-8)}` : "");
+    setThisDeviceLabel(typeof window !== "undefined" ? getDeviceLabel() : "");
   }, []);
 
   useEffect(() => {
-    if (!companyId || !deviceLimitReached) {
+    if (!companyId || (!deviceLimitReached && !kickedAndBlocked)) {
       setActiveDevices([]);
       return;
     }
@@ -100,7 +106,7 @@ function DeviceLimitOverlay() {
       setActiveDevices(list);
     });
     return () => unsub();
-  }, [companyId, deviceLimitReached, ownerId]);
+  }, [companyId, deviceLimitReached, kickedAndBlocked, ownerId]);
 
   const userIdsKey = useMemo(() => activeDevices.map((d) => d.userId).filter(Boolean).sort().join(","), [activeDevices]);
 
@@ -137,8 +143,7 @@ function DeviceLimitOverlay() {
     setKickingId(device.id);
     try {
       await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
-      await setDoc(doc(firestore, "companies", companyId, "device_commands", device.id), { logout: true, at: serverTimestamp() });
-      toast({ title: "Device removed", description: "The device has been signed out. You can continue if within limit." });
+      toast({ title: "Device removed", description: "That device will see slot full and can switch company or remove that device." });
       setConfirmKick(null);
       onSuccess?.();
     } catch (e: unknown) {
@@ -152,8 +157,90 @@ function DeviceLimitOverlay() {
   const myDevices = activeDevices.filter((d) => d.userId === user?.uid);
   const isNewUserNoSlot = !isCompanyOwner && myDevices.length === 0;
 
-  if (!deviceLimitReached) return null;
+  if (!deviceLimitReached && !kickedAndBlocked) return null;
   if (pathname?.startsWith("/billing") || pathname?.startsWith("/settings")) return null;
+
+  if (kickedAndBlocked && !isCompanyOwner) {
+    const myDevicesHere = activeDevices.filter((d) => d.userId === user?.uid);
+    return (
+      <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background/95 backdrop-blur-sm p-6 overflow-y-auto">
+        <Smartphone className="h-12 w-12 text-amber-500 shrink-0" />
+        <p className="text-center font-medium text-lg">You were removed from this company&apos;s devices List.</p>
+        <p className="text-center text-muted-foreground text-sm font-medium"><span className="font-semibold text-foreground">Company:</span> {company?.name || "—"}</p>
+        <p className="text-center text-muted-foreground text-sm max-w-sm">
+          Kick one of your devices below; this device will be added in its place.
+        </p>
+        {myDevicesHere.length > 0 && (
+          <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
+            <p className="text-xs font-semibold text-foreground mb-2">Your devices in this company — kick one to add this device in its place</p>
+            <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+              {myDevicesHere.map((d) => (
+                <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="font-medium text-foreground">{d.deviceType === "mobile" ? "Mobile" : "Desktop"}</span>
+                    <span className="shrink-0 text-muted-foreground">{d.lastActive}</span>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="shrink-0 h-7 text-xs"
+                    onClick={() => setConfirmKick(d)}
+                    disabled={!!kickingId}
+                  >
+                    {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    <span className="ml-1">Kick out</span>
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Button
+            onClick={async () => {
+              setRejoining(true);
+              try {
+                await clearKickedAndRefresh();
+              } finally {
+                setRejoining(false);
+              }
+            }}
+            disabled={rejoining}
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            {rejoining ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            <span className={rejoining ? "ml-2" : ""}>{rejoining ? "Rejoining…" : "Use this device again"}</span>
+          </Button>
+          <Link href="/company" className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+            Switch company
+          </Link>
+          <Button variant="outline" onClick={() => signOut(auth)} className="rounded-md px-4 py-2 text-sm">
+            Logout
+          </Button>
+        </div>
+        <AlertDialog open={!!confirmKick} onOpenChange={(open) => !open && setConfirmKick(null)}>
+          <AlertDialogContent>
+            <AlertDialogTitle>Kick out this device?</AlertDialogTitle>
+            <AlertDialogDescription>
+              That device will be removed from the company. You can then use this device again to rejoin.
+            </AlertDialogDescription>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => confirmKick && handleKickOut(confirmKick)}
+              >
+                Kick out
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+    );
+  }
+
+  const showReplaceOfferDialog = replaceOffer && !isCompanyOwner;
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-background/95 backdrop-blur-sm p-6 overflow-y-auto">
@@ -162,12 +249,95 @@ function DeviceLimitOverlay() {
         Device limit reached ({deviceCount}/{maxDevices})
       </p>
       <div className="w-full max-w-sm rounded-lg border bg-muted/50 px-3 py-2 text-left text-xs text-muted-foreground space-y-1">
-        <p><span className="font-medium text-foreground">User:</span> {user?.email || user?.displayName || "—"}</p>
+        <p><span className="font-medium text-foreground">User name:</span> {(user?.displayName ?? "").toString().trim() || (user?.email ? user.email.split("@")[0] : "") || "—"}</p>
+        <p><span className="font-medium text-foreground">User email:</span> {user?.email || "—"}</p>
         <p><span className="font-medium text-foreground">Company:</span> {company?.name || "—"}</p>
-        <p><span className="font-medium text-foreground">This device:</span> {deviceIdShort || "—"}</p>
+        <p><span className="font-medium text-foreground">This device:</span> {thisDeviceLabel || "—"}</p>
       </div>
 
-      {isCompanyOwner && activeDevices.length > 0 && (
+      {showReplaceOfferDialog && (
+        <div className="w-full max-w-md space-y-4">
+          {!showReplaceDeviceSelect ? (
+            <>
+              {myDevices.length > 0 && (
+                <div className="rounded-lg border bg-muted/30 px-3 py-2 text-left">
+                  <p className="text-xs font-semibold text-foreground mb-2">Your devices in this company — kick one to free a slot, or click Yes to choose which device to replace</p>
+                  <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+                    {myDevices.map((d) => (
+                      <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                          <span className="font-medium text-foreground">{d.deviceType === "mobile" ? "Mobile" : "Desktop"}</span>
+                          <span className="shrink-0 text-muted-foreground">{d.lastActive}</span>
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="shrink-0 h-7 text-xs"
+                          onClick={() => setConfirmKick(d)}
+                          disabled={!!kickingId}
+                        >
+                          {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          <span className="ml-1">Kick out</span>
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="rounded-lg border bg-muted/30 p-4 text-center space-y-4">
+                <p className="text-sm font-medium text-foreground">
+                  To use this device instead? Click Yes to choose which device to remove, or kick one above. This device will be added in its place.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Button
+                    onClick={() => setShowReplaceDeviceSelect(true)}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    Yes
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push("/company")}
+                  >
+                    No
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">No: you will be taken to company selection.</p>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-left">
+              <p className="text-xs font-semibold text-foreground mb-2">Select which device to remove. This device will be added in its place and this company will open.</p>
+              <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
+                {myDevices.map((d) => (
+                  <li key={d.id} className="flex items-center justify-between gap-2 py-1 border-b border-border/50 last:border-0">
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      {d.deviceType === "mobile" ? <Smartphone className="h-3.5 w-3.5 shrink-0" /> : <Monitor className="h-3.5 w-3.5 shrink-0" />}
+                      <span className="font-medium text-foreground">{d.deviceType === "mobile" ? "Mobile" : "Desktop"}</span>
+                      <span className="shrink-0 text-muted-foreground">{d.lastActive}</span>
+                    </span>
+                    <Button
+                      size="sm"
+                      className="shrink-0 h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90"
+                      onClick={() => handleKickOut(d, () => refreshDeviceCheck())}
+                      disabled={!!kickingId}
+                    >
+                      {kickingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      <span className={kickingId === d.id ? "ml-1" : ""}>Replace with this device</span>
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => setShowReplaceDeviceSelect(false)}>
+                Back
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!showReplaceOfferDialog && isCompanyOwner && activeDevices.length > 0 && (
         <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
           <p className="text-xs font-semibold text-foreground mb-2">All synced devices — remove one to free a slot</p>
           <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
@@ -206,7 +376,7 @@ function DeviceLimitOverlay() {
         </div>
       )}
 
-      {!isCompanyOwner && myDevices.length > 0 && !singleDeviceOnly && (
+      {!showReplaceOfferDialog && !noPermissionNewDevice && !isCompanyOwner && myDevices.length > 0 && !singleDeviceOnly && (
         <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
           <p className="text-xs font-semibold text-foreground mb-2">Your device(s) using the limit — kick one to free a slot for this device</p>
           <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
@@ -233,7 +403,7 @@ function DeviceLimitOverlay() {
         </div>
       )}
 
-      {singleDeviceOnly && !isCompanyOwner && myDevices.length > 0 && (
+      {!showReplaceOfferDialog && !noPermissionNewDevice && singleDeviceOnly && !isCompanyOwner && myDevices.length > 0 && (
         <div className="w-full max-w-md rounded-lg border bg-muted/30 px-3 py-2 text-left">
           <p className="text-xs font-semibold text-foreground mb-2">You can only use one device. The following device is already signed in. Please log out from this device, or replace it with this device.</p>
           <ul className="text-xs text-muted-foreground space-y-2 max-h-40 overflow-y-auto">
@@ -259,7 +429,7 @@ function DeviceLimitOverlay() {
         </div>
       )}
 
-      {isCompanyOwner && activeDevices.length === 0 && (
+      {!showReplaceOfferDialog && isCompanyOwner && activeDevices.length === 0 && (
         <Link
           href="/settings?view=devices"
           className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent"
@@ -269,7 +439,43 @@ function DeviceLimitOverlay() {
         </Link>
       )}
 
-      {isCompanyOwner ? (
+      {!showReplaceOfferDialog && noPermissionNewDevice && !isCompanyOwner ? (
+        <>
+          <p className="text-center text-muted-foreground text-sm max-w-sm">
+            No permission to use multi device. You can only use one device. Join this device to kick the previous one, or contact company admin or switch company.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Button
+              onClick={async () => {
+                setReplacing(true);
+                try {
+                  await performReplaceAndRefresh();
+                } finally {
+                  setReplacing(false);
+                }
+              }}
+              disabled={replacing}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {replacing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              <span className={replacing ? "ml-2" : ""}>Join this device</span>
+            </Button>
+            <Link
+              href="/company"
+              className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            >
+              Switch company
+            </Link>
+            <Button
+              variant="outline"
+              onClick={() => signOut(auth)}
+              className="rounded-md px-4 py-2 text-sm"
+            >
+              Logout
+            </Button>
+          </div>
+        </>
+      ) : !showReplaceOfferDialog && isCompanyOwner ? (
         <>
           <p className="text-center text-muted-foreground text-sm max-w-sm">
             This device is not allowed for this company. Remove a device above or switch company or upgrade your plan.
@@ -296,35 +502,59 @@ function DeviceLimitOverlay() {
             </Link>
           </div>
         </>
-      ) : singleDeviceOnly ? (
+      ) : !showReplaceOfferDialog && singleDeviceOnly ? (
         <p className="text-center text-muted-foreground text-sm max-w-sm">
           Log out from this device or use &quot;Replace with this device&quot; above to use this device instead.
         </p>
-      ) : isNewUserNoSlot ? (
+      ) : !showReplaceOfferDialog && isNewUserNoSlot ? (
         <>
           <p className="text-center text-muted-foreground text-sm max-w-sm">
-            This device is not allowed for this company. Contact your company admin to add more devices or switch to another company.
+            Slot full for this company. Change company or logout.
           </p>
-          <Link
-            href="/company"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            Switch company
-          </Link>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Link
+              href="/company"
+              className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              Change company
+            </Link>
+            <Button
+              variant="outline"
+              onClick={() => signOut(auth)}
+              className="rounded-md px-4 py-2 text-sm"
+            >
+              Logout
+            </Button>
+          </div>
         </>
-      ) : (
+      ) : !showReplaceOfferDialog ? (
         <p className="text-center text-muted-foreground text-sm max-w-sm">
           Kick out one of your devices above to free a slot for this device.
         </p>
-      )}
+      ) : null}
 
-      <button
-        type="button"
-        onClick={() => signOut(auth)}
-        className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-2"
-      >
-        Logout
-      </button>
+      {!showReplaceOfferDialog && !noPermissionNewDevice && (
+        <div className="flex flex-wrap items-center justify-center gap-4">
+          <Button
+            onClick={async () => {
+              setRejoining(true);
+              try {
+                await clearKickedAndRefresh();
+              } finally {
+                setRejoining(false);
+              }
+            }}
+            disabled={rejoining}
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            {rejoining ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            <span className={rejoining ? "ml-2" : ""}>{rejoining ? "Rejoining…" : "Rejoin"}</span>
+          </Button>
+          <Button variant="outline" onClick={() => signOut(auth)} className="rounded-md px-4 py-2 text-sm">
+            Logout
+          </Button>
+        </div>
+      )}
 
       <AlertDialog open={!!confirmKick} onOpenChange={(open) => !open && setConfirmKick(null)}>
         <AlertDialogContent>
@@ -380,45 +610,59 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     // Auto-logout only after inactivity: 20 min on mobile and desktop; activity resets the timer
     const INACTIVITY_LOGOUT_MS = 20 * 60 * 1000; // 20 minutes
     const logoutDesc = "20 minutes";
+    const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const toastRef = useRef(toast);
+    toastRef.current = toast;
 
     useEffect(() => {
-        if (!user) return;
+        if (!user) {
+            if (inactivityTimerRef.current) {
+                clearTimeout(inactivityTimerRef.current);
+                inactivityTimerRef.current = null;
+            }
+            return;
+        }
 
-        let activityTimer: ReturnType<typeof setTimeout>;
+        const clearInactivityTimer = () => {
+            if (inactivityTimerRef.current) {
+                clearTimeout(inactivityTimerRef.current);
+                inactivityTimerRef.current = null;
+            }
+        };
 
-        const resetTimer = () => {
-            clearTimeout(activityTimer);
-            activityTimer = setTimeout(() => {
+        const scheduleLogout = () => {
+            clearInactivityTimer();
+            inactivityTimerRef.current = setTimeout(() => {
+                inactivityTimerRef.current = null;
                 import("@/lib/navigation-memory").then(({ clearNavigationMemory }) => clearNavigationMemory());
                 signOut(auth).then(() => {
-                    toast({ title: "Session Expired", description: `You have been logged out due to inactivity (${logoutDesc}).` });
+                    toastRef.current({ title: "Session Expired", description: `You have been logged out due to inactivity (${logoutDesc}).` });
                 });
             }, INACTIVITY_LOGOUT_MS);
         };
 
-        // Include touch events for mobile - any activity resets the timer
         const activityEvents: (keyof WindowEventMap)[] = [
-            'mousemove', 'keydown', 'click', 'scroll',
-            'touchstart', 'touchmove', 'touchend', 'touchcancel',
-            'pointerdown', 'pointermove', 'wheel'
+            "mousemove", "keydown", "click", "scroll",
+            "touchstart", "touchmove", "touchend", "touchcancel",
+            "pointerdown", "pointermove", "wheel"
         ];
 
-        const onActivity = () => resetTimer();
+        const onActivity = () => scheduleLogout();
 
         const onVisibilityChange = () => {
-            if (document.visibilityState === 'visible') resetTimer(); // User came back - reset timer
+            if (document.visibilityState === "visible") scheduleLogout();
         };
 
-        activityEvents.forEach(event => window.addEventListener(event, onActivity, { passive: true }));
-        document.addEventListener('visibilitychange', onVisibilityChange);
-        resetTimer();
+        activityEvents.forEach((event) => window.addEventListener(event, onActivity, { passive: true }));
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        scheduleLogout();
 
         return () => {
-            clearTimeout(activityTimer);
-            activityEvents.forEach(event => window.removeEventListener(event, onActivity));
-            document.removeEventListener('visibilitychange', onVisibilityChange);
+            clearInactivityTimer();
+            activityEvents.forEach((event) => window.removeEventListener(event, onActivity));
+            document.removeEventListener("visibilitychange", onVisibilityChange);
         };
-    }, [user, toast, INACTIVITY_LOGOUT_MS, logoutDesc]);
+    }, [user, INACTIVITY_LOGOUT_MS, logoutDesc]);
 
     const handleDisclaimerClose = () => {
         const today = new Date().toISOString().split('T')[0];

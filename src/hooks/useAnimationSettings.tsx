@@ -21,6 +21,8 @@ const defaultSettings: AnimationSettings = {
   rows: { enabled: true, duration: 2.5 },
 };
 
+const ANIMATION_SETTINGS_CHANNEL = "pocket-ledger-animation-settings";
+
 export function useAnimationSettings() {
   const { user, customUser } = useAuth();
   const userDocId = customUser?.userDocId || user?.uid;
@@ -63,6 +65,26 @@ export function useAnimationSettings() {
 
     return () => unsubscribe();
   }, [userDocId]);
+
+  // Live update across tabs: when another tab saves animation settings, apply here immediately
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL);
+    const handler = (e: MessageEvent) => {
+      const payload = e?.data;
+      if (payload && typeof payload.numbers === "object" && typeof payload.rows === "object") {
+        setSettings({
+          numbers: { ...defaultSettings.numbers, ...payload.numbers },
+          rows: { ...defaultSettings.rows, ...payload.rows },
+        });
+      }
+    };
+    channel.addEventListener("message", handler);
+    return () => {
+      channel.removeEventListener("message", handler);
+      channel.close();
+    };
+  }, []);
 
   return { settings, loading };
 }

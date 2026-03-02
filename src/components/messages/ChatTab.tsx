@@ -420,8 +420,8 @@ export function ChatTab({ conversations, allPotentialContacts, onConversationSel
                           "h-10 w-10 p-0.5 border-2 transition-all duration-500", 
                           isOnline ? "border-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]" : "border-black"
                       )}>
-                        <AvatarImage src={otherUser.photoURL} className="rounded-full" />
-                        <AvatarFallback>{getInitials(otherUser.displayName)}</AvatarFallback>
+                        <AvatarImage src={otherUser?.photoURL} className="rounded-full" />
+                        <AvatarFallback>{getInitials(otherUser?.displayName ?? "?")}</AvatarFallback>
                       </Avatar>
                         <div className="flex-1 min-w-0">
                           <p className="font-semibold text-sm truncate">{otherUser?.displayName || 'Unknown User'}</p>

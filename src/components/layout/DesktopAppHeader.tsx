@@ -411,9 +411,12 @@ function BalanceModeSwitcher() {
   const { isMobile, hidePcIcon } = useMobileView();
   const { showBillWiseToggle: showBillWiseOnReportParty } = useReportPartyView();
 
-  // Pages that only use statement view: hide toggle and force statement mode (parties, staff, bank show Statement/Bill wise in header)
+  // Pages that only use statement view: hide toggle and force statement mode (parties, staff show Statement/Bill wise in header)
   const statementOnlyPaths = ["/items", "/incomes", "/tax", "/dashboard"];
   const isStatementOnlyPage = statementOnlyPaths.some((p) => pathname?.startsWith(p));
+  // Bank/Cash: hide header Statement/Bill wise dropdown; use Statement by default; page has its own Spend wise toggle
+  const isBankPage = pathname != null && pathname.startsWith("/bank-cash");
+  const hideBalanceModeDropdown = isStatementOnlyPage || isBankPage;
 
   // On reports: show toggle only when Group Statement or Accounts Statement has a party selected
   const isReportsPage = pathname?.startsWith("/reports");
@@ -421,14 +424,14 @@ function BalanceModeSwitcher() {
   const hideToggleOnReports = isReportsPage && !showBillWiseOnReportParty;
 
   React.useEffect(() => {
-    if (isStatementOnlyPage || hideToggleOnReports) {
+    if (hideBalanceModeDropdown || hideToggleOnReports) {
       setBalanceMode("statement");
     }
-  }, [pathname, setBalanceMode, isStatementOnlyPage, hideToggleOnReports]);
+  }, [pathname, setBalanceMode, hideBalanceModeDropdown, hideToggleOnReports]);
 
   // In mobile view, hide to keep header minimal (company, date, PC, avatar, full screen only)
   if (isMobile) return null;
-  if (isStatementOnlyPage) return null;
+  if (hideBalanceModeDropdown) return null;
   if (isReportsPage && !isReportPartyView) return null;
 
   const label = balanceMode === "bill_wise" ? "Bill wise" : "Statement";

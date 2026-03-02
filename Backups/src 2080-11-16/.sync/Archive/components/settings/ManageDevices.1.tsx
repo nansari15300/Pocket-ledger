@@ -1,0 +1,215 @@
+"use client";
+
+import { useEffect, useState, useMemo } from "react";
+import { collection, getDocs, getDoc, deleteDoc, doc, onSnapshot } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { Smartphone, Loader2, Trash2, Monitor } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
+
+type DeviceRow = {
+  id: string;
+  userId: string;
+  lastActive: Date | null;
+  deviceType?: "mobile" | "desktop";
+};
+
+export function ManageDevices() {
+  const { company, companyId } = useCompany();
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const livePlans = useLivePlans();
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [kickingId, setKickingId] = useState<string | null>(null);
+  const [confirmKick, setConfirmKick] = useState<DeviceRow | null>(null);
+
+  const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company?.ownerEmail === user.email));
+  const plan = getPlanFromPlans(livePlans, company?.planId as any);
+  const maxDevices = Math.max(1, Number(plan?.entitlements?.maxDevices) || 1);
+
+  useEffect(() => {
+    if (!companyId) {
+      setDevices([]);
+      setLoading(false);
+      return;
+    }
+    const devicesRef = collection(firestore, "companies", companyId, "devices");
+    const unsub = onSnapshot(devicesRef, (snap) => {
+      const rows: DeviceRow[] = snap.docs.map((d) => {
+        const data = d.data();
+        const la = data?.lastActive;
+        const lastActive = la && typeof la.toMillis === "function" ? new Date(la.toMillis()) : null;
+        const deviceType = (data?.deviceType === "mobile" || data?.deviceType === "desktop" ? data.deviceType : undefined) as DeviceRow["deviceType"];
+        return { id: d.id, userId: data?.userId ?? "", lastActive, deviceType };
+      });
+      rows.sort((a, b) => (b.lastActive?.getTime() ?? 0) - (a.lastActive?.getTime() ?? 0));
+      setDevices(rows);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [companyId]);
+
+  const userIdsKey = useMemo(() => devices.map((d) => d.userId).filter(Boolean).sort().join(","), [devices]);
+
+  useEffect(() => {
+    const userIds = [...new Set(devices.map((d) => d.userId).filter(Boolean))];
+    if (userIds.length === 0) {
+      setUserNames({});
+      return;
+    }
+    const map: Record<string, string> = {};
+    Promise.all(
+      userIds.map(async (uid) => {
+        const snap = await getDoc(doc(firestore, "users", uid));
+        if (snap.exists()) {
+          const d = snap.data();
+          map[uid] = d?.displayName?.trim() || d?.name?.trim() || d?.email || uid;
+        } else {
+          map[uid] = uid;
+        }
+      })
+    ).then(() => setUserNames((prev) => ({ ...prev, ...map })));
+  }, [userIdsKey]);
+
+  const handleKickOut = async (device: DeviceRow) => {
+    if (!companyId) return;
+    setKickingId(device.id);
+    try {
+      await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
+      toast({ title: "Device removed", description: "The device has been signed out and can sign in again if within limit." });
+      setConfirmKick(null);
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.message ?? "Failed to remove device", variant: "destructive" });
+    } finally {
+      setKickingId(null);
+    }
+  };
+
+  if (!companyId || !company) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Synced devices</CardTitle>
+          <CardDescription>Select a company to view and manage devices.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (!isCompanyOwner) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Synced devices</CardTitle>
+          <CardDescription>Only the company owner can view and remove devices.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Smartphone className="h-5 w-5" />
+            Synced devices
+          </CardTitle>
+          <CardDescription>
+            Devices that have signed in to this company. Limit: {devices.length} / {maxDevices}. Remove a device to free a slot (e.g. for another device to sign in).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : devices.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">No devices registered yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Device ID</TableHead>
+                  <TableHead>User name</TableHead>
+                  <TableHead>Last active</TableHead>
+                  <TableHead>Device type</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {devices.map((device) => (
+                  <TableRow key={device.id}>
+                    <TableCell className="font-mono text-xs">...{device.id.slice(-8)}</TableCell>
+                    <TableCell className="text-sm truncate max-w-[180px]" title={userNames[device.userId] || device.userId}>
+                      {userNames[device.userId] || device.userId}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {device.lastActive ? device.lastActive.toLocaleString() : "—"}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {device.deviceType === "mobile" ? (
+                        <Smartphone className="h-4 w-4 inline" title="Mobile" />
+                      ) : device.deviceType === "desktop" ? (
+                        <Monitor className="h-4 w-4 inline" title="PC" />
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => setConfirmKick(device)}
+                        disabled={!!kickingId}
+                      >
+                        {kickingId === device.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        <span className="ml-1">Kick out</span>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <AlertDialog open={!!confirmKick} onOpenChange={(open) => !open && setConfirmKick(null)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Remove this device?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will sign out the device from this company. The user can sign in again from that device if the plan allows. Device: ...{confirmKick?.id.slice(-8)}.
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => confirmKick && handleKickOut(confirmKick)}
+            >
+              Kick out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

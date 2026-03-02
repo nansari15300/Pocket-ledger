@@ -57,20 +57,25 @@ function getInitialSettingsTab(): string {
 export default function SettingsPage() {
     const { can } = usePermissions();
     const { company, companyId } = useCompany();
-    const [activeView, setActiveView] = useState(getInitialSettingsTab);
     const searchParams = useSearchParams();
     const router = useRouter();
     const pathname = usePathname();
 
+    const viewFromUrl = searchParams.get("view");
+    // Only use URL to decide tab; when no ?view= (e.g. opened from nav or another page), use first tab so we don't open Danger Zone from old localStorage
+    const initialView = viewFromUrl && settingsNavItems.some((item) => item.id === viewFromUrl)
+        ? viewFromUrl
+        : "company";
+    const [activeView, setActiveView] = useState(initialView);
+
     const availableNavItems = useMemo(() => settingsNavItems.filter(item => can(item.permission)), [can]);
 
-    // URL ?view=... takes precedence on load (e.g. shared link)
+    // URL is source of truth: whenever ?view= is set and differs from activeView, sync (fixes overwrite by usePageMemory when searchParams wasn't ready on first paint)
     useEffect(() => {
-        const view = searchParams.get("view");
-        if (view && settingsNavItems.some((item) => item.id === view)) {
-            setActiveView(view);
+        if (viewFromUrl && viewFromUrl !== activeView && settingsNavItems.some((item) => item.id === viewFromUrl)) {
+            setActiveView(viewFromUrl);
         }
-    }, [searchParams]);
+    }, [viewFromUrl, activeView]);
 
     // Keep URL in sync with active tab so refresh and share link work
     const setActiveViewWithUrl = (id: string) => {
@@ -95,16 +100,19 @@ export default function SettingsPage() {
     }, [activeView, availableNavItems]);
 
     // ========== MEMORY LOGIC: restore active tab on refresh ==========
+    // When URL has ?view=..., don't overwrite with localStorage so refresh opens same tab
     usePageMemory(
         SETTINGS_STORAGE_KEY,
-        activeView,           // current tab id so it gets saved
-        setActiveView,        // restore by setting tab on load
+        activeView,
+        setActiveView,
         selectedSetting,
         (item) => {
             if (item) setActiveViewWithUrl(item.id);
         },
         availableNavItems,
-        false
+        false,
+        undefined,
+        viewFromUrl
     );
     // ==================================
 

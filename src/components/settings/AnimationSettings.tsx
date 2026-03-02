@@ -133,6 +133,8 @@ export function AnimationSettings() {
     setDemoListItems(newItems);
   }, []);
 
+  const ANIMATION_SETTINGS_CHANNEL = "pocket-ledger-animation-settings";
+
   async function onSubmit(data: AnimationSettingsValues): Promise<void> {
     if (!userDocId) {
       toast({ variant: "destructive", title: "User not authenticated." });
@@ -142,6 +144,12 @@ export function AnimationSettings() {
     try {
       const userRef = doc(firestore, "users", userDocId);
       await updateDoc(userRef, { animationSettings: data });
+      // Notify all tabs (same browser, same origin) so they update animation settings live
+      if (typeof BroadcastChannel !== "undefined") {
+        try {
+          new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
+        } catch (_) {}
+      }
       toast({ title: "Success", description: "Animation settings have been updated." });
       // Reload demo to show new settings
       handleReloadDemo();

@@ -408,7 +408,8 @@ service cloud.firestore {
       }
 
       /**
-       * @description Device registration for multi-device sync limit (plan-based).
+       * Device sync & kick-out: owner/admin can delete any device and write logout command.
+       * Deploy after edit: firebase deploy --only firestore:rules
        * @path /companies/{companyId}/devices/{deviceId}
        */
       match /devices/{deviceId} {
@@ -423,6 +424,17 @@ service cloud.firestore {
         allow create, update: if isCompanyOwner(companyId) || isAdmin()
           || (isCompanyUser(companyId) && exists(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId))
             && get(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId)).data.userId == request.auth.uid);
+      }
+
+      /**
+       * Device history (log when devices are kicked/removed). Company users can read; owner can create (on kick) and delete.
+       * @path /companies/{companyId}/device_history/{entryId}
+       */
+      match /device_history/{entryId} {
+        allow read, list: if isCompanyUser(companyId);
+        allow create: if isCompanyUser(companyId);
+        allow update: if false;
+        allow delete: if isCompanyOwner(companyId) || isAdmin();
       }
     }
     

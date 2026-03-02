@@ -1,0 +1,1021 @@
+
+"use client";
+
+import * as React from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useFieldArray, useForm, useWatch, type Resolver } from "react-hook-form";
+import { z } from "zod";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  Fragment,
+  MutableRefObject,
+} from "react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Textarea } from "../ui/textarea";
+import { ScrollArea, ScrollBar } from "../ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { Checkbox } from "../ui/checkbox";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+} from "../ui/alert-dialog";
+
+import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
+import { toast as sonnerToast } from "sonner";
+
+import { useToast } from "@/hooks/use-toast";
+import { useCompany } from "@/hooks/useCompany";
+import usePermissions from "@/hooks/usePermissions";
+import Link from "next/link";
+import { useAuth } from "@/hooks/useAuth";
+import { useDate } from "@/hooks/useDate";
+import { useVouchers } from "@/hooks/useVouchers";
+import { saveVoucher } from "@/lib/voucherActionsClient";
+
+import { firestore } from "@/lib/firebase";
+import { uploadFile } from "@/lib/storage";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  serverTimestamp,
+  doc,
+  updateDoc,
+  onSnapshot,
+  Timestamp,
+} from "firebase/firestore";
+
+import type { Item, ItemGroup } from "@/components/items/types";
+import type { Tax, TaxGroup } from "@/components/tax/types";
+
+import BsDatePicker from "@/components/ui/BsDatePicker";
+import { Combobox } from "../ui/combobox";
+import { FilePreview } from "@/components/vouchers/FilePreview";
+import { compressFile } from "@/lib/compression";
+import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
+import { CreateTaxDialog } from "../tax/CreateTaxDialog";
+import { isSystemParentGroup } from "@/lib/system-groups";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import Image from 'next/image';
+
+
+const fileSchema = z.object({
+  file: z.instanceof(File),
+  preview: z.string(),
+});
+
+const unitConversionSchema = z.object({
+  fromUnit: z.string().min(1, "Unit name is required"),
+  toUnit: z.string().min(1, "Unit name is required"),
+  conversionFactor: z.coerce.number().min(0.001, "Factor must be positive"),
+});
+
+const formSchema = z.object({
+  name: z.string().min(2, { message: "Item name must be at least 2 characters." }),
+  type: z.enum(['item', 'service', 'finished_good']),
+  hsCode: z.string().optional(),
+  salePrice: z.coerce.number().min(0, "Price must be a positive number."),
+  isSalePriceTaxInclusive: z.boolean(),
+  purchasePrice: z.coerce.number().min(0, "Price must be a positive number."),
+  isPurchasePriceTaxInclusive: z.boolean(),
+  openingBalance: z.coerce.number().min(0, "Opening stock must be a positive number."),
+  openingBalanceUnit: z.string().optional(),
+  openingBalanceTaxId: z.string().optional(),
+  openingBalanceDate: z.date().optional(),
+  openingBalanceRate: z.coerce.number().min(0),
+  isOpeningBalanceTaxInclusive: z.boolean().optional(),
+  groupId: z.string().optional(),
+  unitConversions: z.array(unitConversionSchema).optional(),
+  salePriceUnit: z.string().optional(),
+  purchasePriceUnit: z.string().optional(),
+  saleTaxId: z.string().optional(),
+  purchaseTaxId: z.string().optional(),
+});
+
+const MAX_FILE_SIZE_MB = 0.5;
+
+function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
+    if (!item) {
+        return {
+            name: "",
+            type: "item",
+            hsCode: "",
+            salePrice: 0,
+            isSalePriceTaxInclusive: false,
+            purchasePrice: 0,
+            isPurchasePriceTaxInclusive: false,
+            openingBalance: 0,
+            openingBalanceRate: 0,
+            isOpeningBalanceTaxInclusive: false,
+            groupId: "",
+            unitConversions: [{ fromUnit: "", toUnit: "", conversionFactor: 1 }],
+            openingBalanceUnit: "",
+            openingBalanceTaxId: "",
+            openingBalanceDate: undefined,
+            salePriceUnit: "",
+            purchasePriceUnit: "",
+            saleTaxId: "",
+            purchaseTaxId: "",
+        };
+    }
+
+    return {
+        name: item.name,
+        type: item.type,
+        hsCode: (item as any).hsCode || "",
+        salePrice: item.salePrice,
+        isSalePriceTaxInclusive: (item as any).isSalePriceTaxInclusive || false,
+        purchasePrice: item.purchasePrice,
+        isPurchasePriceTaxInclusive: (item as any).isPurchasePriceTaxInclusive || false,
+        openingBalance: item.openingBalance,
+        openingBalanceUnit: (item as any).openingBalanceUnit || "",
+        openingBalanceTaxId: (item as any).openingBalanceTaxId || "",
+        openingBalanceDate: (item as any).openingBalanceDate?.toDate ? (item as any).openingBalanceDate.toDate() : (item.openingBalanceDate ? new Date(item.openingBalanceDate) : undefined),
+        openingBalanceRate: (item as any).openingBalanceRate || 0,
+        isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
+        groupId: item.groupId || "",
+        unitConversions: item.unitConversions || [],
+        salePriceUnit: item.salePriceUnit || "",
+        purchasePriceUnit: (item as any).purchasePriceUnit || "",
+        saleTaxId: item.saleTaxId || "",
+        purchaseTaxId: item.purchaseTaxId || "",
+    };
+}
+
+
+export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, hasTransactions }: {
+  item: Item;
+  onItemUpdated: (updatedItem: Partial<Item>) => void;
+  onItemDeleted: () => void;
+  children: React.ReactNode;
+  hasTransactions?: boolean;
+}) {
+  const [isLoading, setIsLoading] = useState(false);
+  const { toast } = useToast();
+  const [isOpen, setIsOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [groups, setGroups] = useState<ItemGroup[]>([]);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [taxes, setTaxes] = useState<Tax[]>([]);
+  const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
+  const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
+  const [prefillTaxName, setPrefillTaxName] = useState("");
+  const [taxFieldToApply, setTaxFieldToApply] = useState<"purchaseTaxId" | "saleTaxId" | "openingBalanceTaxId" | null>(null);
+  const [files, setFiles] = useState<(File | string)[]>([]);
+  const { dateSystem, formatDate } = useDate();
+
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
+    defaultValues: getInitialFormValues(item),
+  });
+  
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "unitConversions"
+  });
+
+  const itemType = form.watch('type');
+  const watchedUnitConversions = useWatch({ control: form.control, name: 'unitConversions' });
+  const watchedPurchasePrice = useWatch({ control: form.control, name: 'purchasePrice' });
+  const watchedSalePrice = useWatch({ control: form.control, name: 'salePrice' });
+  const watchedPurchasePriceUnit = useWatch({ control: form.control, name: 'purchasePriceUnit' });
+  const watchedSalePriceUnit = useWatch({ control: form.control, name: 'salePriceUnit' });
+  const watchedOpeningBalanceUnit = useWatch({ control: form.control, name: 'openingBalanceUnit' });
+  const watchedIsPurchaseTaxInclusive = useWatch({ control: form.control, name: 'isPurchasePriceTaxInclusive' });
+  const watchedIsSalePriceTaxInclusive = useWatch({ control: form.control, name: 'isSalePriceTaxInclusive' });
+  const watchedIsOpeningBalanceTaxInclusive = useWatch({ control: form.control, name: 'isOpeningBalanceTaxInclusive' });
+  const watchedOpeningBalanceTaxId = useWatch({ control: form.control, name: 'openingBalanceTaxId' });
+  const watchedPurchaseTaxId = useWatch({ control: form.control, name: 'purchaseTaxId' });
+  const watchedSaleTaxId = useWatch({ control: form.control, name: 'saleTaxId' });
+  const openingStockQty = form.watch('openingBalance') || 0;
+  const openingStockRate = form.watch('openingBalanceRate') || 0;
+  const { companyId, triggerSync, company } = useCompany();
+  const { canAddAvatar } = usePermissions();
+
+  const handleGroupCreated = (newGroupId: string) => {
+    form.setValue('groupId', newGroupId);
+    setIsCreateGroupOpen(false);
+  };
+
+  // Hide system item groups (Stock Items, Services) from dropdown
+  const itemGroupOptions = React.useMemo(
+    () =>
+      groups
+        .filter((g) => !isSystemParentGroup("item_groups", g.id))
+        .map((g) => ({ value: g.id, label: g.name })),
+    [groups]
+  );
+  
+  const handleTaxCreated = (newTaxId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
+    if (newTaxId) {
+      if (taxFieldToApply) {
+        form.setValue(taxFieldToApply, newTaxId);
+        setTaxFieldToApply(null);
+      }
+      if (newTax) {
+        setTaxes((prev) => (prev.some((t) => t.id === newTaxId) ? prev : [...prev, { ...newTax, balance: newTax.balance ?? 0 } as Tax]));
+      }
+    }
+    setIsCreateTaxOpen(false);
+    setTaxRowIndex(null);
+  }
+
+  useEffect(() => {
+    if (!isOpen || !companyId) return;
+    
+    const qGroups = query(collection(firestore, `companies/${companyId}/item_groups`));
+    const unsubGroups = onSnapshot(qGroups, (querySnapshot) => {
+        setGroups(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ItemGroup)));
+    }, (error) => {
+        console.error("Error fetching groups:", error);
+        toast({ variant: "destructive", title: "Could not load groups" });
+    });
+
+    const qTaxes = query(collection(firestore, `companies/${companyId}/taxes`));
+    const unsubTaxes = onSnapshot(qTaxes, (snapshot) => {
+        setTaxes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tax)));
+    });
+    
+    return () => {
+        unsubGroups();
+        unsubTaxes();
+    };
+  }, [isOpen, companyId, toast]);
+
+
+  useEffect(() => {
+    if (isOpen) {
+      const dateValue = (item as any).openingBalanceDate;
+      let finalDate;
+      if (dateValue?.toDate) {
+          finalDate = dateValue.toDate();
+      } else if (dateValue instanceof Date) {
+          finalDate = dateValue;
+      } else if (dateValue) {
+          finalDate = new Date(dateValue);
+      } else {
+          finalDate = undefined;
+      }
+
+      form.reset({
+        name: item.name,
+        type: item.type,
+        hsCode: (item as any).hsCode || "",
+        salePrice: item.salePrice,
+        isSalePriceTaxInclusive: (item as any).isSalePriceTaxInclusive || false,
+        purchasePrice: item.purchasePrice,
+        isPurchasePriceTaxInclusive: (item as any).isPurchasePriceTaxInclusive || false,
+        openingBalance: item.openingBalance,
+        openingBalanceUnit: (item as any).openingBalanceUnit || "",
+        openingBalanceTaxId: (item as any).openingBalanceTaxId || "",
+        openingBalanceDate: finalDate,
+        openingBalanceRate: (item as any).openingBalanceRate || 0,
+        isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
+        groupId: item.groupId || "",
+        unitConversions: item.unitConversions || [],
+        salePriceUnit: item.salePriceUnit || "",
+        purchasePriceUnit: (item as any).purchasePriceUnit || "",
+        saleTaxId: item.saleTaxId || "",
+        purchaseTaxId: item.purchaseTaxId || "",
+      });
+      setFiles(item.fileUrls || []);
+    }
+  }, [isOpen, item, form]);
+
+  async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    
+    setIsOpen(false);
+    
+    const toastId = sonnerToast.loading("Updating item...");
+    try {
+      const existingFileUrls = files.filter((f): f is string => typeof f === 'string');
+      const newFilesToUpload = files.filter((f): f is File => f instanceof File);
+
+      if (canAddAvatar && newFilesToUpload.length > 0) {
+        const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          return;
+        }
+      }
+
+      const uploadedUrls = canAddAvatar ? await Promise.all(
+        newFilesToUpload.map(async file => {
+          const res = await uploadFile(
+            { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
+            companyId,
+            company?.name,
+            "avatar",
+            undefined,
+            undefined,
+            undefined,
+            new Date()
+          );
+          if (res.success && res.url) {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            return res.url;
+          }
+          return null;
+        })
+      ) : [];
+      const filtered = uploadedUrls.filter((u): u is string => !!u);
+      
+      const fileUrls = [...existingFileUrls, ...filtered];
+      
+      const itemRef = doc(firestore, `companies/${companyId}/items`, item.id);
+      await updateDoc(itemRef, { 
+          ...values,
+          openingBalance: values.openingBalance,
+          openingBalanceDate: values.openingBalanceDate || null,
+          fileUrls, 
+          groupId: values.groupId || null
+      });
+
+      sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
+      // Update happens in background via onSnapshot - callback will be triggered by Firestore listener
+      // Use setTimeout to debounce and prevent immediate re-renders that cause transaction shaking
+      setTimeout(() => {
+        onItemUpdated({ id: item.id, ...values, fileUrls: fileUrls });
+      }, 100);
+      triggerSync();
+
+    } catch (error) {
+      console.error("Error updating item:", error);
+      sonnerToast.error("Error Updating Item", { id: toastId, description: "An error occurred. Please try again." });
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!companyId) {
+      toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    if (hasTransactions) {
+      sonnerToast.error("Cannot Delete", { description: "This item has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+        await updateDoc(doc(firestore, `companies/${companyId}/items`, item.id), {
+            isDeleted: true,
+            deletedAt: serverTimestamp()
+        });
+        toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.`});
+        onItemDeleted();
+        setIsOpen(false);
+        setIsDeleteDialogOpen(false);
+    } catch (error) {
+        console.error("Error deleting item: ", error);
+        toast({
+            variant: "destructive",
+            title: "Delete Failed",
+            description: "An error occurred while deleting the item.",
+        });
+    } finally {
+        setIsLoading(false);
+    }
+  }
+  
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding or changing files." });
+      return;
+    }
+    const newFiles = Array.from(e.target.files);
+    
+    for (const file of newFiles) {
+       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+          toast({
+            variant: "destructive",
+            title: "File Too Large",
+            description: `Please select a file smaller than ${MAX_FILE_SIZE_MB}MB.`,
+          });
+          continue;
+        }
+      if (files.length < 3) {
+        const compressedFile = await compressFile(file);
+        setFiles(prev => [...prev, compressedFile]);
+      } else {
+        toast({ variant: "destructive", title: "Limit Reached", description: "You can only upload up to 3 files."});
+        break;
+      }
+    }
+  };
+  
+  const removeFile = (indexToRemove: number) => {
+    setFiles(prev => prev.filter((_, index) => index !== indexToRemove));
+  }
+
+
+    const allUnits = [...new Set(watchedUnitConversions?.flatMap(uc => [uc.fromUnit, uc.toUnit]) || [])].filter(Boolean);
+  
+    const unitPrices = useMemo(() => {
+        const prices: Record<string, { purchase: number; sale: number; purchaseTax: number; saleTax: number; }> = {};
+        const conversions = watchedUnitConversions || [];
+        if (conversions.length === 0 || !conversions[0].toUnit) return prices;
+
+        const smallestUnit = conversions[conversions.length - 1].toUnit;
+
+        const purchaseTaxRate = taxes.find(t => t.id === watchedPurchaseTaxId)?.rate || 0;
+        const saleTaxRate = taxes.find(t => t.id === watchedSaleTaxId)?.rate || 0;
+
+        let basePurchasePrice = Number(watchedPurchasePrice) || 0;
+        if (watchedIsPurchaseTaxInclusive) {
+            basePurchasePrice = parseFloat((basePurchasePrice / (1 + purchaseTaxRate / 100)).toFixed(10));
+        }
+        if (watchedPurchasePriceUnit && smallestUnit && watchedPurchasePriceUnit !== smallestUnit) {
+            let factor = 1;
+            let current = watchedPurchasePriceUnit;
+            while (current !== smallestUnit) {
+                const conv = conversions.find((c) => c.fromUnit === current);
+                if (!conv) { factor = 0; break; }
+                factor *= Number(conv.conversionFactor) || 1;
+                current = conv.toUnit;
+            }
+            basePurchasePrice /= (factor || 1);
+        }
+
+        let baseSalePrice = Number(watchedSalePrice) || 0;
+        if (watchedIsSalePriceTaxInclusive) {
+            baseSalePrice = parseFloat((baseSalePrice / (1 + saleTaxRate / 100)).toFixed(10));
+        }
+        if (watchedSalePriceUnit && smallestUnit && watchedSalePriceUnit !== smallestUnit) {
+            let factor = 1;
+            let current = watchedSalePriceUnit;
+            while (current !== smallestUnit) {
+                const conv = conversions.find((c) => c.fromUnit === current);
+                if (!conv) { factor = 0; break; }
+                factor *= Number(conv.conversionFactor) || 1;
+                current = conv.toUnit;
+            }
+            baseSalePrice /= (factor || 1);
+        }
+
+        allUnits.forEach((unit) => {
+            let purchasePriceForUnit = basePurchasePrice;
+            let salePriceForUnit = baseSalePrice;
+
+            if (unit !== smallestUnit) {
+                let factor = 1;
+                let current = unit;
+                 while (current !== smallestUnit) {
+                  const conv = conversions.find((c) => c.fromUnit === current);
+                  if (!conv) { factor = 0; break; }
+                  factor *= Number(conv.conversionFactor) || 1;
+                  current = conv.toUnit;
+                }
+                purchasePriceForUnit *= factor;
+                salePriceForUnit *= factor;
+            }
+
+            prices[unit] = {
+                purchase: purchasePriceForUnit,
+                sale: salePriceForUnit,
+                purchaseTax: purchasePriceForUnit * (purchaseTaxRate / 100),
+                saleTax: salePriceForUnit * (saleTaxRate / 100),
+            };
+        });
+
+        return prices;
+    }, [allUnits, watchedUnitConversions, watchedPurchasePrice, watchedSalePrice, watchedPurchasePriceUnit, watchedSalePriceUnit, watchedPurchaseTaxId, watchedSaleTaxId, taxes, watchedIsPurchaseTaxInclusive, watchedIsSalePriceTaxInclusive]);
+    
+    useEffect(() => {
+        const openingStockUnit = form.getValues('openingBalanceUnit');
+        const currentRate = form.getValues('openingBalanceRate');
+
+        if (openingStockUnit && unitPrices[openingStockUnit]) {
+            const isInclusive = form.getValues('isOpeningBalanceTaxInclusive');
+            const taxId = form.getValues('openingBalanceTaxId');
+            const taxRate = taxes.find(t => t.id === taxId)?.rate || 0;
+            
+            let baseRate = Number(unitPrices[openingStockUnit]?.purchase) || 0;
+            
+            let finalRate = isInclusive 
+            ? parseFloat((baseRate * (1 + taxRate / 100)).toFixed(2)) 
+            : parseFloat(baseRate.toFixed(2));
+            
+            if (currentRate !== finalRate) {
+            form.setValue('openingBalanceRate', finalRate, { shouldValidate: true });
+            }
+        }
+    }, [watchedOpeningBalanceUnit, watchedIsOpeningBalanceTaxInclusive, watchedOpeningBalanceTaxId, unitPrices, taxes, form]);
+
+    const openingStockAmount = (openingStockQty || 0) * (openingStockRate || 0);
+
+    const openingStockByUnit = useMemo(() => {
+        const stock: Record<string, number> = {};
+        const conversions = watchedUnitConversions || [];
+        if (conversions.length === 0 || !watchedOpeningBalanceUnit || !openingStockQty) return stock;
+
+        const getFactorToSmallest = (unit: string): number => {
+            let factor = 1;
+            let current = unit;
+            const smallestUnit = conversions[conversions.length - 1].toUnit;
+
+            while (current !== smallestUnit) {
+                const conv = conversions.find(c => c.fromUnit === current);
+                if (!conv) return 0; // Should not happen in a valid chain
+                factor *= Number(conv.conversionFactor);
+                current = conv.toUnit;
+            }
+            return factor;
+        };
+        
+        const factorToSmallest = getFactorToSmallest(watchedOpeningBalanceUnit);
+        const qtyInSmallest = openingStockQty * factorToSmallest;
+
+        allUnits.forEach(unit => {
+            const factorFromSmallest = getFactorToSmallest(unit);
+            stock[unit] = factorFromSmallest > 0 ? qtyInSmallest / factorFromSmallest : 0;
+        });
+
+        return stock;
+    }, [watchedUnitConversions, openingStockQty, watchedOpeningBalanceUnit, allUnits]);
+
+
+    const capitalizeFirstLetter = (str: string) => {
+        if (!str) return "";
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    };
+
+  return (
+    <>
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+        <DialogContent
+            className="w-[80vw] max-w-[80vw] h-[90vh] max-h-[90vh] flex flex-col"
+            onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+            onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
+        >
+          <DialogHeader>
+            <DialogTitle>Edit Item/Service</DialogTitle>
+            <DialogDescription>Update the details for {item.name}.</DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="h-full flex-1 flex flex-col min-h-0">
+                <Tabs value={itemType} onValueChange={(v) => form.setValue('type', v as "item" | "service")}>
+                <TabsList>
+                  <TabsTrigger value="item">Item</TabsTrigger>
+                  <TabsTrigger value="service">Service</TabsTrigger>
+                </TabsList>
+              </Tabs>
+               <ScrollArea className="flex-1 pr-4 -mr-4">
+                 <div className="space-y-4 py-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Item Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g., T-Shirt (Red)" className="h-9" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+               <FormField
+                control={form.control}
+                name="hsCode"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>HS Code</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Enter HS Code" className="h-9" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+               <FormField
+                control={form.control}
+                name="groupId"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Group</FormLabel>
+                    <Combobox
+                      options={itemGroupOptions}
+                      value={field.value}
+                      onChange={(value, newName) => {
+                        if (value === "add-new") {
+                          setIsCreateGroupOpen(true);
+                          setTimeout(() => {
+                            document.dispatchEvent(new CustomEvent('prefill-create-item-group-name', { detail: newName }));
+                          }, 100);
+                        } else {
+                          field.onChange(value === "none" ? "" : value);
+                        }
+                      }}
+                      placeholder="Select a group"
+                      addNewLabel="+ Add New Group"
+                      triggerClassName="h-9"
+                    />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+            
+            <div className="space-y-4 border p-4 rounded-md">
+                <FormLabel className="text-base font-semibold">Unit Conversions</FormLabel>
+                {fields.map((field, index) => {
+                    const isLastRow = index === fields.length - 1;
+                    return (
+                        <div key={field.id} className="grid grid-cols-11 items-end gap-2">
+                            <div className="col-span-1 flex items-center justify-center font-bold">1</div>
+                             <FormField
+                                control={form.control}
+                                name={`unitConversions.${index}.fromUnit`}
+                                render={({ field: fromUnitField }: any) => (
+                                    <FormItem className="col-span-3">
+                                        <FormControl>
+                                            <Input
+                                                className={cn("h-9", index > 0 && "bg-muted cursor-not-allowed")}
+                                                placeholder="e.g. Box"
+                                                {...fromUnitField}
+                                                value={index > 0 ? (form.watch(`unitConversions.${index - 1}.toUnit`) || '') : fromUnitField.value}
+                                                readOnly={index > 0}
+                                                onBlur={(e) => fromUnitField.onChange(capitalizeFirstLetter(e.target.value))}
+                                            />
+                                        </FormControl>
+                                    </FormItem>
+                                )}
+                            />
+                            <div className="col-span-1 flex items-center justify-center font-bold">=</div>
+                            <FormField
+                                control={form.control}
+                                name={`unitConversions.${index}.conversionFactor`}
+                                render={({ field }: any) => (
+                                    <FormItem className="col-span-2">
+                                        <FormControl><Input type="number" placeholder="e.g. 12" className="h-9" {...field} /></FormControl>
+                                    </FormItem>
+                                )}
+                            />
+                            <FormField
+                                control={form.control}
+                                name={`unitConversions.${index}.toUnit`}
+                                render={({ field }: any) => (
+                                    <FormItem className="col-span-3">
+                                      <div className="relative">
+                                          <FormControl><Input placeholder="e.g. Pcs" className="h-9" {...field} onBlur={(e) => field.onChange(capitalizeFirstLetter(e.target.value))} /></FormControl>
+                                          {isLastRow && <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs bg-muted px-2 py-0.5 rounded-sm text-muted-foreground">Base Unit</span>}
+                                      </div>
+                                    </FormItem>
+                                )}
+                            />
+                            <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                        </div>
+                    )
+                })}
+                <Button 
+                    type="button" 
+                    size="sm" 
+                    variant="outline" 
+                     onClick={() => {
+                        const lastUnit = fields.length > 0 ? form.getValues(`unitConversions.${fields.length - 1}.toUnit`) : "";
+                        append({ fromUnit: lastUnit, toUnit: "", conversionFactor: 1 });
+                    }}
+                >
+                    Add Unit Conversion
+                </Button>
+              </div>
+
+            <div className="grid grid-cols-2 gap-4">
+               <div className="space-y-4 border p-4 rounded-md">
+                   <div className="space-y-2">
+                        <FormLabel>Purchase Price</FormLabel>
+                        <div className="grid grid-cols-2 gap-2">
+                            <FormField control={form.control} name="isPurchasePriceTaxInclusive" render={({ field }: any) => (<FormItem className="flex flex-row items-center space-x-2 space-y-0"><FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} id="isPurchasePriceTaxInclusive"/></FormControl><label htmlFor="isPurchasePriceTaxInclusive" className="text-sm font-normal">Inclusive</label></FormItem>)} />
+                            <FormField control={form.control} name="purchaseTaxId" render={({ field }: any) => (<FormItem><Select onValueChange={(value) => { if (value === "add-new") { setTaxFieldToApply("purchaseTaxId"); setIsCreateTaxOpen(true); } else field.onChange(value === "none" ? "" : value);}} value={field.value}><FormControl><SelectTrigger className="w-full h-9"><SelectValue placeholder="Select Tax"/></SelectTrigger></FormControl><SelectContent><SelectItem value="none">None</SelectItem>{taxes.map(t => <SelectItem key={t.id} value={t.id}>{t.name} @ {t.rate}%</SelectItem>)}<SelectItem value="add-new" className="text-primary">+ Add New Tax</SelectItem></SelectContent></Select><FormMessage /></FormItem>)} />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                        <FormField control={form.control} name="purchasePrice" render={({ field }: any) => (<FormItem><FormControl><Input type="number" placeholder="0.00" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="purchasePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
+                    </div>
+               </div>
+                <div className="space-y-4 border p-4 rounded-md">
+                    <div className="space-y-2">
+                        <FormLabel>Sale Price</FormLabel>
+                        <div className="grid grid-cols-2 gap-2">
+                            <FormField control={form.control} name="isSalePriceTaxInclusive" render={({ field }: any) => (<FormItem className="flex flex-row items-center space-x-2 space-y-0"><FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} id="isSalePriceTaxInclusive"/></FormControl><label htmlFor="isSalePriceTaxInclusive" className="text-sm font-normal">Inclusive</label></FormItem>)} />
+                            <FormField control={form.control} name="saleTaxId" render={({ field }: any) => (<FormItem><Select onValueChange={(value) => { if (value === "add-new") { setTaxFieldToApply("saleTaxId"); setIsCreateTaxOpen(true); } else field.onChange(value === "none" ? "" : value);}} value={field.value}><FormControl><SelectTrigger className="w-full h-9"><SelectValue placeholder="Select Tax"/></SelectTrigger></FormControl><SelectContent><SelectItem value="none">None</SelectItem>{taxes.map(t => <SelectItem key={t.id} value={t.id}>{t.name} @ {t.rate}%</SelectItem>)}<SelectItem value="add-new" className="text-primary">+ Add New Tax</SelectItem></SelectContent></Select><FormMessage /></FormItem>)} />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                       <FormField control={form.control} name="salePrice" render={({ field }: any) => (<FormItem className="flex-1"><FormControl><Input type="number" placeholder="0.00" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
+                       <FormField control={form.control} name="salePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
+                   </div>
+               </div>
+           </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+                <ScrollArea className="w-full">
+                    <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
+                        <FormLabel className="text-base font-semibold">Purchase Unit Prices</FormLabel>
+                        <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
+                            <FormLabel>Unit</FormLabel>
+                            <FormLabel className="text-right">Rate</FormLabel>
+                            <FormLabel className="text-right">Tax</FormLabel>
+                            <FormLabel className="text-right">Total</FormLabel>
+                            {allUnits.map((unit) => (
+                                <React.Fragment key={`purchase-${unit}`}>
+                                    <p className="font-medium text-sm">{unit}</p>
+                                    <Input type="number" value={Number(unitPrices[unit]?.purchase).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                    <Input type="number" value={Number(unitPrices[unit]?.purchaseTax).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                    <Input type="number" value={Number(unitPrices[unit]?.purchase + unitPrices[unit]?.purchaseTax).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    </div>
+                    <ScrollBar orientation="horizontal"/>
+                </ScrollArea>
+                 <ScrollArea className="w-full">
+                    <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
+                        <FormLabel className="text-base font-semibold">Sale Unit Prices</FormLabel>
+                         <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
+                            <FormLabel>Unit</FormLabel>
+                            <FormLabel className="text-right">Rate</FormLabel>
+                            <FormLabel className="text-right">Tax</FormLabel>
+                            <FormLabel className="text-right">Total</FormLabel>
+                            {allUnits.map((unit) => (
+                                <React.Fragment key={`sale-${unit}`}>
+                                    <p className="font-medium text-sm">{unit}</p>
+                                    <Input type="number" value={Number(unitPrices[unit]?.sale).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                    <Input type="number" value={Number(unitPrices[unit]?.saleTax).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                    <Input type="number" value={Number(unitPrices[unit]?.sale + unitPrices[unit]?.saleTax).toFixed(2) || '0.00'} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    </div>
+                    <ScrollBar orientation="horizontal"/>
+                </ScrollArea>
+            </div>
+            
+            <div className="grid grid-cols-10 gap-4">
+              <div className="space-y-4 border p-4 rounded-md col-span-6">
+                <div className="flex items-center gap-4">
+                    <FormLabel className="text-base font-semibold">Opening Stock</FormLabel>
+                    <FormField
+                        control={form.control}
+                        name="openingBalanceDate"
+                        render={({ field }: any) => (
+                            <FormItem className="flex items-center gap-2">
+                                <FormLabel>On Date</FormLabel>
+                                <div className="flex items-center gap-2">
+                                {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                                  <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} numberOfMonths={1} isRange={false} />
+                                )}
+                                {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                                  <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                                    <PopoverTrigger asChild>
+                                      <FormControl>
+                                        <Button
+                                          variant={"outline"}
+                                          className={cn("w-[180px] pl-3 text-left font-normal h-9", !field.value && "text-muted-foreground")}
+                                        >
+                                          {field.value ? formatDate(field.value) : <span>Pick a date</span>}
+                                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                        </Button>
+                                      </FormControl>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                      <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
+                                    </PopoverContent>
+                                  </Popover>
+                                )}
+                                </div>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                </div>
+                 <div className="grid grid-cols-5 gap-4 items-end">
+                     <FormField
+                        control={form.control}
+                        name="openingBalance"
+                        render={({ field }: any) => (
+                        <FormItem>
+                            <FormLabel>Quantity</FormLabel>
+                            <FormControl><Input type="number" placeholder="0" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl>
+                            <FormMessage />
+                        </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="openingBalanceUnit"
+                        render={({ field }: any) => (
+                        <FormItem>
+                            <FormLabel>Unit</FormLabel>
+                            <Select onValueChange={field.onChange} value={field.value}>
+                                <FormControl><SelectTrigger className="h-9"><SelectValue placeholder="Select Unit"/></SelectTrigger></FormControl>
+                                <SelectContent>
+                                    {allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                            <FormMessage />
+                        </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="openingBalanceRate"
+                        render={({ field }: any) => (
+                        <FormItem>
+                            <FormLabel>Rate</FormLabel>
+                            <FormControl><Input type="number" placeholder="0.00" className="h-9" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value === '' ? 0 : Number(e.target.value))} /></FormControl>
+                            <FormMessage />
+                        </FormItem>
+                        )}
+                    />
+                    <div className="space-y-2">
+                        <FormField control={form.control} name="isOpeningBalanceTaxInclusive" render={({ field }: any) => (<FormItem className="flex flex-row items-center space-x-2 space-y-0"><FormControl><Checkbox id="isOpeningBalanceTaxInclusive" checked={field.value} onCheckedChange={field.onChange} /></FormControl><label htmlFor="isOpeningBalanceTaxInclusive" className="text-sm font-normal">Inclusive</label></FormItem>)} />
+                        <FormField control={form.control} name="openingBalanceTaxId" render={({ field }: any) => (
+                        <FormItem>
+                           <FormLabel className="sr-only">Tax</FormLabel>
+                           <Select onValueChange={(value) => {
+                               if (value === "add-new") { setTaxFieldToApply("openingBalanceTaxId"); setIsCreateTaxOpen(true); }
+                               else field.onChange(value === "none" ? "" : value);
+                           }} value={field.value}>
+                           <FormControl><SelectTrigger className="h-9"><SelectValue placeholder="Select Tax" /></SelectTrigger></FormControl>
+                           <SelectContent>
+                               <SelectItem value="none">None</SelectItem>
+                               {taxes.map((t) => (
+                                   <SelectItem key={t.id} value={t.id}>{t.name} @ {t.rate}%</SelectItem>
+                               ))}
+                               <SelectItem value="add-new" className="text-primary">+ Add New Tax</SelectItem>
+                           </SelectContent>
+                           </Select>
+                           <FormMessage />
+                        </FormItem>
+                        )}/>
+                    </div>
+                    <FormItem>
+                        <FormLabel>Amount</FormLabel>
+                        <FormControl><Input type="number" value={openingStockAmount.toFixed(2)} readOnly className="h-9 bg-muted"/></FormControl>
+                    </FormItem>
+                 </div>
+                  <FormItem>
+                    <FormLabel>Attach Files (Optional)</FormLabel>
+                    {!canAddAvatar ? (
+                      <p className="text-xs text-muted-foreground">
+                        Upgrade plan to add or change files.{" "}
+                        <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Click here to upgrade</Link>
+                      </p>
+                    ) : (
+                    <RestrictedFileUploader>
+                      <div className="flex flex-wrap gap-4">
+                        {files.map((file, index) => (
+                          <FilePreview key={index} file={file} onRemove={() => removeFile(index)} />
+                        ))}
+                        {files.length < 3 && (
+                          <FormControl>
+                            <div 
+                              className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              onClick={() => fileInputRef.current?.click()}
+                            >
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1">Add File</span>
+                              <Input 
+                                type="file" 
+                                className="hidden"
+                                ref={fileInputRef}
+                                onChange={handleFileChange}
+                                accept="image/*,application/pdf"
+                                multiple
+                              />
+                            </div>
+                          </FormControl>
+                        )}
+                      </div>
+                    </RestrictedFileUploader>
+                    )}
+                  </FormItem>
+              </div>
+                <div className="space-y-2 border p-4 rounded-md col-span-4">
+                    <FormLabel className="text-base font-semibold">Opening Stock Summary</FormLabel>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 items-center pr-4">
+                       <FormLabel>Unit</FormLabel>
+                       <FormLabel className="text-right">Quantity</FormLabel>
+                        {Object.entries(openingStockByUnit).map(([unit, qty]) => (
+                            <React.Fragment key={`stock-${unit}`}>
+                                <p className="font-medium text-sm">{unit}</p>
+                                <Input type="number" value={qty.toFixed(2)} readOnly className="h-9 bg-muted cursor-not-allowed text-right"/>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                </div>
+            </div>
+            </div>
+              </ScrollArea>
+              
+              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end pt-4 border-t">
+                <DialogClose asChild>
+                  <Button variant="ghost">Cancel</Button>
+                </DialogClose>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0}>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={() => setIsDeleteDialogOpen(true)}
+                          disabled={hasTransactions}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {hasTransactions && (
+                      <TooltipContent>
+                        <p>Cannot delete an item with existing transactions.</p>
+                      </TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+                <Button type="submit" className="col-span-2 sm:col-span-1">
+                    Save Changes
+                  </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+      
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    This action will move the item <span className="font-semibold text-foreground">{item.name}</span> to the recycle bin.
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                    Move to Bin
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <CreateItemGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
+      <CreateTaxDialog onTaxCreated={handleTaxCreated} isOpen={isCreateTaxOpen} onOpenChange={(open) => { if (!open) { setPrefillTaxName(""); setTaxFieldToApply(null); } setIsCreateTaxOpen(open); }} prefillTaxName={prefillTaxName} />
+    </>
+  );
+}
+

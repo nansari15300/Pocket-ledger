@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, getDoc, deleteDoc, doc, onSnapshot, query, where, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, getDocs, getDoc, deleteDoc, doc, onSnapshot, query, where, updateDoc, orderBy } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Smartphone, Loader2, Trash2, Monitor } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Smartphone, Loader2, Trash2, Monitor, History } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -23,15 +24,36 @@ import {
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { getOrCreateDeviceId, removeThisDevice, trimDeviceHistoryToLimit, addDeviceHistoryEntryWhenRemoved } from "@/lib/deviceLimitClient";
+import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
+import { cn } from "@/lib/utils";
 
 type DeviceRow = {
   id: string;
   userId: string;
   lastActive: Date | null;
   deviceType?: "mobile" | "desktop";
+  deviceLabel?: string;
+};
+
+type DeviceHistoryRow = {
+  id: string;
+  deviceId: string;
+  userId: string;
+  lastActive: Date | null;
+  deviceType?: "mobile" | "desktop";
+  deviceLabel?: string;
+  createdAt: Date | null;
 };
 
 const userNamesCache: Record<string, string> = {};
+const DEFAULT_HISTORY_LIMIT = 50;
+
+/** Normalize device label for display (e.g. "Chrome (K)" → "Chrome (Mobile)"). */
+function displayDeviceLabel(label: string | undefined, deviceType?: "mobile" | "desktop"): string {
+  if (label === "Chrome (K)") return "Chrome (Mobile)";
+  return label || (deviceType === "mobile" ? "Mobile" : deviceType === "desktop" ? "Desktop" : "Device");
+}
 
 export function ManageDevices() {
   const { company, companyId } = useCompany();
@@ -44,7 +66,15 @@ export function ManageDevices() {
   const [kickingId, setKickingId] = useState<string | null>(null);
   const [confirmKick, setConfirmKick] = useState<DeviceRow | null>(null);
   const [updatingMultiDevice, setUpdatingMultiDevice] = useState(false);
+  const [removingThisDevice, setRemovingThisDevice] = useState(false);
+  const currentDeviceId = typeof window !== "undefined" ? getOrCreateDeviceId() : "";
+  const [deviceHistory, setDeviceHistory] = useState<DeviceHistoryRow[]>([]);
+  const [historyLimitInput, setHistoryLimitInput] = useState<string>(String(DEFAULT_HISTORY_LIMIT));
+  const [savingHistoryLimit, setSavingHistoryLimit] = useState(false);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+  const [confirmDeleteAllHistory, setConfirmDeleteAllHistory] = useState(false);
 
+  const { refreshDeviceCheck } = useDeviceLimitContext();
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company?.ownerEmail === user.email));
   const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
   const plan = getPlanFromPlans(livePlans, company?.planId as any);
@@ -63,7 +93,8 @@ export function ManageDevices() {
         const la = data?.lastActive;
         const lastActive = la && typeof la.toMillis === "function" ? new Date(la.toMillis()) : null;
         const deviceType = (data?.deviceType === "mobile" || data?.deviceType === "desktop" ? data.deviceType : undefined) as DeviceRow["deviceType"];
-        return { id: d.id, userId: data?.userId ?? "", lastActive, deviceType };
+        const deviceLabel = typeof data?.deviceLabel === "string" ? data.deviceLabel : undefined;
+        return { id: d.id, userId: data?.userId ?? "", lastActive, deviceType, deviceLabel };
       });
       rows.sort((a, b) => (b.lastActive?.getTime() ?? 0) - (a.lastActive?.getTime() ?? 0));
       setDevices(rows);
@@ -73,23 +104,68 @@ export function ManageDevices() {
   }, [companyId]);
 
   const ownerId = company?.ownerId ?? "";
+  const companyHistoryLimit = (company as { deviceHistoryLimit?: number } | null)?.deviceHistoryLimit ?? DEFAULT_HISTORY_LIMIT;
+
+  useEffect(() => {
+    setHistoryLimitInput(String(companyHistoryLimit));
+  }, [companyHistoryLimit]);
+
+  useEffect(() => {
+    if (!companyId) {
+      setDeviceHistory([]);
+      return;
+    }
+    const historyRef = collection(firestore, "companies", companyId, "device_history");
+    const q = query(historyRef, orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => {
+      const rows: DeviceHistoryRow[] = snap.docs.map((d) => {
+        const data = d.data();
+        const la = data?.lastActive;
+        const ca = data?.createdAt;
+        const lastActive = la && typeof (la as { toMillis?: () => number })?.toMillis === "function" ? new Date((la as { toMillis: () => number }).toMillis()) : null;
+        const createdAt = ca && typeof (ca as { toMillis?: () => number })?.toMillis === "function" ? new Date((ca as { toMillis: () => number }).toMillis()) : null;
+        const deviceType = (data?.deviceType === "mobile" || data?.deviceType === "desktop" ? data.deviceType : undefined) as DeviceHistoryRow["deviceType"];
+        const deviceLabel = typeof data?.deviceLabel === "string" ? data.deviceLabel : undefined;
+        return {
+          id: d.id,
+          deviceId: data?.deviceId ?? "",
+          userId: data?.userId ?? "",
+          lastActive,
+          deviceType,
+          deviceLabel,
+          createdAt,
+        };
+      });
+      setDeviceHistory(rows);
+    });
+    return () => unsub();
+  }, [companyId]);
+
   const sortedDevices = useMemo(() => {
     return [...devices].sort((a, b) => {
+      const aThis = a.id === currentDeviceId;
+      const bThis = b.id === currentDeviceId;
+      if (aThis && !bThis) return -1;
+      if (!aThis && bThis) return 1;
       const aOwner = a.userId === ownerId;
       const bOwner = b.userId === ownerId;
       if (aOwner && !bOwner) return -1;
       if (!aOwner && bOwner) return 1;
       return (b.lastActive?.getTime() ?? 0) - (a.lastActive?.getTime() ?? 0);
     });
-  }, [devices, ownerId]);
+  }, [devices, ownerId, currentDeviceId]);
 
-  const userIdsKey = useMemo(() => devices.map((d) => d.userId).filter(Boolean).sort().join(","), [devices]);
+  const userIdsKey = useMemo(
+    () => [...new Set([...devices.map((d) => d.userId), ...deviceHistory.map((h) => h.userId)].filter(Boolean))].sort().join(","),
+    [devices, deviceHistory]
+  );
 
   useEffect(() => {
-    const userIds = [...new Set(devices.map((d) => d.userId).filter(Boolean))];
+    const userIds = [...new Set([...devices.map((d) => d.userId), ...deviceHistory.map((h) => h.userId)].filter(Boolean))];
     if (userIds.length === 0) return;
     let cancelled = false;
     const map: Record<string, string> = {};
+    const sharedWith = (company?.sharedWith || []) as Array<{ uid?: string; name?: string; email?: string }>;
     Promise.all(
       userIds.map(async (uid) => {
         if (cancelled) return;
@@ -101,10 +177,18 @@ export function ManageDevices() {
         }
         if (cancelled) return;
         if (d) {
-          const raw = (d.displayName as string)?.trim() || (d.name as string)?.trim() || (d.email as string) || "";
-          map[uid] = raw && raw !== uid && !/^[a-zA-Z0-9]{20,32}$/.test(raw) ? raw : "—";
+          const name = (d.name as string)?.trim();
+          const displayName = (d.displayName as string)?.trim();
+          const email = (d.email as string)?.trim();
+          const raw = name || displayName || email || "";
+          const isUidLike = raw === uid || /^[a-zA-Z0-9_-]{20,}$/.test(raw);
+          map[uid] = raw && !isUidLike ? raw : "—";
         } else {
           map[uid] = "—";
+        }
+        if (map[uid] === "—" && sharedWith.length > 0) {
+          const shared = sharedWith.find((u) => u.uid === uid);
+          if (shared) map[uid] = (shared.name as string)?.trim() || (shared.email as string)?.trim() || "—";
         }
       })
     ).then(() => {
@@ -114,7 +198,7 @@ export function ManageDevices() {
       }
     });
     return () => { cancelled = true; };
-  }, [userIdsKey]);
+  }, [userIdsKey, company?.sharedWith]);
 
   const handleUserCanUseMultiDeviceChange = async (checked: boolean) => {
     if (!companyId) return;
@@ -133,14 +217,57 @@ export function ManageDevices() {
     if (!companyId) return;
     setKickingId(device.id);
     try {
+      await addDeviceHistoryEntryWhenRemoved(companyId, { id: device.id, userId: device.userId, deviceType: device.deviceType, deviceLabel: device.deviceLabel });
       await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
-      await setDoc(doc(firestore, "companies", companyId, "device_commands", device.id), { logout: true, at: serverTimestamp() });
-      toast({ title: "Device removed", description: "The device has been signed out and can sign in again if within limit." });
+      toast({ title: "Device removed", description: "That device will see slot full and can switch company or remove that device." });
       setConfirmKick(null);
     } catch (e: any) {
       toast({ title: "Error", description: e?.message ?? "Failed to remove device", variant: "destructive" });
     } finally {
       setKickingId(null);
+    }
+  };
+
+  const handleSaveHistoryLimit = async () => {
+    if (!companyId) return;
+    const num = Math.max(1, Math.min(1000, parseInt(historyLimitInput, 10) || DEFAULT_HISTORY_LIMIT));
+    setSavingHistoryLimit(true);
+    try {
+      await updateDoc(doc(firestore, "companies", companyId), { deviceHistoryLimit: num });
+      await trimDeviceHistoryToLimit(companyId, num);
+      setHistoryLimitInput(String(num));
+      toast({ title: "Saved", description: `Device history will keep up to ${num} entries.` });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to save", variant: "destructive" });
+    } finally {
+      setSavingHistoryLimit(false);
+    }
+  };
+
+  const handleDeleteHistoryEntry = async (entryId: string) => {
+    if (!companyId) return;
+    setDeletingHistoryId(entryId);
+    try {
+      await deleteDoc(doc(firestore, "companies", companyId, "device_history", entryId));
+      toast({ title: "Entry removed", description: "History entry deleted." });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to delete", variant: "destructive" });
+    } finally {
+      setDeletingHistoryId(null);
+    }
+  };
+
+  const handleDeleteAllHistory = async () => {
+    if (!companyId) return;
+    setConfirmDeleteAllHistory(false);
+    try {
+      const snap = await getDocs(collection(firestore, "companies", companyId, "device_history"));
+      for (const d of snap.docs) {
+        await deleteDoc(d.ref);
+      }
+      toast({ title: "History cleared", description: "All device history entries removed." });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to delete all", variant: "destructive" });
     }
   };
 
@@ -155,14 +282,51 @@ export function ManageDevices() {
     );
   }
 
+  const handleRemoveThisDevice = async () => {
+    if (!companyId) return;
+    setRemovingThisDevice(true);
+    try {
+      await removeThisDevice(companyId);
+      refreshDeviceCheck();
+      toast({ title: "Device removed", description: "This device no longer uses a slot. You can open the company again to use a slot if available." });
+    } catch (e: unknown) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to remove device", variant: "destructive" });
+    } finally {
+      setRemovingThisDevice(false);
+    }
+  };
+
   if (!isCompanyOwner) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Synced devices</CardTitle>
-          <CardDescription>Only the company owner can view and remove devices.</CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="space-y-8">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Smartphone className="h-5 w-5" />
+              Synced devices
+            </CardTitle>
+            <CardDescription>
+              Remove this device from the company to free a slot. You stay logged in; this device will need to use a slot again when you open the company.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border p-4">
+              <div>
+                <p className="font-medium">This device</p>
+                <p className="text-sm text-muted-foreground font-mono">...{currentDeviceId.slice(-8)}</p>
+              </div>
+              <Button
+                variant="destructive"
+                onClick={handleRemoveThisDevice}
+                disabled={removingThisDevice}
+              >
+                {removingThisDevice ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                <span className="ml-2">Remove</span>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -203,7 +367,7 @@ export function ManageDevices() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Device ID</TableHead>
+                  <TableHead>Device</TableHead>
                   <TableHead>User name</TableHead>
                   <TableHead>Last active</TableHead>
                   <TableHead>Device type</TableHead>
@@ -215,9 +379,15 @@ export function ManageDevices() {
                   const isAdmin = device.userId === ownerId;
                   const displayName = isAdmin ? "Admin" : (userNames[device.userId] ?? "—");
                   const isUid = !isAdmin && (displayName === device.userId || /^[a-zA-Z0-9]{20,32}$/.test(displayName));
+                  const isThisDevice = device.id === currentDeviceId;
                   return (
-                  <TableRow key={device.id}>
-                    <TableCell className="font-mono text-xs">...{device.id.slice(-8)}</TableCell>
+                  <TableRow
+                    key={device.id}
+                    className={isThisDevice ? "cursor-default pointer-events-none" : undefined}
+                  >
+                    <TableCell className="text-sm" title={device.id}>
+                      {displayDeviceLabel(device.deviceLabel, device.deviceType)}
+                    </TableCell>
                     <TableCell className="text-sm truncate max-w-[200px]" title={isAdmin ? "Admin" : (isUid ? undefined : displayName)}>
                       {isAdmin ? "Admin" : (isUid ? "—" : displayName)}
                     </TableCell>
@@ -226,27 +396,134 @@ export function ManageDevices() {
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {device.deviceType === "mobile" ? (
-                        <Smartphone className="h-4 w-4 inline" title="Mobile" />
+                        <span title="Mobile"><Smartphone className="h-4 w-4 inline" /></span>
                       ) : device.deviceType === "desktop" ? (
-                        <Monitor className="h-4 w-4 inline" title="PC" />
+                        <span title="PC"><Monitor className="h-4 w-4 inline" /></span>
                       ) : (
-                        <Monitor className="h-4 w-4 inline" title="Device" />
+                        <span title="Device"><Monitor className="h-4 w-4 inline" /></span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => setConfirmKick(device)}
-                        disabled={!!kickingId}
-                      >
-                        {kickingId === device.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                        <span className="ml-1">Kick out</span>
-                      </Button>
+                    <TableCell className={cn("text-right", isThisDevice && "pointer-events-auto")}>
+                      <div className="flex items-center justify-end gap-2">
+                        {isThisDevice && <span className="text-sm font-medium text-muted-foreground">This device</span>}
+                        {isThisDevice ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={handleRemoveThisDevice}
+                            disabled={removingThisDevice}
+                          >
+                            {removingThisDevice ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            <span className="ml-1">Remove</span>
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => setConfirmKick(device)}
+                            disabled={!!kickingId}
+                          >
+                            {kickingId === device.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            <span className="ml-1">Kick out</span>
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );})}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            Device history
+          </CardTitle>
+          <CardDescription>
+            Log of devices that were kicked or removed. Set how many entries to keep; oldest are removed when over limit.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="history-limit">Max history entries to save</Label>
+              <Input
+                id="history-limit"
+                type="number"
+                min={1}
+                max={1000}
+                value={historyLimitInput}
+                onChange={(e) => setHistoryLimitInput(e.target.value)}
+                className="w-28"
+              />
+            </div>
+            <Button onClick={handleSaveHistoryLimit} disabled={savingHistoryLimit}>
+              {savingHistoryLimit ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              <span className={savingHistoryLimit ? "ml-2" : ""}>Save</span>
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">{deviceHistory.length} entries (keeping up to {companyHistoryLimit})</p>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setConfirmDeleteAllHistory(true)}
+              disabled={deviceHistory.length === 0}
+            >
+              <Trash2 className="h-4 w-4" />
+              <span className="ml-2">Delete all history</span>
+            </Button>
+          </div>
+          {deviceHistory.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4">No history yet. Entries are added when a device is kicked or removed.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Device</TableHead>
+                  <TableHead>User name</TableHead>
+                  <TableHead>Last active</TableHead>
+                  <TableHead>Recorded at</TableHead>
+                  <TableHead>Device type</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {deviceHistory.map((row) => {
+                  const isAdmin = row.userId === ownerId;
+                  const displayName = isAdmin ? "Admin" : (userNames[row.userId] ?? "—");
+                  return (
+                    <TableRow key={row.id}>
+                      <TableCell className="text-sm" title={row.deviceId}>
+                        {displayDeviceLabel(row.deviceLabel, row.deviceType)}
+                      </TableCell>
+                      <TableCell className="text-sm truncate max-w-[140px]">{displayName}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{row.lastActive ? row.lastActive.toLocaleString() : "—"}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{row.createdAt ? row.createdAt.toLocaleString() : "—"}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {row.deviceType === "mobile" ? <Smartphone className="h-4 w-4 inline" /> : row.deviceType === "desktop" ? <Monitor className="h-4 w-4 inline" /> : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDeleteHistoryEntry(row.id)}
+                          disabled={deletingHistoryId === row.id}
+                        >
+                          {deletingHistoryId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          <span className="ml-1">Delete</span>
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

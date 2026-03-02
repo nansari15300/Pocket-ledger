@@ -1,15 +1,14 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { doc, onSnapshot, deleteDoc } from "firebase/firestore";
-import { signOut } from "firebase/auth";
-import { firestore, auth } from "@/lib/firebase";
+import { collection, onSnapshot } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { useLivePlans, getPlanFromPlans } from "./useLivePlans";
-import { registerDeviceAndCheckLimit, getOrCreateDeviceId } from "@/lib/deviceLimitClient";
+import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCreateDeviceId, setKickedForCompany, clearKickedForCompany, getWasKicked, enforceDeviceLimitByPlan } from "@/lib/deviceLimitClient";
 
-const runCheckRef = { current: (() => {}) as () => void };
+const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise<void> };
 
 export function useDeviceLimit() {
   const { companyId, company } = useCompany();
@@ -21,13 +20,19 @@ export function useDeviceLimit() {
     count: number;
     limit: number;
     singleDeviceOnly?: boolean;
+    replaceOffer?: boolean;
+    noPermissionNewDevice?: boolean;
+    kickedAndBlocked?: boolean;
   } | null>(null);
+  const myDeviceWasInListRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (!companyId || !user?.uid || !company) {
       setResult(null);
+      myDeviceWasInListRef.current = null;
       return;
     }
+    myDeviceWasInListRef.current = null;
 
     const plan = getPlanFromPlans(livePlans, company.planId as any);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
@@ -37,11 +42,22 @@ export function useDeviceLimit() {
     const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
 
     let cancelled = false;
-    const runCheck = () => {
-      if (cancelled) return;
-      registerDeviceAndCheckLimit(companyId, user!.uid, maxDevices, true, { userCanUseMultiDevice, isOwner })
-        .then((r) => {
-          if (!cancelled) setResult({ allowed: r.allowed, count: r.count, limit: r.limit, singleDeviceOnly: r.singleDeviceOnly });
+    myDeviceWasInListRef.current = null;
+    const runCheck = (): Promise<void> => {
+      if (cancelled) return Promise.resolve();
+      const wasKicked = getWasKicked(companyId);
+      return registerDeviceAndCheckLimit(companyId, user!.uid, maxDevices, true, { userCanUseMultiDevice, isOwner, wasKicked })
+        .then(async (r) => {
+          if (cancelled) return;
+          if (r.count > r.limit && r.limit >= 1) {
+            try {
+              await enforceDeviceLimitByPlan(companyId, r.limit);
+              if (!cancelled) runCheck();
+            } catch {
+              // non-blocking
+            }
+          }
+          if (!cancelled) setResult({ allowed: r.allowed, count: r.count, limit: r.limit, singleDeviceOnly: r.singleDeviceOnly, replaceOffer: r.replaceOffer, noPermissionNewDevice: r.noPermissionNewDevice, kickedAndBlocked: r.kickedAndBlocked });
         })
         .catch(() => {
           if (!cancelled) setResult({ allowed: true, count: 0, limit: maxDevices });
@@ -50,9 +66,24 @@ export function useDeviceLimit() {
 
     runCheckRef.current = runCheck;
     runCheck();
-    const interval = setInterval(runCheck, 45 * 1000);
+
+    const deviceId = getOrCreateDeviceId();
+    const devicesRef = collection(firestore, "companies", companyId, "devices");
+    const unsubDevices = onSnapshot(devicesRef, (snap) => {
+      if (cancelled) return;
+      const myDoc = snap.docs.find((d) => d.id === deviceId);
+      const inList = !!myDoc;
+      if (myDeviceWasInListRef.current === true && !inList) {
+        setKickedForCompany(companyId);
+      }
+      myDeviceWasInListRef.current = inList;
+      if (!inList) runCheck();
+    });
+
+    const interval = setInterval(runCheck, 10 * 1000);
     return () => {
       cancelled = true;
+      unsubDevices();
       clearInterval(interval);
     };
   }, [companyId, user?.uid, company?.planId, company?.ownerId, company?.ownerEmail, company?.userCanUseMultiDevice, livePlans, company]);
@@ -61,31 +92,33 @@ export function useDeviceLimit() {
     runCheckRef.current?.();
   }, []);
 
-  // Listen for kick-out logout command so this device signs out in real time
-  useEffect(() => {
+  const performReplaceAndRefresh = useCallback(async () => {
     if (!companyId || !user?.uid) return;
-    const deviceId = getOrCreateDeviceId();
-    if (!deviceId) return;
-    const cmdRef = doc(firestore, "companies", companyId, "device_commands", deviceId);
-    const unsub = onSnapshot(cmdRef, (snap) => {
-      if (snap.data()?.logout === true) {
-        signOut(auth).finally(() => {
-          deleteDoc(cmdRef).catch(() => {});
-        });
-      }
-    });
-    return () => unsub();
+    await replaceMyOtherDevicesAndRegister(companyId, user.uid);
+    runCheckRef.current?.();
   }, [companyId, user?.uid]);
+
+  const clearKickedAndRefresh = useCallback((): Promise<void> => {
+    if (!companyId) return Promise.resolve();
+    clearKickedForCompany(companyId);
+    const p = runCheckRef.current?.();
+    return p instanceof Promise ? p : Promise.resolve();
+  }, [companyId]);
 
   return useMemo(
     () => ({
       deviceLimitReached: result !== null && !result.allowed,
       singleDeviceOnly: result?.singleDeviceOnly === true,
+      replaceOffer: result?.replaceOffer === true,
+      noPermissionNewDevice: result?.noPermissionNewDevice === true,
+      kickedAndBlocked: result?.kickedAndBlocked === true,
       deviceCount: result?.count ?? 0,
       maxDevices: result?.limit ?? 1,
       loading: companyId && user && company && result === null,
       refreshDeviceCheck,
+      performReplaceAndRefresh,
+      clearKickedAndRefresh,
     }),
-    [result, companyId, user, company, refreshDeviceCheck]
+    [result, companyId, user, company, refreshDeviceCheck, performReplaceAndRefresh, clearKickedAndRefresh]
   );
 }

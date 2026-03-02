@@ -17,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Loader2, PlusCircle, X } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { useState, useEffect } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 
@@ -116,13 +117,16 @@ const voucherSettingsSchema = z.object({
   voucherPrefixes: voucherPrefixSchema,
   enableVoucherPrefixSelection: voucherPrefixSelectionSchema,
   enableLinkPaymentToTxns: z.boolean(),
+  spendWiseEnabled: z.boolean(),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
 
 export function VoucherSettings() {
   const { company, companyId, loading: companyLoading } = useCompany();
+  const { user } = useAuth();
   const { toast } = useToast();
+  const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
   const [isLoading, setIsLoading] = useState(false);
    const [newPrefixValues, setNewPrefixValues] = useState<Record<keyof VoucherPrefixValues, string>>(
       Object.keys(defaultPrefixes).reduce((acc, key) => ({ ...acc, [key]: "" }), {} as any)
@@ -151,6 +155,7 @@ export function VoucherSettings() {
           add_salary: false, pay_salary: false,
         },
         enableLinkPaymentToTxns: true,
+        spendWiseEnabled: false,
     },
   });
 
@@ -185,6 +190,7 @@ export function VoucherSettings() {
             ...(company as any).enableVoucherPrefixSelection,
         },
         enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns !== false,
+        spendWiseEnabled: (company as any).spendWiseEnabled === true,
       });
     }
   }, [company, form]);
@@ -225,6 +231,7 @@ export function VoucherSettings() {
       voucherPrefixes: data.voucherPrefixes,
       enableVoucherPrefixSelection: data.enableVoucherPrefixSelection,
       enableLinkPaymentToTxns: data.enableLinkPaymentToTxns,
+      spendWiseEnabled: data.spendWiseEnabled,
       });
       toast({ title: "Success", description: "Voucher settings have been updated." });
     } catch (error) {
@@ -314,6 +321,25 @@ export function VoucherSettings() {
                     </FormItem>
                   )}
                 />
+                {isCompanyOwner && (
+                  <FormField
+                    control={form.control}
+                    name="spendWiseEnabled"
+                    render={({ field }: any) => (
+                      <FormItem className="flex flex-row items-center justify-between mt-4">
+                        <div>
+                          <FormLabel>Spend Wise (Bank/Cash)</FormLabel>
+                          <FormDescription>
+                            When ON, Payment Out must be linked to Payment In: user chooses which Payment In(s) this spend is from. When OFF, Payment Out works as normal.
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                )}
               </Card>
             </div>
 

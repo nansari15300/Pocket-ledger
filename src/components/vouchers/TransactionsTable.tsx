@@ -13,9 +13,6 @@ import {
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
-const BillwiseTransactionTable = React.lazy(() =>
-  import("./BillwiseTransactionTable").then((m) => ({ default: m.BillwiseTransactionTable }))
-);
 import { cn } from "@/lib/utils";
 import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
@@ -610,69 +607,13 @@ export function TransactionsTable({
     );
   }
 
-  if (isBillWisePartyOrGroup) {
-    return (
-      <React.Suspense fallback={<div className="p-4 text-muted-foreground">Loading...</div>}>
-      <BillwiseTransactionTable
-        transactions={transactions}
-        context={context}
-        contextId={contextId}
-        openingBalance={openingBalance}
-        openingBalanceOutstanding={openingBalanceOutstanding}
-        openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
-        showNarration={showNarration}
-        stockView={stockView}
-        item={item}
-        displayUnit={displayUnit}
-        setDisplayUnit={setDisplayUnit}
-        journalAccountNames={journalAccountNames}
-        userNames={userNames}
-        filters={filters}
-        setFilters={setFilters}
-        activeFilter={activeFilter}
-        setActiveFilter={setActiveFilter}
-        onRowClick={onRowClick}
-        onDeleteVoucher={onDeleteVoucher}
-        onHistoryVoucher={onHistoryVoucher}
-        onAddLink={onAddLink}
-        onApproveVoucher={effectiveOnApproveVoucher}
-        periodDr={periodDr}
-        periodCr={periodCr}
-        closingBalance={closingBalance}
-        isTaxContext={isTaxContext}
-        hideDebitColumn={hideDebitColumn}
-        hideCreditColumn={hideCreditColumn}
-        hideBalanceColumn={hideBalanceColumn}
-        hideFooter={hideFooter}
-        getDisplayValue={getDisplayValueProp}
-        voucherTypes={voucherTypes}
-        onVoucherTypeChange={onVoucherTypeChange}
-        isBalanceMasked={isBalanceMasked}
-        visibleColumns={visibleColumns}
-        openingBalanceActions={openingBalanceActions}
-        scrollOnlyTransactions={scrollOnlyTransactions}
-        statusFilter={statusFilter}
-        statusFilterAllChecked={statusFilterAllChecked}
-        onStatusFilterAll={onStatusFilterAll}
-        onStatusFilterChange={onStatusFilterChange}
-        statusFilterIdPrefix={statusFilterIdPrefix}
-      />
-      </React.Suspense>
-    );
-  }
-
-  return (
-    <div
-      ref={tableContainerRef}
-      tabIndex={0}
-      role="grid"
-      aria-label="Transactions"
-      className="w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none"
-      onKeyDown={handleTableKeyDown}
-      onClick={() => tableContainerRef.current?.focus()}
-    >
+  const hasSpendWiseGroups = transactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+  const tableContent = (
       <Table
-        className={cn(ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full")}
+        className={cn(
+          ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full",
+          hasSpendWiseGroups && "border-separate border-spacing-0"
+        )}
         scrollContainer={false}
       >
         <TableHeader>
@@ -704,7 +645,6 @@ export function TransactionsTable({
             {showOpeningBalance && (
               <motion.tr 
                 key="opening-balance-row" 
-                layout 
                 initial={{ opacity: 0 }} 
                 animate={{ opacity: 1 }} 
                 exit={{ opacity: 0 }}
@@ -771,10 +711,24 @@ export function TransactionsTable({
               </motion.tr>
             )}
             {transactions.length > 0 ? (
-              transactions.map((t: any) => (
+              transactions.map((t: any, rowIndex: number) =>
+                (t as any)._spendWiseSpacer ? (
+                  <tr key={t.id} aria-hidden="true">
+                    <td
+                      colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
+                      className="p-0 m-0 h-[5px] min-h-[5px] max-h-[5px] border-0 bg-transparent align-middle"
+                      style={{ height: "5px", lineHeight: 0, verticalAlign: "middle" }}
+                    />
+                  </tr>
+                ) : (
                 <TransactionRow
-                    key={t.id}
+                    key={`${(t as any).id}-${rowIndex}`}
                     transaction={t}
+                    isSpendWiseChild={!!(t as any)._spendWiseChild}
+                    isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
+                    isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                    spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
+                    spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
                     showNarration={showNarration}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
@@ -801,7 +755,8 @@ export function TransactionsTable({
                     ensureMinGaps={ensureMinGaps}
                     showFileColumn={showFileBySelection}
                 />
-              ))
+              )
+              )
             ) : (
              <tr key="no-records-row">
               <TableCell
@@ -845,6 +800,21 @@ export function TransactionsTable({
         </TableFooter>
        )}
       </Table>
+  );
+
+  return (
+    <div
+      ref={tableContainerRef}
+      tabIndex={0}
+      role="grid"
+      aria-label="Transactions"
+      className={cn(
+        "w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none"
+      )}
+      onKeyDown={handleTableKeyDown}
+      onClick={() => tableContainerRef.current?.focus()}
+    >
+      {tableContent}
     </div>
   );
 }

@@ -57,6 +57,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
+import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
@@ -97,6 +98,34 @@ const formSchema = z.object({
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Please select To Account (Other).", path: ["toAccountId"] });
     }
 });
+
+/** Allocate total across selected PIs in the order given (selection order from dialog). Returns per-PI amounts. */
+function allocatePaymentInAmounts(
+  totalToAllocate: number,
+  piIds: string[],
+  allVouchers: any[],
+  accountId: string,
+  linkedAmountByPaymentInId: Map<string, number>
+): Record<string, number> {
+  if (!totalToAllocate || !piIds?.length || !allVouchers?.length) return {};
+  const result: Record<string, number> = {};
+  const getPi = (id: string) => allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === accountId);
+  const getLinkable = (id: string) => {
+    const v = getPi(id);
+    const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
+    const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+    return Math.max(0, amount - alreadyLinked);
+  };
+  let remaining = totalToAllocate;
+  for (const id of piIds) {
+    if (remaining <= 0) break;
+    const linkable = getLinkable(id);
+    const take = Math.min(linkable, remaining);
+    if (take > 0) result[id] = take;
+    remaining -= take;
+  }
+  return result;
+}
 
 type PaymentOutFormValues = z.infer<typeof formSchema>;
 
@@ -218,12 +247,18 @@ export function CreatePaymentOutForm({
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
   const [isLinkToSalaryOpen, setIsLinkToSalaryOpen] = useState(false);
+  const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
+  const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
 
 
     useEffect(() => {
         setLoading(vouchersLoading);
-
     }, [vouchersLoading, companyId]);
+
+  useEffect(() => {
+    const ids = voucher?.linkedPaymentInIds;
+    setLinkedPaymentInIds(Array.isArray(ids) ? [...ids] : []);
+  }, [voucher?.id, voucher?.linkedPaymentInIds]);
 
   const isEditingAndConverting = voucher && (voucher.type !== 'payment_out' && voucher.type !== 'direct_expense');
   
@@ -251,6 +286,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const toAccountId = form.watch("toAccountId");
   
   const voucherType = defaultTab === 'direct_expense' ? 'direct_expense' : 'payment_out';
+  const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
 
   const payeeBalance = useMemo(() => {
     if (payeeType === 'party' && partyId) return processedParties.find(p => p.id === partyId)?.balance;
@@ -298,6 +334,47 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const totalLinked = useMemo(() => linkedToRows.reduce((s, r) => s + r.amount, 0), [linkedToRows]);
   const amountPaid = Number(form.watch("amount")) || 0;
   const remainingToLink = Math.max(0, amountPaid - totalLinked);
+  const linkedAmountByPaymentInId = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!allVouchers?.length || !accountId) return map;
+    const currentId = voucher?.id ?? savedVoucherId;
+    allVouchers
+      .filter(
+        (v: any) =>
+          v.type === "payment_out" &&
+          v.accountId === accountId &&
+          Array.isArray(v.linkedPaymentInIds) &&
+          v.linkedPaymentInIds.length > 0 &&
+          v.id !== currentId &&
+          !v.isDeleted
+      )
+      .forEach((po: any) => {
+        const poAmt = Number(po.total ?? po.amount ?? 0) || 0;
+        const ids = po.linkedPaymentInIds as string[];
+        const amounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
+        ids.forEach((piId: string) => {
+          const add = amounts?.[piId] != null ? Number(amounts[piId]) : poAmt / ids.length;
+          map.set(piId, (map.get(piId) ?? 0) + add);
+        });
+      });
+    return map;
+  }, [allVouchers, accountId, voucher?.id, savedVoucherId]);
+  const linkedPaymentInTotal = useMemo(() => {
+    if (!allVouchers?.length || !linkedPaymentInIds?.length || !accountId) return 0;
+    return linkedPaymentInIds.reduce((sum, id) => {
+      const v = allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === accountId);
+      const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
+      const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+      const linkable = Math.max(0, amount - alreadyLinked);
+      return sum + linkable;
+    }, 0);
+  }, [allVouchers, linkedPaymentInIds, accountId, linkedAmountByPaymentInId]);
+  const amountMatched = amountPaid > 0 && linkedPaymentInTotal >= amountPaid;
+  const showLinkPayMode = spendWiseEnabled && !!accountId && voucherType === "payment_out" && amountPaid > 0;
+  const showLinkPayButton = showLinkPayMode && !amountMatched;
+  const showSaveAfterLink = showLinkPayMode && amountMatched;
+  const isEditPaymentOut = !!(voucher?.id || savedVoucherId) && voucherType === "payment_out";
+  const linkPayOthersDisabled = showLinkPayMode && !amountMatched;
 
   const showLinkedSection = voucherType === "payment_out" &&
     ((payeeType === "party" && partyId && company?.enableLinkPaymentToTxns !== false) || (payeeType === "staff" && staffId));
@@ -399,6 +476,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       sonnerToast.error("Error", { description: "Login and company selection required." });
       return;
     }
+    if (voucherType === "payment_out" && spendWiseEnabled) {
+      if (!linkedPaymentInIds || linkedPaymentInIds.length === 0) {
+        sonnerToast.error("Select Payment In", { description: "Spend Wise is on. Please choose at least one Payment In to link this Payment Out to." });
+        return;
+      }
+      const currentId = voucher?.id ?? savedVoucherId;
+      const linkedByPi = new Map<string, number>();
+      allVouchers
+        ?.filter(
+          (v: any) =>
+            v.type === "payment_out" &&
+            v.accountId === data.accountId &&
+            Array.isArray(v.linkedPaymentInIds) &&
+            v.linkedPaymentInIds.length > 0 &&
+            v.id !== currentId &&
+            !v.isDeleted
+        )
+        .forEach((po: any) => {
+          const poAmt = Number(po.total ?? po.amount ?? 0) || 0;
+          const ids = po.linkedPaymentInIds as string[];
+          const amounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
+          ids.forEach((piId: string) => {
+            const add = amounts?.[piId] != null ? Number(amounts[piId]) : poAmt / ids.length;
+            linkedByPi.set(piId, (linkedByPi.get(piId) ?? 0) + add);
+          });
+        });
+      const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
+        const v = allVouchers?.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === data.accountId);
+        const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
+        const alreadyLinked = linkedByPi.get(id) ?? 0;
+        const linkable = Math.max(0, amount - alreadyLinked);
+        return sum + linkable;
+      }, 0);
+      const amt = Number(data.amount) || 0;
+      if (amt > 0 && linkedTotal < amt) {
+        sonnerToast.error("Link amount too low", { description: "Selected Payment In linkable total must match or exceed the amount. Choose more Payment In or reduce the amount." });
+        return;
+      }
+    }
     
     try {
       // Permission check: create or edit
@@ -498,6 +614,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         submissionData.allocations = allocations ?? [];
         if (submissionData.payeeType === 'staff' && data.staffId) {
           submissionData.staffId = data.staffId;
+        }
+        if (spendWiseEnabled && linkedPaymentInIds?.length) {
+          submissionData.linkedPaymentInIds = linkedPaymentInIds;
+          submissionData.linkedPaymentInAmounts = allocatePaymentInAmounts(
+            cleanAmount,
+            linkedPaymentInIds,
+            allVouchers ?? [],
+            data.accountId,
+            linkedAmountByPaymentInId
+          );
         }
       }
       if (voucherType === 'direct_expense') {
@@ -627,6 +753,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             setFiles([]);
             setSavedVoucherId(null);
             setAllocations([]);
+            setLinkedPaymentInIds([]);
             await fetchVoucherNumber();
         }
 
@@ -795,6 +922,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return false;
   });
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()], [company, voucherType]);
+
+  const paymentInDialogNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    processedParties?.forEach((p) => { m[p.id] = p.name ?? ""; });
+    processedStaff?.forEach((s) => { m[s.id] = s.name ?? ""; });
+    processedTaxes?.forEach((t) => { m[t.id] = t.name ?? (t as any).label ?? ""; });
+    processedAccounts?.forEach((a) => { m[a.id] = a.accountName ?? ""; });
+    expenseAccounts?.forEach((e) => { m[e.id] = e.name ?? ""; });
+    return m;
+  }, [processedParties, processedStaff, processedTaxes, processedAccounts, expenseAccounts]);
   
   const paymentPayeeTypes = [
     { value: 'party', label: 'Party' },
@@ -1376,6 +1513,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
               )}
 
+
               <FormField
                 control={form.control}
                 name="amount"
@@ -1544,97 +1682,201 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           )}>
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
-                {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
-                      Delete
+                {showLinkPayMode ? (
+                  <>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" variant="destructive" className="w-full" disabled={linkPayOthersDisabled || !voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                          Delete
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={linkPayOthersDisabled || !voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                      History
                     </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
-                  History
-                </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
-                  Save & Print
-                </Button>
-                {/* Row 1: Cancel (left) | Approve (middle) | Save (right) */}
-                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
-                  Cancel
-                </Button>
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
-                  {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
-                </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
-                </Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
+                      Save & Print
+                    </Button>
+                    <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
+                      Cancel
+                    </Button>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                      {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
+                    </Button>
+                    <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                      Link Pay
+                    </Button>
+                    <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
+                      {isLoading ? "..." : "Save"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                          Delete
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                      History
+                    </Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
+                      Save & Print
+                    </Button>
+                    <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
+                      Cancel
+                    </Button>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                      {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
+                    </Button>
+                    <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
+                      {isLoading ? "..." : "Save"}
+                    </Button>
+                  </>
+                )}
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
-                    <History className="mr-2 h-4 w-4" /> History
-                  </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
-                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                {showLinkPayMode ? (
+                  <>
+                    <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                      <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={linkPayOthersDisabled || !voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                        <History className="mr-2 h-4 w-4" /> History
                       </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                          Move to Bin
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-                <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
-                    Cancel
-                  </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save & New
-                  </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
-                    <Printer className="mr-2 h-4 w-4" />
-                    Save & Print
-                  </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save
-                  </Button>
-                  {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
-                      {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
-                      {isFormDirty ? "Save & Approve" : "Approve"}
-                    </Button>
-                  ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save & Approve
-                    </Button>
-                  )}
-                </div>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={linkPayOthersDisabled || !voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                            <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                              Move to Bin
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                    <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                      <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
+                        Cancel
+                      </Button>
+                      <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={linkPayOthersDisabled || !!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                        {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Save & New
+                      </Button>
+                      <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                        <Printer className="mr-2 h-4 w-4" />
+                        Save & Print
+                      </Button>
+                      <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                        Link Pay
+                      </Button>
+                      <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                        {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Save
+                      </Button>
+                      {voucher?.id ? (
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                          {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                          {isFormDirty ? "Save & Approve" : "Approve"}
+                        </Button>
+                      ) : (
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                          {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          Save & Approve
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                      <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                        <History className="mr-2 h-4 w-4" /> History
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                            <AlertDialogDescription>This will move the voucher to the recycle bin.</AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                              Move to Bin
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </div>
+                    <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                      <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
+                        Cancel
+                      </Button>
+                      <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                        {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Save & New
+                      </Button>
+                      <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                        <Printer className="mr-2 h-4 w-4" />
+                        Save & Print
+                      </Button>
+                      <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                        {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Save
+                      </Button>
+                      {voucher?.id ? (
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                          {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+                          {isFormDirty ? "Save & Approve" : "Approve"}
+                        </Button>
+                      ) : (
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                          {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          Save & Approve
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -1716,6 +1958,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           existingAllocations={allocations}
           staffOpeningBalance={processedStaff.find((s) => s.id === staffId)?.openingBalance ?? 0}
           onDone={setAllocations}
+        />
+      )}
+      {spendWiseEnabled && accountId && voucherType === "payment_out" && (
+        <LinkPaymentInToPaymentOutDialog
+          isOpen={isLinkPaymentInDialogOpen}
+          onOpenChange={setIsLinkPaymentInDialogOpen}
+          accountId={accountId}
+          vouchers={allVouchers ?? []}
+          selectedIds={linkedPaymentInIds}
+          onConfirm={setLinkedPaymentInIds}
+          names={paymentInDialogNames}
+          requiredAmount={amountPaid}
+          currentVoucherId={voucher?.id ?? savedVoucherId ?? undefined}
         />
       )}
     </>

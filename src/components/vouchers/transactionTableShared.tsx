@@ -409,7 +409,30 @@ export const TransactionRow = React.memo(
     isBillWise,
     ensureMinGaps = false,
     showFileColumn = false,
+    isSpendWiseChild = false,
+    isSpendWiseGroupFirst = false,
+    isSpendWiseGroupLast = false,
+    spendWiseRunningBalance,
+    spendWiseGroupColorIndex,
   }: any) => {
+    const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
+    const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
+    const swColor = hasSpendWiseColor && (spendWiseGroupColorIndex === 1 ? "green" : spendWiseGroupColorIndex === 2 ? "pink" : "blue");
+    const spendWiseBorderFirst = isSpendWiseGroupFirst && hasSpendWiseColor && cn(
+      "[&>td]:border-t [&>td]:border-b-0 [&>td]:border-solid",
+      swColor === "green" && "[&>td]:border-t-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+      swColor === "pink" && "[&>td]:border-t-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+      swColor === "blue" && "[&>td]:border-t-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+      "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+      "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
+    );
+    const spendWiseBorderMid = !isSpendWiseGroupFirst && !isSpendWiseGroupLast && isSpendWiseInGroup && hasSpendWiseColor && cn(
+      "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
+      swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+      swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+      swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+      "[&>td:first-child]:border-l [&>td:last-child]:border-r"
+    );
     const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
     const { company } = useCompany();
@@ -426,6 +449,18 @@ export const TransactionRow = React.memo(
     let debit = transaction.debit;
     let credit = transaction.credit;
     let balance = transaction.balance;
+    if (typeof spendWiseRunningBalance === "number") balance = spendWiseRunningBalance;
+    const spendWiseLinkedAmount = (transaction as any)._spendWiseLinkedAmount;
+    if (isSpendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
+      const isOutflow = (transaction.type === "payment_out" || transaction.type === "direct_expense") || (Number(transaction.credit) > 0);
+      if (isOutflow) {
+        debit = 0;
+        credit = spendWiseLinkedAmount;
+      } else {
+        debit = spendWiseLinkedAmount;
+        credit = 0;
+      }
+    }
     if (context === "item" && stockView === "qty" && item) {
       const factor = getConversionFactor(item, displayUnit);
       debit = debit / factor;
@@ -483,7 +518,7 @@ export const TransactionRow = React.memo(
           ))}
         {showCol("type") && (
           <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
-            <Badge variant="outline" className="inline-flex h-6 items-center">
+            <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
               {getDisplayType(transaction)}
             </Badge>
           </TableCell>
@@ -654,35 +689,71 @@ export const TransactionRow = React.memo(
     const showNarrationRow =
       showNarration &&
       (narrationText || (showCol("status") && !hideStatusColumn && statusDetailText));
+    const spendWiseBorderLast = isSpendWiseGroupLast && !showNarrationRow && hasSpendWiseColor && cn(
+      "[&>td]:border-b [&>td]:border-solid [&>td]:pb-1",
+      !isSpendWiseGroupFirst && "[&>td]:border-t-0",
+      swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+      swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+      swColor === "blue" && "[&>td]:border-b-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+      "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+      "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
+    );
+    const spendWiseBorderLastNarr = isSpendWiseGroupLast && showNarrationRow && hasSpendWiseColor && cn(
+      "[&>td]:border-b-0 [&>td]:border-solid",
+      !isSpendWiseGroupFirst && "[&>td]:border-t-0",
+      swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+      swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+      swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+      "[&>td:first-child]:border-l [&>td:last-child]:border-r"
+    );
     const narrationColSpan = colsThroughCredit + (hideStatusColumn || !showCol("status") ? 1 : 0);
+
+    const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
+    const spendWiseMainInset = inSpendWiseGroup && cn(
+      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
+      isSpendWiseGroupFirst && "[&>td]:pt-[6px]",
+      isSpendWiseGroupLast && !showNarrationRow && "[&>td]:pb-[6px]",
+      !isSpendWiseGroupFirst && "[&>td]:pt-[3px]"
+    );
+    const spendWiseNarrInset = inSpendWiseGroup && cn(
+      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
+      isSpendWiseGroupLast && "[&>td]:pb-[6px]",
+      !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
+    );
 
     const MainRow = (
       <motion.tr
-        layout
-        initial={{ opacity: 0, y: -10 }}
+        initial={{ opacity: 0, y: isRowAnimationEnabled ? 8 : 0 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 10 }}
+        exit={{ opacity: 0, y: isRowAnimationEnabled ? -8 : 0 }}
         transition={{
           duration: isRowAnimationEnabled ? rowAnimationDuration : 0,
-          type: "spring",
-          stiffness: 100,
-          damping: 20,
+          ease: "easeOut",
         }}
         onClick={() => onRowSelect?.(transaction)}
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
-          isNote && "bg-amber-50 hover:bg-amber-100",
-          isPaid && "opacity-75 bg-muted/20",
-          isPendingApproval && "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+          isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
+          isSpendWiseChild && !isSelected && "bg-muted/20 [&>td]:bg-muted/20",
+          spendWiseMainInset,
+          spendWiseBorderFirst,
+          spendWiseBorderLast,
+          spendWiseBorderLastNarr,
+          spendWiseBorderMid,
+          isNote && !isSelected && "bg-amber-50 [&>td]:bg-amber-50 hover:bg-amber-100 [&>td]:hover:bg-amber-100",
+          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
+          isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           isSelected &&
-            "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:rounded-l-full [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-r-full [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
-          isSelected && !showNarrationRow && "[&>td]:border-b-0",
-          isSelected && showNarrationRow && "[&>td]:border-b-0",
+            "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
+          isSelected && !showNarrationRow && "[&>td]:border-b-2 [&>td]:border-b-primary [&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
+          isSelected && showNarrationRow && "[&>td]:border-b-0 [&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
           showNarrationRow && isBillWise && "[&>td]:pb-0.5",
           showNarration &&
             (narrationText || (!hideStatusColumn && getStatusDetail(transaction)))
             ? "border-b-0"
-            : "border-b"
+            : (isSpendWiseGroupFirst || isSpendWiseChild || isSpendWiseGroupLast)
+              ? "border-b-0"
+              : "border-b"
         )}
       >
         {mainRowContent}
@@ -703,10 +774,29 @@ export const TransactionRow = React.memo(
         className={cn(
           "narration-row border-b cursor-pointer",
           isBillWise && "-mt-1.5",
-          isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50",
+          spendWiseNarrInset,
+          isSpendWiseGroupLast && cn(
+            "[&>td]:border-b [&>td]:border-t-0 [&>td]:border-solid [&>td]:pb-0.5",
+            swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+            swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+            swColor === "blue" && "[&>td]:border-b-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+            "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+            "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
+          ),
+          (isSpendWiseGroupFirst || isSpendWiseChild) && !isSpendWiseGroupLast && cn(
+            "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
+            swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
+            swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
+            swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
+            "[&>td:first-child]:border-l [&>td:last-child]:border-r"
+          ),
+          isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
           isSelected
-            ? "bg-primary/10 [&>td]:border-t-0 [&>td]:border-b-2 [&>td]:border-primary [&>td]:border-x-0 [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary"
-            : !isPendingApproval && "bg-muted/30 hover:bg-muted/40"
+            ? "[&>td]:bg-primary/10 [&>td]:border-t-0 [&>td]:border-b-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
+            : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
+          isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
+          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
+          !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20"
         )}
       >
         <TableCell
