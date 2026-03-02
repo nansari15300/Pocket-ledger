@@ -106,7 +106,11 @@ export async function registerDeviceAndCheckLimit(
     getDocs(collection(firestore, "companies", companyId, "devices")),
   ]);
   const companyData = companySnap.data();
-  const userCanUseMultiDevice = companyData?.userCanUseMultiDevice !== false;
+  // Prefer caller's value (from company context, real-time) so ON takes effect immediately; fallback to Firestore
+  const userCanUseMultiDevice =
+    options?.userCanUseMultiDevice !== undefined
+      ? options.userCanUseMultiDevice !== false
+      : (companyData?.userCanUseMultiDevice !== false);
   const isOwner = options?.isOwner === true;
 
   const totalCount = allDevicesSnap.size;
