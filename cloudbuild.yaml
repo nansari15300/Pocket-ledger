@@ -6,6 +6,7 @@ steps:
     args:
       - '-c'
       - |
+        export NODE_OPTIONS="--max-old-space-size=4096"
         npm install --no-audit --no-fund
         npm run build
     dir: '.'
