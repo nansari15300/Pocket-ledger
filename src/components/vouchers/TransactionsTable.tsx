@@ -409,6 +409,193 @@ export function TransactionsTable({
   const isBillWiseCardContext = balanceMode === "bill_wise" && (context === "party" || context === "group" || context === "staff" || context === "account");
 
   if (useMobileCardView) {
+    type MobileBlock =
+      | { type: "spacer" }
+      | { type: "group"; colorIndex: number; items: any[] }
+      | { type: "single"; item: any };
+    const mobileBlocks = useMemo((): MobileBlock[] => {
+      const blocks: MobileBlock[] = [];
+      let i = 0;
+      while (i < transactions.length) {
+        const t = transactions[i] as any;
+        if (t._spendWiseSpacer) {
+          blocks.push({ type: "spacer" });
+          i++;
+          continue;
+        }
+        if (t._spendWiseGroupFirst === true) {
+          const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
+          const items: any[] = [];
+          while (i < transactions.length) {
+            const cur = transactions[i] as any;
+            if (cur._spendWiseSpacer) break;
+            items.push(cur);
+            if (cur._spendWiseGroupLast === true) {
+              i++;
+              break;
+            }
+            i++;
+          }
+          blocks.push({ type: "group", colorIndex, items });
+          continue;
+        }
+        blocks.push({ type: "single", item: t });
+        i++;
+      }
+      return blocks;
+    }, [transactions]);
+
+    const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
+      let debit = t.debit ?? 0;
+      let credit = t.credit ?? 0;
+      let balance = t.balance ?? t.runningBalance ?? 0;
+      if (typeof (t as any)._spendWiseRunningBalance === "number") balance = (t as any)._spendWiseRunningBalance;
+      const spendWiseLinkedAmount = (t as any)._spendWiseLinkedAmount;
+      if ((t as any)._spendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
+        const isOutflow = (t.type === "payment_out" || t.type === "direct_expense") || (Number(t.credit) > 0);
+        if (isOutflow) {
+          debit = 0;
+          credit = spendWiseLinkedAmount;
+        } else {
+          debit = spendWiseLinkedAmount;
+          credit = 0;
+        }
+      }
+      const useOutstanding = isBillWiseCardContext && (t.outstanding != null);
+      if (useOutstanding) {
+        const out = Number(t.outstanding) ?? 0;
+        balance = t.type === "purchase" || t.type === "payment_out" || t.type === "direct_expense" ? -out : out;
+      }
+      if (context === "item" && stockView === "qty" && item) {
+        debit = debit / conversionFactor;
+        credit = credit / conversionFactor;
+        balance = balance / conversionFactor;
+      }
+      const amount = credit > 0 ? credit : debit;
+      const isCredit = credit > 0;
+      const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
+      const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
+      const balanceAbs = Math.abs(balance);
+      const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
+      const userName =
+        (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
+        t.userDisplayName ||
+        t.userName ||
+        (t.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
+        "N/A";
+      const isItemQty = context === "item" && stockView === "qty";
+      const formatAmountOrQty = (val: number) =>
+        isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
+      const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
+      const titleLabel = (context === "daybook" || context === "item" || (context === "group" && (t.type === "sale" || t.type === "purchase")))
+        ? `${t.voucherNumber} - ${oppositeLabel}`
+        : `${t.voucherNumber || t.type || ""}${oppositeLabel ? ` - ${oppositeLabel}` : ""}`.trim() || "Transaction";
+      const getGroupAccountName = () => {
+        const getName = (id: string | undefined) => (id ? (names[id] || "—") : "");
+        const id = t.type === "direct_expense" ? (t.toAccountId || t.expenseAccountId) :
+          t.type === "direct_income" ? t.incomeAccountId :
+          t.type === "payment_out" ? (t.expenseAccountId || t.toAccountId) :
+          t.type === "payment_in" ? t.incomeAccountId :
+          t.type === "journal" && Array.isArray(t.entries) ? t.entries.find((e: any) => e?.accountId)?.accountId :
+          t.type === "note" ? t.entityId : undefined;
+        return id ? getName(id) : "";
+      };
+      const groupAccountName = context === "group" ? getGroupAccountName() : "";
+      const showStatusInCard = isBillWiseCardContext;
+      const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
+      const statusDetailText = showStatusInCard ? getStatusDetail(t) : "";
+      const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
+      const isPaidStatus = statusLabel === "Paid";
+      const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
+      const isPendingApproval = (t as any).isApproved !== true;
+      const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
+        ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
+        : "";
+      return (
+        <Card
+          key={key}
+          className={cn(
+            "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
+            swBorder,
+            isPendingApproval
+              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
+              : "bg-card hover:bg-muted/30"
+          )}
+          onClick={() => onRowClick?.(t)}
+        >
+          <div className="flex justify-between items-start gap-2 min-w-0">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <p className="font-bold text-sm truncate">{titleLabel}</p>
+            </div>
+            <p className={cn("font-bold text-sm shrink-0", isCredit ? "text-green-600" : "text-red-600")}>
+              {amount > 0 ? formatAmountOrQty(amount) : "-"}
+            </p>
+          </div>
+          <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
+            <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
+              <span className="font-semibold">Narration : </span>
+              {t.narration || "—"}
+            </p>
+            {showStatusInCard && (statusLabel || statusDetailText) ? (
+              <div className="shrink-0 flex flex-col items-end gap-0.5">
+                {statusLabel ? (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-xs font-semibold h-[22px]",
+                      useNeutralStatus ? "text-muted-foreground border-muted-foreground/40" : isPaidStatus ? "text-green-600 border-green-600/50" : isUnpaidStatus ? "text-red-600 border-red-600/50" : "text-muted-foreground border-muted-foreground/40"
+                    )}
+                  >
+                    {statusLabel}
+                  </Badge>
+                ) : null}
+                {statusDetailText ? <span className="text-[10px] text-muted-foreground">{statusDetailText}</span> : null}
+              </div>
+            ) : !hideBalanceColumn ? (
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "text-xs font-semibold px-1.5 py-0 whitespace-nowrap shrink-0",
+                  balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                )}
+              >
+                Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="flex justify-between items-end gap-2 min-w-0 mt-0.5">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              {groupAccountName ? <p className="text-xs text-muted-foreground truncate font-medium">Account: {groupAccountName}</p> : null}
+              <p className="text-xs text-muted-foreground">
+                {d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}
+                {d ? ` • ${format(d, "h:mm a")}` : ""}
+              </p>
+            </div>
+            <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
+              {showStatusInCard && !hideBalanceColumn && (
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    "text-xs font-semibold px-1.5 py-0 whitespace-nowrap",
+                    balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                  )}
+                >
+                  Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+                </Badge>
+              )}
+              <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {userName}</p>
+            </div>
+          </div>
+        </Card>
+      );
+    };
+
+    const groupContainerClass = (colorIndex: number) => {
+      const border = colorIndex === 1 ? "border-2 border-green-500" : colorIndex === 2 ? "border-2 border-pink-500" : "border-2 border-blue-500";
+      const bg = colorIndex === 1 ? "bg-green-50 dark:bg-green-950/30" : colorIndex === 2 ? "bg-pink-50 dark:bg-pink-950/30" : "bg-blue-50 dark:bg-blue-950/30";
+      return cn("rounded-xl overflow-hidden", border, bg);
+    };
+
     return (
       <div className="w-full min-w-0 px-0.5 space-y-px pb-4 overflow-hidden">
         {showOpeningBalance && (
@@ -457,150 +644,21 @@ export function TransactionsTable({
             </div>
           </Card>
         )}
-        {transactions.map((t: any) => {
-          let debit = t.debit ?? 0;
-          let credit = t.credit ?? 0;
-          let balance = t.balance ?? t.runningBalance ?? 0;
-          // Bill-wise: use outstanding for balance when available (party/group/staff mobile card).
-          const useOutstanding = isBillWiseCardContext && (t.outstanding != null);
-          if (useOutstanding) {
-            const out = Number(t.outstanding) ?? 0;
-            balance = t.type === "purchase" || t.type === "payment_out" || t.type === "direct_expense" ? -out : out;
+        {mobileBlocks.map((block, blockIdx) => {
+          if (block.type === "spacer") {
+            return <div key={`spacer-${blockIdx}`} className="shrink-0 w-full" style={{ height: 20 }} aria-hidden />;
           }
-          if (context === "item" && stockView === "qty" && item) {
-            debit = debit / conversionFactor;
-            credit = credit / conversionFactor;
-            balance = balance / conversionFactor;
+          if (block.type === "group") {
+            return (
+              <div key={`group-${blockIdx}-${block.items[0]?.id}`} className={cn("space-y-px", groupContainerClass(block.colorIndex))}>
+                {block.items.map((t: any, idx: number) => renderMobileCard(t, `mobile-tx-${blockIdx}-${idx}-${t.id}`, true))}
+              </div>
+            );
           }
-          const amount = credit > 0 ? credit : debit;
-          const isCredit = credit > 0;
-          const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
-          const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
-          const balanceAbs = Math.abs(balance);
-          const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
-          const userName =
-            (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-            t.userDisplayName ||
-            t.userName ||
-            (t.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-            "N/A";
-          const isItemQty = context === "item" && stockView === "qty";
-          const formatAmountOrQty = (val: number) =>
-            isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });
-          const oppositeLabel = getOppositeAccountLabel(t, names, context, contextId, groupEntityType);
-          const titleLabel = (context === "daybook" || context === "item" || (context === "group" && (t.type === "sale" || t.type === "purchase")))
-            ? `${t.voucherNumber} - ${oppositeLabel}`
-            : `${t.voucherNumber || t.type || ""}${oppositeLabel ? ` - ${oppositeLabel}` : ""}`.trim() || "Transaction";
-          const getGroupAccountName = () => {
-            const getName = (id: string | undefined) => (id ? (names[id] || "—") : "");
-            const id = t.type === "direct_expense" ? (t.toAccountId || t.expenseAccountId) :
-              t.type === "direct_income" ? t.incomeAccountId :
-              t.type === "payment_out" ? (t.expenseAccountId || t.toAccountId) :
-              t.type === "payment_in" ? t.incomeAccountId :
-              t.type === "journal" && Array.isArray(t.entries) ? t.entries.find((e: any) => e?.accountId)?.accountId :
-              t.type === "note" ? t.entityId : undefined;
-            return id ? getName(id) : "";
-          };
-          const groupAccountName = context === "group" ? getGroupAccountName() : "";
-          const showStatusInCard = isBillWiseCardContext;
-          const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
-          const statusDetailText = showStatusInCard ? getStatusDetail(t) : "";
-          const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
-          const isPaidStatus = statusLabel === "Paid";
-          const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
-          const isPendingApproval = (t as any).isApproved !== true;
           return (
-            <Card
-              key={t.id}
-              className={cn(
-                "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
-                isPendingApproval
-                  ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
-                  : "bg-card hover:bg-muted/30"
-              )}
-              onClick={() => onRowClick?.(t)}
-            >
-              {/* Row 1: Title (left) | Amount (right) */}
-              <div className="flex justify-between items-start gap-2 min-w-0">
-                <div className="min-w-0 flex-1 overflow-hidden">
-                  <p className="font-bold text-sm truncate">
-                    {titleLabel}
-                  </p>
-                </div>
-                <p className={cn("font-bold text-sm shrink-0", isCredit ? "text-green-600" : "text-red-600")}>
-                  {amount > 0 ? formatAmountOrQty(amount) : "-"}
-                </p>
-              </div>
-              {/* Narration row: left = narration, right = status (bill-wise) or running balance (statement) */}
-              <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
-                <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
-                  <span className="font-semibold">Narration : </span>
-                  {t.narration || "—"}
-                </p>
-                {showStatusInCard && (statusLabel || statusDetailText) ? (
-                  <div className="shrink-0 flex flex-col items-end gap-0.5">
-                    {statusLabel ? (
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "text-xs font-semibold h-[22px]",
-                          useNeutralStatus
-                            ? "text-muted-foreground border-muted-foreground/40"
-                            : isPaidStatus
-                              ? "text-green-600 border-green-600/50"
-                              : isUnpaidStatus
-                                ? "text-red-600 border-red-600/50"
-                                : "text-muted-foreground border-muted-foreground/40"
-                        )}
-                      >
-                        {statusLabel}
-                      </Badge>
-                    ) : null}
-                    {statusDetailText ? (
-                      <span className="text-[10px] text-muted-foreground">{statusDetailText}</span>
-                    ) : null}
-                  </div>
-                ) : !hideBalanceColumn ? (
-                  <Badge
-                    variant="secondary"
-                    className={cn(
-                      "text-xs font-semibold px-1.5 py-0 whitespace-nowrap shrink-0",
-                      balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
-                    )}
-                  >
-                    Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
-                  </Badge>
-                ) : null}
-              </div>
-              {/* Details below: groupAccountName, date, user; balance only in bill-wise (statement shows balance in narration row) */}
-              <div className="flex justify-between items-end gap-2 min-w-0 mt-0.5">
-                <div className="min-w-0 flex-1 overflow-hidden">
-                  {groupAccountName ? (
-                    <p className="text-xs text-muted-foreground truncate font-medium">
-                      Account: {groupAccountName}
-                    </p>
-                  ) : null}
-                  <p className="text-xs text-muted-foreground">
-                    {d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}
-                    {d ? ` • ${format(d, "h:mm a")}` : ""}
-                  </p>
-                </div>
-                <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
-                  {showStatusInCard && !hideBalanceColumn && (
-                    <Badge
-                      variant="secondary"
-                      className={cn(
-                        "text-xs font-semibold px-1.5 py-0 whitespace-nowrap",
-                        balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
-                      )}
-                    >
-                      Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
-                    </Badge>
-                  )}
-                  <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {userName}</p>
-                </div>
-              </div>
-            </Card>
+            <div key={`single-${block.item.id}`}>
+              {renderMobileCard(block.item, `mobile-tx-single-${block.item.id}`, false)}
+            </div>
           );
         })}
       </div>
@@ -715,16 +773,16 @@ export function TransactionsTable({
             {transactions.length > 0 ? (
               transactions.map((t: any, rowIndex: number) =>
                 (t as any)._spendWiseSpacer ? (
-                  <tr key={t.id} aria-hidden="true">
+                  <tr key={`spacer-${rowIndex}-${(t as any).id}`} aria-hidden="true">
                     <td
                       colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
-                      className="p-0 m-0 h-2 min-h-2 max-h-2 border-0 bg-transparent align-middle"
-                      style={{ height: "8px", lineHeight: 0, verticalAlign: "middle" }}
+                      className="p-0 m-0 h-5 min-h-5 max-h-5 border-0 bg-transparent align-middle"
+                      style={{ height: "20px", lineHeight: 0, verticalAlign: "middle" }}
                     />
                   </tr>
                 ) : (
                 <TransactionRow
-                    key={(t as any).id}
+                    key={`row-${rowIndex}-${(t as any).id}`}
                     transaction={t}
                     isSpendWiseChild={!!(t as any)._spendWiseChild}
                     isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}

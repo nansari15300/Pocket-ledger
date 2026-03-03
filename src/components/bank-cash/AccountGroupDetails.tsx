@@ -169,24 +169,34 @@ export function AccountGroupDetails({
       (v.type === "payment_in" && accountIdSet.has(v.accountId)) ||
       (v.type === "direct_income" && accountIdSet.has(v.accountId)) ||
       (v.type === "contra" && accountIdSet.has(v.toAccountId));
-    const inVouchers = vouchers
-      .filter((v: any) => isInVoucher(v) && !v.isDeleted && inRangeIds.has(v.id))
-      .sort((a: any, b: any) => {
-        const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-        const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-        return da.getTime() - db.getTime();
-      });
     const linkedOutFilter = (v: any, inId: string) => {
       const hasAccount =
         (v.type === "payment_out" && accountIdSet.has(v.accountId)) ||
         (v.type === "direct_expense" && accountIdSet.has(v.accountId)) ||
         (v.type === "contra" && accountIdSet.has(v.fromAccountId));
-      return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId) && inRangeIds.has(v.id);
+      return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
+    const inVouchers = vouchers
+      .filter((v: any) => {
+        if (!isInVoucher(v) || v.isDeleted) return false;
+        if (inRangeIds.has(v.id)) return true;
+        return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
+      })
+      .sort((a: any, b: any) => {
+        const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+        const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+        return da.getTime() - db.getTime();
+      });
     const rows: any[] = [];
     let groupColorIndex = 0;
     const nextColor = () => (groupColorIndex++) % 4;
 
+    const voucherToInRow = (v: any) => {
+      const existing = byId.get(v.id);
+      if (existing) return existing;
+      const amount = Number(v.amount ?? v.total ?? 0) || 0;
+      return { id: v.id, date: v.date, type: v.type, voucherNumber: v.voucherNumber, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
+    };
     const voucherToRow = (po: any) => {
       const existing = byId.get(po.id);
       if (existing) return existing;
@@ -206,45 +216,43 @@ export function AccountGroupDetails({
     };
 
     inVouchers.forEach((pi: any) => {
-      const t = byId.get(pi.id);
+      const t = voucherToInRow(pi);
       const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
-      if (t) {
-        const groupRunning = (t.debit || 0) - (t.credit || 0);
-        if (hasLinkedGroup) {
-          rows.push({
-            ...t,
-            _spendWiseGroupFirst: true,
-            _spendWiseGroupLast: false,
-            _spendWiseRunningBalance: groupRunning,
-            _spendWiseGroupColorIndex: colorIdx,
-          });
-        } else {
-          rows.push({
-            ...t,
-            _spendWiseGroupFirst: true,
-            _spendWiseGroupLast: true,
-            _spendWiseRunningBalance: groupRunning,
-            _spendWiseGroupColorIndex: colorIdx,
-          });
-          rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}` });
-        }
+      const groupRunning = (t.debit || 0) - (t.credit || 0);
+      if (hasLinkedGroup) {
+        rows.push({
+          ...t,
+          _spendWiseGroupFirst: true,
+          _spendWiseGroupLast: false,
+          _spendWiseRunningBalance: groupRunning,
+          _spendWiseGroupColorIndex: colorIdx,
+        });
+      } else {
+        rows.push({
+          ...t,
+          _spendWiseGroupFirst: true,
+          _spendWiseGroupLast: true,
+          _spendWiseRunningBalance: groupRunning,
+          _spendWiseGroupColorIndex: colorIdx,
+        });
+        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}` });
       }
       linkedOuts.forEach((po: any, idx: number) => {
         const outRow = voucherToRow(po);
         const prevRunning = rows.length > 0 ? (rows[rows.length - 1] as any)._spendWiseRunningBalance : 0;
-        const fullAmount = Number(po.total ?? po.amount ?? 0) || (outRow.debit || 0) - (outRow.credit || 0) || 0;
+        const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
         const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
-        const amountDelta = (outRow.credit || 0) > 0 ? -linkedAmount : linkedAmount;
-        const groupRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
+        const amountDelta = (outRow.credit || 0) > (outRow.debit || 0) ? -linkedAmount : linkedAmount;
+        const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
         rows.push({
           ...outRow,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: idx === linkedOuts.length - 1,
-          _spendWiseRunningBalance: groupRunning,
+          _spendWiseRunningBalance: nextRunning,
           _spendWiseGroupColorIndex: colorIdx,
           _spendWiseLinkedAmount: linkedAmount,
         });
@@ -388,7 +396,33 @@ export function AccountGroupDetails({
     if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
     if (list.length <= 10) return list;
-    return list.slice(-10);
+    const isSpacer = (r: any) => !!(r as any)._spendWiseSpacer;
+    const inGroup = (r: any) => typeof (r as any)._spendWiseGroupColorIndex === "number";
+    const last10Indices: number[] = [];
+    for (let i = list.length - 1; i >= 0 && last10Indices.length < 10; i--) {
+      if (isSpacer(list[i])) continue;
+      last10Indices.unshift(i);
+    }
+    const showIndices = new Set<number>();
+    for (const idx of last10Indices) {
+      const row = list[idx];
+      if (inGroup(row)) {
+        let start = idx;
+        while (start > 0 && (isSpacer(list[start - 1]) || inGroup(list[start - 1]))) {
+          start--;
+          if (!isSpacer(list[start]) && (list[start] as any)._spendWiseGroupFirst) break;
+        }
+        let end = idx;
+        while (end < list.length - 1 && (isSpacer(list[end + 1]) || inGroup(list[end + 1]))) {
+          end++;
+          if (!isSpacer(list[end]) && (list[end] as any)._spendWiseGroupLast) break;
+        }
+        for (let j = start; j <= end; j++) showIndices.add(j);
+      } else {
+        showIndices.add(idx);
+      }
+    }
+    return list.filter((_, i) => showIndices.has(i));
   }, [filteredMobileTransactions, dateRange]);
 
   const dateRangeLabel = buildDateRangeText();
