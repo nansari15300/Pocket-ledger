@@ -607,12 +607,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         }
     }, [user, loading]);
 
-    // Auto-logout only after inactivity: 20 min on mobile and desktop; activity resets the timer
+    // Auto-logout after 20 min with no activity. Same user multi-tab: if any tab has activity, all tabs stay logged in.
     const INACTIVITY_LOGOUT_MS = 20 * 60 * 1000; // 20 minutes
     const logoutDesc = "20 minutes";
     const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const toastRef = useRef(toast);
     toastRef.current = toast;
+    const INACTIVITY_CHANNEL = "pocket-ledger-inactivity";
 
     useEffect(() => {
         if (!user) {
@@ -641,17 +642,40 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             }, INACTIVITY_LOGOUT_MS);
         };
 
+        // Cross-tab: when any tab has activity, all tabs reset timer (same user multi-tab – one tab active = no logout)
+        let broadcastThrottle = 0;
+        const broadcastActivity = () => {
+            const now = Date.now();
+            if (now - broadcastThrottle < 2000) return;
+            broadcastThrottle = now;
+            try {
+                new BroadcastChannel(INACTIVITY_CHANNEL).postMessage({ type: "activity", ts: now });
+            } catch (_) {}
+        };
+
+        const onActivity = () => {
+            scheduleLogout();
+            broadcastActivity();
+        };
+
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") {
+                scheduleLogout();
+                broadcastActivity();
+            }
+        };
+
+        let channel: BroadcastChannel | null = null;
+        try {
+            channel = new BroadcastChannel(INACTIVITY_CHANNEL);
+            channel.onmessage = () => scheduleLogout();
+        } catch (_) {}
+
         const activityEvents: (keyof WindowEventMap)[] = [
             "mousemove", "keydown", "click", "scroll",
             "touchstart", "touchmove", "touchend", "touchcancel",
             "pointerdown", "pointermove", "wheel"
         ];
-
-        const onActivity = () => scheduleLogout();
-
-        const onVisibilityChange = () => {
-            if (document.visibilityState === "visible") scheduleLogout();
-        };
 
         activityEvents.forEach((event) => window.addEventListener(event, onActivity, { passive: true }));
         document.addEventListener("visibilitychange", onVisibilityChange);
@@ -661,6 +685,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             clearInactivityTimer();
             activityEvents.forEach((event) => window.removeEventListener(event, onActivity));
             document.removeEventListener("visibilitychange", onVisibilityChange);
+            try { channel?.close(); } catch (_) {}
         };
     }, [user, INACTIVITY_LOGOUT_MS, logoutDesc]);
 

@@ -165,13 +165,24 @@ export function AccountGroupDetails({
     const inRangeIds = new Set(processedTransactions.map((t: any) => t.id));
     const byId = new Map(processedTransactions.map((t: any) => [t.id, t]));
     const accountIdSet = new Set(accountIdsInGroup);
-    const paymentInVouchers = vouchers
-      .filter((v: any) => v.type === "payment_in" && accountIdSet.has(v.accountId) && !v.isDeleted && inRangeIds.has(v.id))
+    const isInVoucher = (v: any) =>
+      (v.type === "payment_in" && accountIdSet.has(v.accountId)) ||
+      (v.type === "direct_income" && accountIdSet.has(v.accountId)) ||
+      (v.type === "contra" && accountIdSet.has(v.toAccountId));
+    const inVouchers = vouchers
+      .filter((v: any) => isInVoucher(v) && !v.isDeleted && inRangeIds.has(v.id))
       .sort((a: any, b: any) => {
         const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
         const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
         return da.getTime() - db.getTime();
       });
+    const linkedOutFilter = (v: any, inId: string) => {
+      const hasAccount =
+        (v.type === "payment_out" && accountIdSet.has(v.accountId)) ||
+        (v.type === "direct_expense" && accountIdSet.has(v.accountId)) ||
+        (v.type === "contra" && accountIdSet.has(v.fromAccountId));
+      return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId) && inRangeIds.has(v.id);
+    };
     const rows: any[] = [];
     let groupColorIndex = 0;
     const nextColor = () => (groupColorIndex++) % 4;
@@ -194,11 +205,9 @@ export function AccountGroupDetails({
       };
     };
 
-    paymentInVouchers.forEach((pi: any) => {
+    inVouchers.forEach((pi: any) => {
       const t = byId.get(pi.id);
-      const linkedOuts = vouchers.filter(
-        (v: any) => v.type === "payment_out" && accountIdSet.has(v.accountId) && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(pi.id)
-      );
+      const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
       if (t) {
@@ -240,9 +249,9 @@ export function AccountGroupDetails({
           _spendWiseLinkedAmount: linkedAmount,
         });
       });
-      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-${pi.id}` });
+      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}` });
     });
-    const addedIds = new Set(rows.map((r: any) => r.id));
+    const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
     const unlinked = processedTransactions.filter((t: any) => !addedIds.has(t.id));
     unlinked.forEach((t: any, idx: number) => {
       const colorIdx = nextColor();

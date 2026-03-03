@@ -147,9 +147,7 @@ export function PartyGroupList({
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ 
                     duration: rowAnimationDuration,
-                    type: "spring",
-                    stiffness: 100,
-                    damping: 20
+                    ease: "easeInOut"
                   }}
                 >
                   {/* Category Header - same padding/height as party list section (Party (x)) */}
@@ -188,9 +186,7 @@ export function PartyGroupList({
                             exit={{ opacity: 0, scale: 0.95 }}
                             transition={{ 
                               duration: rowAnimationDuration,
-                              type: "spring",
-                              stiffness: 100,
-                              damping: 20
+                              ease: "easeInOut"
                             }}
                           >
                             <Card

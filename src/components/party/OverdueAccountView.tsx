@@ -379,9 +379,7 @@ export function OverdueAccountView({
                     exit={{ opacity: 0, x: -20 }}
                     transition={{
                       duration: isRowAnimationEnabled ? rowAnimationDuration : 0,
-                      type: "spring",
-                      stiffness: 100,
-                      damping: 20,
+                      ease: "easeInOut",
                     }}
                     className={cn(
                       "cursor-pointer min-h-[28px]",

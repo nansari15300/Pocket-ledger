@@ -68,7 +68,7 @@ export function AccountGroupList({
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: rowAnimationDuration, type: "spring", stiffness: 100, damping: 20 }}
+                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                   <Card
                     className={cn(

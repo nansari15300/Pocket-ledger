@@ -723,13 +723,15 @@ export const TransactionRow = React.memo(
 
     const MainRow = (
       <motion.tr
-        initial={{ opacity: 0, y: isRowAnimationEnabled ? 8 : 0 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: isRowAnimationEnabled ? -8 : 0 }}
-        transition={{
-          duration: isRowAnimationEnabled ? rowAnimationDuration : 0,
-          ease: "easeOut",
-        }}
+        layout
+        initial={{ opacity: 1 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={
+          isRowAnimationEnabled
+            ? { duration: rowAnimationDuration, ease: "easeInOut" }
+            : { duration: 0 }
+        }
         onClick={() => onRowSelect?.(transaction)}
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",

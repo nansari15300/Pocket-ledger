@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer } from "lucide-react";
+import { CalendarIcon, Loader2, Trash2, PlusCircle, Upload, FileText, Crown, History, CheckCircle, Printer, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,6 +44,8 @@ import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
+import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
+import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
 
 const fileSchema = z.object({
   file: z.custom<File | null>().optional(),
@@ -91,7 +93,7 @@ export function CreateContraForm({
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   const { formatCurrency, formatCurrencyForPrint, formatDate, dateSystem } = useDate();
-  const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts: allProcessedAccounts } = useVouchers();
+  const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts: allProcessedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts } = useVouchers();
   const { company, companyId, triggerSync } = useCompany();
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const isMobile = useIsMobile();
@@ -106,6 +108,8 @@ export function CreateContraForm({
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
+  const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
 
   const transactionDates = useMemo(() => {
     if (!allVouchers?.length) return [];
@@ -144,6 +148,67 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const isFormDirty = _isFormFieldsDirty || _isFileDirty;
   const fromAccountId = form.watch("fromAccountId");
   const toAccountId = form.watch("toAccountId");
+  const amount = Number(form.watch("amount")) || 0;
+
+  useEffect(() => {
+    const ids = voucher?.linkedPaymentInIds;
+    setLinkedPaymentInIds(Array.isArray(ids) ? [...ids] : []);
+  }, [voucher?.id, voucher?.linkedPaymentInIds]);
+
+  const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
+  const linkedAmountByPaymentInId = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!allVouchers?.length || !fromAccountId) return map;
+    const currentId = voucher?.id ?? savedVoucherId;
+    allVouchers
+      .filter(
+        (v: any) => {
+          const isOut =
+            (v.type === "payment_out" && v.accountId === fromAccountId) ||
+            (v.type === "direct_expense" && v.accountId === fromAccountId) ||
+            (v.type === "contra" && v.fromAccountId === fromAccountId);
+          return (
+            isOut &&
+            Array.isArray(v.linkedPaymentInIds) &&
+            v.linkedPaymentInIds.length > 0 &&
+            v.id !== currentId &&
+            !v.isDeleted
+          );
+        }
+      )
+      .forEach((po: any) => {
+        const poAmt = Number(po.total ?? po.amount ?? 0) || 0;
+        const ids = po.linkedPaymentInIds as string[];
+        const amounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
+        ids.forEach((piId: string) => {
+          const add = amounts?.[piId] != null ? Number(amounts[piId]) : poAmt / ids.length;
+          map.set(piId, (map.get(piId) ?? 0) + add);
+        });
+      });
+    return map;
+  }, [allVouchers, fromAccountId, voucher?.id, savedVoucherId]);
+  const linkedPaymentInTotal = useMemo(() => {
+    if (!allVouchers?.length || !linkedPaymentInIds?.length || !fromAccountId) return 0;
+    return linkedPaymentInIds.reduce((sum, id) => {
+      const v = allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === fromAccountId);
+      const amt = Number(v?.total ?? v?.amount ?? 0) || 0;
+      const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+      return sum + Math.max(0, amt - alreadyLinked);
+    }, 0);
+  }, [allVouchers, linkedPaymentInIds, fromAccountId, linkedAmountByPaymentInId]);
+  const amountMatched = amount > 0 && linkedPaymentInTotal >= amount;
+  const showLinkPayMode = spendWiseEnabled && !!fromAccountId && amount > 0;
+  const linkPayOthersDisabled = showLinkPayMode && !amountMatched;
+
+  const paymentInDialogNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    processedParties?.forEach((p: any) => { m[p.id] = p.name ?? ""; });
+    processedStaff?.forEach((s: any) => { m[s.id] = s.name ?? ""; });
+    processedTaxes?.forEach((t: any) => { m[t.id] = t.name ?? (t as any).label ?? ""; });
+    allProcessedAccounts?.forEach((a: any) => { m[a.id] = a.accountName ?? ""; });
+    processedExpenseAccounts?.forEach((e: any) => { m[e.id] = e.name ?? ""; });
+    return m;
+  }, [processedParties, processedStaff, processedTaxes, allProcessedAccounts, processedExpenseAccounts]);
 
   const { displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
   const { displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
@@ -283,7 +348,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       form.setError("toAccountId", { message: "Cannot be same as source." });
       return;
     }
-    
+    if (spendWiseEnabled && amount > 0) {
+      if (!linkedPaymentInIds?.length) {
+        sonnerToast.error("Select Payment In", { description: "Spend Wise is on. Please choose at least one Payment In to link this contra to." });
+        return;
+      }
+      const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
+        const v = allVouchers?.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === data.fromAccountId);
+        const amt = Number(v?.total ?? v?.amount ?? 0) || 0;
+        const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+        return sum + Math.max(0, amt - alreadyLinked);
+      }, 0);
+      if (linkedTotal < amount) {
+        sonnerToast.error("Link amount too low", { description: "Selected Payment In linkable total must match or exceed the amount." });
+        return;
+      }
+    }
+
     const toastId = sonnerToast.loading("Saving contra entry...");
     setIsLoading(true);
 
@@ -316,6 +397,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         fileUrls: files.filter((f): f is string => typeof f === 'string'),
         type: 'contra',
       };
+      if (spendWiseEnabled && linkedPaymentInIds?.length) {
+        submissionData.linkedPaymentInIds = linkedPaymentInIds;
+        submissionData.linkedPaymentInAmounts = allocatePaymentInAmounts(
+          amount,
+          linkedPaymentInIds,
+          allVouchers ?? [],
+          data.fromAccountId,
+          linkedAmountByPaymentInId
+        );
+      }
       
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
       if (newFilesToUpload.length > 0) {
@@ -697,7 +788,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="min-w-0">
                           <div className="flex justify-between items-baseline mb-1 min-w-0">
-                            <FormLabel className="text-xs truncate">From Account</FormLabel>
+                            <FormLabel className="text-xs truncate">Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrencyForPrint(fromAccountBalance, { noSuffix: true, noAnimation: true })}</FormLabel>}
                           </div>
                           <div className="min-w-0 w-full overflow-hidden">
@@ -709,7 +800,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); 
                                 else field.onChange(value); 
                               }} 
-                              placeholder="Select account" 
+                              placeholder="Pay-from account (kun bata deiyeko)" 
                               addNewLabel="+ Add New Account" 
                               disabled={deleteDisabledWhenLinked}
                             />
@@ -831,10 +922,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="fromAccountId" render={({ field }: any) => (<FormItem>
                         <div className="flex justify-between items-baseline">
-                            <FormLabel>From Account (Credit)</FormLabel>
+                            <FormLabel>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", fromAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(fromAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        <Combobox options={availableFromAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select source account" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
+                        <Combobox options={availableFromAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account (kun bata deiyeko)" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
                     <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem>
                          <div className="flex justify-between items-baseline">
                             <FormLabel>To Account (Debit)</FormLabel>
@@ -920,28 +1011,33 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={linkPayOthersDisabled || !voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
-                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
+                <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
-                {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Save (always) - all 6 buttons */}
+                {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Link Pay (when Spend Wise) | Save */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isLoading ? "..." : "Save & Approve"}
                   </Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
+                {showLinkPayMode && (
+                  <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                    <Link2 className="mr-2 h-4 w-4" /> Link Pay
+                  </Button>
+                )}
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
               </div>
@@ -975,25 +1071,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={linkPayOthersDisabled || !!voucher || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
                   </Button>
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}>
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  {showLinkPayMode && (
+                    <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                      <Link2 className="mr-2 h-4 w-4" /> Link Pay
+                    </Button>
+                  )}
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
@@ -1005,6 +1106,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         </form>
       </Form>
       <CreateBankAccountDialog onAccountCreated={handleAccountCreated} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
+      {spendWiseEnabled && fromAccountId && (
+        <LinkPaymentInToPaymentOutDialog
+          isOpen={isLinkPaymentInDialogOpen}
+          onOpenChange={setIsLinkPaymentInDialogOpen}
+          accountId={fromAccountId}
+          vouchers={allVouchers ?? []}
+          selectedIds={linkedPaymentInIds}
+          onConfirm={setLinkedPaymentInIds}
+          names={paymentInDialogNames}
+          requiredAmount={amount}
+          currentVoucherId={voucher?.id ?? savedVoucherId ?? undefined}
+        />
+      )}
     </>
   );
 }

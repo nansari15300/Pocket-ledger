@@ -126,11 +126,11 @@ export function AnimationSettings() {
   };
 
   const handleReloadDemo = useCallback(() => {
-    setDemoKey(prev => prev + 1);
     const newItems = generateDemoListItems();
-    // Sort by balance (bigger to smaller) to show reordering animation
+    // Sort by balance (bigger to smaller) – same item ids, order changes = layout animation (smooth move)
     newItems.sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
     setDemoListItems(newItems);
+    setDemoKey(prev => prev + 1); // for number animation refresh
   }, []);
 
   const ANIMATION_SETTINGS_CHANNEL = "pocket-ledger-animation-settings";
@@ -188,25 +188,22 @@ export function AnimationSettings() {
                   </Button>
                 </div>
                 <CardDescription>
-                  Watch how rows smoothly move up/down when account balances change and list reorders
+                  Same smooth move in account list, transaction tables (statement, billwise, spend wise). Rows slide to new position when order changes (e.g. new entry, date change). No animation on first load, refresh or tab change. Click Reload Demo to see reorder.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="rounded-lg border-2 border-primary/20 p-4 bg-muted/30">
                   <div className="space-y-2">
                     <AnimatePresence mode="popLayout">
-                      {demoListItems.map((item, index) => (
+                      {demoListItems.map((item) => (
                         <motion.div
-                          key={`${item.id}-${demoKey}`}
+                          key={item.id}
                           layout
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
+                          initial={{ opacity: 1 }}
                           exit={{ opacity: 0, scale: 0.95 }}
                           transition={{ 
                             duration: activeSettings.rows.enabled === true ? activeSettings.rows.duration : 0,
-                            type: "spring",
-                            stiffness: 100,
-                            damping: 20
+                            ease: "easeInOut"
                           }}
                         >
                           <Card className="p-2 border">

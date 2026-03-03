@@ -60,6 +60,7 @@ import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentO
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
 import { Zap } from "lucide-react";
 
@@ -98,34 +99,6 @@ const formSchema = z.object({
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Please select To Account (Other).", path: ["toAccountId"] });
     }
 });
-
-/** Allocate total across selected PIs in the order given (selection order from dialog). Returns per-PI amounts. */
-function allocatePaymentInAmounts(
-  totalToAllocate: number,
-  piIds: string[],
-  allVouchers: any[],
-  accountId: string,
-  linkedAmountByPaymentInId: Map<string, number>
-): Record<string, number> {
-  if (!totalToAllocate || !piIds?.length || !allVouchers?.length) return {};
-  const result: Record<string, number> = {};
-  const getPi = (id: string) => allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === accountId);
-  const getLinkable = (id: string) => {
-    const v = getPi(id);
-    const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
-    const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
-    return Math.max(0, amount - alreadyLinked);
-  };
-  let remaining = totalToAllocate;
-  for (const id of piIds) {
-    if (remaining <= 0) break;
-    const linkable = getLinkable(id);
-    const take = Math.min(linkable, remaining);
-    if (take > 0) result[id] = take;
-    remaining -= take;
-  }
-  return result;
-}
 
 type PaymentOutFormValues = z.infer<typeof formSchema>;
 
@@ -341,7 +314,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     allVouchers
       .filter(
         (v: any) =>
-          v.type === "payment_out" &&
+          (v.type === "payment_out" || v.type === "direct_expense") &&
           v.accountId === accountId &&
           Array.isArray(v.linkedPaymentInIds) &&
           v.linkedPaymentInIds.length > 0 &&
@@ -359,10 +332,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
     return map;
   }, [allVouchers, accountId, voucher?.id, savedVoucherId]);
+  const isInVoucherForAccount = (x: any, accId: string) =>
+    (x.type === "payment_in" && x.accountId === accId) ||
+    (x.type === "direct_income" && x.accountId === accId) ||
+    (x.type === "contra" && x.toAccountId === accId);
   const linkedPaymentInTotal = useMemo(() => {
     if (!allVouchers?.length || !linkedPaymentInIds?.length || !accountId) return 0;
     return linkedPaymentInIds.reduce((sum, id) => {
-      const v = allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === accountId);
+      const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccount(x, accountId));
       const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       const linkable = Math.max(0, amount - alreadyLinked);
@@ -370,13 +347,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }, 0);
   }, [allVouchers, linkedPaymentInIds, accountId, linkedAmountByPaymentInId]);
   const amountMatched = amountPaid > 0 && linkedPaymentInTotal >= amountPaid;
-  const showLinkPayMode = spendWiseEnabled && !!accountId && voucherType === "payment_out" && amountPaid > 0;
+  const showLinkPayMode = spendWiseEnabled && !!accountId && (voucherType === "payment_out" || voucherType === "direct_expense") && amountPaid > 0;
   const showLinkPayButton = showLinkPayMode && !amountMatched;
   const showSaveAfterLink = showLinkPayMode && amountMatched;
   const isEditPaymentOut = !!(voucher?.id || savedVoucherId) && voucherType === "payment_out";
   const linkPayOthersDisabled = showLinkPayMode && !amountMatched;
 
-  const showLinkedSection = voucherType === "payment_out" &&
+  const showLinkedSection = (voucherType === "payment_out" || voucherType === "direct_expense") &&
     ((payeeType === "party" && partyId && company?.enableLinkPaymentToTxns !== false) || (payeeType === "staff" && staffId));
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.[voucherType] ?? true;
@@ -476,9 +453,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       sonnerToast.error("Error", { description: "Login and company selection required." });
       return;
     }
-    if (voucherType === "payment_out" && spendWiseEnabled) {
+    if ((voucherType === "payment_out" || voucherType === "direct_expense") && spendWiseEnabled) {
       if (!linkedPaymentInIds || linkedPaymentInIds.length === 0) {
-        sonnerToast.error("Select Payment In", { description: "Spend Wise is on. Please choose at least one Payment In to link this Payment Out to." });
+        sonnerToast.error("Select Payment In", { description: "Spend Wise is on. Please choose at least one Payment In to link this payment to." });
         return;
       }
       const currentId = voucher?.id ?? savedVoucherId;
@@ -486,7 +463,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       allVouchers
         ?.filter(
           (v: any) =>
-            v.type === "payment_out" &&
+            (v.type === "payment_out" || v.type === "direct_expense") &&
             v.accountId === data.accountId &&
             Array.isArray(v.linkedPaymentInIds) &&
             v.linkedPaymentInIds.length > 0 &&
@@ -502,8 +479,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             linkedByPi.set(piId, (linkedByPi.get(piId) ?? 0) + add);
           });
         });
+      const accId = data.accountId;
+      const isInForAccount = (x: any) =>
+        (x.type === "payment_in" && x.accountId === accId) ||
+        (x.type === "direct_income" && x.accountId === accId) ||
+        (x.type === "contra" && x.toAccountId === accId);
       const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
-        const v = allVouchers?.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === data.accountId);
+        const v = allVouchers?.find((x: any) => x.id === id && isInForAccount(x));
         const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
         const alreadyLinked = linkedByPi.get(id) ?? 0;
         const linkable = Math.max(0, amount - alreadyLinked);
@@ -511,7 +493,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }, 0);
       const amt = Number(data.amount) || 0;
       if (amt > 0 && linkedTotal < amt) {
-        sonnerToast.error("Link amount too low", { description: "Selected Payment In linkable total must match or exceed the amount. Choose more Payment In or reduce the amount." });
+        sonnerToast.error("Link amount too low", { description: "Selected linkable total must match or exceed the amount. Choose more vouchers or reduce the amount." });
         return;
       }
     }
@@ -635,6 +617,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           sonnerToast.error("Validation Failed", { id: toastId, description: "From and To account cannot be the same." });
           setIsLoading(false);
           return;
+        }
+        if (spendWiseEnabled && linkedPaymentInIds?.length) {
+          submissionData.linkedPaymentInIds = linkedPaymentInIds;
+          submissionData.linkedPaymentInAmounts = allocatePaymentInAmounts(
+            cleanAmount,
+            linkedPaymentInIds,
+            allVouchers ?? [],
+            data.accountId,
+            linkedAmountByPaymentInId
+          );
         }
       }
   
@@ -1960,7 +1952,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           onDone={setAllocations}
         />
       )}
-      {spendWiseEnabled && accountId && voucherType === "payment_out" && (
+      {spendWiseEnabled && accountId && (voucherType === "payment_out" || voucherType === "direct_expense") && (
         <LinkPaymentInToPaymentOutDialog
           isOpen={isLinkPaymentInDialogOpen}
           onOpenChange={setIsLinkPaymentInDialogOpen}

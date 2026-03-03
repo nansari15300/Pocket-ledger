@@ -67,7 +67,7 @@ export function StaffList({
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0, type: "spring", stiffness: 100, damping: 20 }}
+                  transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0, ease: "easeInOut" }}
                 >
                   <Card
                     className={cn(

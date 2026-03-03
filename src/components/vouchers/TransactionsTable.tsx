@@ -641,14 +641,16 @@ export function TransactionsTable({
       </TableHeader>
       
       <TableBody>
-        <AnimatePresence>
+        <AnimatePresence mode="popLayout">
             {showOpeningBalance && (
               <motion.tr 
                 key="opening-balance-row" 
-                initial={{ opacity: 0 }} 
-                animate={{ opacity: 1 }} 
+                layout
+                initial={{ opacity: 1 }} 
                 exit={{ opacity: 0 }}
-                transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0 }}
+                transition={
+                  isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }
+                }
               >
                 <TableCell colSpan={openingBalanceColSpan - (showFileBySelection ? 1 : 0)} className="font-semibold">
                     <div className="flex items-center gap-2">
@@ -716,13 +718,13 @@ export function TransactionsTable({
                   <tr key={t.id} aria-hidden="true">
                     <td
                       colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
-                      className="p-0 m-0 h-[5px] min-h-[5px] max-h-[5px] border-0 bg-transparent align-middle"
-                      style={{ height: "5px", lineHeight: 0, verticalAlign: "middle" }}
+                      className="p-0 m-0 h-2 min-h-2 max-h-2 border-0 bg-transparent align-middle"
+                      style={{ height: "8px", lineHeight: 0, verticalAlign: "middle" }}
                     />
                   </tr>
                 ) : (
                 <TransactionRow
-                    key={`${(t as any).id}-${rowIndex}`}
+                    key={(t as any).id}
                     transaction={t}
                     isSpendWiseChild={!!(t as any)._spendWiseChild}
                     isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}

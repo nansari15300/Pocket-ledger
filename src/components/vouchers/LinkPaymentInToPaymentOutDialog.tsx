@@ -65,13 +65,19 @@ export function LinkPaymentInToPaymentOutDialog({
     const map = new Map<string, number>();
     vouchers
       .filter(
-        (v: any) =>
-          v.type === "payment_out" &&
-          v.accountId === accountId &&
-          Array.isArray(v.linkedPaymentInIds) &&
-          v.linkedPaymentInIds.length > 0 &&
-          v.id !== currentVoucherId &&
-          !v.isDeleted
+        (v: any) => {
+          const isOutForAccount =
+            (v.type === "payment_out" && v.accountId === accountId) ||
+            (v.type === "direct_expense" && v.accountId === accountId) ||
+            (v.type === "contra" && v.fromAccountId === accountId);
+          return (
+            isOutForAccount &&
+            Array.isArray(v.linkedPaymentInIds) &&
+            v.linkedPaymentInIds.length > 0 &&
+            v.id !== currentVoucherId &&
+            !v.isDeleted
+          );
+        }
       )
       .forEach((po: any) => {
         const poAmt = Number(po.total ?? po.amount ?? 0) || 0;
@@ -85,21 +91,29 @@ export function LinkPaymentInToPaymentOutDialog({
     return map;
   }, [vouchers, accountId, currentVoucherId]);
 
+  /** In-flow vouchers for this account: Payment In, Direct Income, and Contra (where this account receives). */
+  const isInVoucherForAccount = (v: any) =>
+    (v.type === "payment_in" && v.accountId === accountId) ||
+    (v.type === "direct_income" && v.accountId === accountId) ||
+    (v.type === "contra" && v.toAccountId === accountId);
+
   const paymentInList = React.useMemo(() => {
     return vouchers
-      .filter((v) => v.type === "payment_in" && v.accountId === accountId && !v.isDeleted)
+      .filter((v) => isInVoucherForAccount(v) && !v.isDeleted)
       .map((v) => {
         const date = safeToDate(v.date);
         const amount = Number(v.total ?? v.amount ?? 0);
         const alreadyLinked = linkedAmountByPaymentInId.get(v.id) ?? 0;
         const linkable = Math.max(0, amount - alreadyLinked);
         const from =
-          names[v.partyId] ||
-          names[v.staffId] ||
-          names[v.taxAccountId] ||
-          names[v.incomeAccountId] ||
-          v.payeeName ||
-          "—";
+          v.type === "contra"
+            ? (names[v.fromAccountId] ?? "—")
+            : names[v.partyId] ||
+              names[v.staffId] ||
+              names[v.taxAccountId] ||
+              names[v.incomeAccountId] ||
+              v.payeeName ||
+              "—";
         return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount, alreadyLinked, linkable, from };
       })
       .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
@@ -158,9 +172,9 @@ export function LinkPaymentInToPaymentOutDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Select Payment In</DialogTitle>
+          <DialogTitle>Select Payment In / Direct Income / Contra (in)</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Tick which Payment In(s) this Payment Out is spending from. Amount will be linked from selected vouchers.
+            Tick which Payment In, Direct Income or Contra (in) vouchers this payment is spending from. Amount will be linked from selected vouchers.
           </p>
           {requiredAmount > 0 && (
             <div className="flex items-center gap-4 text-sm pt-1">
@@ -177,8 +191,8 @@ export function LinkPaymentInToPaymentOutDialog({
             {displayList.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {paymentInList.length === 0
-                  ? "No Payment In found for this account."
-                  : "No Payment In with linkable amount."}
+                  ? "No Payment In, Direct Income or Contra (in) found for this account."
+                  : "No linkable amount remaining."}
               </p>
             ) : (
               <table className="w-full text-sm">
@@ -224,7 +238,7 @@ export function LinkPaymentInToPaymentOutDialog({
           </div>
         </ScrollArea>
         {needsMore && (
-          <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more Payment In to cover the amount.</p>
+          <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

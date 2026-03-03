@@ -360,15 +360,18 @@ export function BillwiseTransactionTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          <AnimatePresence>
+          <AnimatePresence mode="popLayout">
             {showOpeningBalance && (
               <motion.tr
                 key="opening-balance-row"
                 layout
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+                initial={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: rowAnimationDuration }}
+                transition={
+                  isRowAnimationEnabled
+                    ? { duration: rowAnimationDuration, ease: "easeInOut" }
+                    : { duration: 0 }
+                }
               >
                 <TableCell colSpan={openingBalanceColSpan} className="font-semibold">
                   Opening Balance
