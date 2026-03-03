@@ -1,0 +1,24 @@
+{
+  "name": "pocket-ledger-desktop",
+  "version": "0.1.0",
+  "description": "Pocket Ledger Windows desktop app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir"
+  },
+  "build": {
+    "appId": "com.pocketledger.app",
+    "productName": "Pocket Ledger",
+    "directories": { "output": "dist" },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}

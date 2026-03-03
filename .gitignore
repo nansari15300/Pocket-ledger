@@ -17,6 +17,14 @@
 /.next/
 /out/
 
+# Electron EXE build
+/electron/node_modules/
+/electron/dist/
+
+# Capacitor native (uncomment if you don't commit android/ios)
+# /android/
+# /ios/
+
 # production
 /build
 

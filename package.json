@@ -12,7 +12,14 @@
     "lint": "eslint",
     "typecheck": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
     "typecheck:light": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
-    "ci": "npm install && npm run build"
+    "ci": "npm install && npm run build",
+    "electron:install": "cd electron && npm install",
+    "electron:start": "cd electron && npm start",
+    "electron:build": "cd electron && npm run build",
+    "cap:init": "npx cap init",
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npx cap sync",
+    "cap:open:android": "npx cap open android"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
@@ -72,6 +79,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

@@ -6,6 +6,7 @@ import { CompanyProvider } from "@/hooks/useCompany";
 import { DateProvider } from "@/hooks/useDate";
 import { VoucherProvider } from "@/hooks/useVouchers";
 import { BalanceModeProvider } from "@/contexts/BalanceModeContext";
+import { OfflineGraceProvider } from "@/contexts/OfflineGraceContext";
 import { FirebaseErrorListener } from "@/components/FirebaseErrorListener";
 import { PrintLogoPreloader } from "@/components/PrintLogoPreloader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -20,6 +21,7 @@ function PresenceManager() {
 export function Providers({ children }: { children: React.ReactNode }) {
     return (
       <ThemeProvider>
+        <OfflineGraceProvider>
         <AuthProvider>
             <FirebaseErrorListener />
             <CompanyProvider>
@@ -36,6 +38,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 </DateProvider>
             </CompanyProvider>
         </AuthProvider>
+        </OfflineGraceProvider>
       </ThemeProvider>
     )
 }
