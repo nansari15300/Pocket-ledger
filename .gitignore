@@ -17,6 +17,7 @@
 /.next/
 /out/
 
+<<<<<<< HEAD
 # Electron EXE build
 /electron/node_modules/
 /electron/dist/
@@ -25,6 +26,8 @@
 # /android/
 # /ios/
 
+=======
+>>>>>>> 6a1ec26 (Animation Fixed)
 # production
 /build
 

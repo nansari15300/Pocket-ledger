@@ -516,6 +516,10 @@ export function TransactionsTable({
           key={key}
           className={cn(
             "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
+<<<<<<< HEAD
+=======
+            context === "daybook" && "rounded-lg",
+>>>>>>> 6a1ec26 (Animation Fixed)
             swBorder,
             isPendingApproval
               ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
@@ -596,8 +600,14 @@ export function TransactionsTable({
       return cn("rounded-xl overflow-hidden", border, bg);
     };
 
+<<<<<<< HEAD
     return (
       <div className="w-full min-w-0 px-0.5 space-y-px pb-4 overflow-hidden">
+=======
+    // Daybook/Recent: horizontal gap comes from parent (DaybookReport/dashboard); other contexts use px-0.5
+      return (
+      <div className={cn("w-full min-w-0 space-y-px pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
         {showOpeningBalance && (
           <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex justify-between items-start gap-2 min-w-0">
@@ -649,6 +659,7 @@ export function TransactionsTable({
             return <div key={`spacer-${blockIdx}`} className="shrink-0 w-full" style={{ height: 20 }} aria-hidden />;
           }
           if (block.type === "group") {
+<<<<<<< HEAD
             return (
               <div key={`group-${blockIdx}-${block.items[0]?.id}`} className={cn("space-y-px", groupContainerClass(block.colorIndex))}>
                 {block.items.map((t: any, idx: number) => renderMobileCard(t, `mobile-tx-${blockIdx}-${idx}-${t.id}`, true))}
@@ -659,6 +670,39 @@ export function TransactionsTable({
             <div key={`single-${block.item.id}`}>
               {renderMobileCard(block.item, `mobile-tx-single-${block.item.id}`, false)}
             </div>
+=======
+            const groupKey = `group-${block.items.map((t: any) => t.id).join("-")}`;
+            return (
+              <motion.div
+                key={groupKey}
+                layout
+                initial={false}
+                transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                className={cn("space-y-px", groupContainerClass(block.colorIndex))}
+              >
+                {block.items.map((t: any) => (
+                  <motion.div
+                    key={t.id}
+                    layout
+                    initial={false}
+                    transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                  >
+                    {renderMobileCard(t, t.id, true)}
+                  </motion.div>
+                ))}
+              </motion.div>
+            );
+          }
+          return (
+            <motion.div
+              key={block.item.id}
+              layout
+              initial={false}
+              transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+            >
+              {renderMobileCard(block.item, block.item.id, false)}
+            </motion.div>
+>>>>>>> 6a1ec26 (Animation Fixed)
           );
         })}
       </div>
@@ -704,8 +748,13 @@ export function TransactionsTable({
               <motion.tr 
                 key="opening-balance-row" 
                 layout
+<<<<<<< HEAD
                 initial={{ opacity: 1 }} 
                 exit={{ opacity: 0 }}
+=======
+                initial={false}
+                exit={{ transition: { duration: 0 } }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                 transition={
                   isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }
                 }
@@ -773,7 +822,11 @@ export function TransactionsTable({
             {transactions.length > 0 ? (
               transactions.map((t: any, rowIndex: number) =>
                 (t as any)._spendWiseSpacer ? (
+<<<<<<< HEAD
                   <tr key={`spacer-${rowIndex}-${(t as any).id}`} aria-hidden="true">
+=======
+                  <tr key={`spacer-${rowIndex}`} aria-hidden="true">
+>>>>>>> 6a1ec26 (Animation Fixed)
                     <td
                       colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
                       className="p-0 m-0 h-5 min-h-5 max-h-5 border-0 bg-transparent align-middle"
@@ -782,8 +835,14 @@ export function TransactionsTable({
                   </tr>
                 ) : (
                 <TransactionRow
+<<<<<<< HEAD
                     key={`row-${rowIndex}-${(t as any).id}`}
                     transaction={t}
+=======
+                    key={(t as any).id}
+                    transaction={t}
+                    animateLayout={true}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     isSpendWiseChild={!!(t as any)._spendWiseChild}
                     isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
                     isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}

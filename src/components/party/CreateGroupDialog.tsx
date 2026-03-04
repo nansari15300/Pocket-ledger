@@ -156,11 +156,21 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   return (
     <Dialog open={isOpen} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+<<<<<<< HEAD
       <DialogContent className="sm:max-w-md p-4">
+=======
+      {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
+      <DialogContent className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 py-4 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6">
+>>>>>>> 6a1ec26 (Animation Fixed)
         <DialogHeader>
           <DialogTitle>Create a New Group</DialogTitle>
           <DialogDescription>Add a new group to categorize your parties.</DialogDescription>
         </DialogHeader>
+<<<<<<< HEAD
+=======
+        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+        <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+>>>>>>> 6a1ec26 (Animation Fixed)
         <Form {...form}>
           <form onSubmit={form.handleSubmit(data => onSubmit(data, false))} className="space-y-4 py-4">
             <FormField
@@ -218,6 +228,10 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
             </DialogFooter>
           </form>
         </Form>
+<<<<<<< HEAD
+=======
+        </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
       </DialogContent>
     </Dialog>
   );

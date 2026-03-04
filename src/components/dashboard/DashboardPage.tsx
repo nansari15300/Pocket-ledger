@@ -54,7 +54,11 @@ import {
   TableFooter,
 } from '@/components/ui/table';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from '@/components/ui/BsDatePicker';
 import { Button } from '@/components/ui/button';
 import {
@@ -90,7 +94,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { AddVoucherDialog } from '@/components/vouchers/AddVoucherDialog';
 import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
+<<<<<<< HEAD
 import { useIsMobile } from '@/hooks/use-mobile';
+=======
+import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 // Type definitions
 type Voucher = {
@@ -457,7 +465,11 @@ useEffect(() => {
                     <TableBody>
                         <AnimatePresence>
                             {bankCashSummary.bankAccounts.map(acc => (
+<<<<<<< HEAD
                                 <motion.tr key={acc.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b">
+=======
+                                <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+>>>>>>> 6a1ec26 (Animation Fixed)
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -478,7 +490,11 @@ useEffect(() => {
                         </TableRow>
                           <AnimatePresence>
                             {bankCashSummary.cashAccounts.map(acc => (
+<<<<<<< HEAD
                                <motion.tr key={acc.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b">
+=======
+                               <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+>>>>>>> 6a1ec26 (Animation Fixed)
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -528,6 +544,10 @@ export default function DashboardPage() {
   const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
   const [receivablesPayablesTab, setReceivablesPayablesTab] = useState<'receivables' | 'payables'>('receivables');
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
   const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
   const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
@@ -1820,7 +1840,11 @@ export default function DashboardPage() {
                     </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">
+<<<<<<< HEAD
                     <Calendar initialFocus mode="range" defaultMonth={recentDateRange?.from} selected={recentDateRange} onSelect={setRecentDateRange} numberOfMonths={2} modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: 'has-transactions' }} />
+=======
+                    <Calendar initialFocus mode="range" defaultMonth={recentDateRange?.from} selected={asCalendarRange(recentDateRange)} onSelect={setRecentDateRange} numberOfMonths={calendarMonths} modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: 'has-transactions' }} />
+>>>>>>> 6a1ec26 (Animation Fixed)
                     </PopoverContent>
                 </Popover>
             )}

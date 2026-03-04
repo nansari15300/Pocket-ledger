@@ -178,6 +178,31 @@ body {
     z-index: 2;
   }
 
+<<<<<<< HEAD
+=======
+  /* 🔸 AD Calendar – Is project ma narrow na hos (Firebase Studio jasto); mobile ma full width */
+  .rdp {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: min(100%, 280px) !important;
+  }
+  .rdp-months,
+  .rdp-month {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  @media (max-width: 768px) {
+    .rdp,
+    .rdp-months,
+    .rdp-month {
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+  }
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   /* 🔸 AD Calendar – Force 7-column grid layout like BS calendar (match BS exactly) */
   .rdp-table,
   table.rdp-table {

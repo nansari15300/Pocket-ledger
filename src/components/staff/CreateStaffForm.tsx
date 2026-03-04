@@ -23,7 +23,11 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 import { toast as sonnerToast } from "sonner";
 import { useToast } from "@/hooks/use-toast";
@@ -347,7 +351,12 @@ export function CreateStaffForm({
   return (
     <>
       <Form {...form}>
+<<<<<<< HEAD
         <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+=======
+        {/* Single scroll: do not add max-h/overflow-y-auto here; dialog wrapper in CreateStaffDialog is the only scroll container. */}
+        <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6">
+>>>>>>> 6a1ec26 (Animation Fixed)
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Name */}
             <FormField
@@ -472,7 +481,11 @@ export function CreateStaffForm({
               </div>
             </FormItem>
 
+<<<<<<< HEAD
             {/* Address */}
+=======
+            {/* Address — single scroll: dialog wrapper scrolls; avoid extra overflow on this field. */}
+>>>>>>> 6a1ec26 (Animation Fixed)
             <FormField
               control={form.control}
               name="address"
@@ -480,7 +493,11 @@ export function CreateStaffForm({
                 <FormItem>
                   <FormLabel>Address</FormLabel>
                   <FormControl>
+<<<<<<< HEAD
                     <Textarea placeholder="Enter full address" {...field} />
+=======
+                    <Textarea placeholder="Enter full address" {...field} className="resize-none" />
+>>>>>>> 6a1ec26 (Animation Fixed)
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -1,0 +1,89 @@
+"use client";
+
+import { doc, getDoc, setDoc, getDocs, collection, query, where, serverTimestamp } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+
+const DEVICE_ID_KEY = "pocket_ledger_device_id";
+
+function getOrCreateDeviceId(): string {
+  if (typeof window === "undefined") return "";
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) {
+    id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `dev_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    localStorage.setItem(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+export type DeviceLimitResult = {
+  allowed: boolean;
+  count: number;
+  limit: number;
+  isNewDevice: boolean;
+};
+
+/**
+ * Register current device for the company and check if within plan limit.
+ * Call when user has company selected. Returns allowed: false when over limit (new device and count >= maxDevices).
+ */
+export async function registerDeviceAndCheckLimit(
+  companyId: string,
+  userId: string,
+  maxDevices: number,
+  hasMultiDeviceSync: boolean
+): Promise<DeviceLimitResult> {
+  if (maxDevices < 1) {
+    return { allowed: true, count: 1, limit: 1, isNewDevice: false };
+  }
+  if (!hasMultiDeviceSync) {
+    return { allowed: true, count: 1, limit: maxDevices || 1, isNewDevice: false };
+  }
+
+  const deviceId = getOrCreateDeviceId();
+  if (!deviceId) return { allowed: true, count: 1, limit: maxDevices, isNewDevice: false };
+
+  const deviceType = typeof navigator !== "undefined" && /Mobile|Android|iPhone|iPad|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ? "mobile" : "desktop";
+
+  const devicesRef = collection(firestore, "companies", companyId, "devices");
+  const q = query(devicesRef, where("userId", "==", userId));
+  const snap = await getDocs(q);
+  const existing = snap.docs.find((d) => d.id === deviceId);
+  const count = snap.size;
+
+  if (existing) {
+    // When over limit, only allow the most recently active devices (by lastActive). Tie-break: prefer current device so at least one works.
+    if (count > maxDevices) {
+      const sorted = [...snap.docs].sort((a, b) => {
+        const ta = a.data()?.lastActive?.toMillis?.() ?? 0;
+        const tb = b.data()?.lastActive?.toMillis?.() ?? 0;
+        if (tb !== ta) return tb - ta;
+        if (a.id === deviceId) return -1;
+        if (b.id === deviceId) return 1;
+        return 0;
+      });
+      const allowedIds = new Set(sorted.slice(0, maxDevices).map((d) => d.id));
+      if (!allowedIds.has(deviceId)) {
+        return { allowed: false, count, limit: maxDevices, isNewDevice: false };
+      }
+    }
+    await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
+      userId,
+      lastActive: serverTimestamp(),
+      deviceType,
+    });
+    return { allowed: true, count, limit: maxDevices, isNewDevice: false };
+  }
+
+  if (count >= maxDevices) {
+    return { allowed: false, count, limit: maxDevices, isNewDevice: true };
+  }
+
+  await setDoc(doc(firestore, "companies", companyId, "devices", deviceId), {
+    userId,
+    lastActive: serverTimestamp(),
+    deviceType,
+  });
+  return { allowed: true, count: count + 1, limit: maxDevices, isNewDevice: true };
+}
+
+export { getOrCreateDeviceId };

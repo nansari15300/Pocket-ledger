@@ -163,8 +163,14 @@ export function CreateAccountGroupDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+<<<<<<< HEAD
       <DialogContent
         className="sm:max-w-md"
+=======
+      {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
+      <DialogContent
+        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
+>>>>>>> 6a1ec26 (Animation Fixed)
         onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <DialogHeader>
@@ -173,6 +179,11 @@ export function CreateAccountGroupDialog({
               Add a new group to categorize your bank or cash accounts.
             </DialogDescription>
           </DialogHeader>
+<<<<<<< HEAD
+=======
+          {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+          <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+>>>>>>> 6a1ec26 (Animation Fixed)
           <Form {...form}>
             <form
               onSubmit={form.handleSubmit(data => onSubmit(data, false))}
@@ -236,6 +247,10 @@ export function CreateAccountGroupDialog({
               </DialogFooter>
             </form>
           </Form>
+<<<<<<< HEAD
+=======
+          </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
         </DialogContent>
     </Dialog>
   );

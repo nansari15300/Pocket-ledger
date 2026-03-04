@@ -15,7 +15,11 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useRouter } from "next/navigation";
 import { doc, getDoc, collection, query, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";

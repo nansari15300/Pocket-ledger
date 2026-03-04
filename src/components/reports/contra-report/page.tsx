@@ -11,7 +11,11 @@ import { Button } from "@/components/ui/button";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, Layers, BarChart2 } from "lucide-react";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { startOfMonth, endOfMonth, isSameDay, startOfDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -35,14 +39,25 @@ import * as XLSX from 'xlsx';
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import type { Account } from "@/components/bank-cash/types";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+import { toast } from "sonner";
+import type { Account } from "@/components/bank-cash/types";
+import { useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 export default function ContraReportPage() {
     const { vouchers, loading, processedAccounts } = useVouchers();
     const { company, companyId } = useCompany();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
+<<<<<<< HEAD
+=======
+    const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
     const router = useRouter();
     const searchParams = useSearchParams();
     const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -526,6 +541,7 @@ export default function ContraReportPage() {
                               onSelect={handleNepaliSelect}
                               valueAD={dateRange}
                               isRange={true}
+<<<<<<< HEAD
                               numberOfMonths={1}
                               />
                           )}
@@ -545,6 +561,30 @@ export default function ContraReportPage() {
                                   }
                               }}
                               numberOfMonths={1}
+=======
+                              numberOfMonths={calendarMonths}
+                              />
+                          )}
+                          {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                          <div className="flex-1 w-full min-w-0">
+                              <AdCalendar
+                              valueAD={dateRange}
+                              isRange
+                              numberOfMonths={calendarMonths}
+                              transactionDates={[]}
+                              onSelect={(adDate) => {
+                                  const range = dateRange;
+                                  if (!range?.from || (range.from && range.to)) {
+                                      setDateRange({ from: adDate, to: undefined });
+                                  } else if (adDate < range.from) {
+                                      setDateRange({ from: adDate, to: range.from });
+                                      setIsCalendarOpen(false);
+                                  } else {
+                                      setDateRange({ from: range.from, to: adDate });
+                                      setIsCalendarOpen(false);
+                                  }
+                              }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                               />
                           </div>
                           )}

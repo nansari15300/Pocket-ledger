@@ -26,7 +26,11 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { doc, getDoc } from "firebase/firestore";
@@ -35,11 +39,19 @@ import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { useTransactions } from "@/hooks/use-transactions";
 import { openPrintDirect } from "@/lib/printDirect";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { format } from "date-fns";
+import BsDatePicker from "@/components/ui/BsDatePicker";
+import { cn } from "@/lib/utils";
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 /**
  * TYPES
@@ -169,6 +181,10 @@ const GroupRow = ({ group, level, onAccountClick, expandedGroups, toggleGroup, p
  */
 export function TrialBalancePage() {
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const {
     vouchers,
     loading,
@@ -1190,6 +1206,7 @@ export function TrialBalancePage() {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                       <Calendar
                         initialFocus
                         mode="range"
@@ -1210,6 +1227,26 @@ export function TrialBalancePage() {
                         numberOfMonths={2}
                         modifiers={{ hasTransactions: transactionDates }}
                         modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                      <AdCalendar
+                        valueAD={dateRange}
+                        isRange
+                        numberOfMonths={calendarMonths}
+                        transactionDates={transactionDates}
+                        onSelect={(adDate) => {
+                          const atNoon = new Date(adDate.getFullYear(), adDate.getMonth(), adDate.getDate(), 12);
+                          const range = dateRange;
+                          if (!range?.from || (range.from && range.to)) {
+                            setDateRange({ from: atNoon, to: undefined });
+                          } else if (adDate < range.from) {
+                            setDateRange({ from: atNoon, to: new Date(range.from.getFullYear(), range.from.getMonth(), range.from.getDate(), 12) });
+                            setIsCalendarOpen(false);
+                          } else {
+                            setDateRange({ from: range.from, to: atNoon });
+                            setIsCalendarOpen(false);
+                          }
+                        }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       />
                     </PopoverContent>
                   </Popover>

@@ -36,7 +36,11 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
+<<<<<<< HEAD
 import { Calendar } from "../ui/calendar";
+=======
+import AdCalendar from "../ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import {
   Select,
   SelectContent,
@@ -44,7 +48,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -68,8 +76,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { Combobox } from "@/components/ui/combobox";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -130,6 +144,10 @@ export function ItemGroupDetails({
   const itemsInGroup = useMemo(() => items.filter((i) => i.groupId === group.id), [items, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -273,6 +291,21 @@ export function ItemGroupDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    setNoteEntityId(null);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -502,7 +535,12 @@ export function ItemGroupDetails({
   if (isMobile) {
     return (
       <>
+<<<<<<< HEAD
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
           <div className="flex flex-col flex-shrink-0 border-b bg-background">
             <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
               {onBack && (
@@ -560,7 +598,11 @@ export function ItemGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
+<<<<<<< HEAD
             <div className="w-full min-w-0 px-0.5 space-y-px pb-4">
+=======
+            <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
+>>>>>>> 6a1ec26 (Animation Fixed)
               {openingBalanceForPeriod !== 0 && (
                 <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
                   <div className="flex items-center justify-between gap-2 min-w-0">
@@ -614,6 +656,7 @@ export function ItemGroupDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
+<<<<<<< HEAD
                   <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={1} />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -630,6 +673,29 @@ export function ItemGroupDetails({
                         if (range?.from && range?.to) setIsCalendarOpen(false);
                       }}
                       numberOfMonths={1}
+=======
+                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                )}
+                {(dateSystem === "AD" || dateSystem === "Both") && (
+                  <div className="flex-1 w-full min-w-0">
+                    <AdCalendar
+                      valueAD={dateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = dateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          onDateRangeChange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          onDateRangeChange({ from: adDate, to: range.from });
+                          setIsCalendarOpen(false);
+                        } else {
+                          onDateRangeChange({ from: range.from, to: adDate });
+                          setIsCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </div>
                 )}
@@ -680,6 +746,7 @@ export function ItemGroupDetails({
             </div>
           </DialogContent>
         </Dialog>
+<<<<<<< HEAD
         <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={(open: boolean) => {
           if (!open) {
             setIsVoucherDialogOpen(false);
@@ -689,6 +756,20 @@ export function ItemGroupDetails({
             setIsVoucherDialogOpen(open);
           }
         }} voucher={selectedVoucher} onVoucherUpdated={() => setSelectedVoucher(null)} />
+=======
+        <AddVoucherDialog
+          isOpen={isVoucherDialogOpen}
+          onOpenChange={(open: boolean) => {
+            setIsVoucherDialogOpen(!!open);
+            if (!open) {
+              setSelectedVoucher(null);
+              if (isMobile) closeModalInUrl();
+            }
+          }}
+          voucher={selectedVoucher}
+          onVoucherUpdated={() => setSelectedVoucher(null)}
+        />
+>>>>>>> 6a1ec26 (Animation Fixed)
       </>
     );
   }
@@ -765,6 +846,7 @@ export function ItemGroupDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                     <Calendar
                       initialFocus
                       mode="range"
@@ -784,6 +866,29 @@ export function ItemGroupDetails({
                       numberOfMonths={2}
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                    <AdCalendar
+                      valueAD={tempDateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = tempDateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setTempDateRange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          const next = { from: adDate, to: range.from };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        } else {
+                          const next = { from: range.from, to: adDate };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>

@@ -1,0 +1,18 @@
+---
+description: Dashboard cards (Daybook, Bank, Recent, etc.) are controlled by role permissions. Shared users may not see a card if permission is off.
+alwaysApply: false
+globs: ["**/dashboard/**", "**/permissions*"]
+---
+
+# Dashboard & role permissions
+
+## Yaad rahe
+
+- **Dashboard cards** (Summary, Bank, **Daybook**, Recent) **role permissions** se control hote hain.
+- **Shared user** agar koi card nahi dikh raha (e.g. sirf Daybook nahi dikh raha) to **pehle role permission check karo** – Settings mein user ke role mein "View Daybook" / "View Bank/Cash Summary" / "View Recent Transactions" **Yes** hona chahiye.
+- **Permission check hata mat dena** (e.g. `can('view_daybook')`) – yeh intentional hai; shared users ko role ke hisaab se hi cards dikhne chahiye.
+
+## Code
+
+- Dashboard page: `shouldShow('daybook') && can('view_daybook')` – dono rahene chahiye.
+- Agar "real mobile pe X nahi dikh raha" aaye to **role permission** yaad dilana: shared user ho to role mein us card ka permission **Yes** karna padega.

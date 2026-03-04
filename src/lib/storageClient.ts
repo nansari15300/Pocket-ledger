@@ -14,8 +14,13 @@ const slugify = (text: string = "") =>
     .replace(/^-|-$/g, "")
     .slice(0, 60);
 
+<<<<<<< HEAD
 const safeFileName = (name: string) =>
   name
+=======
+const safeFileName = (name: string | undefined) =>
+  (name ?? "")
+>>>>>>> 6a1ec26 (Animation Fixed)
     .trim()
     .replace(/[^\w.\-() ]+/g, "_")
     .replace(/\s+/g, "_")
@@ -32,7 +37,11 @@ const generateVoucherPath = (
   voucherType: string,
   voucherDate: Date,
   voucherId: string,
+<<<<<<< HEAD
   fileName: string
+=======
+  fileName: string | undefined
+>>>>>>> 6a1ec26 (Animation Fixed)
 ) => {
   const year = format(voucherDate, "yyyy");
   const month = format(voucherDate, "MM");

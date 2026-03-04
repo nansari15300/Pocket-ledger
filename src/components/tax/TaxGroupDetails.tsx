@@ -16,7 +16,11 @@ import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
 import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -28,8 +32,14 @@ import { Checkbox } from "../ui/checkbox";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { Combobox } from "@/components/ui/combobox";
 import {
   Drawer,
@@ -116,6 +126,10 @@ export function TaxGroupDetails({
   const openingModalRef = React.useRef(false);
 
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -144,6 +158,20 @@ export function TaxGroupDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = React.useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   React.useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -208,6 +236,10 @@ export function TaxGroupDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
@@ -377,7 +409,12 @@ export function TaxGroupDetails({
   if (isMobile) {
     return (
       <>
+<<<<<<< HEAD
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -449,6 +486,10 @@ export function TaxGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
+<<<<<<< HEAD
+=======
+            <div className="pb-24">
+>>>>>>> 6a1ec26 (Animation Fixed)
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
@@ -473,6 +514,10 @@ export function TaxGroupDetails({
               isTaxContext={true}
               scrollOnlyTransactions
             />
+<<<<<<< HEAD
+=======
+            </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -515,7 +560,11 @@ export function TaxGroupDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
+<<<<<<< HEAD
                   <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={2} />
+=======
+                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+>>>>>>> 6a1ec26 (Animation Fixed)
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1">
@@ -524,12 +573,20 @@ export function TaxGroupDetails({
                       initialFocus
                       mode="range"
                       defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                       selected={dateRange}
+=======
+                      selected={asCalendarRange(dateRange)}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       onSelect={(range) => {
                         onDateRangeChange(range as DateRange | undefined);
                         if (range?.from && range?.to) setIsCalendarOpen(false);
                       }}
+<<<<<<< HEAD
                       numberOfMonths={2}
+=======
+                      numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: "has-transactions" }}
                     />
@@ -675,7 +732,11 @@ export function TaxGroupDetails({
                       initialFocus
                       mode="range"
                       defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                       selected={tempDateRange}
+=======
+                      selected={asCalendarRange(tempDateRange)}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       onSelect={(range) => {
                         if (range?.from) range.from.setHours(12, 0, 0, 0);
                         if (range?.to) range.to.setHours(12, 0, 0, 0);
@@ -687,7 +748,11 @@ export function TaxGroupDetails({
                           onDateRangeChange(undefined);
                         }
                       }}
+<<<<<<< HEAD
                       numberOfMonths={2}
+=======
+                      numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
                     />
@@ -895,7 +960,22 @@ export function TaxGroupDetails({
             </div>
         </DialogContent>
       </Dialog>
+<<<<<<< HEAD
       <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherUpdated={() => setSelectedVoucher(null)} />
+=======
+      <AddVoucherDialog
+        isOpen={isVoucherDialogOpen}
+        onOpenChange={(open) => {
+          setIsVoucherDialogOpen(!!open);
+          if (!open) {
+            setSelectedVoucher(null);
+            if (isMobile) closeModalInUrl();
+          }
+        }}
+        voucher={selectedVoucher}
+        onVoucherUpdated={() => setSelectedVoucher(null)}
+      />
+>>>>>>> 6a1ec26 (Animation Fixed)
     </>
   );
 }

@@ -31,8 +31,13 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { useTransactions } from "@/hooks/use-transactions";
 import { cn } from "@/lib/utils";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "react-day-picker";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { format, startOfDay, endOfDay } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 
@@ -56,6 +61,10 @@ const toNepaliCurrency = (n: number) =>
 
 export function CashFlowStatementPage() {
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const { vouchers, loading, journalAccountNames, userNames } = useVouchers();
   const { company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
@@ -410,7 +419,11 @@ export function CashFlowStatementPage() {
                       initialFocus
                       mode="range"
                       defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                       selected={dateRange}
+=======
+                      selected={asCalendarRange(dateRange)}
+>>>>>>> 6a1ec26 (Animation Fixed)
                       onSelect={(range) => {
                         if (range) {
                           const normalizedRange: DateRange = {
@@ -424,7 +437,11 @@ export function CashFlowStatementPage() {
                           setIsCalendarOpen(false);
                         }
                       }}
+<<<<<<< HEAD
                       numberOfMonths={2}
+=======
+                      numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>

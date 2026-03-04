@@ -20,7 +20,12 @@ import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import { useCalendarMonths } from "@/hooks/use-mobile";
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { CommissionPayoutDialog } from "@/components/admin/CommissionPayoutDialog";
 import { DistributorApplicationDialog } from "@/components/admin/DistributorApplicationDialog";
 import { FilePreview } from "@/components/vouchers/FilePreview";
@@ -56,6 +61,10 @@ export default function AgentsPage() {
   const [activeTab, setActiveTab] = useState<'approved' | 'pending' | 'rejected'>('approved');
   const [searchTerm, setSearchTerm] = useState('');
   const { formatCurrency, dateSystem, formatDate, formatDateBS } = useDate();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [isPayoutOpen, setIsPayoutOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -283,9 +292,15 @@ export default function AgentsPage() {
                                                     initialFocus
                                                     mode="range"
                                                     defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                                                     selected={dateRange}
                                                     onSelect={setDateRange}
                                                     numberOfMonths={2}
+=======
+                                                    selected={asCalendarRange(dateRange)}
+                                                    onSelect={setDateRange}
+                                                    numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                                                 />
                                             </PopoverContent>
                                         </Popover>

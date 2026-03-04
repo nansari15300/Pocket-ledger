@@ -1,6 +1,10 @@
 
 "use client";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type Resolver, useFieldArray, useForm, useWatch } from "react-hook-form";

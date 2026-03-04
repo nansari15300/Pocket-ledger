@@ -39,7 +39,11 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
+<<<<<<< HEAD
 import { Calendar } from "../ui/calendar";
+=======
+import AdCalendar from "../ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import {
   Select,
   SelectContent,
@@ -47,7 +51,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useDate } from "@/hooks/useDate";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -73,8 +81,14 @@ import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { Input } from "../ui/input";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -190,6 +204,10 @@ export function GroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const showApproveOnEntity =
     can("approve_transactions") &&
     company?.notificationSettings?.approve?.on !== false &&
@@ -528,11 +546,19 @@ export function GroupDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     setIsVoucherDialogOpen(true);
   };
 
   const handleHistoryVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setHistoryVoucher(voucher);
   };
 
@@ -540,6 +566,10 @@ export function GroupDetails({
   const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
 
   const handleDeleteVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     setIsVoucherDialogOpen(true);
   };
@@ -566,6 +596,23 @@ export function GroupDetails({
     router.replace(q ? `${pathname}?${q}` : pathname);
   }, [pathname, searchParams, router]);
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    setHistoryVoucher(null);
+    setLinkAdvancesVoucher(null);
+    setLinkPaymentVoucher(null);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -898,7 +945,12 @@ export function GroupDetails({
 
   const renderMobileView = () => (
     <>
+<<<<<<< HEAD
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+        {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
         <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
           {onBack && (
             <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -927,7 +979,11 @@ export function GroupDetails({
           <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
+<<<<<<< HEAD
           {pendingApprovalCount > 0 && (
+=======
+          {pendingApprovalCount > 0 && !isMobile && (
+>>>>>>> 6a1ec26 (Animation Fixed)
             <p className="text-center mt-2">
               <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem]">
                 {pendingApprovalCount} pending approval
@@ -970,6 +1026,10 @@ export function GroupDetails({
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-auto">
+<<<<<<< HEAD
+=======
+          <div className="pb-24">
+>>>>>>> 6a1ec26 (Animation Fixed)
           <TransactionsTable
             transactions={mobileTransactionsToShow}
             context="group"
@@ -1005,6 +1065,10 @@ export function GroupDetails({
             onStatusFilterChange={handleStatusFilterChange}
             statusFilterIdPrefix="group"
           />
+<<<<<<< HEAD
+=======
+          </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
         </div>
       </div>
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -1054,6 +1118,7 @@ export function GroupDetails({
             </DrawerHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
               {(dateSystem === "BS" || dateSystem === "Both") && (
+<<<<<<< HEAD
                 <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={2} />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -1070,6 +1135,29 @@ export function GroupDetails({
                       if (range?.from && range?.to) setIsCalendarOpen(false);
                     }}
                     numberOfMonths={2}
+=======
+                <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+              )}
+              {(dateSystem === "AD" || dateSystem === "Both") && (
+                <div className="flex-1 w-full min-w-0">
+                  <AdCalendar
+                    valueAD={dateRange}
+                    isRange
+                    numberOfMonths={calendarMonths}
+                    transactionDates={transactionDates}
+                    onSelect={(adDate) => {
+                      const range = dateRange;
+                      if (!range?.from || (range.from && range.to)) {
+                        onDateRangeChange({ from: adDate, to: undefined });
+                      } else if (adDate < range.from) {
+                        onDateRangeChange({ from: adDate, to: range.from });
+                        setIsCalendarOpen(false);
+                      } else {
+                        onDateRangeChange({ from: range.from, to: adDate });
+                        setIsCalendarOpen(false);
+                      }
+                    }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   />
                 </div>
               )}
@@ -1125,7 +1213,11 @@ export function GroupDetails({
               >
                 {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
+<<<<<<< HEAD
               {pendingApprovalCount > 0 && (
+=======
+              {pendingApprovalCount > 0 && !isMobile && (
+>>>>>>> 6a1ec26 (Animation Fixed)
                 <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem] flex-shrink-0">
                   {pendingApprovalCount} pending approval
                 </span>
@@ -1183,6 +1275,7 @@ export function GroupDetails({
                     </Button>
                   </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                   <Calendar
                     initialFocus
                     mode="range"
@@ -1202,6 +1295,29 @@ export function GroupDetails({
                     numberOfMonths={2}
                     modifiers={{ hasTransactions: transactionDates }}
                     modifiersClassNames={{ hasTransactions: "has-transactions" }}
+=======
+                  <AdCalendar
+                    valueAD={tempDateRange}
+                    isRange
+                    numberOfMonths={calendarMonths}
+                    transactionDates={transactionDates}
+                    onSelect={(adDate) => {
+                      const range = tempDateRange;
+                      if (!range?.from || (range.from && range.to)) {
+                        setTempDateRange({ from: adDate, to: undefined });
+                      } else if (adDate < range.from) {
+                        const next = { from: adDate, to: range.from };
+                        setTempDateRange(next);
+                        onDateRangeChange(next);
+                        setIsDesktopCalendarOpen(false);
+                      } else {
+                        const next = { from: range.from, to: adDate };
+                        setTempDateRange(next);
+                        onDateRangeChange(next);
+                        setIsDesktopCalendarOpen(false);
+                      }
+                    }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   />
                 </PopoverContent>
               </Popover>
@@ -1593,23 +1709,31 @@ export function GroupDetails({
       <HistoryDialog
         voucher={historyVoucher}
         isOpen={!!historyVoucher}
+<<<<<<< HEAD
         onOpenChange={(open: boolean) => {
           if (!open) {
             setHistoryVoucher(null);
             if (isMobile) closeModalInUrl();
           }
         }}
+=======
+        onOpenChange={(open: boolean) => !open && setHistoryVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
         onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
       />
       {linkAdvancesVoucher && (
         <LinkAdvancesToVoucherDialog
           isOpen={!!linkAdvancesVoucher}
+<<<<<<< HEAD
           onOpenChange={(open: boolean) => {
             if (!open) {
               setLinkAdvancesVoucher(null);
               if (isMobile) closeModalInUrl();
             }
           }}
+=======
+          onOpenChange={(open: boolean) => !open && setLinkAdvancesVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
           mode={linkAdvancesVoucher.type === "purchase" || linkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
           targetVoucherId={linkAdvancesVoucher.id}
           targetPartyId={linkAdvancesVoucher.partyId ?? ""}
@@ -1622,12 +1746,16 @@ export function GroupDetails({
       {linkPaymentVoucher && (
         <LinkPaymentToTxnsDialog
           isOpen={!!linkPaymentVoucher}
+<<<<<<< HEAD
           onOpenChange={(open: boolean) => {
             if (!open) {
               setLinkPaymentVoucher(null);
               if (isMobile) closeModalInUrl();
             }
           }}
+=======
+          onOpenChange={(open: boolean) => !open && setLinkPaymentVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
           variant={linkPaymentVoucher.type === "payment_out" || linkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
           partyId={linkPaymentVoucher.partyId ?? null}
           partyName={allParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.name ?? "Party"}

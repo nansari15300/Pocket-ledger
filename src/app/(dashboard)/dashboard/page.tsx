@@ -33,7 +33,11 @@ import {
   History,
   Receipt,
   Home,
+<<<<<<< HEAD
   XCircle,
+=======
+  X,
+>>>>>>> 6a1ec26 (Animation Fixed)
   Calendar as CalendarIcon,
   Printer,
   FileDigit,
@@ -53,7 +57,11 @@ import {
   TableFooter,
 } from '@/components/ui/table';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from '@/components/ui/BsDatePicker';
 import { Button } from '@/components/ui/button';
 import {
@@ -74,7 +82,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useDate } from '@/hooks/useDate';
+<<<<<<< HEAD
 import { useIsMobile } from '@/hooks/use-mobile';
+=======
+import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -84,7 +96,11 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
 import { useDashboard } from '@/hooks/useDashboard';
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useAuth } from '@/hooks/useAuth';
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 import { motion, AnimatePresence } from 'framer-motion';
@@ -411,7 +427,11 @@ useEffect(() => {
                     <TableBody>
                         <AnimatePresence>
                             {bankCashSummary.bankAccounts.map(acc => (
+<<<<<<< HEAD
                                 <motion.tr key={acc.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b">
+=======
+                                <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+>>>>>>> 6a1ec26 (Animation Fixed)
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -432,7 +452,11 @@ useEffect(() => {
                         </TableRow>
                           <AnimatePresence>
                             {bankCashSummary.cashAccounts.map(acc => (
+<<<<<<< HEAD
                                <motion.tr key={acc.id} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b">
+=======
+                               <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
+>>>>>>> 6a1ec26 (Animation Fixed)
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -474,6 +498,10 @@ export default function DashboardPage() {
   const hideFabTimeout = useRef<NodeJS.Timeout | null>(null);
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   
   const [loading, setLoading] = React.useState(true);
   
@@ -510,6 +538,11 @@ export default function DashboardPage() {
   
   const [recentVoucherTypes, setRecentVoucherTypes] = useState<string[]>(['all']);
   const [recentDateRange, setRecentDateRange] = React.useState<DateRange | undefined>();
+<<<<<<< HEAD
+=======
+  const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
+  const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
+>>>>>>> 6a1ec26 (Animation Fixed)
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
   const [isDateChange, setIsDateChange] = useState(false);
@@ -1373,6 +1406,7 @@ export default function DashboardPage() {
                 <BsDatePicker isRange valueAD={recentDateRange} onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)} transactionDates={transactionDates} className="h-9" />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+<<<<<<< HEAD
                 <Popover>
                     <PopoverTrigger asChild>
                     <Button id="recent-date" variant={"outline"} className={cn("w-auto justify-start text-left font-normal h-9", !recentDateRange && "text-muted-foreground")}>
@@ -1382,12 +1416,52 @@ export default function DashboardPage() {
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">
                     <Calendar initialFocus mode="range" defaultMonth={recentDateRange?.from} selected={recentDateRange} onSelect={setRecentDateRange} numberOfMonths={2} modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: 'has-transactions' }} />
+=======
+                <Popover open={isRecentCalendarOpen} onOpenChange={(open) => {
+                  setIsRecentCalendarOpen(open);
+                  if (open) setTempRecentDateRange(recentDateRange);
+                  else setTempRecentDateRange(undefined);
+                }}>
+                    <PopoverTrigger asChild>
+                    <Button id="recent-date" variant={"outline"} className={cn("w-auto justify-start text-left font-normal h-9", !recentDateRange && "text-muted-foreground")}>
+                        {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
+                        {recentDateRange?.from ? (recentDateRange.to ? <>{formatDate(recentDateRange.from)} - {formatDate(recentDateRange.to)}</> : formatDate(recentDateRange.from)) : (<span>Date range</span>)}
+                    </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="end">
+                    <AdCalendar
+                      valueAD={tempRecentDateRange ?? recentDateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = tempRecentDateRange ?? recentDateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setTempRecentDateRange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          const next = { from: adDate, to: range.from };
+                          setTempRecentDateRange(next);
+                          setRecentDateRange(next);
+                          setIsRecentCalendarOpen(false);
+                        } else {
+                          const next = { from: range.from, to: adDate };
+                          setTempRecentDateRange(next);
+                          setRecentDateRange(next);
+                          setIsRecentCalendarOpen(false);
+                        }
+                      }}
+                    />
+>>>>>>> 6a1ec26 (Animation Fixed)
                     </PopoverContent>
                 </Popover>
             )}
             </div>
             <div className={cn("flex items-center gap-2 flex-1 min-w-0 h-9", isMobile ? "order-2" : "md:order-1")}>
+<<<<<<< HEAD
                 <span className="text-sm font-medium shrink-0">Show:</span>
+=======
+                {!isMobile && <span className="text-sm font-medium shrink-0">Show:</span>}
+>>>>>>> 6a1ec26 (Animation Fixed)
                 <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
                     <SelectTrigger className="h-9 flex-1 min-w-0 w-full max-w-[140px]">
                         <SelectValue />
@@ -1399,18 +1473,33 @@ export default function DashboardPage() {
                         <SelectItem value="0">All</SelectItem>
                     </SelectContent>
                 </Select>
+<<<<<<< HEAD
+=======
+                {!isMobile && (
+>>>>>>> 6a1ec26 (Animation Fixed)
                 <label className="flex items-center gap-2 h-9 cursor-pointer shrink-0">
                   <Checkbox id="recent-show-narration" checked={showRecentNarration} onCheckedChange={(c) => setShowRecentNarration(!!c)} className="h-4 w-4" />
                   <span className="text-sm whitespace-nowrap">Show Narration</span>
                 </label>
+<<<<<<< HEAD
             </div>
              {isRecentFilterActive && <Button variant="ghost" size="sm" className="h-9" onClick={clearRecentFilters}><XCircle className="mr-2 h-4 w-4"/>Clear Filters</Button>}
+=======
+                )}
+            </div>
+             {isRecentFilterActive && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearRecentFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>}
+>>>>>>> 6a1ec26 (Animation Fixed)
           </div>
           <span className="text-sm font-medium text-muted-foreground">Showing {recentTransactions ? recentTransactions.length : 0} Vouchers Of All {allRecentTransactions ? allRecentTransactions.length : 0} Vouchers</span>
         </div>
       </CardHeader>
       <CardContent className="px-0 pb-2">
+<<<<<<< HEAD
         <div className="w-full overflow-x-auto">
+=======
+        {/* Mobile: 2px horizontal gap so Recent transaction cards match Daybook spacing */}
+        <div className={cn("w-full overflow-x-auto", isMobile && "px-[2px]")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
@@ -1449,6 +1538,10 @@ export default function DashboardPage() {
     <div className="space-y-3">
       {shouldShow('financial-summaries') && renderFinancialSummaries(isReportsEnabled)}
       {shouldShow('bank-cash-summary') && can('view_bank_cash_summary') && <BankCashSummary />}
+<<<<<<< HEAD
+=======
+      {/* Dashboard cards (Daybook, Bank, Recent) are gated by role permissions. If shared user doesn't see a card, check Settings → role permissions (e.g. View Daybook). */}
+>>>>>>> 6a1ec26 (Animation Fixed)
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
       

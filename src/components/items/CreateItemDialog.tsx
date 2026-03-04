@@ -666,8 +666,14 @@ const capitalizeFirstLetter = (str: string) => {
     <React.Fragment>
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+<<<<<<< HEAD
         <DialogContent
             className="w-[80vw] max-w-[80vw] h-[90vh] max-h-[90vh] flex flex-col"
+=======
+        {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
+        <DialogContent
+            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-4xl sm:grid sm:flex-none sm:px-6"
+>>>>>>> 6a1ec26 (Animation Fixed)
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
@@ -675,8 +681,15 @@ const capitalizeFirstLetter = (str: string) => {
             <DialogTitle>Create a New Item</DialogTitle>
             <DialogDescription>Add a new product or service to your records.</DialogDescription>
           </DialogHeader>
+<<<<<<< HEAD
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="h-full flex-1 flex flex-col min-h-0">
+=======
+          {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+          <div className="overflow-y-auto min-h-0 flex-1 pr-1 sm:flex-none sm:overflow-visible">
+          <Form {...form}>
+            <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-4 py-4">
+>>>>>>> 6a1ec26 (Animation Fixed)
               <Tabs value={itemType} onValueChange={(value) => form.setValue('type', value as 'item' | 'service' | 'finished_good')} className="w-full mb-4">
                   <TabsList>
                       <TabsTrigger value="item">Item</TabsTrigger>
@@ -684,7 +697,10 @@ const capitalizeFirstLetter = (str: string) => {
                       <TabsTrigger value="finished_good">Finished Good</TabsTrigger>
                   </TabsList>
               </Tabs>
+<<<<<<< HEAD
               <ScrollArea className="flex-1 pr-4 -mr-4">
+=======
+>>>>>>> 6a1ec26 (Animation Fixed)
               <div className="space-y-4 py-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <FormField
@@ -742,8 +758,16 @@ const capitalizeFirstLetter = (str: string) => {
                 />
               </div>
               
+<<<<<<< HEAD
               <div className="space-y-4 border p-4 rounded-md">
                   <FormLabel className="text-base font-semibold">Unit Conversions</FormLabel>
+=======
+              {/* Unit Conversions: horizontal scroll so Base Unit + delete icon visible on small screens (do not remove overflow-x-auto). */}
+              <div className="space-y-4 border p-4 rounded-md">
+                  <FormLabel className="text-base font-semibold">Unit Conversions</FormLabel>
+                  <div className="w-full overflow-x-auto overflow-y-visible -mx-1 px-1">
+                  <div className="space-y-2 min-w-[560px] pr-2">
+>>>>>>> 6a1ec26 (Animation Fixed)
                   {unitFields.map((field, index) => (
                       <div key={field.id} className="grid grid-cols-11 items-end gap-2">
                           <div className="col-span-1 flex items-center justify-center font-bold">1</div>
@@ -802,10 +826,19 @@ const capitalizeFirstLetter = (str: string) => {
                           </Button>
                       </div>
                   ))}
+<<<<<<< HEAD
+=======
+                  </div>
+                  </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
                   <Button 
                       type="button" 
                       size="sm" 
                       variant="outline" 
+<<<<<<< HEAD
+=======
+                      className="mt-2"
+>>>>>>> 6a1ec26 (Animation Fixed)
                       onClick={() => {
                           const lastUnit = unitFields.length > 0 ? form.getValues(`unitConversions.${unitFields.length - 1}.toUnit`) : "";
                           appendUnit({ fromUnit: lastUnit || '', toUnit: '', conversionFactor: 1 })
@@ -815,8 +848,14 @@ const capitalizeFirstLetter = (str: string) => {
                   </Button>
               </div>
 
+<<<<<<< HEAD
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-4 border p-4 rounded-md">
+=======
+              {/* Purchase Price, Purchase Unit Prices, Sale Price, Sale Unit Prices: mobile = Purchase Price then Purchase Unit Prices then Sale then Sale Unit Prices; PC = side-by-side (do not remove order classes). */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="order-1 sm:order-1 space-y-4 border p-4 rounded-md">
+>>>>>>> 6a1ec26 (Animation Fixed)
                     <div className="space-y-2">
                           <FormLabel>Purchase Price</FormLabel>
                           <div className="grid grid-cols-2 gap-2">
@@ -842,7 +881,11 @@ const capitalizeFirstLetter = (str: string) => {
                           <FormField control={form.control} name="purchasePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
                       </div>
                 </div>
+<<<<<<< HEAD
                   <div className="space-y-4 border p-4 rounded-md">
+=======
+                  <div className="order-3 sm:order-2 space-y-4 border p-4 rounded-md">
+>>>>>>> 6a1ec26 (Animation Fixed)
                       <div className="space-y-2">
                           <FormLabel>Sale Price</FormLabel>
                           <div className="grid grid-cols-2 gap-2">
@@ -868,10 +911,14 @@ const capitalizeFirstLetter = (str: string) => {
                         <FormField control={form.control} name="salePriceUnit" render={({ field }: any) => (<FormItem><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger className="w-28 h-9"><SelectValue placeholder="Unit"/></SelectTrigger></FormControl><SelectContent>{allUnits.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>)} />
                     </div>
                 </div>
+<<<<<<< HEAD
             </div>
               
               <div className="grid grid-cols-2 gap-4">
                   <ScrollArea className="w-full">
+=======
+                  <ScrollArea className="order-2 sm:order-3 w-full">
+>>>>>>> 6a1ec26 (Animation Fixed)
                       <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
                           <FormLabel className="text-base font-semibold">Purchase Unit Prices</FormLabel>
                           <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
@@ -891,7 +938,11 @@ const capitalizeFirstLetter = (str: string) => {
                       </div>
                       <ScrollBar orientation="horizontal"/>
                   </ScrollArea>
+<<<<<<< HEAD
                   <ScrollArea className="w-full">
+=======
+                  <ScrollArea className="order-4 sm:order-4 w-full">
+>>>>>>> 6a1ec26 (Animation Fixed)
                       <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
                           <FormLabel className="text-base font-semibold">Sale Unit Prices</FormLabel>
                           <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
@@ -913,8 +964,17 @@ const capitalizeFirstLetter = (str: string) => {
                   </ScrollArea>
               </div>
               
+<<<<<<< HEAD
               <div className="grid grid-cols-10 gap-4">
                 <div className="space-y-4 border p-4 rounded-md col-span-6">
+=======
+              {/* Opening Stock first, then Opening Stock Summary below (do not revert to side-by-side). */}
+              <div className="space-y-4">
+                <div className="space-y-4 border p-4 rounded-md">
+                  {/* Opening Stock container: horizontal scroll when fields overflow on small screens (do not remove overflow-x-auto). */}
+                  <div className="w-full overflow-x-auto overflow-y-visible -mx-1 px-1">
+                  <div className="min-w-[520px] space-y-4">
+>>>>>>> 6a1ec26 (Animation Fixed)
                   <div className="flex items-center gap-4">
                       <FormLabel className="text-base font-semibold">Opening Stock</FormLabel>
                       <FormField
@@ -1013,6 +1073,11 @@ const capitalizeFirstLetter = (str: string) => {
                         <FormControl><Input type="number" value={openingStockAmount.toFixed(2)} readOnly className="h-9 bg-muted"/></FormControl>
                     </FormItem>
                  </div>
+<<<<<<< HEAD
+=======
+                  </div>
+                  </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
                   <FormItem>
                     <FormLabel>Attach Files (Optional)</FormLabel>
                     {!canAddAvatar ? (
@@ -1050,7 +1115,11 @@ const capitalizeFirstLetter = (str: string) => {
                     )}
                   </FormItem>
                 </div>
+<<<<<<< HEAD
                   <div className="space-y-2 border p-4 rounded-md col-span-4">
+=======
+                <div className="space-y-2 border p-4 rounded-md">
+>>>>>>> 6a1ec26 (Animation Fixed)
                       <FormLabel className="text-base font-semibold">Opening Stock Summary</FormLabel>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1 items-center pr-4">
                         <FormLabel>Unit</FormLabel>
@@ -1065,8 +1134,12 @@ const capitalizeFirstLetter = (str: string) => {
                   </div>
               </div>
               </div>
+<<<<<<< HEAD
               </ScrollArea>
               
+=======
+
+>>>>>>> 6a1ec26 (Animation Fixed)
               <DialogFooter className="mt-4 border-t pt-4">
                   <DialogClose asChild>
                       <Button type="button" variant="ghost">Cancel</Button>
@@ -1082,6 +1155,10 @@ const capitalizeFirstLetter = (str: string) => {
               </DialogFooter>
             </form>
           </Form>
+<<<<<<< HEAD
+=======
+          </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
         </DialogContent>
       </Dialog>
       <CreateItemGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />

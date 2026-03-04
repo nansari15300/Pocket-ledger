@@ -41,11 +41,19 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import AdCalendar from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import {
   Select,
   SelectContent,
@@ -80,7 +88,11 @@ import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } fro
 import { COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useTransactions } from "@/hooks/use-transactions";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -139,6 +151,10 @@ export function PayeeDetails({
     useDate();
   const { vouchers, processedParties } = useVouchers();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -372,6 +388,7 @@ export function PayeeDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                     <Calendar
                       initialFocus
                       mode="range"
@@ -391,6 +408,29 @@ export function PayeeDetails({
                       numberOfMonths={2}
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                    <AdCalendar
+                      valueAD={tempDateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = tempDateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setTempDateRange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          const next = { from: adDate, to: range.from };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        } else {
+                          const next = { from: range.from, to: adDate };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>

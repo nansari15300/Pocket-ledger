@@ -374,9 +374,14 @@ export function OverdueAccountView({
                   <React.Fragment key={t.id}>
                   <motion.tr
                     layout
+<<<<<<< HEAD
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -20 }}
+=======
+                    initial={false}
+                    exit={{ transition: { duration: 0 } }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     transition={{
                       duration: isRowAnimationEnabled ? rowAnimationDuration : 0,
                       ease: "easeInOut",

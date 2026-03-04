@@ -414,6 +414,10 @@ export const TransactionRow = React.memo(
     isSpendWiseGroupLast = false,
     spendWiseRunningBalance,
     spendWiseGroupColorIndex,
+<<<<<<< HEAD
+=======
+    animateLayout = false,
+>>>>>>> 6a1ec26 (Animation Fixed)
   }: any) => {
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
     const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
@@ -677,12 +681,22 @@ export const TransactionRow = React.memo(
     const dateCols = dateSystem === "Both" ? 2 : 1;
     const colsThroughCredit =
       visibleColumns == null
+<<<<<<< HEAD
         ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (context !== "note" ? 1 : 0) + 1 + 1
+=======
+        ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (context === "item" ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
+>>>>>>> 6a1ec26 (Animation Fixed)
         : (showCol("date") ? dateCols : 0) +
           (showCol("type") ? 1 : 0) +
           (showCol("voucherNo") ? 1 : 0) +
           (context === "daybook" ? 1 : 0) +
+<<<<<<< HEAD
           (showCol("user") && context !== "note" ? 1 : 0) +
+=======
+          (context === "item" ? 1 : 0) +
+          (showCol("user") && context !== "note" ? 1 : 0) +
+          (showFileColumn ? 1 : 0) +
+>>>>>>> 6a1ec26 (Animation Fixed)
           (showCol("dr") ? 1 : 0) +
           (showCol("cr") ? 1 : 0);
     const statusDetailText = getStatusDetail(transaction);
@@ -707,6 +721,14 @@ export const TransactionRow = React.memo(
       "[&>td:first-child]:border-l [&>td:last-child]:border-r"
     );
     const narrationColSpan = colsThroughCredit + (hideStatusColumn || !showCol("status") ? 1 : 0);
+<<<<<<< HEAD
+=======
+    const narrationFullColSpan =
+      narrationColSpan +
+      (showCol("status") && !hideStatusColumn ? 1 : 0) +
+      (showCol("runningBalance") && !hideBalanceColumn ? 1 : 0) +
+      1;
+>>>>>>> 6a1ec26 (Animation Fixed)
 
     const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
     const spendWiseMainInset = inSpendWiseGroup && cn(
@@ -723,6 +745,7 @@ export const TransactionRow = React.memo(
 
     const MainRow = (
       <motion.tr
+<<<<<<< HEAD
         layout
         initial={{ opacity: 1 }}
         animate={{ opacity: 1 }}
@@ -732,6 +755,17 @@ export const TransactionRow = React.memo(
             ? { duration: rowAnimationDuration, ease: "easeInOut" }
             : { duration: 0 }
         }
+=======
+        layout={animateLayout ? "position" : false}
+        initial={false}
+        exit={{ transition: { duration: 0 } }}
+        transition={
+          isRowAnimationEnabled && animateLayout
+            ? { duration: rowAnimationDuration, ease: "easeInOut" }
+            : { duration: 0 }
+        }
+        style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
+>>>>>>> 6a1ec26 (Animation Fixed)
         onClick={() => onRowSelect?.(transaction)}
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
@@ -746,10 +780,27 @@ export const TransactionRow = React.memo(
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           isSelected &&
+<<<<<<< HEAD
             "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
           isSelected && !showNarrationRow && "[&>td]:border-b-2 [&>td]:border-b-primary [&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
           isSelected && showNarrationRow && "[&>td]:border-b-0 [&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
           showNarrationRow && isBillWise && "[&>td]:pb-0.5",
+=======
+            "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
+          isSelected &&
+            "[&>td]:[box-shadow:inset_0_2px_0_0_hsl(var(--primary))]",
+          isSelected && !showNarrationRow && "[&>td]:[box-shadow:inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
+          isSelected &&
+            "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary))]",
+          isSelected && !showNarrationRow && "[&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
+          isSelected &&
+            "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary))]",
+          isSelected && !showNarrationRow && "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
+          isSelected && !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
+          isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
+          showNarrationRow && isBillWise && "[&>td]:pb-0.5",
+          !showNarrationRow && "md:[&>td]:pb-1",
+>>>>>>> 6a1ec26 (Animation Fixed)
           showNarration &&
             (narrationText || (!hideStatusColumn && getStatusDetail(transaction)))
             ? "border-b-0"
@@ -769,7 +820,20 @@ export const TransactionRow = React.memo(
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
     const subRowStatusText = [statusDetailText, overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
     const NarrationRow = showNarrationRow ? (
+<<<<<<< HEAD
       <tr
+=======
+      <motion.tr
+        layout={animateLayout ? "position" : false}
+        initial={false}
+        exit={{ transition: { duration: 0 } }}
+        transition={
+          isRowAnimationEnabled && animateLayout
+            ? { duration: rowAnimationDuration, ease: "easeInOut" }
+            : { duration: 0 }
+        }
+        style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
+>>>>>>> 6a1ec26 (Animation Fixed)
         role="button"
         tabIndex={-1}
         onClick={() => onRowSelect?.(transaction)}
@@ -794,6 +858,7 @@ export const TransactionRow = React.memo(
           ),
           isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
           isSelected
+<<<<<<< HEAD
             ? "[&>td]:bg-primary/10 [&>td]:border-t-0 [&>td]:border-b-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
             : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
@@ -819,6 +884,37 @@ export const TransactionRow = React.memo(
         {showCol("runningBalance") && !hideBalanceColumn && <TableCell className="py-0 w-10 p-0" />}
         <TableCell className="py-0 w-10 p-0" />
       </tr>
+=======
+            ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
+            : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
+          isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
+          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
+          !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
+          "md:[&>td]:pb-1"
+        )}
+      >
+        <TableCell
+          colSpan={narrationFullColSpan}
+          className={cn(
+            "px-3 text-[11px] italic leading-tight align-top whitespace-normal break-words w-full min-w-0 overflow-hidden",
+            isPendingApproval && !isSelected ? "text-pink-950 dark:text-pink-100" : "text-muted-foreground",
+            isBillWise ? "pt-0.5 pb-0.5" : "py-0",
+            inSpendWiseGroup && "pr-[10px]"
+          )}
+        >
+          {narrationText || (isBillWise && subRowStatusText) ? (
+            <span className="block min-w-0 overflow-hidden break-words" style={{ overflowWrap: "anywhere" }}>
+              <span className="font-semibold not-italic">{narrationLabel}:</span> {narrationText || ""}
+              {isBillWise && subRowStatusText ? (
+                <span className={cn("ml-2 not-italic", isOverdueForSubRow && overdueDaysForSubRow > 0 ? "text-red-600 font-medium" : "text-muted-foreground")}>
+                  ({subRowStatusText})
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+        </TableCell>
+      </motion.tr>
+>>>>>>> 6a1ec26 (Animation Fixed)
     ) : null;
 
     return (

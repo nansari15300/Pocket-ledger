@@ -4,9 +4,17 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Button } from "@/components/ui/button";
 import { Calendar as Icon } from "lucide-react";
 import { adToBs, bsToAd, type BSDate, sameBSDay, NEPALI_MONTHS, NEPALI_WEEKDAYS_SHORT } from "@/lib/bs-date";
+<<<<<<< HEAD
 import type { DayPicker, DateRange, SelectSingleEventHandler } from "react-day-picker";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
+=======
+import type { DayPicker, SelectSingleEventHandler } from "react-day-picker";
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { cn } from "@/lib/utils";
+import { useDate } from "@/hooks/useDate";
+import { useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { format, isSameDay, startOfDay } from "date-fns";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 
@@ -45,10 +53,19 @@ function isValidForBS(date?: Date | null): boolean {
     return year >= MIN_VALID_AD_YEAR && year <= MAX_VALID_AD_YEAR;
 }
 
+<<<<<<< HEAD
 export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths = 2, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { dateSystem, formatDateBS } = useDate();
   const isRange = isRangeProp ?? true;
+=======
+export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
+  const [open, setOpen] = React.useState(false);
+  const { dateSystem, formatDateBS } = useDate();
+  const calendarMonths = useCalendarMonths(); // mobile: 1 month, PC: 2 months (date range)
+  const isRange = isRangeProp ?? true;
+  const numberOfMonths = numberOfMonthsProp ?? (isRange ? calendarMonths : 1);
+>>>>>>> 6a1ec26 (Animation Fixed)
   
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     // ✅ FINAL FIX: Do NOT use startOfDay. Use Noon (12:00 PM).
@@ -131,7 +148,11 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths = 2, 
             onSelect={handleNepaliSelect}
             valueAD={valueAD}
             isRange={isRange}
+<<<<<<< HEAD
             numberOfMonths={isRange ? numberOfMonths : 1}
+=======
+            numberOfMonths={numberOfMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
             transactionDates={transactionDates}
         />
       </PopoverContent>

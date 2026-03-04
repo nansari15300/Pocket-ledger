@@ -29,12 +29,21 @@ import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { openPrintDirect } from "@/lib/printDirect";
 import { cn } from "@/lib/utils";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import AdCalendar from "@/components/ui/ad-calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CalendarIcon } from "lucide-react";
+import { format } from "date-fns";
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { startOfDay, endOfDay } from "date-fns";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -206,6 +215,10 @@ function GroupRow({
  */
 export function ProfitAndLossPage() {
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const {
     vouchers,
     loading,
@@ -751,6 +764,7 @@ export function ProfitAndLossPage() {
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                     <Calendar
                       initialFocus
                       mode="range"
@@ -775,6 +789,26 @@ export function ProfitAndLossPage() {
                         }
                       }}
                       numberOfMonths={2}
+=======
+                    <AdCalendar
+                      valueAD={dateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      onSelect={(adDate) => {
+                        const range = dateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setDateRange({ from: startOfDay(adDate), to: undefined });
+                        } else if (adDate < range.from) {
+                          setDateRange({ from: startOfDay(adDate), to: endOfDay(range.from) });
+                          setIsCalendarOpen(false);
+                          if (activeRow) openDetail(activeRow);
+                        } else {
+                          setDateRange({ from: range.from, to: endOfDay(adDate) });
+                          setIsCalendarOpen(false);
+                          if (activeRow) openDetail(activeRow);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>

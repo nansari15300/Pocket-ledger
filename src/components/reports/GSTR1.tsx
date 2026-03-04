@@ -3,8 +3,14 @@
 import { useVouchers } from "@/hooks/useVouchers";
 import { useState, useMemo } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../ui/card";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
 import { useDate } from "@/hooks/useDate";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+import { useDate } from "@/hooks/useDate";
+import { useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from "../ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
@@ -26,6 +32,10 @@ export function GSTR1Report() {
   const { vouchers, loading, processedParties } = useVouchers();
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const { dateSystem, formatCurrency, formatDate, formatDateBS } = useDate();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
 
   const gstr1Data = useMemo(() => {
     let filtered = vouchers.filter(v => v.type === 'sale');
@@ -120,9 +130,15 @@ export function GSTR1Report() {
                     initialFocus
                     mode="range"
                     defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                     selected={dateRange}
                     onSelect={setDateRange}
                     numberOfMonths={2}
+=======
+                    selected={asCalendarRange(dateRange)}
+                    onSelect={setDateRange}
+                    numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   />
                 </PopoverContent>
               </Popover>

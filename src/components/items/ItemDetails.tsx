@@ -42,16 +42,28 @@ import type { Item } from "./types";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
 import { format, startOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+import { format, startOfDay } from "date-fns";
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } from "@/components/ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { EditItemDialog } from "./EditItemDialog";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -143,6 +155,10 @@ export default function ItemDetails({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const openingModalRef = useRef(false);
   const { processedItems, vouchers, processedAccounts, processedParties, journalAccountNames, userNames: userNamesFromHook } = useVouchers();
   const effectiveUserNames = userNames ?? userNamesFromHook ?? {};
@@ -372,6 +388,20 @@ export default function ItemDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -609,7 +639,12 @@ export default function ItemDetails({
 
   const renderMobileView = () => (
     <>
+<<<<<<< HEAD
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+      {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
       <div className="flex flex-col flex-shrink-0 border-b bg-background">
         {/* Row 1: Back | Item Details | Showing x of y vouchers - Party-style */}
         <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
@@ -692,9 +727,15 @@ export default function ItemDetails({
         </div>
       </div>
 
+<<<<<<< HEAD
       {/* Transaction list - scroll only here */}
       <div className="flex-1 min-h-0 overflow-auto">
         <div className="w-full min-w-0 px-0.5 space-y-px pb-4">
+=======
+      {/* Transaction list - extends to footer line */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
+>>>>>>> 6a1ec26 (Animation Fixed)
           {openingBalanceForPeriod !== 0 && (
             <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex items-center justify-between gap-2 min-w-0">
@@ -768,6 +809,7 @@ export default function ItemDetails({
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
+<<<<<<< HEAD
                           numberOfMonths={1}
                         />
                     )}
@@ -785,6 +827,30 @@ export default function ItemDetails({
                               if (range?.from && range.to) setIsCalendarOpen(false);
                           }}
                           numberOfMonths={1}
+=======
+                          numberOfMonths={calendarMonths}
+                        />
+                    )}
+                    {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                      <div className="flex-1 w-full min-w-0">
+                        <AdCalendar
+                          valueAD={dateRange}
+                          isRange
+                          numberOfMonths={calendarMonths}
+                          transactionDates={transactionDates}
+                          onSelect={(adDate) => {
+                            const range = dateRange;
+                            if (!range?.from || (range.from && range.to)) {
+                              setDateRange({ from: adDate, to: undefined });
+                            } else if (adDate < range.from) {
+                              setDateRange({ from: adDate, to: range.from });
+                              setIsCalendarOpen(false);
+                            } else {
+                              setDateRange({ from: range.from, to: adDate });
+                              setIsCalendarOpen(false);
+                            }
+                          }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                         />
                       </div>
                     )}
@@ -866,6 +932,7 @@ export default function ItemDetails({
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                   <Calendar
                     initialFocus
                     mode="range"
@@ -885,6 +952,29 @@ export default function ItemDetails({
                     numberOfMonths={2}
                     modifiers={{ hasTransactions: transactionDates }}
                     modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                  <AdCalendar
+                    valueAD={tempDateRange}
+                    isRange
+                    numberOfMonths={calendarMonths}
+                    transactionDates={transactionDates}
+                    onSelect={(adDate) => {
+                      const range = tempDateRange;
+                      if (!range?.from || (range.from && range.to)) {
+                        setTempDateRange({ from: adDate, to: undefined });
+                      } else if (adDate < range.from) {
+                        const next = { from: adDate, to: range.from };
+                        setTempDateRange(next);
+                        setDateRange(next);
+                        setIsDesktopCalendarOpen(false);
+                      } else {
+                        const next = { from: range.from, to: adDate };
+                        setTempDateRange(next);
+                        setDateRange(next);
+                        setIsDesktopCalendarOpen(false);
+                      }
+                    }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   />
                 </PopoverContent>
               </Popover>
@@ -1096,6 +1186,7 @@ export default function ItemDetails({
           </div>
         </DialogContent>
       </Dialog>
+<<<<<<< HEAD
       <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={(open: boolean) => {
         if (!open) {
           setIsVoucherDialogOpen(false);
@@ -1105,6 +1196,20 @@ export default function ItemDetails({
           setIsVoucherDialogOpen(open);
         }
       }} voucher={selectedVoucher} onVoucherAction={() => setSelectedVoucher(null)} />
+=======
+      <AddVoucherDialog
+        isOpen={isVoucherDialogOpen}
+        onOpenChange={(open: boolean) => {
+          setIsVoucherDialogOpen(!!open);
+          if (!open) {
+            setSelectedVoucher(null);
+            if (isMobile) closeModalInUrl();
+          }
+        }}
+        voucher={selectedVoucher}
+        onVoucherAction={() => setSelectedVoucher(null)}
+      />
+>>>>>>> 6a1ec26 (Animation Fixed)
     </>
   );
 }

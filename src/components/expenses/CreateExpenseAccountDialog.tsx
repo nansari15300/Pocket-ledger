@@ -192,8 +192,14 @@ export function CreateExpenseAccountDialog({
     <>
     <Dialog open={open} onOpenChange={setOpen} modal={true}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
+<<<<<<< HEAD
       <DialogContent 
         className="sm:max-w-lg"
+=======
+      {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
+      <DialogContent 
+        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-lg sm:grid sm:flex-none sm:px-6"
+>>>>>>> 6a1ec26 (Animation Fixed)
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
@@ -220,6 +226,11 @@ export function CreateExpenseAccountDialog({
             Add a new category for your expenses, like "Office Rent" or "Utilities".
           </DialogDescription>
         </DialogHeader>
+<<<<<<< HEAD
+=======
+        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+        <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+>>>>>>> 6a1ec26 (Animation Fixed)
         <Form {...form}>
           <form onSubmit={handleFormSubmit} className="space-y-4 py-4">
             <FormField
@@ -324,6 +335,10 @@ export function CreateExpenseAccountDialog({
             </DialogFooter>
           </form>
         </Form>
+<<<<<<< HEAD
+=======
+        </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
       </DialogContent>
     </Dialog>
     <CreateExpenseGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups}/>

@@ -33,7 +33,11 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import {
   Popover,
@@ -51,7 +55,11 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import {
   Select,
   SelectContent,
@@ -81,8 +89,14 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
 import { useTransactions } from "@/hooks/use-transactions";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -124,6 +138,10 @@ export function AccountDetails({
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -233,6 +251,21 @@ export function AccountDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    setIsEditAccountDialogOpen(false);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -616,7 +649,12 @@ export function AccountDetails({
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isEditAccountDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
 
   const renderMobileView = () => (
+<<<<<<< HEAD
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+      {/* No pb-24 here: scroll area extends to footer; inner content has pb-24 so last row clears footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
       {/* Row 1: Bank Account Details (left) | Showing x of y voucher(s) (right) - same as Party Details */}
       <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
         {onBack && (
@@ -707,6 +745,7 @@ export function AccountDetails({
           </div>
         </div>
       </div>
+<<<<<<< HEAD
       {/* Transaction list - use TransactionsTable for same row height as Party Details */}
       <div className={cn("flex-1 min-h-0 overflow-auto", spendWiseView && spendWiseEnabled && "p-[2px]")}>
         <TransactionsTable
@@ -732,6 +771,35 @@ export function AccountDetails({
           isBalanceMasked={showMaskedBalance}
           scrollOnlyTransactions
         />
+=======
+      {/* Transaction list - fills to footer line; inner pb-24 so last row scrolls above fixed footer */}
+      <div className={cn("flex-1 min-h-0 overflow-auto", spendWiseView && spendWiseEnabled && "p-[2px]")}>
+        <div className="pb-24">
+          <TransactionsTable
+            transactions={mobileTransactionsToShow}
+            context="account"
+            contextId={account.id}
+            openingBalance={openingBalanceForPeriod}
+            openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
+            openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
+            showNarration={showNarration}
+            visibleColumns={visibleColumns}
+            journalAccountNames={journalAccountNames}
+            userNames={userNames}
+            accountNames={accountNamesMap}
+            onRowClick={handleTransactionOpen}
+            filters={filters}
+            setFilters={setFilters}
+            activeFilter={activeFilter}
+            setActiveFilter={setActiveFilter}
+            periodDr={showMaskedBalance ? undefined : periodDr}
+            periodCr={showMaskedBalance ? undefined : periodCr}
+            closingBalance={showMaskedBalance ? undefined : closingBalance}
+            isBalanceMasked={showMaskedBalance}
+            scrollOnlyTransactions
+          />
+        </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
       </div>
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -740,7 +808,14 @@ export function AccountDetails({
                  type="button"
                  variant={spendWiseView ? "default" : "outline"}
                  size="sm"
+<<<<<<< HEAD
                  className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0"
+=======
+                 className={cn(
+                   "flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0",
+                   !spendWiseView && "bg-violet-600 hover:bg-violet-700 text-white border-0"
+                 )}
+>>>>>>> 6a1ec26 (Animation Fixed)
                  onClick={() => setSpendWiseView(!spendWiseView)}
                >
                  {spendWiseView ? "Statement" : "Spend wise"}
@@ -792,6 +867,7 @@ export function AccountDetails({
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
+<<<<<<< HEAD
                           numberOfMonths={1}
                         />
                     )}
@@ -809,6 +885,30 @@ export function AccountDetails({
                               if (range?.from && range.to) setIsCalendarOpen(false);
                           }}
                           numberOfMonths={1}
+=======
+                          numberOfMonths={calendarMonths}
+                        />
+                    )}
+                    {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                      <div className="flex-1 w-full min-w-0">
+                        <AdCalendar
+                          valueAD={dateRange}
+                          isRange
+                          numberOfMonths={calendarMonths}
+                          transactionDates={transactionDates}
+                          onSelect={(adDate) => {
+                            const range = dateRange;
+                            if (!range?.from || (range.from && range.to)) {
+                              onDateRangeChange?.({ from: adDate, to: undefined });
+                            } else if (adDate < range.from) {
+                              onDateRangeChange?.({ from: adDate, to: range.from });
+                              setIsCalendarOpen(false);
+                            } else {
+                              onDateRangeChange?.({ from: range.from, to: adDate });
+                              setIsCalendarOpen(false);
+                            }
+                          }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                         />
                       </div>
                     )}
@@ -898,6 +998,7 @@ export function AccountDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                     <Calendar
                       initialFocus
                       mode="range"
@@ -917,6 +1018,29 @@ export function AccountDetails({
                       numberOfMonths={2}
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                    <AdCalendar
+                      valueAD={tempDateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = tempDateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setTempDateRange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          const next = { from: adDate, to: range.from };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        } else {
+                          const next = { from: range.from, to: adDate };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>
@@ -1143,12 +1267,19 @@ export function AccountDetails({
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open: boolean) => {
+<<<<<<< HEAD
           if (!open) {
             setIsVoucherDialogOpen(false);
             setSelectedVoucher(null);
             closeModalInUrl();
           } else {
             setIsVoucherDialogOpen(true);
+=======
+          setIsVoucherDialogOpen(!!open);
+          if (!open) {
+            setSelectedVoucher(null);
+            if (isMobile) closeModalInUrl();
+>>>>>>> 6a1ec26 (Animation Fixed)
           }
         }}
         voucher={selectedVoucher}

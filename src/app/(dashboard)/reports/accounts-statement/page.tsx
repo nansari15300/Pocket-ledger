@@ -23,14 +23,22 @@ import type { Tax } from "@/components/tax/types";
 import type { ExpenseAccount } from "@/components/expenses/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { format } from "date-fns";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
 import { ChevronRight, ChevronDown, Landmark, Users, Crown, Building2, UserCheck, Receipt, TrendingUp, Briefcase, X, ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2 } from "lucide-react";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useReportPage } from "@/contexts/ReportPageContext";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -173,6 +181,10 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
   const hasAutoSelected = useRef(false);
   const { settings: animationSettings } = useAnimationSettings();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const dateRangeLabel = useMemo(() => {
@@ -1271,10 +1283,17 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     return (
       <motion.div
         key={item.id}
+<<<<<<< HEAD
         initial={{ opacity: 0, x: -10 }}
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ 
+=======
+        layout
+        initial={false}
+        exit={{ transition: { duration: 0 } }}
+        transition={{
+>>>>>>> 6a1ec26 (Animation Fixed)
           duration: rowAnimationDuration,
           ease: "easeInOut"
         }}
@@ -1678,7 +1697,11 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                   onSelect={handleNepaliSelect}
                   valueAD={dateRange}
                   isRange={true}
+<<<<<<< HEAD
                   numberOfMonths={2}
+=======
+                  numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                 />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -1689,12 +1712,20 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                     initialFocus
                     mode="range"
                     defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                     selected={dateRange}
+=======
+                    selected={asCalendarRange(dateRange)}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     onSelect={(range) => {
                       setDateRange(range as DateRange | undefined);
                       if (range?.from && range.to) setIsCalendarOpen(false);
                     }}
+<<<<<<< HEAD
                     numberOfMonths={2}
+=======
+                    numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   />
                 </div>
               )}
@@ -1707,7 +1738,12 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           </DrawerContent>
         </Drawer>
 
+<<<<<<< HEAD
         <main className="flex-1 flex flex-col min-h-0 px-4 pb-20 pt-0.5">
+=======
+        {/* Mobile: no pb-20 so scroll extends to footer; inner pb-24 so last row clears fixed footer */}
+        <main className={cn("flex-1 flex flex-col min-h-0 px-4 pt-0.5", !isMobile && "pb-20")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
           {activeSelection ? (
             view === "chart" ? (
               <div className="-mx-4 w-[calc(100%+2rem)] max-w-none flex-shrink-0">
@@ -1732,6 +1768,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                   className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0"
                   data-floating-button-scroll
                 >
+<<<<<<< HEAD
                   <TransactionsTable
                     transactions={filteredReportTransactions}
                     context={activeContext}
@@ -1750,6 +1787,49 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                       />
                     }
                   />
+=======
+                  {isMobile ? (
+                    <div className="pb-24">
+                      <TransactionsTable
+                        transactions={filteredReportTransactions}
+                        context={activeContext}
+                        contextId={activeSelection?.id}
+                        openingBalance={openingBalanceForPeriod}
+                        userNames={mergedUserNames}
+                        journalAccountNames={journalAccountNames}
+                        onRowClick={handleEditVoucher}
+                        openingBalanceLabel="Opening"
+                        openingBalanceSearch={
+                          <Input
+                            placeholder="Search..."
+                            value={transactionSearch}
+                            onChange={(e) => setTransactionSearch(e.target.value)}
+                            className="h-8 w-32 max-w-[140px] text-sm"
+                          />
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <TransactionsTable
+                      transactions={filteredReportTransactions}
+                      context={activeContext}
+                      contextId={activeSelection?.id}
+                      openingBalance={openingBalanceForPeriod}
+                      userNames={mergedUserNames}
+                      journalAccountNames={journalAccountNames}
+                      onRowClick={handleEditVoucher}
+                      openingBalanceLabel="Opening"
+                      openingBalanceSearch={
+                        <Input
+                          placeholder="Search..."
+                          value={transactionSearch}
+                          onChange={(e) => setTransactionSearch(e.target.value)}
+                          className="h-8 w-32 max-w-[140px] text-sm"
+                        />
+                      }
+                    />
+                  )}
+>>>>>>> 6a1ec26 (Animation Fixed)
                 </div>
               </>
             )

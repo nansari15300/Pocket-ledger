@@ -6,7 +6,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { format, getYear, getMonth, endOfMonth, startOfDay, endOfDay } from "date-fns";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 
 export function MonthYearFilter({ 

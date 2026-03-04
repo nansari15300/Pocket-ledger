@@ -16,7 +16,11 @@ import { StaffList } from "@/components/staff/StaffList";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useRouter } from "next/navigation";
 
 // ✅ Custom Hook Import

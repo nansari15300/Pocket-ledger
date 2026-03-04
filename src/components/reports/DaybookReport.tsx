@@ -5,19 +5,33 @@
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useCompany } from "@/hooks/useCompany";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+<<<<<<< HEAD
 import { Info, XCircle, Calendar as CalendarIcon, Expand, Filter, RotateCw } from "lucide-react";
+=======
+import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw } from "lucide-react";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { cn } from "@/lib/utils";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
 import type { Account } from "@/components/bank-cash/types";
 import type { Item } from "@/components/items/types";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { startOfDay, isSameDay, format } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+<<<<<<< HEAD
 import { Calendar } from "@/components/ui/calendar";
 import { useDate } from "@/hooks/useDate";
+=======
+import AdCalendar from "@/components/ui/ad-calendar";
+import { useDate } from "@/hooks/useDate";
+import { useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import usePermissions from "@/hooks/usePermissions";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ItemFilterDropdown } from "../items/ItemFilterDropdown";
@@ -36,7 +50,11 @@ import { Skeleton } from "../ui/skeleton";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+<<<<<<< HEAD
 import { useIsMobile } from '@/hooks/use-mobile';
+=======
+import { useIsMobile } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 type Voucher = {
     id: string;
@@ -140,7 +158,13 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const [userNames, setUserNames] = React.useState<Record<string, string>>({});
     const [isDateChange, setIsDateChange] = useState(false);
     const [daybookRotated, setDaybookRotated] = useState(false);
+<<<<<<< HEAD
     const isMobile = useIsMobile();
+=======
+    const [isDaybookCalendarOpen, setIsDaybookCalendarOpen] = useState(false);
+    const isMobile = useIsMobile();
+    const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
 
     const handleEditVoucher = (voucher: any) => {
         setSelectedVoucher(voucher);
@@ -346,7 +370,11 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                     </div>
                 </div>
                  {daybookSummary && (
+<<<<<<< HEAD
                     <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "rounded-none -mx-0.5")}>
+=======
+                    <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "rounded-lg mx-[2px]")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
                         <CardHeader className={cn("pb-2 pt-4", isMobile ? "px-2" : "px-4")}>
                              <CardTitle className="text-sm flex items-center gap-2"><Info className="h-4 w-4" />Daily Summary</CardTitle>
                              <CardDescription className="text-blue-700">Only showing bank and cash summary.</CardDescription>
@@ -366,18 +394,28 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                  <div className="flex flex-col gap-2 mt-4 print:hidden">
                     <div className="flex flex-wrap items-center justify-between gap-4">
                         <div className="flex items-center gap-2">
+<<<<<<< HEAD
                             {(dateSystem === 'BS' || dateSystem === 'Both') && (
+=======
+                            {/* Daybook only: single date system – show either BS or AD calendar, not both. Date select par calendar auto-close. */}
+                            {dateSystem === 'BS' && (
+>>>>>>> 6a1ec26 (Animation Fixed)
                                 <BsDatePicker valueAD={daybookDate} onChangeAD={(date) => setDaybookDate(date as Date)} isRange={false} transactionDates={transactionDates} />
                             )}
                             <Button variant="outline" onClick={() => setDaybookDate(new Date())}>Today</Button>
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
+<<<<<<< HEAD
                                 <Popover>
+=======
+                                <Popover open={isDaybookCalendarOpen} onOpenChange={setIsDaybookCalendarOpen}>
+>>>>>>> 6a1ec26 (Animation Fixed)
                                     <PopoverTrigger asChild>
                                     <Button
                                         id="date"
                                         variant={"outline"}
                                         className={cn("w-auto justify-start text-left font-normal", !daybookDate && "text-muted-foreground")}
                                     >
+<<<<<<< HEAD
                                         <CalendarIcon className="mr-2 h-4 w-4" />
                                         {daybookDate ? format(daybookDate, "PPP") : <span>Pick a date</span>}
                                     </Button>
@@ -391,13 +429,35 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                             onSelect={setDaybookDate}
                                             modifiers={{ hasTransactions: transactionDates }}
                                             modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                                        {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
+                                        {daybookDate ? formatDate(daybookDate) : <span>Pick a date</span>}
+                                    </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="start">
+                                        <AdCalendar
+                                            valueAD={daybookDate}
+                                            isRange={false}
+                                            numberOfMonths={calendarMonths}
+                                            transactionDates={transactionDates}
+                                            onSelect={(adDate) => {
+                                                setDaybookDate(adDate);
+                                                setIsDaybookCalendarOpen(false);
+                                            }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                                         />
                                     </PopoverContent>
                                 </Popover>
                             )}
                              {isDaybookFilterActive && (
+<<<<<<< HEAD
                                 <Button variant="ghost" size="sm" onClick={clearDaybookFilters}><XCircle className="mr-2 h-4 w-4"/>Clear Filters</Button>
                             )}
+=======
+                                <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearDaybookFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>
+                            )}
+                            {!isMobile && (
+>>>>>>> 6a1ec26 (Animation Fixed)
                             <div className="flex items-center space-x-2 flex-shrink-0">
                                 <Checkbox
                                     id="daybook-show-narration"
@@ -406,9 +466,16 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                 />
                                 <label htmlFor="daybook-show-narration" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Show Narration</label>
                             </div>
+<<<<<<< HEAD
                         </div>
                         <div className="flex items-center space-x-2">
                             <span className="text-sm font-medium">Rows:</span>
+=======
+                            )}
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            {!isMobile && <span className="text-sm font-medium">Rows:</span>}
+>>>>>>> 6a1ec26 (Animation Fixed)
                             <Select value={daybookRowsPerPage} onValueChange={(v) => setDaybookRowsPerPage(v)}>
                                 <SelectTrigger className="h-9 w-[80px]">
                                     <SelectValue placeholder={`${daybookRowsPerPage}`} />
@@ -430,7 +497,12 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                  {daybookTransactions && daybookTransactions.length > 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-full w-full">
                     <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto min-w-full w-full">
+<<<<<<< HEAD
                            <div className="w-full min-w-full overflow-hidden pr-[15px]">
+=======
+                           {/* Mobile: 2px horizontal gap so transaction cards match Daily Summary card spacing */}
+                           <div className={cn("w-full min-w-full overflow-hidden pr-[15px]", isMobile && "px-[2px]")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
                            <TransactionsTable
                                 transactions={daybookTransactions || []}
                                 context="daybook" 

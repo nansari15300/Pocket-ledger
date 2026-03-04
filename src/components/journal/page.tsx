@@ -10,7 +10,11 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import type { Account } from "@/components/bank-cash/types";
 import type { Item } from "@/components/items/types";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";

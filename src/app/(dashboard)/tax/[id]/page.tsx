@@ -5,7 +5,11 @@ import { useParams } from 'next/navigation';
 import { TaxDetails as DesktopTaxDetails } from '@/components/tax/TaxDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
+<<<<<<< HEAD
 import type { DateRange } from 'react-day-picker';
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';

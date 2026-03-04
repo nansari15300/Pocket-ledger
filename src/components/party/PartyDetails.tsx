@@ -39,11 +39,19 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import AdCalendar from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import {
   Select,
   SelectContent,
@@ -81,7 +89,11 @@ import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { useTransactions } from "@/hooks/use-transactions";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
 import { Combobox } from "@/components/ui/combobox";
@@ -105,6 +117,10 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { NotificationBell } from "../vouchers/NotificationBell";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
+<<<<<<< HEAD
+=======
+import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -191,6 +207,10 @@ export function PartyDetails({
     useDate();
   const { vouchers, processedParties } = useVouchers();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -305,6 +325,23 @@ export function PartyDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
+<<<<<<< HEAD
+=======
+  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
+  const closeUrlModal = useCallback(() => {
+    setMobileFooterDialogOpen(null);
+    setIsCalendarOpen(false);
+    setIsVoucherDialogOpen(false);
+    setSelectedVoucher(null);
+    setIsNoteOpen(false);
+    setHistoryVoucher(null);
+    setLinkAdvancesVoucher(null);
+    setLinkPaymentVoucher(null);
+    closeModalInUrl();
+  }, [closeModalInUrl]);
+  useUrlModalBack(urlModalOpen, closeUrlModal);
+
+>>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -431,23 +468,39 @@ export function PartyDetails({
   }, [processedTransactions, userNames, localFetchedUserNames]);
 
   const handleEditVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
 
   const handleHistoryVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     openModalInUrl();
     setHistoryVoucher(voucher);
   };
 
   const handleDeleteVoucher = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
 
   const handleAddLink = (voucher: any) => {
+<<<<<<< HEAD
+=======
+    openingModalRef.current = true;
+>>>>>>> 6a1ec26 (Animation Fixed)
     openModalInUrl();
     const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(voucher?.type);
     if (isPaymentType) {
@@ -655,7 +708,12 @@ export function PartyDetails({
   if (isMobile) {
     return (
       <>
+<<<<<<< HEAD
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
+=======
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
+          {/* Mobile: no pb-24 here so scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+>>>>>>> 6a1ec26 (Animation Fixed)
           {/* Row 1: Party Details (left) | Showing x of y vouchers (right) - compact */}
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
@@ -729,8 +787,14 @@ export function PartyDetails({
               </div>
             </div>
           </div>
+<<<<<<< HEAD
           {/* Transaction list - full width minus 2px */}
           <div className="flex-1 min-h-0 overflow-auto">
+=======
+          {/* Transaction list - extends to footer line */}
+          <div className="flex-1 min-h-0 overflow-auto">
+            <div className="pb-24">
+>>>>>>> 6a1ec26 (Animation Fixed)
             <TransactionsTable
               transactions={mobileTransactions}
               context="party"
@@ -766,6 +830,10 @@ export function PartyDetails({
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
             />
+<<<<<<< HEAD
+=======
+            </div>
+>>>>>>> 6a1ec26 (Animation Fixed)
           </div>
         </div>
         {/* Fixed bottom: Bill wise/Statement, Receive, Pay, New Sale, Calendar - open popups */}
@@ -834,6 +902,7 @@ export function PartyDetails({
                     }}
                     valueAD={dateRange}
                     isRange={true}
+<<<<<<< HEAD
                     numberOfMonths={2}
                   />
                 )}
@@ -852,6 +921,30 @@ export function PartyDetails({
                       numberOfMonths={2}
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: "has-transactions" }}
+=======
+                    numberOfMonths={calendarMonths}
+                  />
+                )}
+                {(dateSystem === "AD" || dateSystem === "Both") && (
+                  <div className="flex-1 w-full min-w-0">
+                    <AdCalendar
+                      valueAD={dateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = dateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          onDateRangeChange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          onDateRangeChange({ from: adDate, to: range.from });
+                          setIsCalendarOpen(false);
+                        } else {
+                          onDateRangeChange({ from: range.from, to: adDate });
+                          setIsCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </div>
                 )}
@@ -902,23 +995,31 @@ export function PartyDetails({
         <HistoryDialog
           voucher={historyVoucher}
           isOpen={!!historyVoucher}
+<<<<<<< HEAD
           onOpenChange={(open: boolean) => {
             if (!open) {
               setHistoryVoucher(null);
               closeModalInUrl();
             }
           }}
+=======
+          onOpenChange={(open: boolean) => !open && setHistoryVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
           onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
         />
         {linkAdvancesVoucher && (
           <LinkAdvancesToVoucherDialog
             isOpen={!!linkAdvancesVoucher}
+<<<<<<< HEAD
             onOpenChange={(open: boolean) => {
               if (!open) {
                 setLinkAdvancesVoucher(null);
                 closeModalInUrl();
               }
             }}
+=======
+            onOpenChange={(open: boolean) => !open && setLinkAdvancesVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
             mode={linkAdvancesVoucher.type === "purchase" || linkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
             targetVoucherId={linkAdvancesVoucher.id}
             targetPartyId={linkAdvancesVoucher.partyId ?? party?.id ?? ""}
@@ -931,12 +1032,16 @@ export function PartyDetails({
         {linkPaymentVoucher && (
           <LinkPaymentToTxnsDialog
             isOpen={!!linkPaymentVoucher}
+<<<<<<< HEAD
             onOpenChange={(open: boolean) => {
               if (!open) {
                 setLinkPaymentVoucher(null);
                 closeModalInUrl();
               }
             }}
+=======
+            onOpenChange={(open: boolean) => !open && setLinkPaymentVoucher(null)}
+>>>>>>> 6a1ec26 (Animation Fixed)
             variant={linkPaymentVoucher.type === "payment_out" || linkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
             partyId={linkPaymentVoucher.partyId ?? null}
             partyName={allParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.name ?? "Party"}
@@ -1002,7 +1107,11 @@ export function PartyDetails({
                 <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                   {formatCurrency(closingBalance, { showDrCr: true })}
                 </div>
+<<<<<<< HEAD
                 {showApproveNotification && (
+=======
+                {showApproveNotification && !isMobile && (
+>>>>>>> 6a1ec26 (Animation Fixed)
                   <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 flex-shrink-0 min-w-[8rem]">
                     {pendingApprovalCount} pending approval
                   </span>
@@ -1052,6 +1161,7 @@ export function PartyDetails({
                       </Button>
                     </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+<<<<<<< HEAD
                     <Calendar
                       initialFocus
                       mode="range"
@@ -1071,6 +1181,29 @@ export function PartyDetails({
                       numberOfMonths={2}
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
+=======
+                    <AdCalendar
+                      valueAD={tempDateRange}
+                      isRange
+                      numberOfMonths={calendarMonths}
+                      transactionDates={transactionDates}
+                      onSelect={(adDate) => {
+                        const range = tempDateRange;
+                        if (!range?.from || (range.from && range.to)) {
+                          setTempDateRange({ from: adDate, to: undefined });
+                        } else if (adDate < range.from) {
+                          const next = { from: adDate, to: range.from };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        } else {
+                          const next = { from: range.from, to: adDate };
+                          setTempDateRange(next);
+                          onDateRangeChange(next);
+                          setIsDesktopCalendarOpen(false);
+                        }
+                      }}
+>>>>>>> 6a1ec26 (Animation Fixed)
                     />
                   </PopoverContent>
                 </Popover>
@@ -1284,7 +1417,22 @@ export function PartyDetails({
           </div>
         </DialogContent>
       </Dialog>
+<<<<<<< HEAD
       <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherAction={() => setSelectedVoucher(null)} />
+=======
+      <AddVoucherDialog
+        isOpen={isVoucherDialogOpen}
+        onOpenChange={(open) => {
+          setIsVoucherDialogOpen(open);
+          if (!open) {
+            setSelectedVoucher(null);
+            if (isMobile) closeModalInUrl();
+          }
+        }}
+        voucher={selectedVoucher}
+        onVoucherAction={() => setSelectedVoucher(null)}
+      />
+>>>>>>> 6a1ec26 (Animation Fixed)
       <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
       {linkAdvancesVoucher && (
         <LinkAdvancesToVoucherDialog

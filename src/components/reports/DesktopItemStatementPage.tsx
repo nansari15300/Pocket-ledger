@@ -10,7 +10,11 @@ import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File as FileIcon, Printer, Share2, BarChart2, X } from "lucide-react";
 import type { Item, ItemGroup } from "@/components/items/types";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -37,7 +41,11 @@ import { PermissionButton } from "@/components/permission";
 import * as XLSX from "xlsx";
 import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFullChart";
 import { getConversionFactor, formatQuantity } from "@/components/vouchers/transactionTableShared";
+<<<<<<< HEAD
 import { useIsMobile } from "@/hooks/use-mobile";
+=======
+import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 
 const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
@@ -73,6 +81,10 @@ export default function DesktopItemStatementPage() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
   const openingModalRef = useRef(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -507,7 +519,11 @@ export default function DesktopItemStatementPage() {
           </DrawerHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
             {(dateSystem === "BS" || dateSystem === "Both") && (
+<<<<<<< HEAD
               <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={2} />
+=======
+              <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+>>>>>>> 6a1ec26 (Animation Fixed)
             )}
             {(dateSystem === "AD" || dateSystem === "Both") && (
               <div className="flex-1">
@@ -517,12 +533,20 @@ export default function DesktopItemStatementPage() {
                   initialFocus
                   mode="range"
                   defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                   selected={dateRange}
+=======
+                  selected={asCalendarRange(dateRange)}
+>>>>>>> 6a1ec26 (Animation Fixed)
                   onSelect={(range) => {
                     setDateRange(range as DateRange | undefined);
                     if (range?.from && range.to) setIsCalendarOpen(false);
                   }}
+<<<<<<< HEAD
                   numberOfMonths={2}
+=======
+                  numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                 />
               </div>
             )}
@@ -535,7 +559,12 @@ export default function DesktopItemStatementPage() {
         </DrawerContent>
       </Drawer>
 
+<<<<<<< HEAD
       <main className="flex-1 flex flex-col min-h-0 px-4 pb-20 pt-0.5">
+=======
+      {/* Mobile: no pb-20 so scroll extends to footer; inner pb-24 so last row clears fixed footer */}
+      <main className={cn("flex-1 flex flex-col min-h-0 px-4 pt-0.5", !isMobile && "pb-20")}>
+>>>>>>> 6a1ec26 (Animation Fixed)
         {view === "chart" ? (
           <div className="-mx-4 w-[calc(100%+2rem)] max-w-none flex-shrink-0">
             <RunningBalanceFullChart transactions={reportDisplayTransactions} openingBalance={openingBalanceForPeriod} />
@@ -589,6 +618,7 @@ export default function DesktopItemStatementPage() {
               })}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+<<<<<<< HEAD
               <TransactionsTable
                 transactions={filteredReportTransactions}
                 context={activeContext}
@@ -611,6 +641,57 @@ export default function DesktopItemStatementPage() {
                   />
                 }
               />
+=======
+              {isMobile ? (
+                <div className="pb-24">
+                  <TransactionsTable
+                    transactions={filteredReportTransactions}
+                    context={activeContext}
+                    contextId={activeEntity?.id}
+                    openingBalance={openingBalanceForPeriod}
+                    userNames={userNames}
+                    journalAccountNames={journalAccountNames}
+                    accountNames={{}}
+                    stockView={selectedItem ? reportStockView : "amount"}
+                    displayUnit={selectedItem && reportStockView === "qty" ? effectiveDisplayUnit : undefined}
+                    item={selectedItem || undefined}
+                    onRowClick={handleEditVoucher}
+                    openingBalanceLabel="Opening"
+                    openingBalanceSearch={
+                      <Input
+                        placeholder="Search..."
+                        value={transactionSearch}
+                        onChange={(e) => setTransactionSearch(e.target.value)}
+                        className="h-9 w-32 max-w-[140px] text-sm"
+                      />
+                    }
+                  />
+                </div>
+              ) : (
+                <TransactionsTable
+                  transactions={filteredReportTransactions}
+                  context={activeContext}
+                  contextId={activeEntity?.id}
+                  openingBalance={openingBalanceForPeriod}
+                  userNames={userNames}
+                  journalAccountNames={journalAccountNames}
+                  accountNames={{}}
+                  stockView={selectedItem ? reportStockView : "amount"}
+                  displayUnit={selectedItem && reportStockView === "qty" ? effectiveDisplayUnit : undefined}
+                  item={selectedItem || undefined}
+                  onRowClick={handleEditVoucher}
+                  openingBalanceLabel="Opening"
+                  openingBalanceSearch={
+                    <Input
+                      placeholder="Search..."
+                      value={transactionSearch}
+                      onChange={(e) => setTransactionSearch(e.target.value)}
+                      className="h-9 w-32 max-w-[140px] text-sm"
+                    />
+                  }
+                />
+              )}
+>>>>>>> 6a1ec26 (Animation Fixed)
             </div>
           </>
         )}

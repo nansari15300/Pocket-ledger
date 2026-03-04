@@ -45,9 +45,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+<<<<<<< HEAD
 import { DateRange } from "react-day-picker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+=======
+import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { useCalendarMonths } from "@/hooks/use-mobile";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { startOfDay, endOfDay, startOfMonth, endOfMonth, subDays, format } from 'date-fns';
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
@@ -557,6 +564,10 @@ export default function AdminDashboard() {
     return { from: startOfMonth(now), to: endOfMonth(now) };
   });
   const { dateSystem } = useDate();
+<<<<<<< HEAD
+=======
+  const calendarMonths = useCalendarMonths();
+>>>>>>> 6a1ec26 (Animation Fixed)
 
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allCompanies, setAllCompanies] = useState<any[]>([]);
@@ -688,9 +699,15 @@ export default function AdminDashboard() {
                             initialFocus
                             mode="range"
                             defaultMonth={dateRange?.from}
+<<<<<<< HEAD
                             selected={dateRange}
                             onSelect={setDateRange}
                             numberOfMonths={2}
+=======
+                            selected={asCalendarRange(dateRange)}
+                            onSelect={setDateRange}
+                            numberOfMonths={calendarMonths}
+>>>>>>> 6a1ec26 (Animation Fixed)
                         />
                     </PopoverContent>
                 </Popover>

@@ -45,7 +45,11 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import type { StockView } from "@/components/items/ItemDetails";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Item, ItemGroup } from "@/components/items/types";
+<<<<<<< HEAD
 import type { DateRange } from "react-day-picker";
+=======
+import type { DateRange } from "@/components/ui/ad-calendar";
+>>>>>>> 6a1ec26 (Animation Fixed)
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams } from "next/navigation";
