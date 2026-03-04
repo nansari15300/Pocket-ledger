@@ -4,11 +4,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { AccountGroupDetails as DesktopAccountGroupDetails } from '@/components/bank-cash/AccountGroupDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
-<<<<<<< HEAD
-import type { DateRange } from 'react-day-picker';
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';

@@ -47,11 +47,8 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";

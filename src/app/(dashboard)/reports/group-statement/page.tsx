@@ -21,11 +21,8 @@ import { ExpenseGroupDetails } from "@/components/expenses/ExpenseGroupDetails";
 import type { Group, Party } from "@/components/party/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";

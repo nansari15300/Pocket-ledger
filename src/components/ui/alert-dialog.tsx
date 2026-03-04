@@ -5,10 +5,6 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
-<<<<<<< HEAD
-
-const AlertDialog = AlertDialogPrimitive.Root
-=======
 import { useDialogBack } from "@/contexts/DialogBackHandlerContext"
 
 /** Root with global back handling: first back closes dialog, second back navigates. */
@@ -16,7 +12,7 @@ function AlertDialog(props: React.ComponentProps<typeof AlertDialogPrimitive.Roo
   useDialogBack(props.open, props.onOpenChange)
   return <AlertDialogPrimitive.Root {...props} />
 }
->>>>>>> 6a1ec26 (Animation Fixed)
+
 
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 

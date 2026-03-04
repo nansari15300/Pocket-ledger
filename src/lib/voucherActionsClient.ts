@@ -304,13 +304,9 @@ export async function saveVoucher(
       if (moveResult?.success && Array.isArray(moveResult.moved)) {
         movedFileObjects = moveResult.moved.map((m: any) => ({
           url: m.url,
-<<<<<<< HEAD
-          storagePath: m.newPath,
-          name: m.newPath.split("/").pop(),
-=======
           storagePath: m.newPath ?? "",
           name: m.newPath ? m.newPath.split("/").pop() : "",
->>>>>>> 6a1ec26 (Animation Fixed)
+
         }));
       }
     }

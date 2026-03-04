@@ -12,11 +12,8 @@ import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, Layers, BarChart2 } from "lucide-react";
-<<<<<<< HEAD
-import { DateRange } from "react-day-picker";
-=======
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { startOfMonth, endOfMonth, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -43,17 +40,12 @@ import { firestore } from "@/lib/firebase";
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import type { Account } from "@/components/bank-cash/types";
-<<<<<<< HEAD
-
-export default function ContraReportPage() {
-    const { vouchers, loading, processedAccounts } = useVouchers();
-=======
 import { useIsMobile } from "@/hooks/use-mobile";
 
 export default function ContraReportPage() {
     const { vouchers, loading, processedAccounts } = useVouchers();
     const isMobile = useIsMobile();
->>>>>>> 6a1ec26 (Animation Fixed)
+
     const { company, companyId } = useCompany();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
     const router = useRouter();
@@ -469,12 +461,9 @@ export default function ContraReportPage() {
                     </div>
                  </div>
             </header>
-<<<<<<< HEAD
-            <main className="p-4 space-y-4 pb-20 flex-1">
-=======
             {/* Mobile: no pb-20 so scroll extends to footer; inner pb-24 so last row clears fixed footer */}
             <main className={cn("p-4 space-y-4 flex-1 flex flex-col min-h-0", isMobile ? "overflow-y-auto" : "pb-20")}>
->>>>>>> 6a1ec26 (Animation Fixed)
+
                 {selectedAccountId !== 'all' && (
                 <div className="grid grid-cols-3 gap-2 text-center">
                     <Card className="p-2"><CardTitle className="text-sm font-medium text-muted-foreground">Balance</CardTitle><p className={cn("font-semibold", finalData.closing >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(finalData.closing, {showDrCr: true})}</p></Card>
@@ -497,20 +486,6 @@ export default function ContraReportPage() {
                             </div>
                         </div>
                         )}
-<<<<<<< HEAD
-                        <TransactionsTable
-                            transactions={finalData.transactions} 
-                            context={getContext()} 
-                            contextId={selectedAccountId || ""}
-                            onRowClick={handleEditVoucher}
-                            userNames={userNames}
-                            journalAccountNames={journalAccountNames}
-                            filters={filters}
-                            setFilters={setFilters}
-                            activeFilter={activeFilter}
-                            setActiveFilter={setActiveFilter}
-                        />
-=======
                         {isMobile ? (
                             <div className="pb-24">
                                 <TransactionsTable
@@ -540,7 +515,7 @@ export default function ContraReportPage() {
                                     setActiveFilter={setActiveFilter}
                                 />
                         )}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     </>
                  )}
             </main>
@@ -580,11 +555,8 @@ export default function ContraReportPage() {
                               initialFocus
                               mode="range"
                               defaultMonth={dateRange?.from}
-<<<<<<< HEAD
-                              selected={dateRange}
-=======
                               selected={asCalendarRange(dateRange)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                               onSelect={(range: DateRange | undefined) => {
                                   setDateRange(range);
                                   if (range?.from && range.to) {

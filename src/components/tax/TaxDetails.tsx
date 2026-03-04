@@ -31,19 +31,12 @@ import {
   Search,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-import { format, startOfDay } from "date-fns";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import { Calendar } from "@/components/ui/calendar";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import AdCalendar from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import {
   Select,
   SelectContent,
@@ -91,14 +84,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getTaxTransactionAmounts, useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { NotificationBell } from "../vouchers/NotificationBell";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Combobox } from "@/components/ui/combobox";
 import {
   Drawer,
@@ -172,64 +161,6 @@ export function TaxDetails({
   const openingModalRef = React.useRef(false);
 
   const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    if (typeof window === "undefined") return { ...DEFAULT_STATUS_FILTER };
-    try {
-      const saved = sessionStorage.getItem(STATUS_FILTER_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<StatusFilter>;
-        return {
-          paid: parsed.paid ?? DEFAULT_STATUS_FILTER.paid,
-          unpaid: parsed.unpaid ?? DEFAULT_STATUS_FILTER.unpaid,
-          partial: parsed.partial ?? DEFAULT_STATUS_FILTER.partial,
-          overdue: parsed.overdue ?? DEFAULT_STATUS_FILTER.overdue,
-        };
-      }
-    } catch (_) {}
-    return { ...DEFAULT_STATUS_FILTER };
-  });
-  const statusFilterAllChecked = statusFilter.paid && statusFilter.unpaid && statusFilter.partial && statusFilter.overdue;
-  const handleStatusFilterAll = () => {
-    const next = statusFilterAllChecked ? { paid: false, unpaid: false, partial: false, overdue: false } : { ...DEFAULT_STATUS_FILTER };
-    setStatusFilter(next);
-    sessionStorage.setItem(STATUS_FILTER_KEY, JSON.stringify(next));
-    setCurrentPage(1);
-  };
-
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
-
-  const anyMobilePopupOpen = isMobile && (
-    !!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen
-  );
-
-  const openModalInUrl = React.useCallback(() => {
-    if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("modal", "1");
-    router.push(`${pathname}?${params.toString()}`);
-  }, [isMobile, pathname, searchParams, router]);
-
-  const closeModalInUrl = React.useCallback(() => {
-    if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("modal");
-    const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
-
-  const modalParam = searchParams.get("modal");
-<<<<<<< HEAD
-=======
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = React.useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -241,7 +172,6 @@ export function TaxDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
->>>>>>> 6a1ec26 (Animation Fixed)
   React.useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -310,175 +240,9 @@ export function TaxDetails({
   };
   
   const handleEditVoucher = useCallback((voucher: any) => {
-<<<<<<< HEAD
-=======
-    openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
-    setSelectedVoucher(voucher);
-    openModalInUrl();
-    setIsVoucherDialogOpen(true);
-  }, [openModalInUrl]);
-
-  const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
-  );
-
-  const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm.trim()) return statusFilteredTransactions;
-    const q = mobileSearchTerm.toLowerCase().trim();
-    return statusFilteredTransactions.filter((t) => {
-      const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
-      const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
-      const timeStr = d ? format(d, "h:mm a") : "";
-      const amt = t.debit > 0 ? t.debit : t.credit;
-      const bal = t.balance ?? t.runningBalance ?? 0;
-      const userStr = (userNames && t.userId && userNames[t.userId]) || "";
-      return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
-        dateStr.toLowerCase().includes(q) ||
-        timeStr.toLowerCase().includes(q) ||
-        String(amt || 0).toLowerCase().includes(q) ||
-        String(t.debit || 0).toLowerCase().includes(q) ||
-        String(t.credit || 0).toLowerCase().includes(q) ||
-        String(bal).toLowerCase().includes(q) ||
-        userStr.toLowerCase().includes(q)
-      );
-    });
-  }, [statusFilteredTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
-
-  const mobileTransactions = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return searchFilteredTransactions;
-    const list = searchFilteredTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [searchFilteredTransactions, dateRange]);
-
-  const taxDropdownOptions = useMemo(
-    () => (allTaxes || []).map((t) => ({ value: t.id, label: t.name })),
-    [allTaxes]
-  );
-
-  useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-    if (total >= 1) setCurrentPage(total);
-  }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
-
-  const handleMobileBack = useCallback(() => {
-    if (mobileFooterDialogOpen) {
-      setMobileFooterDialogOpen(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isCalendarOpen) {
-      setIsCalendarOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (isVoucherDialogOpen) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isNoteOpen) {
-      setIsNoteOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    onBack?.();
-  }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
-  
-  const totalPages = Math.ceil(processedTransactions.length / rowsPerPage);
-  const paginatedTransactions = processedTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  );
-  
-  const buildDateRangeText = () => {
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if (from) {
-      const fromBS = formatDateBS(from);
-      const toBS = to ? formatDateBS(to) : fromBS;
-      const fromAD = formatDate(from);
-      const toAD = to ? formatDate(to) : fromAD;
-      if (dateSystem === "AD") dateRangeText = `AD: ${fromAD} to ${toAD}`;
-      else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS} to ${toBS}`;
-      else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    return dateRangeText;
-  };
-
-  const handlePrintStatement = (billWise: boolean = false) => {
-    if (!company || !tax) return Promise.resolve();
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Tax Statement: ${tax.name}`,
-      context: "tax",
-      contextId: tax.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      billWise: billWise,
-    }, true);
-  };
-
-  const handlePrint = () => {
-    setTimeout(async () => {
-      try {
-        await handlePrintStatement(balanceMode === "bill_wise");
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
-      }
-    }, 200);
-  };
-
-  if (!tax) {
-    return null;
-  }
-
-  const dateRangeLabel = buildDateRangeText() || "All Time";
-  const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
-
-  const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
-    const range = dateRange;
-    if (!range?.from || (range.from && range.to)) {
-      onDateRangeChange({ from: adDate, to: undefined });
-    } else if (adDate < range.from) {
-      onDateRangeChange({ from: adDate, to: range.from });
-      setIsCalendarOpen(false);
-    } else {
-      onDateRangeChange({ from: range.from, to: adDate });
-      setIsCalendarOpen(false);
-    }
-  };
-
-  if (isMobile) {
-    return (
-      <>
-<<<<<<< HEAD
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
-=======
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -550,42 +314,8 @@ export function TaxDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
-<<<<<<< HEAD
-=======
-            <div className="pb-24">
->>>>>>> 6a1ec26 (Animation Fixed)
-            <TransactionsTable
-              transactions={mobileTransactions}
-              context="tax"
-              contextId={tax.id}
-              openingBalance={openingBalanceForPeriod}
-              openingBalanceOutstanding={openingBalanceOutstanding}
-              openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
-              openingBalanceActions={undefined}
-              showNarration={showNarration}
-              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              journalAccountNames={journalAccountNames}
-              userNames={userNames}
-              onRowClick={handleEditVoucher}
-              filters={filters}
-              setFilters={setFilters}
-              activeFilter={activeFilter}
-              setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
-              isTaxContext={isTaxContext ?? true}
-              scrollOnlyTransactions
-              statusFilter={statusFilter}
-              statusFilterAllChecked={statusFilterAllChecked}
-              onStatusFilterAll={handleStatusFilterAll}
-              onStatusFilterChange={handleStatusFilterChange}
-              statusFilterIdPrefix="tax"
-            />
-<<<<<<< HEAD
-=======
             </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -632,25 +362,6 @@ export function TaxDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
-<<<<<<< HEAD
-                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={2} />
-                )}
-                {(dateSystem === "AD" || dateSystem === "Both") && (
-                  <div className="flex-1">
-                    <Calendar
-                      className="p-0 w-full"
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={dateRange}
-                      onSelect={(range) => {
-                        onDateRangeChange(range as DateRange | undefined);
-                        if (range?.from && range?.to) setIsCalendarOpen(false);
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: "has-transactions" }}
-=======
                   <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -672,7 +383,7 @@ export function TaxDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </div>
                 )}
@@ -793,27 +504,6 @@ export function TaxDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
-<<<<<<< HEAD
-                    <Calendar
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={tempDateRange}
-                      onSelect={(range) => {
-                        if (range?.from) range.from.setHours(12, 0, 0, 0);
-                        if (range?.to) range.to.setHours(12, 0, 0, 0);
-                        setTempDateRange(range);
-                        if (range?.from && range.to) {
-                          onDateRangeChange(range);
-                          setIsDesktopCalendarOpen(false);
-                        } else if (!range) {
-                          onDateRangeChange(undefined);
-                        }
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: 'has-transactions' }}
-=======
                     <AdCalendar
                       valueAD={tempDateRange}
                       isRange
@@ -835,7 +525,7 @@ export function TaxDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </PopoverContent>
                 </Popover>
@@ -1028,9 +718,6 @@ export function TaxDetails({
           </div>
         </DialogContent>
       </Dialog>
-<<<<<<< HEAD
-      <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherCreated={() => setSelectedVoucher(null)} />
-=======
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open) => {
@@ -1043,7 +730,7 @@ export function TaxDetails({
         voucher={selectedVoucher}
         onVoucherCreated={() => setSelectedVoucher(null)}
       />
->>>>>>> 6a1ec26 (Animation Fixed)
+
     </>
   );
 }

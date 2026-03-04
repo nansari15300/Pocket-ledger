@@ -5,11 +5,8 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { PartyDetails as DesktopPartyDetails } from '@/components/party/PartyDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback, useMemo } from 'react';
-<<<<<<< HEAD
-import type { DateRange } from 'react-day-picker';
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';

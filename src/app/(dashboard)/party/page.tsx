@@ -45,11 +45,8 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";

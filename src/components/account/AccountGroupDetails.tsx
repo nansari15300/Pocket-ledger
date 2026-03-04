@@ -21,11 +21,8 @@ import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
 import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea } from "../ui/scroll-area";
@@ -36,37 +33,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { openPrintDirect } from "@/lib/printDirect";
-<<<<<<< HEAD
-=======
-import { useCalendarMonths } from "@/hooks/use-mobile";
->>>>>>> 6a1ec26 (Animation Fixed)
-
-export function AccountGroupDetails({ 
-  group,
-  allGroups,
-  accounts,
-  groupTransactions,
-  onGroupUpdated, 
-  onGroupDeleted,
-  onAccountUpdated,
-  dateRange,
-  onDateRangeChange,
-}: { 
-  group: AccountGroup, 
-  allGroups: AccountGroup[],
-  accounts: Account[],
-  groupTransactions: any[],
-  onGroupUpdated: () => void, 
-  onGroupDeleted: () => void,
-  onAccountUpdated: () => void,
-  dateRange: DateRange | undefined;
-  onDateRangeChange: (dateRange: DateRange | undefined) => void;
-}) {
-  const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
-<<<<<<< HEAD
-=======
   const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
+
   const { company } = useCompany();
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(['all']);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -281,15 +249,10 @@ export function AccountGroupDetails({
                             initialFocus
                             mode="range"
                             defaultMonth={dateRange?.from}
-<<<<<<< HEAD
-                            selected={dateRange}
-                            onSelect={onDateRangeChange}
-                            numberOfMonths={2}
-=======
                             selected={asCalendarRange(dateRange)}
                             onSelect={onDateRangeChange}
                             numberOfMonths={calendarMonths}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                           />
                         </PopoverContent>
                       </Popover>

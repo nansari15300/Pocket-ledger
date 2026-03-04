@@ -5,11 +5,8 @@ import { useParams } from 'next/navigation';
 import DesktopItemDetails from '@/components/items/ItemDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState } from 'react';
-<<<<<<< HEAD
-import type { DateRange } from 'react-day-picker';
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';

@@ -192,14 +192,10 @@ export function CreateExpenseAccountDialog({
     <>
     <Dialog open={open} onOpenChange={setOpen} modal={true}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-<<<<<<< HEAD
-      <DialogContent 
-        className="sm:max-w-lg"
-=======
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent 
         className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-lg sm:grid sm:flex-none sm:px-6"
->>>>>>> 6a1ec26 (Animation Fixed)
+
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
@@ -226,119 +222,8 @@ export function CreateExpenseAccountDialog({
             Add a new category for your expenses, like "Office Rent" or "Utilities".
           </DialogDescription>
         </DialogHeader>
-<<<<<<< HEAD
-=======
-        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-        <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
->>>>>>> 6a1ec26 (Animation Fixed)
-        <Form {...form}>
-          <form onSubmit={handleFormSubmit} className="space-y-4 py-4">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Account Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g., Salary Expense" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="groupId"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Group</FormLabel>
-                  <Combobox
-                    options={allGroupOptions}
-                    value={field.value}
-                    onChange={(value, newName) => {
-                      if (value === "add-new") {
-                        setIsCreateGroupOpen(true);
-                         setTimeout(() => {
-                          document.dispatchEvent(new CustomEvent('prefill-create-expense-group-name', { detail: newName }));
-                        }, 100);
-                      } else {
-                        field.onChange(value === "none" ? "" : value);
-                      }
-                    }}
-                    placeholder="Select a group"
-                    addNewLabel="+ Add New Group"
-                  />
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-             <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={form.control}
-                  name="openingBalance"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Opening Balance</FormLabel>
-                      <FormControl>
-                        <Input type="number" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="openingBalanceDate"
-                  render={({ field }: any) => (
-                    <FormItem>
-                    <FormLabel>As on Date</FormLabel>
-                      <div className={cn("grid", dateSystem === 'Both' && "grid-cols-2 gap-2")}>
-                          {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <BsDatePicker valueAD={field.value} onChangeAD={(d) => { field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} />
-                          )}
-                          {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                              <Popover modal={true} open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                                <PopoverTrigger asChild>
-                                  <FormControl>
-                                    <Button
-                                      variant={"outline"}
-                                      className={cn("w-full pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
-                                    >
-                                      {field.value ? format(field.value, "MMM-dd-yyyy") : <span>Pick a date</span>}
-                                      <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                                    </Button>
-                                  </FormControl>
-                                </PopoverTrigger>
-                                <PopoverContent className="w-auto p-0 z-[102]" align="start">
-                                  <Calendar mode="single" selected={field.value} onSelect={(date) => { field.onChange(date); setIsCalendarOpen(false); }} initialFocus />
-                                </PopoverContent>
-                              </Popover>
-                          )}
-                      </div>
-                    <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            <DialogFooter className="mt-4">
-              <DialogClose asChild>
-                <Button variant="ghost">Cancel</Button>
-              </DialogClose>
-               <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save & New
-                </Button>
-              <Button type="submit" disabled={isLoading}>
-                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Create
-              </Button>
-            </DialogFooter>
-          </form>
-        </Form>
-<<<<<<< HEAD
-=======
         </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
       </DialogContent>
     </Dialog>
     <CreateExpenseGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups}/>

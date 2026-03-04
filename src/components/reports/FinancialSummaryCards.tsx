@@ -15,11 +15,8 @@ import { useCompany } from "@/hooks/useCompany";
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Printer, RotateCw, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { startOfDay, endOfDay, isSameDay } from "date-fns";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { ShoppingBag, ShoppingCart, BookText, FileDigit, Landmark, TrendingUp, TrendingDown } from "lucide-react";

@@ -163,14 +163,10 @@ export function CreateAccountGroupDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-<<<<<<< HEAD
-      <DialogContent
-        className="sm:max-w-md"
-=======
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent
         className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
->>>>>>> 6a1ec26 (Animation Fixed)
+
         onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <DialogHeader>
@@ -179,78 +175,8 @@ export function CreateAccountGroupDialog({
               Add a new group to categorize your bank or cash accounts.
             </DialogDescription>
           </DialogHeader>
-<<<<<<< HEAD
-=======
-          {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-          <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
->>>>>>> 6a1ec26 (Animation Fixed)
-          <Form {...form}>
-            <form
-              onSubmit={form.handleSubmit(data => onSubmit(data, false))}
-              className="space-y-4 py-4"
-            >
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Group Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., Cash in Hand" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="parentId"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Parent Group</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a parent group" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectGroup>
-                            <SelectLabel>System Groups</SelectLabel>
-                            {systemGroups
-                              .map((group) => (
-                                <SelectItem key={group.id} value={group.id}>
-                                  {group.name}
-                                </SelectItem>
-                              ))}
-                          </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <DialogFooter className="mt-4">
-                <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
-                </DialogClose>
-                 <Button type="button" variant="outline" onClick={form.handleSubmit(data => onSubmit(data, true))} disabled={isLoading}>
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save & New
-                </Button>
-                <Button type="submit" disabled={isLoading || !companyId}>
-                  {isLoading && (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  )}
-                  Create Group
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
-<<<<<<< HEAD
-=======
           </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
         </DialogContent>
     </Dialog>
   );

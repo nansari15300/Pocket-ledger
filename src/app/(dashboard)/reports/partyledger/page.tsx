@@ -11,11 +11,8 @@ import type { Party } from "@/components/party/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";

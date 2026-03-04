@@ -58,14 +58,10 @@ export function CreateStaffDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-<<<<<<< HEAD
-      <DialogContent
-        className="sm:max-w-3xl z-50"
-=======
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent
         className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 z-50 sm:max-h-none sm:w-full sm:max-w-3xl sm:grid sm:flex-none sm:px-6"
->>>>>>> 6a1ec26 (Animation Fixed)
+
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
@@ -93,12 +89,9 @@ export function CreateStaffDialog({
             Add a new employee to your records. You can also upload a related file.
           </DialogDescription>
         </DialogHeader>
-<<<<<<< HEAD
-        <div className="py-4">
-=======
         {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
         <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
->>>>>>> 6a1ec26 (Animation Fixed)
+
           <CreateStaffForm onStaffCreated={handleStaffCreated} groups={groups} onNestedDialogOpenChange={setIsNestedOpen} defaultName={defaultName} />
         </div>
       </DialogContent>

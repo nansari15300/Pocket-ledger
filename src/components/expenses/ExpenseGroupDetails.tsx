@@ -13,15 +13,10 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
-<<<<<<< HEAD
-import { Calendar } from "../ui/calendar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import type { DateRange } from "react-day-picker";
-=======
 import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -44,14 +39,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -104,115 +95,6 @@ export function ExpenseGroupDetails({
   const { company } = useCompany();
   const { processedExpenseAccounts, vouchers } = useVouchers();
   const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { balanceMode } = useBalanceMode();
-  const accountsInGroup = useMemo(() => {
-    const fromProcessed = processedExpenseAccounts.filter((a) => a.groupId === group.id);
-    if (fromProcessed.length > 0) return fromProcessed as ExpenseAccount[];
-    return accounts.filter((a) => a.groupId === group.id);
-  }, [processedExpenseAccounts, accounts, group.id]);
-  const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
-  const [showNarration, setShowNarration] = useState(true);
-  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
-  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
-  const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
-  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
-  const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "add_expense" | "add_income" | "add_salary">(null);
-  const openingModalRef = useRef(false);
-  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
-
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
-  
-  const groupEntity = useMemo(() => {
-    // Include expenseGroupIds so useTransactions can identify income/expense groups
-    const expenseGroupIds = [group.id];
-    const entity = { ...group, items: accountsInGroup, expenseGroupIds };
-    return entity;
-  }, [group, accountsInGroup]);
-
-  const groupMemberTransactions = useMemo(() => {
-    if (!accountsInGroup.length) return [];
-    const firstMember = accountsInGroup.find(Boolean);
-    if (!firstMember) return [];
-
-    const memberIds = new Set(accountsInGroup.map((a) => a.id));
-    const hasExpenseImpactForAccount = (v: any, acc: ExpenseAccount) => {
-      const amounts = getTransactionAmounts(v, "expense", acc, undefined, processedExpenseAccounts);
-      return Number(amounts.debit || 0) !== 0 || Number(amounts.credit || 0) !== 0;
-    };
-
-    return (vouchers || []).filter((v: any) => {
-      if (v.type === "note") return memberIds.has(v.entityId);
-
-      // Step 1: first member tracking (same account-details expense filter path)
-      const firstMemberHit = hasExpenseImpactForAccount(v, firstMember);
-      if (firstMemberHit) return true;
-
-      // Step 2: then check remaining members with same filter logic
-      return accountsInGroup.some((acc) => hasExpenseImpactForAccount(v, acc));
-    });
-  }, [accountsInGroup, vouchers, processedExpenseAccounts]);
-  
-  const { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(groupEntity, "group", dateRange, undefined, processedExpenseAccounts, groupMemberTransactions, undefined, filters, undefined, undefined, userNames);
-
-  const transactionDates = useMemo(() => {
-    const dates = new Set<number>();
-    processedTransactions.forEach((v: any) => {
-        const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-            dates.add(startOfDay(dateValue).getTime());
-        }
-    });
-    return Array.from(dates).map(d => new Date(d));
-  }, [processedTransactions]);
-
-  const isFilterActive = dateRange !== undefined || Object.values(filters).some(v => v);
-  
-  const clearFilters = () => {
-    onDateRangeChange(undefined);
-    setTempDateRange(undefined);
-    setFilters({});
-  };
-
-  const anyMobilePopupOpen = isMobile && (
-    !!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen
-  );
-
-  const openModalInUrl = useCallback(() => {
-    if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("modal", "1");
-    router.push(`${pathname}?${params.toString()}`);
-  }, [isMobile, pathname, searchParams, router]);
-
-  const closeModalInUrl = useCallback(() => {
-    if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("modal");
-    const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
-
-  const modalParam = searchParams.get("modal");
-<<<<<<< HEAD
-=======
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -223,7 +105,6 @@ export function ExpenseGroupDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
->>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -320,89 +201,9 @@ export function ExpenseGroupDetails({
   }, [allGroups]);
 
   const handleEditVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
-    if (isMobile) openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
-    setSelectedVoucher(voucher);
-    if (isMobile) openModalInUrl();
-    setIsVoucherDialogOpen(true);
-  };
-
-  useEffect(() => {
-    const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState !== "false");
-  }, []);
-
-  const handleShowNarrationChange = (checked: boolean) => {
-    setShowNarration(checked);
-    sessionStorage.setItem("showNarration", String(checked));
-  };
-  
-  const totalPages = Math.max(1, Math.ceil(processedTransactions.length / rowsPerPage));
-  const paginatedTransactions = processedTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  );
-  
-  const handleOpenNoteDialog = (accountId?: string) => {
-    if (accountsInGroup.length === 1) {
-        setNoteEntityId(accountsInGroup[0].id);
-    } else if (accountId) {
-        setNoteEntityId(accountId);
-    }
-    setIsNoteOpen(true);
-  };
-  
-  const handlePrint = () => {
-    if (!company) return;
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if (from) {
-      const fromBS = formatDateBS(from);
-      const toBS = to ? formatDateBS(to) : fromBS;
-      const fromAD = formatDate(from);
-      const toAD = to ? formatDate(to) : fromAD;
-
-      if (dateSystem === 'AD') dateRangeText = `AD: ${fromAD} to ${toAD}`;
-      else if (dateSystem === 'BS') dateRangeText = `BS: ${fromBS} to ${toBS}`;
-      else
-        dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Group Statement: ${group.name}`,
-      context: 'group',
-      contextId: group.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText,
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod, 
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      userNames: userNames,
-    }, true);
-  };
-
-  if (isMobile) {
-    return (
-      <>
-<<<<<<< HEAD
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
-=======
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -476,35 +277,8 @@ export function ExpenseGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
-<<<<<<< HEAD
-=======
-            <div className="pb-24">
->>>>>>> 6a1ec26 (Animation Fixed)
-            <TransactionsTable
-              transactions={mobileTransactions}
-              context="group"
-              contextId={group.id}
-              openingBalance={openingBalanceForPeriod}
-              openingBalanceOutstanding={openingBalanceOutstanding}
-              openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
-              showNarration={showNarration}
-              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              userNames={userNames}
-              accountNames={Object.fromEntries(accountsInGroup.map((a) => [a.id, a.name]))}
-              onRowClick={handleEditVoucher}
-              filters={filters}
-              setFilters={setFilters}
-              activeFilter={activeFilter}
-              setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
-              scrollOnlyTransactions
-            />
-<<<<<<< HEAD
-=======
             </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -565,26 +339,6 @@ export function ExpenseGroupDetails({
                     onSelect={handleNepaliSelect}
                     valueAD={dateRange}
                     isRange={true}
-<<<<<<< HEAD
-                    numberOfMonths={2}
-                  />
-                )}
-                {(dateSystem === "AD" || dateSystem === "Both") && (
-                  <div className="flex-1">
-                    <Calendar
-                      className="p-0 w-full"
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={dateRange}
-                      onSelect={(range) => {
-                        onDateRangeChange(range as DateRange | undefined);
-                        if (range?.from && range?.to) setIsCalendarOpen(false);
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: "has-transactions" }}
-=======
                     numberOfMonths={calendarMonths}
                   />
                 )}
@@ -607,7 +361,7 @@ export function ExpenseGroupDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </div>
                 )}
@@ -741,27 +495,6 @@ export function ExpenseGroupDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
-<<<<<<< HEAD
-                    <Calendar
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={tempDateRange}
-                      onSelect={(range) => {
-                        if (range?.from) range.from.setHours(12, 0, 0, 0);
-                        if (range?.to) range.to.setHours(12, 0, 0, 0);
-                        setTempDateRange(range);
-                        if (range?.from && range.to) {
-                          onDateRangeChange(range);
-                          setIsDesktopCalendarOpen(false);
-                        } else if (!range) {
-                          onDateRangeChange(undefined);
-                        }
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: 'has-transactions' }}
-=======
                     <AdCalendar
                       valueAD={tempDateRange}
                       isRange
@@ -783,7 +516,7 @@ export function ExpenseGroupDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </PopoverContent>
                 </Popover>
@@ -986,9 +719,6 @@ export function ExpenseGroupDetails({
             </div>
         </DialogContent>
       </Dialog>
-<<<<<<< HEAD
-      <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherAction={() => setSelectedVoucher(null)} />
-=======
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open) => {
@@ -1001,7 +731,7 @@ export function ExpenseGroupDetails({
         voucher={selectedVoucher}
         onVoucherAction={() => setSelectedVoucher(null)}
       />
->>>>>>> 6a1ec26 (Animation Fixed)
+
     </>
   );
 }

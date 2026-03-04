@@ -31,11 +31,8 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import {
   Popover,
@@ -89,11 +86,8 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
 import { useTransactions } from "@/hooks/use-transactions";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { useRouter } from "next/navigation";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -134,265 +128,10 @@ export function AccountDetails({
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
     useDate();
   const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-  const router = useRouter();
-  const { vouchers } = useVouchers();
-
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [showNarration, setShowNarration] = useState(true);
-  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  
-  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
-  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
-  const [isDateSearchMode, setIsDateSearchMode] = useState(false);
-  // Desktop Calendar State
-  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
-  
-  // Local State for Calendar Buffer
-  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
-
-  // Sync tempDateRange when prop changes
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
-
-  const account = useMemo(() => {
-    if (!allAccounts) return initialAccount;
-    return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
-  }, [allAccounts, initialAccount]);
-
-  // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
-  // It should show all transaction types for this account, not all transactions for all accounts
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
-    account, 
-    'account', 
-    dateRange, 
-    undefined, 
-    allAccounts, 
-    transactions
-);
-
-  const transactionDates = useMemo(() => {
-    const dates = new Set<number>();
-    processedTransactions.forEach((v:any) => {
-        const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-            dates.add(startOfDay(dateValue).getTime());
-        }
-    });
-    return Array.from(dates).map(d => new Date(d));
-  }, [processedTransactions]);
-
-  useEffect(() => {
-    const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState !== "false");
-  }, []);
-
-  const handleShowNarrationChange = (checked: boolean) => {
-    setShowNarration(checked);
-    sessionStorage.setItem("showNarration", String(checked));
-  };
-
-
-  const handleEditVoucher = (voucher: any) => {
-    setSelectedVoucher(voucher);
-    setIsVoucherDialogOpen(true);
-  };
-  
-
-  const isFilterActive =
-    dateRange !== undefined || Object.values(filters).some((v) => v);
-
-  const clearFilters = () => {
-    if(onDateRangeChange) {
-      onDateRangeChange(undefined);
-    }
-    setFilters({});
-  };
-
-  const totalPages =
-    rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions =
-    rowsPerPage > 0
-      ? processedTransactions.slice(
-          (currentPage - 1) * rowsPerPage,
-          currentPage * rowsPerPage
-        )
-      : processedTransactions;
-
-  const buildDateRangeText = () => {
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if (from) {
-      const fromBS = formatDateBS(from);
-      const toBS = to ? formatDateBS(to) : fromBS;
-      const fromAD = formatDate(from);
-      const toAD = to ? formatDate(to) : fromAD;
-
-      if (dateSystem === "AD")
-        dateRangeText = `AD: ${fromAD} to ${toAD}`;
-      else if (dateSystem === "BS")
-        dateRangeText = `BS: ${fromBS} to ${toBS}`;
-      else
-        dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    return dateRangeText;
-  };
-
-  const handlePrintStatement = () => {
-    if (!company) return;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Account Statement: ${account.accountName}`,
-      context: "account",
-      contextId: account.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      billWise: false,
-    }, true);
-  };
-
-  const handlePrintBillWise = () => {
-    if (!company) return;
-    openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: `Bill Wise Account Statement: ${account.accountName}`,
-      context: "account",
-      contextId: account.id,
-      dateSystem: dateSystem,
-      dateRangeText: buildDateRangeText(),
-      vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
-      showNarration: showNarration,
-      billWise: true,
-    }, true);
-  };
-  
-  const balanceText = useMemo(() => {
-    if (closingBalance === 0) return "Settled Up";
-    return closingBalance >= 0 ? "Receivable" : "Payable";
-  }, [closingBalance]);
-  
-  const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
-    const range = dateRange;
-    if (!onDateRangeChange) return;
-    if (!range?.from || (range.from && range.to)) {
-      if (onDateRangeChange) onDateRangeChange({ from: adDate, to: undefined });
-    } else if (adDate < range.from) {
-      if (onDateRangeChange) onDateRangeChange({ from: adDate, to: range.from });
-      setIsCalendarOpen(false);
-    } else {
-      if (onDateRangeChange) onDateRangeChange({ from: range.from, to: adDate });
-      setIsCalendarOpen(false);
-    }
-  };
-  
-  const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
-    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return processedTransactions.filter(t => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
-      return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
-        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
-        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
-        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.balance).toLowerCase().includes(lowerCaseSearch)
-      );
-    });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
-
-
-  const TransactionRow = React.memo(({ transaction }: { transaction: any }) => {
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-    
-    const d = transaction.date?.toDate ? transaction.date.toDate() : (transaction.date ? new Date(transaction.date) : null);
-    
-    if (!d) {
-        return <Card className="p-2 m-2 mb-0"><p className="text-red-500">Invalid date found</p></Card>;
-    }
-    
-    const displayDate = () => {
-        switch (dateSystem) {
-            case 'AD': return formatDate(d);
-            case 'BS': return formatDateBS(d);
-            case 'Both': return `${formatDateBS(d)} (${formatDate(d)})`;
-            default: return formatDateBS(d);
-        }
-    };
-    
-    return (
-      <Card className="p-2 m-2 mb-0 rounded-lg shadow-sm border overflow-hidden" onClick={() => handleEditVoucher(transaction)}>
-            <div className="flex justify-between items-start">
-                <div>
-                    <p className="font-semibold text-xs">{transaction.voucherNumber} - {transaction.type ? transaction.type.replace(/_/g, ' ') : 'N/A'}</p>
-                    <p className="text-xs text-muted-foreground">{transaction.narration || "No narration"}</p>
-                </div>
-                <div className="text-right flex flex-col items-end gap-1">
-                      <p className={cn("font-bold text-sm whitespace-nowrap", transaction.debit > 0 ? "text-green-600" : "text-red-600")}>{formatCurrency(transaction.debit > 0 ? transaction.debit : transaction.credit)}</p>
-                      <div className="flex flex-col items-end">
-                          <Badge variant="secondary" className={cn("font-normal text-xs px-1.5 py-0.5", transaction.balance >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>Bal: {formatCurrency(transaction.balance)}</Badge>
-                          <p className="text-xs text-muted-foreground font-medium mt-1">User: {userNames?.[transaction.userId] || 'N/A'}</p>
-                      </div>
-                </div>
-            </div>
-            <div className="flex justify-between items-center mt-1">
-                <p className="text-xs text-muted-foreground">{displayDate()} • {format(d, 'p')}</p>
-            </div>
-        </Card>
-    );
-  });
-  TransactionRow.displayName = 'TransactionRow';
-
-
-  const renderMobileView = () => (
-<<<<<<< HEAD
-    <div className="flex flex-col min-h-screen">
-      <div className="p-2 border-b sticky top-0 bg-background z-10 space-y-3">
-=======
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
       <div className="p-2 border-b sticky top-0 bg-background z-10 space-y-3 flex-shrink-0">
->>>>>>> 6a1ec26 (Animation Fixed)
+
         <div className="bg-card p-3 rounded-lg flex items-center justify-between gap-2">
             {onBack && (
               <Button variant="ghost" size="icon" className="mr-2" onClick={onBack}>
@@ -435,19 +174,13 @@ export function AccountDetails({
         </div>
       )}
 
-<<<<<<< HEAD
-      <ScrollArea className="pb-20 flex-1">
-        {filteredMobileTransactions.map((t: any) => (
-            <TransactionRow key={t.id} transaction={t} />
-        ))}
-=======
       <ScrollArea className="flex-1 min-h-0">
         <div className="pb-24">
         {filteredMobileTransactions.map((t: any) => (
             <TransactionRow key={t.id} transaction={t} />
         ))}
         </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
       </ScrollArea>
       
         <div className="fixed bottom-0 left-0 right-0 p-2 border-t bg-background/80 backdrop-blur-sm z-50 flex items-center justify-around gap-2">
@@ -471,11 +204,8 @@ export function AccountDetails({
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
-<<<<<<< HEAD
-                          numberOfMonths={1}
-=======
                           numberOfMonths={calendarMonths}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                         />
                     )}
                     {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -486,20 +216,14 @@ export function AccountDetails({
                           initialFocus
                           mode="range"
                           defaultMonth={dateRange?.from}
-<<<<<<< HEAD
-                          selected={dateRange}
-=======
                           selected={asCalendarRange(dateRange)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                           onSelect={(range) => {
                               if(onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
                               if (range?.from && range.to) setIsCalendarOpen(false);
                           }}
-<<<<<<< HEAD
-                          numberOfMonths={1}
-=======
                           numberOfMonths={calendarMonths}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                         />
                       </div>
                     )}
@@ -602,11 +326,8 @@ export function AccountDetails({
                       initialFocus
                       mode="range"
                       defaultMonth={dateRange?.from}
-<<<<<<< HEAD
-                      selected={tempDateRange}
-=======
                       selected={asCalendarRange(tempDateRange)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                       onSelect={(range) => {
                         if (range?.from) range.from.setHours(12, 0, 0, 0);
                         if (range?.to) range.to.setHours(12, 0, 0, 0);
@@ -618,11 +339,8 @@ export function AccountDetails({
                           onDateRangeChange(undefined);
                         }
                       }}
-<<<<<<< HEAD
-                      numberOfMonths={2}
-=======
                       numberOfMonths={calendarMonths}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
                     />

@@ -75,15 +75,10 @@ export function ExpenseGroupList({
                   <motion.li
                     key={group.id}
                     className="w-full"
-<<<<<<< HEAD
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-=======
                     layout
                     initial={false}
                     exit={{ transition: { duration: 0 } }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     transition={{
                       duration: rowAnimationDuration,
                       ease: "easeInOut",

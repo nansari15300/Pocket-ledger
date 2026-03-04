@@ -62,14 +62,9 @@ export function StaffGroupList({
                 <motion.li 
                   key={group.id}
                   layout
-<<<<<<< HEAD
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-=======
                   initial={false}
                   exit={{ transition: { duration: 0 } }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                   <div
@@ -127,19 +122,10 @@ export function StaffGroupList({
           </AnimatePresence>
           
           {filteredAndSortedGroups.length === 0 && (
-<<<<<<< HEAD
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center text-muted-foreground p-8"
-            >
-              No staff groups found.
-            </motion.div>
-=======
             <div className="text-center text-muted-foreground p-8">
               No staff groups found.
             </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
           )}
         </ul>
       </ScrollArea>

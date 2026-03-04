@@ -35,11 +35,8 @@ import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { Printer } from "lucide-react";
 import { PrintOptionsDialog } from "@/components/ui/PrintOptionsDialog";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { startOfDay, endOfDay } from "date-fns";
 
 /**

@@ -12,15 +12,10 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
-<<<<<<< HEAD
-import { Calendar } from "../ui/calendar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import type { DateRange } from "react-day-picker";
-=======
 import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useCompany } from "@/hooks/useCompany";
@@ -46,14 +41,10 @@ import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Combobox } from "../ui/combobox";
 import {
   Drawer,
@@ -150,212 +141,6 @@ export function AccountGroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-  const openingModalRef = useRef(false);
-
-  const containsSpecialAccount = useMemo(() => accounts.some(acc => acc.isSpecial), [accounts]);
-  const canViewSpecialBalance = can('view_special_account_balance');
-  const isBalanceMasked = containsSpecialAccount && !canViewSpecialBalance;
-
-
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
-  
-  let { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions({ ...group, items: accounts }, "group", dateRange, undefined, processedAccounts, undefined, undefined, filters, undefined, undefined, userNames);
-
-  // If special account and user can't see balance, filter transactions to only show their own.
-  if (containsSpecialAccount && !canViewSpecialBalance) {
-      processedTransactions = processedTransactions.filter(t => t.userId === user?.uid);
-      openingBalanceForPeriod = 0; // Don't show opening balance
-      periodDr = processedTransactions.reduce((sum, t) => sum + (t.debit || 0), 0);
-      periodCr = processedTransactions.reduce((sum, t) => sum + (t.credit || 0), 0);
-      closingBalance = periodDr - periodCr;
-  }
-
-  const displayTransactions = useMemo(() => {
-    if (!spendWiseView || !spendWiseEnabled || !vouchers?.length) return processedTransactions;
-    const inRangeIds = new Set(processedTransactions.map((t: any) => t.id));
-    const byId = new Map(processedTransactions.map((t: any) => [t.id, t]));
-    const accountIdSet = new Set(accountIdsInGroup);
-    const isInVoucher = (v: any) =>
-      (v.type === "payment_in" && accountIdSet.has(v.accountId)) ||
-      (v.type === "direct_income" && accountIdSet.has(v.accountId)) ||
-      (v.type === "contra" && accountIdSet.has(v.toAccountId));
-    const linkedOutFilter = (v: any, inId: string) => {
-      const hasAccount =
-        (v.type === "payment_out" && accountIdSet.has(v.accountId)) ||
-        (v.type === "direct_expense" && accountIdSet.has(v.accountId)) ||
-        (v.type === "contra" && accountIdSet.has(v.fromAccountId));
-      return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
-    };
-    const inVouchers = vouchers
-      .filter((v: any) => {
-        if (!isInVoucher(v) || v.isDeleted) return false;
-        if (inRangeIds.has(v.id)) return true;
-        return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
-      })
-      .sort((a: any, b: any) => {
-        const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-        const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-        return da.getTime() - db.getTime();
-      });
-    const rows: any[] = [];
-    let groupColorIndex = 0;
-    const nextColor = () => (groupColorIndex++) % 4;
-
-    const voucherToInRow = (v: any) => {
-      const existing = byId.get(v.id);
-      if (existing) return existing;
-      const amount = Number(v.amount ?? v.total ?? 0) || 0;
-      return { id: v.id, date: v.date, type: v.type, voucherNumber: v.voucherNumber, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
-    };
-    const voucherToRow = (po: any) => {
-      const existing = byId.get(po.id);
-      if (existing) return existing;
-      const amount = Number(po.total ?? po.amount ?? 0) || 0;
-      return {
-        id: po.id,
-        date: po.date,
-        type: po.type,
-        voucherNumber: po.voucherNumber,
-        debit: 0,
-        credit: amount,
-        userId: po.userId,
-        narration: po.narration,
-        accountId: po.accountId,
-        ...po,
-      };
-    };
-
-    inVouchers.forEach((pi: any) => {
-      const t = voucherToInRow(pi);
-      const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
-      const hasLinkedGroup = linkedOuts.length > 0;
-      const colorIdx = nextColor();
-      const groupRunning = (t.debit || 0) - (t.credit || 0);
-      if (hasLinkedGroup) {
-        rows.push({
-          ...t,
-          _spendWiseGroupFirst: true,
-          _spendWiseGroupLast: false,
-          _spendWiseRunningBalance: groupRunning,
-          _spendWiseGroupColorIndex: colorIdx,
-        });
-      } else {
-        rows.push({
-          ...t,
-          _spendWiseGroupFirst: true,
-          _spendWiseGroupLast: true,
-          _spendWiseRunningBalance: groupRunning,
-          _spendWiseGroupColorIndex: colorIdx,
-        });
-        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}` });
-      }
-      linkedOuts.forEach((po: any, idx: number) => {
-        const outRow = voucherToRow(po);
-        const prevRunning = rows.length > 0 ? (rows[rows.length - 1] as any)._spendWiseRunningBalance : 0;
-        const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
-        const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
-        const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
-        const amountDelta = (outRow.credit || 0) > (outRow.debit || 0) ? -linkedAmount : linkedAmount;
-        const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
-        rows.push({
-          ...outRow,
-          _spendWiseChild: true,
-          _spendWiseGroupFirst: false,
-          _spendWiseGroupLast: idx === linkedOuts.length - 1,
-          _spendWiseRunningBalance: nextRunning,
-          _spendWiseGroupColorIndex: colorIdx,
-          _spendWiseLinkedAmount: linkedAmount,
-        });
-      });
-      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}` });
-    });
-    const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = processedTransactions.filter((t: any) => !addedIds.has(t.id));
-    unlinked.forEach((t: any, idx: number) => {
-      const colorIdx = nextColor();
-      const voucherBalance = (t.debit || 0) - (t.credit || 0);
-      rows.push({
-        ...t,
-        _spendWiseGroupFirst: true,
-        _spendWiseGroupLast: true,
-        _spendWiseRunningBalance: voucherBalance,
-        _spendWiseGroupColorIndex: colorIdx,
-      });
-      if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}` });
-    });
-    return rows.length ? rows : processedTransactions;
-  }, [spendWiseView, spendWiseEnabled, processedTransactions, vouchers, accountIdsInGroup]);
-
-  const displayTransactionCount = useMemo(
-    () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [displayTransactions]
-  );
-
-  const transactionDates = useMemo(() => {
-    const dates = new Set<number>();
-    processedTransactions.forEach((v: any) => {
-        const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-            dates.add(startOfDay(dateValue).getTime());
-        }
-    });
-    return Array.from(dates).map(d => new Date(d));
-  }, [processedTransactions]);
-
-  const isFilterActive = dateRange !== undefined || Object.values(filters).some(v => v);
-  
-  const clearFilters = () => {
-    onDateRangeChange(undefined);
-    setTempDateRange(undefined);
-    setFilters({});
-  };
-
-  const handleEditVoucher = (voucher: any) => {
-    openingModalRef.current = true;
-    setSelectedVoucher(voucher);
-    openModalInUrl();
-    setIsVoucherDialogOpen(true);
-  };
-
-  const handleTransactionOpen = useCallback((voucher: any) => {
-    handleEditVoucher(voucher);
-  }, [handleEditVoucher]);
-
-  useEffect(() => {
-    const savedState = sessionStorage.getItem("showNarration");
-    setShowNarration(savedState !== "false");
-  }, []);
-
-  const anyMobilePopupOpen =
-    isMobile &&
-    (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen);
-
-  const openModalInUrl = useCallback(() => {
-    if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("modal", "1");
-    params.set("modalts", String(Date.now()));
-    router.push(`${pathname}?${params.toString()}`);
-  }, [isMobile, pathname, searchParams, router]);
-
-  const closeModalInUrl = useCallback(() => {
-    if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("modal");
-    params.delete("modalts");
-    const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
-
-  const modalParam = searchParams.get("modal");
-<<<<<<< HEAD
-=======
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -368,7 +153,6 @@ export function AccountGroupDetails({
   }, [closeModalInUrl]);
   useUrlModalBack(urlModalOpen, closeUrlModal);
 
->>>>>>> 6a1ec26 (Animation Fixed)
   useEffect(() => {
     if (!isMobile) return;
     if (modalParam === "1") openingModalRef.current = false;
@@ -576,12 +360,9 @@ export function AccountGroupDetails({
   if (isMobile) {
     return (
       <>
-<<<<<<< HEAD
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
-=======
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -657,50 +438,16 @@ export function AccountGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
-<<<<<<< HEAD
-=======
-            <div className="pb-24">
->>>>>>> 6a1ec26 (Animation Fixed)
-            <TransactionsTable
-              transactions={mobileTransactionsToShow}
-              context="group"
-              contextId={group.id}
-              groupEntityType="account"
-              openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
-              openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
-              openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
-              openingBalanceActions={undefined}
-              showNarration={showNarration}
-              visibleColumns={visibleColumns}
-              journalAccountNames={journalAccountNames}
-              accountNames={accountNamesMap}
-              userNames={userNames}
-              onRowClick={handleTransactionOpen}
-              filters={filters}
-              setFilters={setFilters}
-              activeFilter={activeFilter}
-              setActiveFilter={setActiveFilter}
-              periodDr={isBalanceMasked ? undefined : periodDr}
-              periodCr={isBalanceMasked ? undefined : periodCr}
-              closingBalance={isBalanceMasked ? undefined : closingBalance}
-              isBalanceMasked={isBalanceMasked}
-              scrollOnlyTransactions
-            />
-<<<<<<< HEAD
-=======
             </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           {spendWiseEnabled && (
             <Button
               type="button"
-<<<<<<< HEAD
-              className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "border border-input bg-background hover:bg-accent hover:text-accent-foreground")}
-=======
               className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
->>>>>>> 6a1ec26 (Animation Fixed)
+
               variant={spendWiseView ? "default" : "outline"}
               onClick={() => setSpendWiseView(!spendWiseView)}
             >
@@ -753,25 +500,6 @@ export function AccountGroupDetails({
                     onSelect={handleNepaliSelect}
                     valueAD={dateRange}
                     isRange={true}
-<<<<<<< HEAD
-                    numberOfMonths={1}
-                  />
-                )}
-                {(dateSystem === "AD" || dateSystem === "Both") && (
-                  <div className="flex-1">
-                    <Calendar
-                      className="p-0 w-full"
-                      classNames={{ table: "w-full" }}
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={dateRange}
-                      onSelect={(range) => {
-                        if (onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
-                        if (range?.from && range.to) setIsCalendarOpen(false);
-                      }}
-                      numberOfMonths={1}
-=======
                     numberOfMonths={calendarMonths}
                   />
                 )}
@@ -794,7 +522,7 @@ export function AccountGroupDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </div>
                 )}
@@ -959,27 +687,6 @@ export function AccountGroupDetails({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
-<<<<<<< HEAD
-                    <Calendar
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={tempDateRange}
-                      onSelect={(range) => {
-                        if (range?.from) range.from.setHours(12, 0, 0, 0);
-                        if (range?.to) range.to.setHours(12, 0, 0, 0);
-                        setTempDateRange(range);
-                        if (range?.from && range.to) {
-                          onDateRangeChange(range);
-                          setIsDesktopCalendarOpen(false);
-                        } else if (!range) {
-                          onDateRangeChange(undefined);
-                        }
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: 'has-transactions' }}
-=======
                     <AdCalendar
                       valueAD={tempDateRange}
                       isRange
@@ -1001,7 +708,7 @@ export function AccountGroupDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </PopoverContent>
                 </Popover>
@@ -1225,9 +932,6 @@ export function AccountGroupDetails({
             </div>
         </DialogContent>
       </Dialog>
-<<<<<<< HEAD
-      <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherUpdated={() => setSelectedVoucher(null)} />
-=======
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open) => {
@@ -1240,7 +944,7 @@ export function AccountGroupDetails({
         voucher={selectedVoucher}
         onVoucherUpdated={() => setSelectedVoucher(null)}
       />
->>>>>>> 6a1ec26 (Animation Fixed)
+
     </>
   );
 }

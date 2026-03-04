@@ -38,11 +38,7 @@
     "**/*.tsx"
   ],
   "exclude": [
-<<<<<<< HEAD
     "node_modules",
     ".next"
-=======
-    "node_modules"
->>>>>>> 6a1ec26 (Animation Fixed)
   ]
 }

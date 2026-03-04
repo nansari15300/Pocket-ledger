@@ -45,16 +45,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-<<<<<<< HEAD
-import { DateRange } from "react-day-picker";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-=======
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { useCalendarMonths } from "@/hooks/use-mobile";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { startOfDay, endOfDay, startOfMonth, endOfMonth, subDays, format } from 'date-fns';
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
@@ -564,150 +559,10 @@ export default function AdminDashboard() {
     return { from: startOfMonth(now), to: endOfMonth(now) };
   });
   const { dateSystem } = useDate();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-  const [allCompanies, setAllCompanies] = useState<any[]>([]);
-  const [allVouchers, setAllVouchers] = useState<any[]>([]);
-  const [deletedCompanies, setDeletedCompanies] = useState<any[]>([]);
-  const [activities, setActivities] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [vouchersError, setVouchersError] = useState<string | null>(null);
-
-  // 1) Sync admin + subscribe to users, companies, deleted, activities
-  useEffect(() => {
-    if (!user || !customUser || (customUser.role !== 'SuperAdmin' && customUser.role !== 'CompanyAdmin')) return;
-
-    setLoading(true);
-    setVouchersError(null);
-    let unsubs: (() => void)[] = [];
-    let cancelled = false;
-
-    (async () => {
-      try {
-        await ensureAdminSync(user, customUser.role);
-      } catch (_) { /* ignore */ }
-      if (cancelled) return;
-
-      const queries = [
-        { q: query(collection(firestore, "users")), setter: setAllUsers },
-        { q: query(collection(firestore, "companies")), setter: setAllCompanies },
-        { q: query(collection(firestore, "companies"), where("isDeleted", "==", true)), setter: setDeletedCompanies },
-        { q: query(collection(firestore, 'activity_logs'), orderBy('at', 'desc')), setter: setActivities },
-      ];
-
-      unsubs = queries.map(({ q, setter }) =>
-        onSnapshot(q, (snap) => {
-          if (cancelled) return;
-          setter(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        }, (error) => console.error("Error fetching data for admin dashboard:", error))
-      );
-
-      try {
-        await Promise.all(queries.map(({ q }) => getDocs(q)));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      unsubs.forEach(unsub => unsub());
-    };
-  }, [user, customUser]);
-
-  // 2) Live vouchers: subscribe per company (companies/{companyId}/vouchers) so count updates in real time
-  const vouchersByCompanyRef = React.useRef<Record<string, { id: string; [key: string]: any }[]>>({});
-  useEffect(() => {
-    if (allCompanies.length === 0) {
-      vouchersByCompanyRef.current = {};
-      setAllVouchers([]);
-      return;
-    }
-    setVouchersError(null);
-    const unsubs: (() => void)[] = [];
-    const mergeAndSet = () => {
-      const combined = Object.values(vouchersByCompanyRef.current).flat();
-      setAllVouchers(combined);
-    };
-    allCompanies.forEach((c: { id: string }) => {
-      const ref = collection(firestore, 'companies', c.id, 'vouchers');
-      const unsub = onSnapshot(
-        ref,
-        (snap) => {
-          vouchersByCompanyRef.current[c.id] = snap.docs.map(d => ({ id: d.id, companyId: c.id, ...d.data() }));
-          mergeAndSet();
-        },
-        (err: any) => {
-          if (err?.message?.includes('permission') || err?.code === 'permission-denied') {
-            setVouchersError('Permission denied for vouchers.');
-          } else {
-            console.error("Error fetching admin vouchers:", err);
-          }
-          vouchersByCompanyRef.current[c.id] = [];
-          mergeAndSet();
-        }
-      );
-      unsubs.push(unsub);
-    });
-    return () => {
-      unsubs.forEach(u => u());
-      vouchersByCompanyRef.current = {};
-    };
-  }, [allCompanies]);
-
-  const userMap = useMemo(() => {
-    const map = new Map<string, any>();
-    allUsers.forEach(u => map.set(u.id, u));
-    return map;
-  }, [allUsers]);
-  
-  return (
-    <div className="p-4 md:p-6 space-y-6 h-full overflow-y-auto">
-        <div className="flex justify-end items-center gap-2">
-            {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <BsDatePicker isRange valueAD={dateRange} onChangeAD={(range) => setDateRange(range as DateRange | undefined)} />
-            )}
-            {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                 <Popover>
-                    <PopoverTrigger asChild>
-                    <Button
-                        id="date"
-                        variant={"outline"}
-                        className={cn("w-auto justify-start text-left font-normal", !dateRange && "text-muted-foreground")}
-                    >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {dateRange?.from ? (
-                        dateRange.to ? (
-                            <>
-                            {format(dateRange.from, "LLL dd, y")} -{" "}
-                            {format(dateRange.to, "LLL dd, y")}
-                            </>
-                        ) : (
-                            format(dateRange.from, "LLL dd, y")
-                        )
-                        ) : (
-                        <span>Pick a date range</span>
-                        )}
-                    </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="end">
-                        <Calendar
-                            initialFocus
-                            mode="range"
-                            defaultMonth={dateRange?.from}
-<<<<<<< HEAD
-                            selected={dateRange}
-                            onSelect={setDateRange}
-                            numberOfMonths={2}
-=======
                             selected={asCalendarRange(dateRange)}
                             onSelect={setDateRange}
                             numberOfMonths={calendarMonths}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                         />
                     </PopoverContent>
                 </Popover>

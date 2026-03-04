@@ -365,13 +365,9 @@ export function BillwiseTransactionTable({
               <motion.tr
                 key="opening-balance-row"
                 layout
-<<<<<<< HEAD
-                initial={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-=======
                 initial={false}
                 exit={{ transition: { duration: 0 } }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                 transition={
                   isRowAnimationEnabled
                     ? { duration: rowAnimationDuration, ease: "easeInOut" }
@@ -435,18 +431,12 @@ export function BillwiseTransactionTable({
               </motion.tr>
             )}
             {transactions.length > 0 ? (
-<<<<<<< HEAD
-              transactions.map((t: any) => (
-                <TransactionRow
-                  key={t.id}
-                  transaction={t}
-=======
               transactions.map((t: any, rowIndex: number) => (
                 <TransactionRow
                   key={t.id}
                   transaction={t}
                   animateLayout={true}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   showNarration={showNarration}
                   userNames={userNames}
                   journalAccountNames={journalAccountNames}

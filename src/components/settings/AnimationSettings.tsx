@@ -199,13 +199,9 @@ export function AnimationSettings() {
                         <motion.div
                           key={item.id}
                           layout
-<<<<<<< HEAD
-                          initial={{ opacity: 1 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-=======
                           initial={false}
                           exit={{ transition: { duration: 0 } }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                           transition={{ 
                             duration: activeSettings.rows.enabled === true ? activeSettings.rows.duration : 0,
                             ease: "easeInOut"

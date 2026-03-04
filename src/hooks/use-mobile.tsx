@@ -277,9 +277,6 @@ export function useIsMobile(): boolean {
 export function useMobileView() {
   return useMobileDetection();
 }
-<<<<<<< HEAD
-=======
-
 /**
  * Date range calendar ke liye: mobile = 1 month, PC = 2 months.
  * Saari date range picker jaga par isko use karo taaki mobile/PC dono par consistent UX rahe.
@@ -288,4 +285,3 @@ export function useCalendarMonths(): number {
   const { isMobile } = useMobileDetection();
   return isMobile ? 1 : 2;
 }
->>>>>>> 6a1ec26 (Animation Fixed)

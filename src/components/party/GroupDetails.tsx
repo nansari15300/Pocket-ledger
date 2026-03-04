@@ -39,11 +39,8 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
-<<<<<<< HEAD
-import { Calendar } from "../ui/calendar";
-=======
 import AdCalendar from "../ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import {
   Select,
   SelectContent,
@@ -51,11 +48,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { useDate } from "@/hooks/useDate";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -81,14 +75,10 @@ import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { Input } from "../ui/input";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -204,372 +194,15 @@ export function GroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
-  const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
-  const showApproveOnEntity =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onEntity !== false;
-  const [rowsPerPage, setRowsPerPage] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isNoteOpen, setIsNoteOpen] = useState(false);
-  const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
-  const [showNarration, setShowNarration] = useState(true);
-  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-    try {
-      const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as VisibleColumns;
-        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
-      }
-    } catch (_) {}
-    return DEFAULT_VISIBLE_COLUMNS;
-  });
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    if (typeof window === "undefined") return { ...DEFAULT_STATUS_FILTER };
-    try {
-      const saved = sessionStorage.getItem(STATUS_FILTER_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<StatusFilter>;
-        return {
-          paid: parsed.paid ?? DEFAULT_STATUS_FILTER.paid,
-          unpaid: parsed.unpaid ?? DEFAULT_STATUS_FILTER.unpaid,
-          partial: parsed.partial ?? DEFAULT_STATUS_FILTER.partial,
-          overdue: parsed.overdue ?? DEFAULT_STATUS_FILTER.overdue,
-        };
-      }
-    } catch (_) {}
-    return { ...DEFAULT_STATUS_FILTER };
-  });
-  const statusFilterAllChecked = statusFilter.paid && statusFilter.unpaid && statusFilter.partial && statusFilter.overdue;
-  const handleStatusFilterAll = () => {
-    const next = statusFilterAllChecked ? { paid: false, unpaid: false, partial: false, overdue: false } : { ...DEFAULT_STATUS_FILTER };
-    setStatusFilter(next);
-    sessionStorage.setItem(STATUS_FILTER_KEY, JSON.stringify(next));
-    setCurrentPage(1);
-  };
-  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
-  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
-  const [historyVoucher, setHistoryVoucher] = useState<any>(null);
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
-  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
-  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
-  const [isDateSearchMode, setIsDateSearchMode] = useState(false);
-  const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "sale" | "purchase">(null);
-  const openingModalRef = useRef(false);
-
-  useEffect(() => {
-    setTempDateRange(dateRange);
-  }, [dateRange]);
-
-  // Determine group type
-  const groupType = useMemo(() => {
-    if ((group as any).groupType) return (group as any).groupType;
-    // Check if it's a tax group
-    if (processedTaxGroups.some(tg => tg.id === group.id)) return 'tax';
-    // Check if it's a staff group
-    if (processedStaffGroups.some(sg => sg.id === group.id)) return 'staff';
-    // Check if it's an account group
-    if (processedAccountGroups.some(ag => ag.id === group.id)) return 'account';
-    // Check if it's an expense group
-    if (processedExpenseGroups.some(eg => eg.id === group.id)) return 'expense';
-    // Default to party group
-    return 'party';
-  }, [group, processedTaxGroups, processedStaffGroups, processedAccountGroups, processedExpenseGroups]);
-
-  const partiesInGroup = useMemo(() => {
-    if (group.id === "ungrouped")
-      return allParties.filter((p) => !p.groupId);
-    // Only filter parties if this is a party group
-    if (groupType === 'party') {
-      return allParties.filter((p) => p.groupId === group.id);
-    }
-    return [];
-  }, [allParties, group, groupType]);
-
-  const pendingApprovalCount = useMemo(() => {
-    if (!showApproveOnEntity || groupType !== "party" || !partiesInGroup.length) return 0;
-    const partyIds = new Set(partiesInGroup.map((p) => p.id));
-    return vouchers.filter(
-      (v: any) => v.partyId && partyIds.has(v.partyId) && v.isApproved !== true
-    ).length;
-  }, [vouchers, partiesInGroup, showApproveOnEntity, groupType]);
-
-  // Get child groups (groups that have this group as parent)
-  const childGroups = useMemo(() => {
-    return allGroups.filter((g) => (g as any).parentId === group.id);
-  }, [allGroups, group]);
-
-  // Get all accounts (bank accounts, expense accounts) that belong to this group or its child groups
-  const accountsInGroup = useMemo(() => {
-    const groupIds = new Set([group.id, ...childGroups.map(g => g.id)]);
-    
-    // Handle different group types
-    if (groupType === 'tax') {
-      // For tax groups, get taxes that belong to this group
-      return processedTaxes.filter((tax) => tax.groupId === group.id);
-    }
-    
-    if (groupType === 'staff') {
-      // For staff groups, get staff that belong to this group
-      return processedStaff.filter((staff) => staff.groupId === group.id);
-    }
-    
-    if (groupType === 'account') {
-      // For account groups, get accounts that belong to this group
-      return processedAccounts.filter((acc) => acc.groupId === group.id);
-    }
-    
-    if (groupType === 'expense') {
-      // For expense groups, get expense accounts that belong to this group
-      return processedExpenseAccounts.filter((acc) => acc.groupId === group.id);
-    }
-    
-    if (groupType === 'item') {
-      // For item groups, get items that belong to this group
-      return processedItems.filter((item) => item.groupId === group.id);
-    }
-    
-    // For party groups, use the existing logic
-    // Get account groups (bank/cash groups) that belong to this party group or its child groups
-    const accountGroupIds = processedAccountGroups
-      .filter(ag => {
-        const parentId = (ag as any).parentId;
-        return parentId && groupIds.has(parentId);
-      })
-      .map(ag => ag.id);
-    
-    // Get expense groups (income/expense groups) that belong to this party group or its child groups
-    const expenseGroupIds = processedExpenseGroups
-      .filter(eg => {
-        const parentId = (eg as any).parentId;
-        return parentId && groupIds.has(parentId);
-      })
-      .map(eg => eg.id);
-    
-    // Get tax groups that belong to this party group or its child groups
-    const taxGroupIds = processedTaxGroups
-      .filter(tg => {
-        const parentId = (tg as any).parentId;
-        return parentId && groupIds.has(parentId);
-      })
-      .map(tg => tg.id);
-    
-    // Get staff groups that belong to this party group or its child groups
-    const staffGroupIds = processedStaffGroups
-      .filter(sg => {
-        const parentId = (sg as any).parentId;
-        return parentId && groupIds.has(parentId);
-      })
-      .map(sg => sg.id);
-    
-    // Get bank accounts that belong to those account groups
-    const bankAccounts = processedAccounts.filter((acc) => 
-      acc.groupId && accountGroupIds.includes(acc.groupId)
-    );
-    
-    // Get expense accounts that belong to those expense groups
-    const expenseAccounts = processedExpenseAccounts.filter((acc) => 
-      acc.groupId && expenseGroupIds.includes(acc.groupId)
-    );
-    
-    // Get taxes that belong to those tax groups
-    const taxesInGroup = processedTaxes.filter((tax) => 
-      tax.groupId && taxGroupIds.includes(tax.groupId)
-    );
-    
-    // Get staff that belong to those staff groups
-    const staffInGroup = processedStaff.filter((staff) => 
-      staff.groupId && staffGroupIds.includes(staff.groupId)
-    );
-    
-    return [...bankAccounts, ...expenseAccounts, ...taxesInGroup, ...staffInGroup];
-  }, [group, groupType, childGroups, processedAccounts, processedExpenseAccounts, processedAccountGroups, processedExpenseGroups, processedTaxGroups, processedStaffGroups, processedTaxes, processedStaff, processedItems]);
-
-  // Get expense group IDs that belong to this group (for transaction filtering)
-  const expenseGroupIdsInGroup = useMemo(() => {
-    const groupIds = new Set([group.id, ...childGroups.map(g => g.id)]);
-    return processedExpenseGroups
-      .filter(eg => {
-        const parentId = (eg as any).parentId;
-        return parentId && groupIds.has(parentId);
-      })
-      .map(eg => eg.id);
-  }, [group, childGroups, processedExpenseGroups]);
-
-  // Combine parties and accounts for the group
-  const allItemsInGroup = useMemo(() => {
-    return [...partiesInGroup, ...accountsInGroup];
-  }, [partiesInGroup, accountsInGroup]);
-
-  const isFilterActive =
-    dateRange !== undefined || Object.values(filters).some((v) => v);
-
-  // For staff groups, use the group's balance directly if no date range is set
-  // This ensures consistency with the list view
-  const shouldUseGroupBalance = !dateRange && groupType === 'staff' && group.balance !== undefined;
-  
-  // Maintain local userNames state that merges with prop
-  const [localFetchedUserNames, setLocalFetchedUserNames] = useState<Record<string, string>>({});
-  const { user, customUser } = useAuth();
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const me = customUser?.displayName || user.displayName || user.email || "";
-    if (!me) return;
-    setLocalFetchedUserNames((prev) => (prev[user.uid] === me ? prev : { ...prev, [user.uid]: me }));
-  }, [user?.uid, user?.displayName, user?.email, customUser?.displayName]);
-  
-  // Merge prop userNames with locally fetched userNames
-  const mergedUserNames = useMemo(() => {
-    return { ...userNames, ...localFetchedUserNames };
-  }, [userNames, localFetchedUserNames]);
-  
-  const {
-    openingBalanceForPeriod,
-    processedTransactions,
-    periodDr,
-    periodCr,
-    closingBalance: calculatedClosingBalance,
-    openingBalanceOutstanding,
-    openingBalanceLinkedVoucherNos,
-  } = useTransactions(
-    { ...group, items: allItemsInGroup, expenseGroupIds: expenseGroupIdsInGroup },
-    "group",
-    dateRange,
-    undefined,
-    allParties,
-    undefined,
-    undefined,
-    filters,
-    undefined,
-    undefined,
-    mergedUserNames
-  );
-  
-  // Fetch missing user names directly from Firestore and store in local state
-  useEffect(() => {
-    if (!processedTransactions || processedTransactions.length === 0) return;
-    
-    const uids = new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[]);
-    
-    // Fetch missing user names - check both prop and local state
-    const missingUids = Array.from(uids).filter(uid => {
-      const propName = userNames?.[uid];
-      const localName = localFetchedUserNames[uid];
-      return (!propName || propName === "Unknown" || propName === "N/A") && 
-             (!localName || localName === "Unknown" || localName === "N/A");
-    });
-    
-    if (missingUids.length === 0) return;
-    
-    Promise.all(
-      missingUids.map(async (uid) => {
-        try {
-          // Try query by uid field first
-          const q = query(collection(firestore, "users"), where("uid", "==", uid));
-          const snap = await getDocs(q);
-          let data = snap.docs[0]?.data();
-          
-          if (!data) {
-            // Fallback: try doc ID as uid
-            const userDoc = await getDoc(doc(firestore, 'users', uid));
-            if (userDoc.exists()) {
-              data = userDoc.data();
-            } else {
-              // Fallback 2: search all users for doc ending with uid
-              const allUsersSnap = await getDocs(collection(firestore, "users"));
-              const matchingDoc = allUsersSnap.docs.find(d => {
-                const docData = d.data();
-                return docData.uid === uid || d.id.endsWith(uid);
-              });
-              if (matchingDoc) {
-                data = matchingDoc.data();
-              }
-            }
-          }
-          
-          const displayName = data?.displayName || data?.name || null;
-          const email = typeof data?.email === "string" ? data.email : "";
-          const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-          let resolvedName = displayName || emailPrefix || null;
-          if (resolvedName) {
-            const isUIDPattern = resolvedName.length > 15 && /^[a-zA-Z0-9_-]+$/.test(resolvedName) && !resolvedName.includes("@") && !resolvedName.includes(" ");
-            if (isUIDPattern && emailPrefix) {
-              resolvedName = emailPrefix;
-            }
-          }
-          if (resolvedName && resolvedName !== uid && resolvedName !== "Unknown" && resolvedName !== "N/A") {
-            return { uid, name: resolvedName };
-          }
-        } catch (e) {
-          console.error('[GroupDetails] Error fetching userName for', uid, e);
-        }
-        return { uid, name: null };
-      })
-    ).then(results => {
-      const newUserNames: Record<string, string> = {};
-      results.forEach(({ uid, name }) => {
-        if (name) {
-          newUserNames[uid] = name;
-        }
-      });
-      if (Object.keys(newUserNames).length > 0) {
-        setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
-      }
-    });
-  }, [processedTransactions, userNames, localFetchedUserNames]);
-
-  // Use group balance if no date range, otherwise use calculated balance
-  const closingBalance = shouldUseGroupBalance ? (group.balance || 0) : calculatedClosingBalance;
-
-  const transactionDates = useMemo(() => {
-    const dates = new Set<number>();
-    processedTransactions.forEach((v: any) => {
-      const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
-      if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
-        dates.add(startOfDay(dateValue).getTime());
-      }
-    });
-    return Array.from(dates).map((d) => new Date(d));
-  }, [processedTransactions]);
-
-  const clearFilters = () => {
-    onDateRangeChange(undefined);
-    setFilters({});
-  };
-
-  const handleEditVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
     openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
+
     setSelectedVoucher(voucher);
     setIsVoucherDialogOpen(true);
   };
 
   const handleHistoryVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
     openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
-    setHistoryVoucher(voucher);
-  };
 
-  const [linkAdvancesVoucher, setLinkAdvancesVoucher] = useState<any>(null);
-  const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
-
-  const handleDeleteVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
-    openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     setIsVoucherDialogOpen(true);
   };
@@ -596,361 +229,9 @@ export function GroupDetails({
     router.replace(q ? `${pathname}?${q}` : pathname);
   }, [pathname, searchParams, router]);
   const modalParam = searchParams.get("modal");
-<<<<<<< HEAD
-=======
-  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
-  const closeUrlModal = useCallback(() => {
-    setMobileFooterDialogOpen(null);
-    setIsCalendarOpen(false);
-    setIsVoucherDialogOpen(false);
-    setSelectedVoucher(null);
-    setIsNoteOpen(false);
-    setHistoryVoucher(null);
-    setLinkAdvancesVoucher(null);
-    setLinkPaymentVoucher(null);
-    closeModalInUrl();
-  }, [closeModalInUrl]);
-  useUrlModalBack(urlModalOpen, closeUrlModal);
-
->>>>>>> 6a1ec26 (Animation Fixed)
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setHistoryVoucher(null);
-      setLinkAdvancesVoucher(null);
-      setLinkPaymentVoucher(null);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
-
-  const handleAddLink = useCallback((voucher: any) => {
-    openModalInUrl?.();
-    const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(voucher?.type);
-    if (isPaymentType) {
-      setLinkPaymentVoucher(voucher);
-    } else {
-      setLinkAdvancesVoucher(voucher);
-    }
-  }, [openModalInUrl]);
-
-  const handleMobileBack = useCallback(() => {
-    if (mobileFooterDialogOpen) {
-      setMobileFooterDialogOpen(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isCalendarOpen) {
-      setIsCalendarOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (isVoucherDialogOpen) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isNoteOpen) {
-      setIsNoteOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (historyVoucher) {
-      setHistoryVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (linkPaymentVoucher) {
-      setLinkPaymentVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (linkAdvancesVoucher) {
-      setLinkAdvancesVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    onBack?.();
-  }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
-
-  const handleShowNarrationChange = (checked: boolean) => {
-    setShowNarration(checked);
-    sessionStorage.setItem("showNarration", String(checked));
-  };
-
-  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
-    const next = { ...visibleColumns, [key]: checked };
-    setVisibleColumns(next);
-    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
-  };
-
-  const handleStatusFilterChange = (key: keyof StatusFilter, checked: boolean) => {
-    const next = { ...statusFilter, [key]: checked };
-    setStatusFilter(next);
-    sessionStorage.setItem(STATUS_FILTER_KEY, JSON.stringify(next));
-    setCurrentPage(1);
-  };
-
-  const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
-  );
-
-  const totalPages = Math.max(
-    1,
-    Math.ceil(statusFilteredTransactions.length / rowsPerPage)
-  );
-  const paginatedTransactions = statusFilteredTransactions.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
-
-  const handleOpenNoteDialog = (partyId?: string) => {
-    if (partiesInGroup.length === 1) {
-      setNoteEntityId(partiesInGroup[0].id);
-    } else if (partyId) {
-      setNoteEntityId(partyId);
-    }
-    setIsNoteOpen(true);
-  };
-
-  const buildDateRangeText = () => {
-    if (!company) return;
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if (from) {
-      const fromBS = formatDateBS(from);
-      const toBS = to ? formatDateBS(to) : fromBS;
-      const fromAD = formatDate(from);
-      const toAD = to ? formatDate(to) : fromAD;
-
-      if (dateSystem === "AD") dateRangeText = `AD: ${fromAD} to ${toAD}`;
-      else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS} to ${toBS}`;
-      else
-        dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    return dateRangeText;
-  };
-
-  const getPrintTitle = (variant: "statement" | "bill_wise") => {
-    const title = `Group Statement: ${group.name}`;
-    return variant === "bill_wise" ? `Bill Wise ${title}` : title;
-  };
-
-  const printTransactions = (transactionsToPrint: any[], variant: "statement" | "bill_wise") => {
-    if (!company) return Promise.resolve();
-    const dateRangeText = buildDateRangeText();
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: getPrintTitle(variant),
-      context: "group",
-      contextId: group.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText || "All Time",
-      vouchersCount: transactionsToPrint.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: transactionsToPrint,
-      showNarration: showNarration,
-      userNames: userNames,
-      billWise: variant === "bill_wise",
-      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),
-    }, true);
-  };
-
-  const handlePrint = () => {
-    (async () => {
-      try {
-        await printTransactions(statusFilteredTransactions, balanceMode === "bill_wise" ? "bill_wise" : "statement");
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
-      }
-    })();
-  };
-
-  const balanceText = closingBalance >= 0 ? "To Receive" : "To Pay";
-
-  const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
-    const range = dateRange;
-    if (!range?.from || (range.from && range.to)) {
-      onDateRangeChange({ from: adDate, to: undefined });
-    } else if (adDate < range.from) {
-      onDateRangeChange({ from: adDate, to: range.from });
-      setIsCalendarOpen(false);
-    } else {
-      onDateRangeChange({ from: range.from, to: adDate });
-      setIsCalendarOpen(false);
-    }
-  };
-
-  const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return statusFilteredTransactions;
-    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return statusFilteredTransactions.filter((t) => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
-      return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
-        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
-        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.total || t.amount || 0)
-          .toLowerCase()
-          .includes(lowerCaseSearch) ||
-        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
-        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.balance).toLowerCase().includes(lowerCaseSearch)
-      );
-    });
-  }, [statusFilteredTransactions, mobileSearchTerm, formatDate, formatDateBS]);
-
-  const totalPagesMobile = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
-  const paginatedMobileTransactions = filteredMobileTransactions.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
-
-  // Default to last page (most recent 10) on open and when date filter or list changes
-  useEffect(() => {
-    const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
-    setCurrentPage(total);
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
-
-  // Mobile: show a simple "last 10" view by default (no date filter),
-  // and all matching transactions when a date filter is applied.
-  const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter =
-      !!dateRange && (dateRange.from != null || dateRange.to != null);
-
-    if (hasDateFilter) {
-      // Date filter active → show all filtered transactions on mobile
-      return filteredMobileTransactions;
-    }
-
-    // No date filter → always show the last 10 transactions (any date)
-    const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
-
-  const dateRangeLabel = buildDateRangeText() || "All Time";
-
-  // Group dropdown: hide Assets, Equity, Expenses, Income, Liabilities (show Sundry Creditors, Sundry Debtors, etc.)
-  const groupDropdownOptions = useMemo(() => {
-    const exclude = ["assets", "equity", "expenses", "income", "liabilities", "liability"];
-    return allGroups
-      .filter(
-        (g) =>
-          g.id === group?.id || !exclude.includes((g.name || "").trim().toLowerCase())
-      )
-      .map((g) => ({ value: g.id, label: g.name }));
-  }, [allGroups, group?.id]);
-
-  const TransactionRow = React.memo(({ transaction }: { transaction: any }) => {
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-
-    const d = transaction.date?.toDate
-      ? transaction.date.toDate()
-      : transaction.date
-      ? new Date(transaction.date)
-      : null;
-
-    if (!d) {
-      return (
-        <Card className="p-2 m-2 mb-0">
-          <p className="text-red-500">Invalid date found</p>
-        </Card>
-      );
-    }
-
-    const displayDate = () => {
-      switch (dateSystem) {
-        case "AD":
-          return formatDate(d);
-        case "BS":
-          return formatDateBS(d);
-        case "Both":
-          return `${formatDateBS(d)} (${formatDate(d)})`;
-        default:
-          return formatDateBS(d);
-      }
-    };
-
-    return (
-      <Card
-        className="p-2 m-2 mb-0 rounded-lg shadow-sm border overflow-hidden"
-        onClick={() => handleEditVoucher(transaction)}
-      >
-        <div className="flex justify-between items-start">
-          <div>
-            <p className="font-semibold text-xs">
-              {transaction.voucherNumber} -{" "}
-              {transaction.type
-                ? transaction.type.replace(/_/g, " ")
-                : "N/A"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {transaction.narration || "No narration"}
-            </p>
-          </div>
-          <div className="text-right">
-            <p
-              className={cn(
-                "font-bold text-sm",
-                transaction.debit > 0 ? "text-red-600" : "text-green-600"
-              )}
-            >
-              {formatCurrency(
-                transaction.debit > 0 ? transaction.debit : transaction.credit
-              )}
-            </p>
-          </div>
-        </div>
-        <div className="flex justify-between items-center mt-1">
-          <p className="text-xs text-muted-foreground">
-            {displayDate()} • {format(d, "p")}
-          </p>
-          <Badge
-            variant="secondary"
-            className={cn(
-              "font-normal text-xs px-1.5 py-0.5",
-              transaction.balance >= 0
-                ? "bg-green-100 text-green-800"
-                : "bg-red-100 text-red-800"
-            )}
-          >
-            Bal: {formatCurrency(transaction.balance)}
-          </Badge>
-        </div>
-      </Card>
-    );
-  });
-  TransactionRow.displayName = "TransactionRow";
-
-  const renderMobileView = () => (
-    <>
-<<<<<<< HEAD
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
-=======
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
         {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
->>>>>>> 6a1ec26 (Animation Fixed)
+
         <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
           {onBack && (
             <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -979,11 +260,8 @@ export function GroupDetails({
           <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
-<<<<<<< HEAD
-          {pendingApprovalCount > 0 && (
-=======
           {pendingApprovalCount > 0 && !isMobile && (
->>>>>>> 6a1ec26 (Animation Fixed)
+
             <p className="text-center mt-2">
               <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem]">
                 {pendingApprovalCount} pending approval
@@ -1026,49 +304,8 @@ export function GroupDetails({
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-auto">
-<<<<<<< HEAD
-=======
-          <div className="pb-24">
->>>>>>> 6a1ec26 (Animation Fixed)
-          <TransactionsTable
-            transactions={mobileTransactionsToShow}
-            context="group"
-            contextId={group.id}
-            openingBalance={openingBalanceForPeriod}
-            openingBalanceOutstanding={openingBalanceOutstanding}
-            openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
-            openingBalanceActions={undefined}
-            showNarration={showNarration}
-            visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-            journalAccountNames={journalAccountNames}
-            userNames={mergedUserNames}
-            onRowClick={(t) => { openModalInUrl(); handleEditVoucher(t); }}
-            onDeleteVoucher={handleDeleteVoucher}
-            onHistoryVoucher={(v) => { openModalInUrl(); handleHistoryVoucher(v); }}
-            onAddLink={handleAddLink}
-            filters={filters}
-            setFilters={setFilters}
-            activeFilter={activeFilter}
-            setActiveFilter={setActiveFilter}
-            periodDr={periodDr}
-            periodCr={periodCr}
-            closingBalance={closingBalance}
-            isAllVouchersView={false}
-            hideDebitColumn={false}
-            hideCreditColumn={false}
-            hideBalanceColumn={false}
-            isDateChange={false}
-            scrollOnlyTransactions
-            statusFilter={statusFilter}
-            statusFilterAllChecked={statusFilterAllChecked}
-            onStatusFilterAll={handleStatusFilterAll}
-            onStatusFilterChange={handleStatusFilterChange}
-            statusFilterIdPrefix="group"
-          />
-<<<<<<< HEAD
-=======
           </div>
->>>>>>> 6a1ec26 (Animation Fixed)
+
         </div>
       </div>
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -1118,24 +355,6 @@ export function GroupDetails({
             </DrawerHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
               {(dateSystem === "BS" || dateSystem === "Both") && (
-<<<<<<< HEAD
-                <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={2} />
-              )}
-              {(dateSystem === "AD" || dateSystem === "Both") && (
-                <div className="flex-1">
-                  <Calendar
-                    className="p-0 w-full"
-                    classNames={{ table: "w-full" }}
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={dateRange}
-                    onSelect={(range) => {
-                      onDateRangeChange(range as DateRange | undefined);
-                      if (range?.from && range?.to) setIsCalendarOpen(false);
-                    }}
-                    numberOfMonths={2}
-=======
                 <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
@@ -1157,7 +376,7 @@ export function GroupDetails({
                         setIsCalendarOpen(false);
                       }
                     }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   />
                 </div>
               )}
@@ -1213,11 +432,8 @@ export function GroupDetails({
               >
                 {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
-<<<<<<< HEAD
-              {pendingApprovalCount > 0 && (
-=======
               {pendingApprovalCount > 0 && !isMobile && (
->>>>>>> 6a1ec26 (Animation Fixed)
+
                 <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem] flex-shrink-0">
                   {pendingApprovalCount} pending approval
                 </span>
@@ -1275,27 +491,6 @@ export function GroupDetails({
                     </Button>
                   </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-<<<<<<< HEAD
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={tempDateRange}
-                    onSelect={(range) => {
-                      if (range?.from) range.from.setHours(12, 0, 0, 0);
-                      if (range?.to) range.to.setHours(12, 0, 0, 0);
-                      setTempDateRange(range);
-                      if (range?.from && range.to) {
-                        onDateRangeChange(range);
-                        setIsDesktopCalendarOpen(false);
-                      } else if (!range) {
-                        onDateRangeChange(undefined);
-                      }
-                    }}
-                    numberOfMonths={2}
-                    modifiers={{ hasTransactions: transactionDates }}
-                    modifiersClassNames={{ hasTransactions: "has-transactions" }}
-=======
                   <AdCalendar
                     valueAD={tempDateRange}
                     isRange
@@ -1317,7 +512,7 @@ export function GroupDetails({
                         setIsDesktopCalendarOpen(false);
                       }
                     }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   />
                 </PopoverContent>
               </Popover>
@@ -1709,31 +904,15 @@ export function GroupDetails({
       <HistoryDialog
         voucher={historyVoucher}
         isOpen={!!historyVoucher}
-<<<<<<< HEAD
-        onOpenChange={(open: boolean) => {
-          if (!open) {
-            setHistoryVoucher(null);
-            if (isMobile) closeModalInUrl();
-          }
-        }}
-=======
         onOpenChange={(open: boolean) => !open && setHistoryVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
         onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
       />
       {linkAdvancesVoucher && (
         <LinkAdvancesToVoucherDialog
           isOpen={!!linkAdvancesVoucher}
-<<<<<<< HEAD
-          onOpenChange={(open: boolean) => {
-            if (!open) {
-              setLinkAdvancesVoucher(null);
-              if (isMobile) closeModalInUrl();
-            }
-          }}
-=======
           onOpenChange={(open: boolean) => !open && setLinkAdvancesVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           mode={linkAdvancesVoucher.type === "purchase" || linkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
           targetVoucherId={linkAdvancesVoucher.id}
           targetPartyId={linkAdvancesVoucher.partyId ?? ""}
@@ -1746,16 +925,8 @@ export function GroupDetails({
       {linkPaymentVoucher && (
         <LinkPaymentToTxnsDialog
           isOpen={!!linkPaymentVoucher}
-<<<<<<< HEAD
-          onOpenChange={(open: boolean) => {
-            if (!open) {
-              setLinkPaymentVoucher(null);
-              if (isMobile) closeModalInUrl();
-            }
-          }}
-=======
           onOpenChange={(open: boolean) => !open && setLinkPaymentVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           variant={linkPaymentVoucher.type === "payment_out" || linkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
           partyId={linkPaymentVoucher.partyId ?? null}
           partyName={allParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.name ?? "Party"}

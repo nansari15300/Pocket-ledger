@@ -60,14 +60,9 @@ export function TaxList({
                 <motion.li
                   key={tax.id}
                   layout
-<<<<<<< HEAD
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-=======
                   initial={false}
                   exit={{ transition: { duration: 0 } }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                     <Card

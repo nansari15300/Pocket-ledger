@@ -39,19 +39,12 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import { Calendar } from "@/components/ui/calendar";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import AdCalendar from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import {
   Select,
   SelectContent,
@@ -89,11 +82,8 @@ import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { useTransactions } from "@/hooks/use-transactions";
-<<<<<<< HEAD
-import { useIsMobile } from "@/hooks/use-mobile";
-=======
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
 import { Combobox } from "@/components/ui/combobox";
@@ -117,100 +107,8 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { NotificationBell } from "../vouchers/NotificationBell";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
-<<<<<<< HEAD
-=======
-import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
->>>>>>> 6a1ec26 (Animation Fixed)
-
-const getInitials = (name: string) => {
-  if (!name) return "NA";
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("");
-};
-
-const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
-const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
-  date: true,
-  type: true,
-  voucherNo: true,
-  user: true,
-  file: true,
-  dr: true,
-  cr: true,
-  status: true,
-  runningBalance: true,
-};
-const COLUMN_LABELS: Record<TransactionColumnKey, string> = {
-  date: "Date",
-  type: "Type",
-  voucherNo: "Voucher No.",
-  user: "User",
-  file: "File",
-  dr: "Dr",
-  cr: "Cr",
-  status: "Status",
-  runningBalance: "Running Balance",
-};
-
-const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
-type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
-const STATUS_FILTER_KEY = "transactionStatusFilter";
-
-function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
-  const anySelected = statusFilter.paid || statusFilter.unpaid || statusFilter.partial || statusFilter.overdue;
-  if (!anySelected) return txns;
-  return txns.filter((t) => {
-    if (statusFilter.paid && t.paymentStatus === "paid") return true;
-    if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
-    if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
-    if (statusFilter.overdue && t.isOverdue) return true;
-    return false;
-  });
-}
-
-export function PartyDetails({
-  party: initialParty,
-  allParties,
-  transactions: passedTransactions,
-  onPartyUpdated,
-  onPartyDeleted,
-  onShowAll,
-  dateRange,
-  onDateRangeChange,
-  isAllVouchersView,
-  journalAccountNames,
-  userNames,
-  onBack,
-  context,
-}: {
-  party: Party & { saleTotal?: number; purchaseTotal?: number };
-  allParties?: Party[];
-  transactions?: any[];
-  onPartyUpdated: () => void;
-  onPartyDeleted: (deletedId: string) => void;
-  onShowAll?: () => void;
-  dateRange: DateRange | undefined;
-  onDateRangeChange: (dateRange: DateRange | undefined) => void;
-  isAllVouchersView?: boolean;
-  journalAccountNames?: Record<string, string>;
-  userNames?: Record<string, string>;
-  onBack?: () => void;
-  context?: string;
-}) {
-  const { company, companyId } = useCompany();
-  const { can } = usePermissions();
-  const { balanceMode, setBalanceMode } = useBalanceMode();
-  const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
-    useDate();
-  const { vouchers, processedParties } = useVouchers();
-  const isMobile = useIsMobile();
-<<<<<<< HEAD
-=======
   const calendarMonths = useCalendarMonths();
->>>>>>> 6a1ec26 (Animation Fixed)
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -325,395 +223,25 @@ export function PartyDetails({
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
-<<<<<<< HEAD
-=======
-  const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
-  const closeUrlModal = useCallback(() => {
-    setMobileFooterDialogOpen(null);
-    setIsCalendarOpen(false);
-    setIsVoucherDialogOpen(false);
-    setSelectedVoucher(null);
-    setIsNoteOpen(false);
-    setHistoryVoucher(null);
-    setLinkAdvancesVoucher(null);
-    setLinkPaymentVoucher(null);
-    closeModalInUrl();
-  }, [closeModalInUrl]);
-  useUrlModalBack(urlModalOpen, closeUrlModal);
-
->>>>>>> 6a1ec26 (Animation Fixed)
-  useEffect(() => {
-    if (!isMobile) return;
-    if (modalParam === "1") openingModalRef.current = false;
-    if (modalParam !== "1" && anyMobilePopupOpen && !openingModalRef.current) {
-      setMobileFooterDialogOpen(null);
-      setIsCalendarOpen(false);
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      setIsNoteOpen(false);
-      setHistoryVoucher(null);
-      setLinkAdvancesVoucher(null);
-      setLinkPaymentVoucher(null);
-    }
-  }, [isMobile, modalParam, anyMobilePopupOpen]);
-
-  const handleShowNarrationChange = (checked: boolean) => {
-    setShowNarration(checked);
-    sessionStorage.setItem("showNarration", String(checked));
-  };
-
-  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
-    const next = { ...visibleColumns, [key]: checked };
-    setVisibleColumns(next);
-    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
-  };
-
-  const handleStatusFilterChange = (key: keyof StatusFilter, checked: boolean) => {
-    const next = { ...statusFilter, [key]: checked };
-    setStatusFilter(next);
-    sessionStorage.setItem(STATUS_FILTER_KEY, JSON.stringify(next));
-    setCurrentPage(1);
-  };
-  
-  // Maintain local userNames state that merges with prop
-  const [localFetchedUserNames, setLocalFetchedUserNames] = useState<Record<string, string>>({});
-  const { user, customUser } = useAuth();
-
-  // Always seed current user's display name so own transactions never fall back to raw UID.
-  useEffect(() => {
-    if (!user?.uid) return;
-    const me = customUser?.displayName || user.displayName || user.email || "";
-    if (!me) return;
-    setLocalFetchedUserNames((prev) => (prev[user.uid] === me ? prev : { ...prev, [user.uid]: me }));
-  }, [user?.uid, user?.displayName, user?.email, customUser?.displayName]);
-  
-  // Merge prop userNames with locally fetched userNames
-  const mergedUserNames = useMemo(() => {
-    return { ...userNames, ...localFetchedUserNames };
-  }, [userNames, localFetchedUserNames]);
-  
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(party, "party", dateRange, undefined, allParties, passedTransactions, context, filters, undefined, undefined, mergedUserNames);
-  
-  // Fetch missing user names directly from Firestore and store in local state
-  useEffect(() => {
-    if (!processedTransactions || processedTransactions.length === 0) return;
-    
-    const uids = new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[]);
-    
-    // Fetch missing user names - check both prop and local state
-    const missingUids = Array.from(uids).filter(uid => {
-      const propName = userNames?.[uid];
-      const localName = localFetchedUserNames[uid];
-      return (!propName || propName === "Unknown" || propName === "N/A") && 
-             (!localName || localName === "Unknown" || localName === "N/A");
-    });
-    
-    if (missingUids.length === 0) return;
-    
-    Promise.all(
-      missingUids.map(async (uid) => {
-        try {
-          // Try query by uid field first
-          const q = query(collection(firestore, "users"), where("uid", "==", uid));
-          const snap = await getDocs(q);
-          let data = snap.docs[0]?.data();
-          
-          if (!data) {
-            // Fallback: try doc ID as uid
-            const userDoc = await getDoc(doc(firestore, 'users', uid));
-            if (userDoc.exists()) {
-              data = userDoc.data();
-            } else {
-              // Fallback 2: search all users for doc ending with uid
-              const allUsersSnap = await getDocs(collection(firestore, "users"));
-              const matchingDoc = allUsersSnap.docs.find(d => {
-                const docData = d.data();
-                return docData.uid === uid || d.id.endsWith(uid);
-              });
-              if (matchingDoc) {
-                data = matchingDoc.data();
-              }
-            }
-          }
-          
-          const displayName = data?.displayName || data?.name || null;
-          const email = typeof data?.email === "string" ? data.email : "";
-          const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-          let resolvedName = displayName || emailPrefix || null;
-          if (resolvedName) {
-            const isUIDPattern = resolvedName.length > 15 && /^[a-zA-Z0-9_-]+$/.test(resolvedName) && !resolvedName.includes("@") && !resolvedName.includes(" ");
-            if (isUIDPattern && emailPrefix) {
-              resolvedName = emailPrefix;
-            }
-          }
-          if (resolvedName && resolvedName !== uid && resolvedName !== "Unknown" && resolvedName !== "N/A") {
-            return { uid, name: resolvedName };
-          }
-        } catch (e) {
-          console.error('[PartyDetails] Error fetching userName for', uid, e);
-        }
-        return { uid, name: null };
-      })
-    ).then(results => {
-      const newUserNames: Record<string, string> = {};
-      results.forEach(({ uid, name }) => {
-        if (name) {
-          newUserNames[uid] = name;
-        }
-      });
-      if (Object.keys(newUserNames).length > 0) {
-        setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
-      }
-    });
-  }, [processedTransactions, userNames, localFetchedUserNames]);
-
-  const handleEditVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
     openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
+
     setSelectedVoucher(voucher);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
 
   const handleHistoryVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
     openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
-    openModalInUrl();
-    setHistoryVoucher(voucher);
-  };
 
-  const handleDeleteVoucher = (voucher: any) => {
-<<<<<<< HEAD
-=======
-    openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
     setSelectedVoucher(voucher);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
 
   const handleAddLink = (voucher: any) => {
-<<<<<<< HEAD
-=======
-    openingModalRef.current = true;
->>>>>>> 6a1ec26 (Animation Fixed)
-    openModalInUrl();
-    const isPaymentType = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(voucher?.type);
-    if (isPaymentType) {
-      setLinkPaymentVoucher(voucher);
-    } else {
-      setLinkAdvancesVoucher(voucher);
-    }
-  };
-
-  const isFilterActive =
-    dateRange !== undefined || Object.values(filters).some((v) => v);
-
-  const clearFilters = () => {
-    onDateRangeChange(undefined);
-    setFilters({});
-  };
-  
-  const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
-  );
-
-  const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm.trim()) return statusFilteredTransactions;
-    const q = mobileSearchTerm.toLowerCase().trim();
-    return statusFilteredTransactions.filter((t) => {
-      const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
-      const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
-      const timeStr = d ? format(d, "h:mm a") : "";
-      const amt = t.debit > 0 ? t.debit : t.credit;
-      const bal = t.balance ?? t.runningBalance ?? 0;
-      const userStr = (userNames && t.userId && userNames[t.userId]) || "";
-      return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
-        dateStr.toLowerCase().includes(q) ||
-        timeStr.toLowerCase().includes(q) ||
-        String(amt || 0).toLowerCase().includes(q) ||
-        String(t.debit || 0).toLowerCase().includes(q) ||
-        String(t.credit || 0).toLowerCase().includes(q) ||
-        String(bal).toLowerCase().includes(q) ||
-        userStr.toLowerCase().includes(q)
-      );
-    });
-  }, [statusFilteredTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
-
-  const totalPages = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions = rowsPerPage > 0 ? searchFilteredTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  ) : searchFilteredTransactions;
-
-  // Mobile: show a simple "last 10" view by default (no date filter),
-  // and all matching transactions when a date filter is applied.
-  const mobileTransactions = useMemo(() => {
-    const hasDateFilter =
-      !!dateRange && (dateRange.from != null || dateRange.to != null);
-
-    if (hasDateFilter) {
-      // Date filter active → show all filtered transactions on mobile
-      return searchFilteredTransactions;
-    }
-
-    // No date filter → always show the last 10 transactions (any date)
-    const list = searchFilteredTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [searchFilteredTransactions, dateRange]);
-
-  // Party dropdown: hide Owners Capital and Opening Balance (keep current party so selection shows)
-  const partyDropdownOptions = useMemo(() => {
-    const normalized = (name: string) =>
-      (name || "").trim().toLowerCase().replace(/'/g, "");
-    const excludeNames = ["owners capital", "opening balance"];
-    return (allParties || []).filter((p) => {
-      if (p.id === party?.id) return true;
-      const n = normalized(p.name || "");
-      return !excludeNames.includes(n) && !(n.includes("owner") && n.includes("capital"));
-    }).map((p) => ({ value: p.id, label: p.name }));
-  }, [allParties, party?.id]);
-
-  // Default to last page (most recent 10) on open and when date filter or list changes
-  useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-    if (total >= 1) setCurrentPage(total);
-  }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
-
-  const buildDateRangeText = () => {
-    if (!company) return;
-    const from = dateRange?.from;
-    const to = dateRange?.to;
-    let dateRangeText = "All Time";
-    if(from) {
-        const fromBS = formatDateBS(from);
-        const toBS = to ? formatDateBS(to) : fromBS;
-        const fromAD = formatDate(from);
-        const toAD = to ? formatDate(to) : fromAD;
-        
-        if (dateSystem === 'AD') dateRangeText = `AD: ${fromAD} to ${toAD}`;
-        else if (dateSystem === 'BS') dateRangeText = `BS: ${fromBS} to ${toBS}`;
-        else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-    }
-    return dateRangeText;
-  };
-
-  const getPrintTitle = (variant: "statement" | "bill_wise") => {
-    let title = `Party Statement: ${party.name}`;
-    if (context === 'sale') {
-      title = `Sale Statement / ${party.name}`;
-    } else if (context === 'purchase') {
-      title = `Purchase Statement / ${party.name}`;
-    } else if (context === 'payment-in') {
-      title = `Receipt Statement / ${party.name}`;
-    } else if (context === 'payment-out') {
-      title = `Payment Statement / ${party.name}`;
-    }
-    return variant === "bill_wise" ? `Bill Wise ${title}` : title;
-  };
-
-  const printTransactions = (transactionsToPrint: any[], variant: "statement" | "bill_wise") => {
-    if (!company) return Promise.resolve();
-    const dateRangeText = buildDateRangeText();
-    return openPrintDirect({
-      company: {
-        name: company.name,
-        pan: company.pan,
-        phone: company.phone,
-        address: company.address,
-        decimalPlaces: company.decimalPlaces,
-        showDrCr: company.showDrCr,
-        showCurrencySymbol: company.showCurrencySymbol,
-        logoUrl: company.logoUrl,
-      },
-      title: getPrintTitle(variant),
-      context: "party",
-      contextId: party.id,
-      dateSystem: dateSystem,
-      dateRangeText: dateRangeText || "All Time",
-      vouchersCount: transactionsToPrint.length,
-      openingBalance: openingBalanceForPeriod,
-      transactions: transactionsToPrint.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
-      showNarration: showNarration,
-      journalAccountNames: journalAccountNames,
-      billWise: variant === "bill_wise",
-      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),
-    }, true);
-  };
-
-  const handlePrint = () => {
-    (async () => {
-      try {
-        await printTransactions(statusFilteredTransactions, balanceMode === "bill_wise" ? "bill_wise" : "statement");
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
-      }
-    })();
-  };
-  
-  if(!party) return null;
-
-  const dateRangeLabel = buildDateRangeText() || "All Time";
-  const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
-
-  const handleMobileBack = useCallback(() => {
-    if (mobileFooterDialogOpen) {
-      setMobileFooterDialogOpen(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isCalendarOpen) {
-      setIsCalendarOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (isVoucherDialogOpen) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isNoteOpen) {
-      setIsNoteOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (historyVoucher) {
-      setHistoryVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (linkPaymentVoucher) {
-      setLinkPaymentVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (linkAdvancesVoucher) {
-      setLinkAdvancesVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    onBack?.();
-  }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
-
-  if (isMobile) {
-    return (
-      <>
-<<<<<<< HEAD
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden pb-24">
-=======
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: no pb-24 here so scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           {/* Row 1: Party Details (left) | Showing x of y vouchers (right) - compact */}
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
@@ -787,14 +315,10 @@ export function PartyDetails({
               </div>
             </div>
           </div>
-<<<<<<< HEAD
-          {/* Transaction list - full width minus 2px */}
-          <div className="flex-1 min-h-0 overflow-auto">
-=======
           {/* Transaction list - extends to footer line */}
           <div className="flex-1 min-h-0 overflow-auto">
             <div className="pb-24">
->>>>>>> 6a1ec26 (Animation Fixed)
+
             <TransactionsTable
               transactions={mobileTransactions}
               context="party"
@@ -830,98 +354,6 @@ export function PartyDetails({
               onStatusFilterChange={handleStatusFilterChange}
               statusFilterIdPrefix="party"
             />
-<<<<<<< HEAD
-=======
-            </div>
->>>>>>> 6a1ec26 (Animation Fixed)
-          </div>
-        </div>
-        {/* Fixed bottom: Bill wise/Statement, Receive, Pay, New Sale, Calendar - open popups */}
-        <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          <Button
-            className="flex-1 h-6 rounded-md text-xs font-medium shrink-0 min-w-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
-            onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-          >
-            {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
-          </Button>
-          <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
-            Receive
-          </Button>
-          <Button className="flex-1 h-6 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_out"); openModalInUrl(); }}>
-            Pay
-          </Button>
-          <Button className="flex-1 h-6 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("sale"); openModalInUrl(); }}>
-            New Sale
-          </Button>
-          <AddVoucherDialog
-            isOpen={!!mobileFooterDialogOpen}
-            onOpenChange={(open: boolean) => {
-              if (!open) {
-                setMobileFooterDialogOpen(null);
-                closeModalInUrl();
-              }
-            }}
-            defaultTab={mobileFooterDialogOpen || "sale"}
-            defaultVoucherData={{ partyId: party.id }}
-          />
-          <Drawer
-            open={isCalendarOpen}
-            onOpenChange={(open: boolean) => {
-              if (open) {
-                openingModalRef.current = true;
-                openModalInUrl();
-              }
-              setIsCalendarOpen(open);
-              if (!open) closeModalInUrl();
-            }}
-          >
-            <DrawerTrigger asChild>
-              <Button className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium px-1 bg-pink-600 hover:bg-pink-700 text-white">
-                <CalendarIcon className="h-3.5 w-3.5 shrink-0" />
-              </Button>
-            </DrawerTrigger>
-            <DrawerContent>
-              <DrawerHeader className="p-4 text-left">
-                <DrawerTitle>Select Date Range</DrawerTitle>
-                <DrawerDescription>Select a date range for the transaction list.</DrawerDescription>
-              </DrawerHeader>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
-                {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar
-                    onSelect={(_bs, adDate) => {
-                      const range = dateRange;
-                      if (!range?.from || (range.from && range.to)) {
-                        onDateRangeChange({ from: adDate, to: undefined });
-                      } else if (adDate < range.from) {
-                        onDateRangeChange({ from: adDate, to: range.from });
-                        setIsCalendarOpen(false);
-                      } else {
-                        onDateRangeChange({ from: range.from, to: adDate });
-                        setIsCalendarOpen(false);
-                      }
-                    }}
-                    valueAD={dateRange}
-                    isRange={true}
-<<<<<<< HEAD
-                    numberOfMonths={2}
-                  />
-                )}
-                {(dateSystem === "AD" || dateSystem === "Both") && (
-                  <div className="flex-1">
-                    <Calendar
-                      className="p-0 w-full"
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={dateRange}
-                      onSelect={(range) => {
-                        onDateRangeChange(range as DateRange | undefined);
-                        if (range?.from && range?.to) setIsCalendarOpen(false);
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: "has-transactions" }}
-=======
                     numberOfMonths={calendarMonths}
                   />
                 )}
@@ -944,7 +376,7 @@ export function PartyDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </div>
                 )}
@@ -995,31 +427,15 @@ export function PartyDetails({
         <HistoryDialog
           voucher={historyVoucher}
           isOpen={!!historyVoucher}
-<<<<<<< HEAD
-          onOpenChange={(open: boolean) => {
-            if (!open) {
-              setHistoryVoucher(null);
-              closeModalInUrl();
-            }
-          }}
-=======
           onOpenChange={(open: boolean) => !open && setHistoryVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
           onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)}
         />
         {linkAdvancesVoucher && (
           <LinkAdvancesToVoucherDialog
             isOpen={!!linkAdvancesVoucher}
-<<<<<<< HEAD
-            onOpenChange={(open: boolean) => {
-              if (!open) {
-                setLinkAdvancesVoucher(null);
-                closeModalInUrl();
-              }
-            }}
-=======
             onOpenChange={(open: boolean) => !open && setLinkAdvancesVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
             mode={linkAdvancesVoucher.type === "purchase" || linkAdvancesVoucher.type === "purchase_service" ? "purchase" : "sale"}
             targetVoucherId={linkAdvancesVoucher.id}
             targetPartyId={linkAdvancesVoucher.partyId ?? party?.id ?? ""}
@@ -1032,16 +448,8 @@ export function PartyDetails({
         {linkPaymentVoucher && (
           <LinkPaymentToTxnsDialog
             isOpen={!!linkPaymentVoucher}
-<<<<<<< HEAD
-            onOpenChange={(open: boolean) => {
-              if (!open) {
-                setLinkPaymentVoucher(null);
-                closeModalInUrl();
-              }
-            }}
-=======
             onOpenChange={(open: boolean) => !open && setLinkPaymentVoucher(null)}
->>>>>>> 6a1ec26 (Animation Fixed)
+
             variant={linkPaymentVoucher.type === "payment_out" || linkPaymentVoucher.type === "direct_expense" ? "payment_out" : "payment_in"}
             partyId={linkPaymentVoucher.partyId ?? null}
             partyName={allParties?.find((p) => p.id === linkPaymentVoucher.partyId)?.name ?? "Party"}
@@ -1107,11 +515,8 @@ export function PartyDetails({
                 <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                   {formatCurrency(closingBalance, { showDrCr: true })}
                 </div>
-<<<<<<< HEAD
-                {showApproveNotification && (
-=======
                 {showApproveNotification && !isMobile && (
->>>>>>> 6a1ec26 (Animation Fixed)
+
                   <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 flex-shrink-0 min-w-[8rem]">
                     {pendingApprovalCount} pending approval
                   </span>
@@ -1161,27 +566,6 @@ export function PartyDetails({
                       </Button>
                     </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
-<<<<<<< HEAD
-                    <Calendar
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={tempDateRange}
-                      onSelect={(range) => {
-                        if (range?.from) range.from.setHours(12, 0, 0, 0);
-                        if (range?.to) range.to.setHours(12, 0, 0, 0);
-                        setTempDateRange(range);
-                        if (range?.from && range.to) {
-                          onDateRangeChange(range);
-                          setIsDesktopCalendarOpen(false);
-                        } else if (!range) {
-                          onDateRangeChange(undefined);
-                        }
-                      }}
-                      numberOfMonths={2}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: 'has-transactions' }}
-=======
                     <AdCalendar
                       valueAD={tempDateRange}
                       isRange
@@ -1203,7 +587,7 @@ export function PartyDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
->>>>>>> 6a1ec26 (Animation Fixed)
+
                     />
                   </PopoverContent>
                 </Popover>
@@ -1417,9 +801,6 @@ export function PartyDetails({
           </div>
         </DialogContent>
       </Dialog>
-<<<<<<< HEAD
-      <AddVoucherDialog isOpen={isVoucherDialogOpen} onOpenChange={setIsVoucherDialogOpen} voucher={selectedVoucher} onVoucherAction={() => setSelectedVoucher(null)} />
-=======
       <AddVoucherDialog
         isOpen={isVoucherDialogOpen}
         onOpenChange={(open) => {
@@ -1432,7 +813,7 @@ export function PartyDetails({
         voucher={selectedVoucher}
         onVoucherAction={() => setSelectedVoucher(null)}
       />
->>>>>>> 6a1ec26 (Animation Fixed)
+
       <HistoryDialog voucher={historyVoucher} isOpen={!!historyVoucher} onOpenChange={(open) => !open && setHistoryVoucher(null)} onHistoryReset={() => setHistoryVoucher((prev: any) => prev ? { ...prev, history: [] } : null)} />
       {linkAdvancesVoucher && (
         <LinkAdvancesToVoucherDialog

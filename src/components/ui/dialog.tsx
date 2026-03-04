@@ -6,10 +6,6 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-<<<<<<< HEAD
-
-const Dialog = DialogPrimitive.Root
-=======
 import { useDialogBack } from "@/contexts/DialogBackHandlerContext"
 
 /** Root with global back handling: first back closes dialog, second back navigates. */
@@ -17,7 +13,7 @@ function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>) {
   useDialogBack(props.open, props.onOpenChange)
   return <DialogPrimitive.Root {...props} />
 }
->>>>>>> 6a1ec26 (Animation Fixed)
+
 
 const DialogTrigger = DialogPrimitive.Trigger
 

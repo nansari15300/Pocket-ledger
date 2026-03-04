@@ -414,289 +414,16 @@ export const TransactionRow = React.memo(
     isSpendWiseGroupLast = false,
     spendWiseRunningBalance,
     spendWiseGroupColorIndex,
-<<<<<<< HEAD
-=======
-    animateLayout = false,
->>>>>>> 6a1ec26 (Animation Fixed)
-  }: any) => {
-    const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
-    const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
-    const swColor = hasSpendWiseColor && (spendWiseGroupColorIndex === 1 ? "green" : spendWiseGroupColorIndex === 2 ? "pink" : "blue");
-    const spendWiseBorderFirst = isSpendWiseGroupFirst && hasSpendWiseColor && cn(
-      "[&>td]:border-t [&>td]:border-b-0 [&>td]:border-solid",
-      swColor === "green" && "[&>td]:border-t-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
-      swColor === "pink" && "[&>td]:border-t-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
-      swColor === "blue" && "[&>td]:border-t-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r",
-      "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
-    );
-    const spendWiseBorderMid = !isSpendWiseGroupFirst && !isSpendWiseGroupLast && isSpendWiseInGroup && hasSpendWiseColor && cn(
-      "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
-      swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
-      swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
-      swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
-      "[&>td:first-child]:border-l [&>td:last-child]:border-r"
-    );
-    const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
-    const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-    const { company } = useCompany();
-    const { user, customUser } = useAuth();
-    const currentUserUid = user?.uid ?? null;
-    const currentUserDisplayName = customUser?.displayName || user?.displayName || user?.email || null;
-    const { can } = usePermissions();
-    const isNote = context === "note";
-    const { settings: animationSettings } = useAnimationSettings();
-    const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
-    const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
-
-    const d = safeToDate(transaction.date);
-    let debit = transaction.debit;
-    let credit = transaction.credit;
-    let balance = transaction.balance;
-    if (typeof spendWiseRunningBalance === "number") balance = spendWiseRunningBalance;
-    const spendWiseLinkedAmount = (transaction as any)._spendWiseLinkedAmount;
-    if (isSpendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
-      const isOutflow = (transaction.type === "payment_out" || transaction.type === "direct_expense") || (Number(transaction.credit) > 0);
-      if (isOutflow) {
-        debit = 0;
-        credit = spendWiseLinkedAmount;
-      } else {
-        debit = spendWiseLinkedAmount;
-        credit = 0;
-      }
-    }
-    if (context === "item" && stockView === "qty" && item) {
-      const factor = getConversionFactor(item, displayUnit);
-      debit = debit / factor;
-      credit = credit / factor;
-      balance = balance / factor;
-    }
-
-    const formatBalanceCell = (value: number) => {
-      const isItemQty = context === "item" && stockView === "qty";
-      if (isItemQty)
-        return `${formatQuantity(value)} ${displayUnit || ""}`;
-      const absValue = Math.abs(value);
-      const suffix = value >= 0 ? "Dr" : "Cr";
-      return (
-        <span className={cn("font-bold", value >= 0 ? "text-green-700" : "text-red-700")}>
-          {formatCurrency(absValue, { noSuffix: true, context: "transaction" })} {suffix}
-        </span>
-      );
-    };
-
-    const getOutstandingBalanceDisplay = () => {
-      const out = Number((transaction as any).outstanding) || 0;
-      const isCreditSide = ["sale", "payment_in", "direct_income"].includes(transaction.type);
-      const value = isCreditSide ? out : -out;
-      return formatBalanceCell(value);
-    };
-
-    const formatAmountCell = (val: number) => {
-      if (val === 0) return "-";
-      if (context === "item" && stockView === "qty")
-        return `${formatQuantity(val)} ${displayUnit || ""}`;
-      return getDisplayValue(val);
-    };
-
-    // Show whatever user info is available for visible transaction rows.
-    const resolvedUserName = userNames && transaction.userId ? userNames[transaction.userId] : null;
-    const displayName =
-      (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-      transaction.userDisplayName ||
-      transaction.userName ||
-      (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-      "N/A";
-    const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
-
-    const mainRowContent = (
-      <>
-        {showCol("date") &&
-          (dateSystem === "Both" ? (
-            <>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? formatDateBS(d) : ""}</TableCell>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? formatDate(d) : ""}</TableCell>
-            </>
-          ) : (
-            <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? (dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}</TableCell>
-          ))}
-        {showCol("type") && (
-          <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
-            <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
-              {getDisplayType(transaction)}
-            </Badge>
-          </TableCell>
-        )}
-        {showCol("voucherNo") && <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>{transaction.voucherNumber}</TableCell>}
-        {context === "daybook" && (
-          <TableCell className="max-w-[200px] truncate">
-            {getParticularsText(transaction, names)}
-          </TableCell>
-        )}
-        {context === "item" && (
-          <TableCell className="max-w-[180px] truncate text-muted-foreground">
-            {getOppositeAccountLabel(transaction, names, context, contextId, groupEntityType)}
-          </TableCell>
-        )}
-        {showCol("user") && context !== "note" && <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined}>{displayName}</TableCell>}
-        {showFileColumn && (
-          <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")}>
-            {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
-              <CheckCircle className="h-4 w-4 text-green-600 inline" aria-label="Has attachment" />
-            ) : (
-              "-"
-            )}
-          </TableCell>
-        )}
-        {showCol("dr") && (
-          <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>{formatAmountCell(debit)}</TableCell>
-        )}
-        {showCol("cr") && (
-          <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>{formatAmountCell(credit)}</TableCell>
-        )}
-        {showCol("status") && !hideStatusColumn &&
-          (() => {
-            const isDashboardAddSalary =
-              context === "daybook" &&
-              transaction.type === "journal" &&
-              transaction.subType === "add_salary";
-            const statusLabel = isDashboardAddSalary ? "Salary" : getStatusLabel(transaction, context);
-            const useNeutralBadge = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
-            const paidByLabel = statusLabel === "Paid";
-            const unpaidByLabel = statusLabel === "Partial" || statusLabel === "Unpaid";
-            const statusDetailText = getStatusDetail(transaction);
-            const isOverdueRow = statusLabel === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
-            const overdueDays = isOverdueRow ? getOverdueDays(transaction) : 0;
-            return (
-              <TableCell className={cn("text-center", isBillWise ? "align-middle" : "align-baseline", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-                <div className={cn("flex items-center justify-center gap-[1px] leading-tight", !isBillWise && "flex-col")}>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "inline-flex h-[22px] font-semibold shrink-0",
-                      useNeutralBadge
-                        ? "text-muted-foreground border-muted-foreground/40"
-                        : paidByLabel || (transaction as any).paymentStatus === "paid"
-                          ? "text-green-600 border-green-600/50"
-                          : unpaidByLabel ||
-                              (transaction as any).paymentStatus === "unpaid" ||
-                              (transaction as any).paymentStatus === "partially_paid" ||
-                              (transaction as any).isOverdue ||
-                              (transaction as any).paymentStatus === "overdue"
-                            ? "text-red-600 border-red-600/50"
-                            : "text-muted-foreground"
-                    )}
-                  >
-                    {statusLabel || "-"}
-                  </Badge>
-                  {!isBillWise && statusDetailText && (
-                    <span className="text-[10px] text-muted-foreground">{statusDetailText}</span>
-                  )}
-                  {!isBillWise && isOverdueRow && overdueDays > 0 && (
-                    <span className="text-[10px] text-red-600 font-medium">{overdueDays} {overdueDays === 1 ? "day" : "days"}</span>
-                  )}
-                </div>
-              </TableCell>
-            );
-          })()}
-        {showCol("runningBalance") && !hideBalanceColumn &&
-          (() => {
-            const out = Number((transaction as any).outstanding) || 0;
-            const isCreditSide = ["sale", "payment_in", "direct_income"].includes(transaction.type);
-            const isStaffPaymentOut = (context === "staff" || context === "group") && (transaction.type === "payment_out" || transaction.type === "direct_expense");
-            const displayValue = useOutstandingForBalance
-              ? (isTaxContext ? (isCreditSide ? out : -out) : (isStaffPaymentOut ? out : (isCreditSide ? out : -out)))
-              : balance;
-            return (
-              <TableCell
-                className={cn(
-                  "text-right font-semibold",
-                  displayValue >= 0 ? "text-green-600" : "text-red-600",
-                  ensureMinGaps && "min-w-[115px] px-[5px]"
-                )}
-              >
-                {isBalanceMasked
-                  ? "*****"
-                  : useOutstandingForBalance
-                    ? formatBalanceCell(displayValue)
-                    : formatBalanceCell(balance)}
-              </TableCell>
-            );
-          })()}
-        <TableCell
-          className="w-10 p-1 text-center align-middle"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                <MoreVertical className="h-4 w-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              {(() => {
-                const isSalePurchase = ["sale", "purchase", "sale_service", "purchase_service"].includes(transaction.type);
-                const isPaymentLinkable = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(transaction.type);
-                const showAddLink = can('add_link') && onAddLink && (
-                  (isSalePurchase || isPaymentLinkable) &&
-                  (context === "party" || context === "staff" || !!transaction.partyId || !!transaction.staffId)
-                );
-                return showAddLink ? (
-                  <DropdownMenuItem onClick={() => onAddLink?.(transaction)} className="flex items-center gap-2">
-                    <Link2 className="h-3.5 w-3.5" />
-                    Add Link
-                  </DropdownMenuItem>
-                ) : null;
-              })()}
-              {can("approve_transactions") &&
-                company?.notificationSettings?.approve?.on !== false &&
-                company?.notificationSettings?.approve?.onTransaction !== false &&
-                (transaction as any).isApproved !== true && (
-                  <DropdownMenuItem onClick={() => onApproveVoucher?.(transaction)} className="flex items-center gap-2">
-                    <CheckCircle className="h-3.5 w-3.5" />
-                    Approve
-                  </DropdownMenuItem>
-                )}
-              <DropdownMenuItem onClick={() => onRowClick?.(transaction)} className="flex items-center gap-2">
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
-              </DropdownMenuItem>
-              {can('view_voucher_history') && onHistoryVoucher && (
-                <DropdownMenuItem onClick={() => onHistoryVoucher?.(transaction)} className="flex items-center gap-2">
-                  <History className="h-3.5 w-3.5" />
-                  History
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </TableCell>
-      </>
-    );
-
-    const isPaid = (transaction as any).paymentStatus === "paid";
-    const isPendingApproval = (transaction as any).isApproved !== true;
-    const narrationText =
-      transaction.type === "note" ? transaction.title : transaction.narration;
-    const narrationLabel = transaction.type === "note" ? "Title" : "Narration";
-    const dateCols = dateSystem === "Both" ? 2 : 1;
-    const colsThroughCredit =
-      visibleColumns == null
-<<<<<<< HEAD
-        ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (context !== "note" ? 1 : 0) + 1 + 1
-=======
         ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (context === "item" ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
->>>>>>> 6a1ec26 (Animation Fixed)
+
         : (showCol("date") ? dateCols : 0) +
           (showCol("type") ? 1 : 0) +
           (showCol("voucherNo") ? 1 : 0) +
           (context === "daybook" ? 1 : 0) +
-<<<<<<< HEAD
-          (showCol("user") && context !== "note" ? 1 : 0) +
-=======
           (context === "item" ? 1 : 0) +
           (showCol("user") && context !== "note" ? 1 : 0) +
           (showFileColumn ? 1 : 0) +
->>>>>>> 6a1ec26 (Animation Fixed)
+
           (showCol("dr") ? 1 : 0) +
           (showCol("cr") ? 1 : 0);
     const statusDetailText = getStatusDetail(transaction);
@@ -721,41 +448,6 @@ export const TransactionRow = React.memo(
       "[&>td:first-child]:border-l [&>td:last-child]:border-r"
     );
     const narrationColSpan = colsThroughCredit + (hideStatusColumn || !showCol("status") ? 1 : 0);
-<<<<<<< HEAD
-=======
-    const narrationFullColSpan =
-      narrationColSpan +
-      (showCol("status") && !hideStatusColumn ? 1 : 0) +
-      (showCol("runningBalance") && !hideBalanceColumn ? 1 : 0) +
-      1;
->>>>>>> 6a1ec26 (Animation Fixed)
-
-    const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
-    const spendWiseMainInset = inSpendWiseGroup && cn(
-      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
-      isSpendWiseGroupFirst && "[&>td]:pt-[6px]",
-      isSpendWiseGroupLast && !showNarrationRow && "[&>td]:pb-[6px]",
-      !isSpendWiseGroupFirst && "[&>td]:pt-[3px]"
-    );
-    const spendWiseNarrInset = inSpendWiseGroup && cn(
-      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
-      isSpendWiseGroupLast && "[&>td]:pb-[6px]",
-      !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
-    );
-
-    const MainRow = (
-      <motion.tr
-<<<<<<< HEAD
-        layout
-        initial={{ opacity: 1 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={
-          isRowAnimationEnabled
-            ? { duration: rowAnimationDuration, ease: "easeInOut" }
-            : { duration: 0 }
-        }
-=======
         layout={animateLayout ? "position" : false}
         initial={false}
         exit={{ transition: { duration: 0 } }}
@@ -765,7 +457,7 @@ export const TransactionRow = React.memo(
             : { duration: 0 }
         }
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
->>>>>>> 6a1ec26 (Animation Fixed)
+
         onClick={() => onRowSelect?.(transaction)}
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
@@ -780,12 +472,6 @@ export const TransactionRow = React.memo(
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           isSelected &&
-<<<<<<< HEAD
-            "[&>td]:bg-primary/10 [&>td]:border-t-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:overflow-hidden",
-          isSelected && !showNarrationRow && "[&>td]:border-b-2 [&>td]:border-b-primary [&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
-          isSelected && showNarrationRow && "[&>td]:border-b-0 [&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
-          showNarrationRow && isBillWise && "[&>td]:pb-0.5",
-=======
             "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
           isSelected &&
             "[&>td]:[box-shadow:inset_0_2px_0_0_hsl(var(--primary))]",
@@ -800,7 +486,7 @@ export const TransactionRow = React.memo(
           isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
           showNarrationRow && isBillWise && "[&>td]:pb-0.5",
           !showNarrationRow && "md:[&>td]:pb-1",
->>>>>>> 6a1ec26 (Animation Fixed)
+
           showNarration &&
             (narrationText || (!hideStatusColumn && getStatusDetail(transaction)))
             ? "border-b-0"
@@ -820,9 +506,6 @@ export const TransactionRow = React.memo(
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
     const subRowStatusText = [statusDetailText, overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
     const NarrationRow = showNarrationRow ? (
-<<<<<<< HEAD
-      <tr
-=======
       <motion.tr
         layout={animateLayout ? "position" : false}
         initial={false}
@@ -833,7 +516,7 @@ export const TransactionRow = React.memo(
             : { duration: 0 }
         }
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
->>>>>>> 6a1ec26 (Animation Fixed)
+
         role="button"
         tabIndex={-1}
         onClick={() => onRowSelect?.(transaction)}
@@ -858,33 +541,6 @@ export const TransactionRow = React.memo(
           ),
           isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
           isSelected
-<<<<<<< HEAD
-            ? "[&>td]:bg-primary/10 [&>td]:border-t-0 [&>td]:border-b-2 [&>td]:border-primary [&>td:first-child]:border-l-2 [&>td:first-child]:border-primary [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:border-r-2 [&>td:last-child]:border-primary [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
-            : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
-          isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
-          isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
-          !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20"
-        )}
-      >
-        <TableCell
-          colSpan={narrationColSpan}
-          className={cn("px-3 text-[11px] italic text-muted-foreground leading-tight align-top whitespace-normal break-words w-full", isBillWise ? "pt-0.5 pb-0.5" : "py-0")}
-        >
-          {narrationText ? (
-            <span>
-              <span className="font-semibold not-italic">{narrationLabel}:</span> {narrationText}
-            </span>
-          ) : null}
-        </TableCell>
-        {showCol("status") && !hideStatusColumn && (
-          <TableCell className={cn("py-0 px-2 text-[10px] whitespace-nowrap text-center leading-tight", isBillWise ? "pt-0.5 pb-0.5 align-top" : "py-0 align-top", isBillWise && subRowStatusText && "text-muted-foreground", isBillWise && isOverdueForSubRow && overdueDaysForSubRow > 0 && "text-red-600 font-medium")}>
-            {isBillWise ? subRowStatusText : ""}
-          </TableCell>
-        )}
-        {showCol("runningBalance") && !hideBalanceColumn && <TableCell className="py-0 w-10 p-0" />}
-        <TableCell className="py-0 w-10 p-0" />
-      </tr>
-=======
             ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
             : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
@@ -914,7 +570,7 @@ export const TransactionRow = React.memo(
           ) : null}
         </TableCell>
       </motion.tr>
->>>>>>> 6a1ec26 (Animation Fixed)
+
     ) : null;
 
     return (

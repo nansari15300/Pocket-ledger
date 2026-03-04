@@ -24,11 +24,8 @@ import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { CreateStaffGroupDialog } from "@/components/staff/CreateStaffGroupDialog";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
-<<<<<<< HEAD
-import type { DateRange } from "react-day-picker";
-=======
 import type { DateRange } from "@/components/ui/ad-calendar";
->>>>>>> 6a1ec26 (Animation Fixed)
+
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
