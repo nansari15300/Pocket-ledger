@@ -2,7 +2,6 @@
   "name": "pocket-ledger",
   "version": "0.1.0",
   "private": true,
-<<<<<<< HEAD
   "engines": {
     "node": ">=18"
   },
@@ -21,13 +20,6 @@
     "cap:add:android": "npx cap add android",
     "cap:sync": "npx cap sync",
     "cap:open:android": "npx cap open android"
-=======
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
->>>>>>> 6a1ec26 (Animation Fixed)
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
@@ -87,12 +79,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-<<<<<<< HEAD
     "@capacitor/android": "^6.0.0",
     "@capacitor/cli": "^6.0.0",
     "@capacitor/core": "^6.0.0",
-=======
->>>>>>> 6a1ec26 (Animation Fixed)
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
