@@ -55,11 +55,29 @@ export function LinkPaymentInToPaymentOutDialog({
   /** Order in which user ticked rows: first-ticked gets allocation first. */
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
 
+  const prevOpenRef = React.useRef(false);
   React.useEffect(() => {
     const ids = Array.isArray(selectedIds) ? selectedIds : [];
-    setChecked(new Set(ids));
-    setSelectedOrder(ids.length ? [...ids] : []);
-  }, [selectedIds, isOpen]);
+    const deduped = [...new Set(ids)];
+    const justOpened = isOpen && !prevOpenRef.current;
+    prevOpenRef.current = isOpen;
+    if (!isOpen) return;
+    if (justOpened && requiredAmount > 0 && paymentInList.length > 0 && deduped.length > 0) {
+      const ordered = paymentInList.filter((r) => deduped.includes(r.id));
+      let sum = 0;
+      const minimal: string[] = [];
+      for (const row of ordered) {
+        minimal.push(row.id);
+        sum += row.linkable;
+        if (sum >= requiredAmount) break;
+      }
+      setChecked(new Set(minimal));
+      setSelectedOrder(minimal);
+    } else {
+      setChecked(new Set(deduped));
+      setSelectedOrder(deduped.length ? [...deduped] : []);
+    }
+  }, [selectedIds, isOpen, requiredAmount]);
 
   const linkedAmountByPaymentInId = React.useMemo(() => {
     const map = new Map<string, number>();
@@ -157,20 +175,21 @@ export function LinkPaymentInToPaymentOutDialog({
         setSelectedOrder((order) => order.filter((x) => x !== id));
       } else {
         next.add(id);
-        setSelectedOrder((order) => [...order, id]);
+        setSelectedOrder((order) => (order.includes(id) ? order : [...order, id]));
       }
       return next;
     });
   };
 
   const handleConfirm = () => {
-    onConfirm(selectedOrder.filter((id) => checked.has(id)));
+    const ids = selectedOrder.filter((id) => checked.has(id));
+    onConfirm([...new Set(ids)]);
     onOpenChange(false);
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Select Payment In / Direct Income / Contra (in)</DialogTitle>
           <p className="text-sm text-muted-foreground">
@@ -187,7 +206,7 @@ export function LinkPaymentInToPaymentOutDialog({
           )}
         </DialogHeader>
         <ScrollArea className="flex-1 min-h-0 border rounded-md">
-          <div className="p-0">
+          <div className="p-0 min-w-0 max-w-full overflow-x-auto">
             {displayList.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {paymentInList.length === 0
@@ -195,16 +214,16 @@ export function LinkPaymentInToPaymentOutDialog({
                   : "No linkable amount remaining."}
               </p>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="text-left p-2 w-10"></th>
-                    <th className="text-left p-2 font-medium">Date</th>
-                    <th className="text-left p-2 font-medium">Voucher No.</th>
-                    <th className="text-left p-2 font-medium">From</th>
-                    <th className="text-right p-2 font-medium">Amount</th>
-                    <th className="text-right p-2 font-medium">Linked</th>
-                    <th className="text-right p-2 font-medium">Linkable</th>
+                    <th className="text-left p-2 w-10 whitespace-nowrap"></th>
+                    <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                    <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                    <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Linkable</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -218,18 +237,18 @@ export function LinkPaymentInToPaymentOutDialog({
                         checked.has(row.id) && "bg-muted/30"
                       )}
                     >
-                      <td className="p-2 w-10" onClick={(e) => e.stopPropagation()}>
+                      <td className="p-2 w-10 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
                           checked={checked.has(row.id)}
                           onCheckedChange={() => handleToggle(row.id)}
                         />
                       </td>
-                      <td className="p-2 text-muted-foreground">{row.date ? formatDate(row.date) : "—"}</td>
-                      <td className="p-2 font-medium">{row.voucherNumber}</td>
-                      <td className="p-2 truncate max-w-[180px]">{row.from}</td>
-                      <td className="p-2 text-right font-medium text-green-600">{formatCurrency(row.amount)}</td>
-                      <td className="p-2 text-right text-muted-foreground">{formatCurrency(tentativeLinkedByRowId[row.id] ?? 0)}</td>
-                      <td className="p-2 text-right font-medium">{formatCurrency(Math.max(0, row.linkable - (tentativeLinkedByRowId[row.id] ?? 0)))}</td>
+                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
+                      <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                      <td className="p-2 whitespace-nowrap">{row.from}</td>
+                      <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount)}</td>
+                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(tentativeLinkedByRowId[row.id] ?? 0)}</td>
+                      <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(Math.max(0, row.linkable - (tentativeLinkedByRowId[row.id] ?? 0)))}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -41,6 +41,7 @@ import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
@@ -133,7 +134,7 @@ export function AccountGroupDetails({
   const accountIdsInGroup = useMemo(() => accountsInGroup.map((a) => a.id), [accountsInGroup]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
@@ -177,7 +178,8 @@ export function AccountGroupDetails({
   }
 
   const displayTransactions = useMemo(() => {
-    if (!spendWiseView || !spendWiseEnabled || !vouchers?.length) return processedTransactions;
+    if (!spendWiseView || !vouchers?.length) return processedTransactions;
+    // Date range overwrite: if any transaction in a group is in range, show full group (all linked rows)
     const inRangeIds = new Set(processedTransactions.map((t: any) => t.id));
     const byId = new Map(processedTransactions.map((t: any) => [t.id, t]));
     const accountIdSet = new Set(accountIdsInGroup);
@@ -192,11 +194,21 @@ export function AccountGroupDetails({
         (v.type === "contra" && accountIdSet.has(v.fromAccountId));
       return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
+    /** Owner = first payment_in in linkedPaymentInIds so group never changes with card position/date. */
+    const paymentOutToOwnerId = new Map<string, string>();
+    vouchers.forEach((v: any) => {
+      const hasAccount =
+        (v.type === "payment_out" && accountIdSet.has(v.accountId)) ||
+        (v.type === "direct_expense" && accountIdSet.has(v.accountId)) ||
+        (v.type === "contra" && accountIdSet.has(v.fromAccountId));
+      if (hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.length > 0)
+        paymentOutToOwnerId.set(v.id, v.linkedPaymentInIds[0]);
+    });
     const getDateMs = (v: any) => {
       const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
       return d.getTime();
     };
-    /** Payment-in / contra / direct_income (main row) always first in each group; groups ordered by main row date. */
+    /** Include group if any row (payment_in or linked payment_out) is in date range — then show full group. */
     const inVouchers = vouchers
       .filter((v: any) => {
         if (!isInVoucher(v) || v.isDeleted) return false;
@@ -238,7 +250,7 @@ export function AccountGroupDetails({
       let rowIndexInGroup = 0;
       const t = voucherToInRow(pi);
       const linkedOuts = vouchers
-        .filter((v: any) => linkedOutFilter(v, pi.id))
+        .filter((v: any) => linkedOutFilter(v, pi.id) && paymentOutToOwnerId.get(v.id) === pi.id)
         .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
@@ -305,12 +317,80 @@ export function AccountGroupDetails({
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}` });
     });
     return rows.length ? rows : processedTransactions;
-  }, [spendWiseView, spendWiseEnabled, processedTransactions, vouchers, accountIdsInGroup]);
+  }, [spendWiseView, processedTransactions, vouchers, accountIdsInGroup]);
 
   const displayTransactionCount = useMemo(
     () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
     [displayTransactions]
   );
+
+  /** Rows-per-page overwrite: paginate by full groups so we never split a group across pages. */
+  const displayBlocks = useMemo(() => {
+    const list = displayTransactions;
+    if (!list.length) return [];
+    const blocks: any[][] = [];
+    let i = 0;
+    while (i < list.length) {
+      const start = i;
+      const first = list[i] as any;
+      if (first._spendWiseSpacer) {
+        blocks.push([first]);
+        i++;
+        continue;
+      }
+      let end = i;
+      while (end < list.length) {
+        const cur = list[end] as any;
+        if (cur._spendWiseGroupLast === true) {
+          end++;
+          if (end < list.length && (list[end] as any)._spendWiseSpacer) end++;
+          break;
+        }
+        end++;
+      }
+      blocks.push(list.slice(start, end));
+      i = end;
+    }
+    return blocks;
+  }, [displayTransactions]);
+
+  const { totalPages, paginatedTransactions } = useMemo(() => {
+    if (rowsPerPage <= 0) {
+      return { totalPages: 1, paginatedTransactions: displayTransactions };
+    }
+    const hasSpendWiseGroups = displayTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
+    if (!hasSpendWiseGroups) {
+      const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
+      const start = (currentPage - 1) * rowsPerPage;
+      const paginatedTransactions = displayTransactions.slice(start, start + rowsPerPage);
+      return { totalPages, paginatedTransactions };
+    }
+    const blocks = displayBlocks;
+    if (!blocks.length) {
+      return { totalPages: 1, paginatedTransactions: displayTransactions };
+    }
+    const rowCounts = blocks.map((b) => b.length);
+    const pages: number[][] = [];
+    let pageRows = 0;
+    let currentPageBlocks: number[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      if (pageRows + rowCounts[i] > rowsPerPage && currentPageBlocks.length > 0) {
+        pages.push(currentPageBlocks);
+        currentPageBlocks = [];
+        pageRows = 0;
+      }
+      currentPageBlocks.push(i);
+      pageRows += rowCounts[i];
+    }
+    if (currentPageBlocks.length > 0) pages.push(currentPageBlocks);
+    const totalPages = Math.max(1, pages.length);
+    const pageIndex = Math.min(currentPage - 1, totalPages - 1);
+    const blockIndices = pages[pageIndex] ?? [];
+    const paginatedTransactions = blockIndices.length > 0
+      ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
+      : displayTransactions;
+    return { totalPages, paginatedTransactions };
+  }, [displayTransactions, displayBlocks, rowsPerPage, currentPage]);
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -526,11 +606,6 @@ export function AccountGroupDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
 
-  const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage)) : 1;
-  const paginatedTransactions = rowsPerPage > 0
-    ? displayTransactions.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
-    : displayTransactions;
-  
   const handleOpenNoteDialog = (accountId?: string) => {
     if (accounts.length === 1) {
         setNoteEntityId(accounts[0].id);
@@ -696,16 +771,14 @@ export function AccountGroupDetails({
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
-          {spendWiseEnabled && (
-            <Button
-              type="button"
-              className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
-              variant={spendWiseView ? "default" : "outline"}
-              onClick={handleSpendWiseViewToggle}
-            >
-              {spendWiseView ? "Statement" : "Spend wise"}
-            </Button>
-          )}
+          <Button
+            type="button"
+            className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
+            variant={spendWiseView ? "default" : "outline"}
+            onClick={handleSpendWiseViewToggle}
+          >
+            {spendWiseView ? "Statement" : "Spend wise"}
+          </Button>
           <Button
             className="flex-1 h-6 min-w-0 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium"
             onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}
@@ -983,16 +1056,14 @@ export function AccountGroupDetails({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
-              {spendWiseEnabled && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn("flex-shrink-0 h-10", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
-                  onClick={handleSpendWiseViewToggle}
-                >
-                  {spendWiseView ? "Statement" : "Spend wise"}
-                </Button>
-              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn("flex-shrink-0 h-10", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
+                onClick={handleSpendWiseViewToggle}
+              >
+                {spendWiseView ? "Statement" : "Spend wise"}
+              </Button>
               <Button variant="outline" size="sm" onClick={() => handleOpenNoteDialog()} className="flex-shrink-0 h-10">
                 <FilePlus className="mr-2 h-4 w-4" /> Add Note
               </Button>
@@ -1003,7 +1074,7 @@ export function AccountGroupDetails({
           </div>
         </div>
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim">
-          <div className={cn("py-4 min-w-0", spendWiseView && spendWiseEnabled && "p-[2px]")}>
+          <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"

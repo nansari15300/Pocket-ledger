@@ -47,6 +47,7 @@ import { format, startOfDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } from "@/components/ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { EditItemDialog } from "./EditItemDialog";
@@ -152,7 +153,7 @@ export default function ItemDetails({
   const { balanceMode } = useBalanceMode();
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);

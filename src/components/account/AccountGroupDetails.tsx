@@ -33,6 +33,7 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCalendarMonths } from "@/hooks/use-mobile";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 
 export function AccountGroupDetails({ 
   group,
@@ -59,7 +60,7 @@ export function AccountGroupDetails({
   const calendarMonths = useCalendarMonths();
   const { company } = useCompany();
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(['all']);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);

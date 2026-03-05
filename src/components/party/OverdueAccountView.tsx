@@ -5,6 +5,7 @@ import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { differenceInDays } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Table,
@@ -126,7 +127,7 @@ export function OverdueAccountView({
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0) : 0;
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [showNarration, setShowNarration] = useState(() => {
     if (typeof window === "undefined") return true;

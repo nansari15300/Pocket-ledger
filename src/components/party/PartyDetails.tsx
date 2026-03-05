@@ -58,6 +58,7 @@ import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { EditPartyDialog } from "@/components/party/EditPartyDialog";
@@ -226,7 +227,7 @@ export function PartyDetails({
     company?.notificationSettings?.approve?.onEntity !== false &&
     pendingApprovalCount > 0;
 
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);

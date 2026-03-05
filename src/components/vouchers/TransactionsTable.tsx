@@ -654,7 +654,7 @@ export function TransactionsTable({
             return <div key={`spacer-${blockIdx}`} className="shrink-0 w-full" style={{ height: 20 }} aria-hidden />;
           }
           if (block.type === "group") {
-            const groupKey = `group-${block.items.map((t: any) => t.id).join("-")}`;
+            const groupKey = `group-${block.items[0]?.id ?? block.items.map((t: any) => t.id).join("-")}`;
             return (
               <motion.div
                 key={groupKey}
@@ -860,7 +860,8 @@ export function TransactionsTable({
                       );
                     }
                     if (block.type === "group") {
-                      const groupKey = `group-${block.items.map((t: any) => t.id).join("-")}`;
+                      // Stable key by first item (payment_in) so date reorder doesn't remount — all cards animate same speed
+                      const groupKey = `group-${block.items[0]?.id ?? block.items.map((t: any) => t.id).join("-")}`;
                       const tableGroupCardClass = (colorIndex: number) =>
                         cn(
                           "rounded-xl overflow-hidden border-2 shadow-sm",
@@ -879,12 +880,7 @@ export function TransactionsTable({
                               layout
                               initial={false}
                               exit={{ transition: { duration: 0 } }}
-                              transition={{
-                                duration: rowAnimationDuration,
-                                ease: "easeInOut",
-                                layout: { duration: rowAnimationDuration, ease: "easeInOut" },
-                              }}
-                              style={{ willChange: "transform" }}
+                              transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                               className={tableGroupCardClass(block.colorIndex)}
                             >
                               <table className="w-full border-0 border-collapse">

@@ -18,6 +18,7 @@ import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
@@ -98,7 +99,7 @@ export function TaxGroupDetails({
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
   const taxesInGroup = useMemo(() => taxes.filter((t) => t.groupId === group.id), [taxes, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);

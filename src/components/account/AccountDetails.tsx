@@ -85,6 +85,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
 import { useTransactions } from "@/hooks/use-transactions";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter } from "next/navigation";
 import { Combobox } from "../ui/combobox";
@@ -130,7 +131,7 @@ export function AccountDetails({
   const router = useRouter();
   const { vouchers } = useVouchers();
 
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);

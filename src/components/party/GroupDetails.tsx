@@ -55,6 +55,7 @@ import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { EditGroupDialog } from "./EditGroupDialog";
 import { PartyFilterDropdown } from "./PartyFilterDropdown";
 import {
@@ -196,7 +197,7 @@ export function GroupDetails({
     can("approve_transactions") &&
     company?.notificationSettings?.approve?.on !== false &&
     company?.notificationSettings?.approve?.onEntity !== false;
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);

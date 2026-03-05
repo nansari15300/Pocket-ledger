@@ -49,6 +49,7 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { EditItemGroupDialog } from "./EditItemGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -136,7 +137,7 @@ export function ItemGroupDetails({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const openingModalRef = useRef(false);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);

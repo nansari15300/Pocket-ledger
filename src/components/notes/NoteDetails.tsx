@@ -8,6 +8,7 @@ import { Edit, FilePlus, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight,
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { ScrollArea } from "../ui/scroll-area";
 import { Badge } from "../ui/badge";
@@ -41,7 +42,7 @@ export function NoteDetails({
   const [isNoteDialogOpen, setIsNoteDialogOpen] = React.useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [showTitle, setShowTitle] = useState(true);
 

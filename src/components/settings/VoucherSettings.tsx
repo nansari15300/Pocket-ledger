@@ -110,6 +110,34 @@ const rateEditableSettingsSchema = z.object({
 
 const voucherPrefixSelectionSchema = voucherEditableSettingsSchema.partial();
 
+const ROLES_WITH_VOUCHER_CREATE = ["data-entry", "accountant", "editor", "manager", "owner"] as const;
+const ROLE_LABELS: Record<string, string> = {
+  "data-entry": "Data Entry",
+  accountant: "Accountant",
+  editor: "Editor",
+  manager: "Manager",
+  owner: "Owner",
+};
+
+export const REQUIRE_LINK_VOUCHER_KEYS = ["payment_out", "contra", "direct_expense"] as const;
+export const REQUIRE_LINK_VOUCHER_LABELS: Record<(typeof REQUIRE_LINK_VOUCHER_KEYS)[number], string> = {
+  payment_out: "Payment Out",
+  contra: "Contra",
+  direct_expense: "Direct Expense",
+};
+
+const requireLinkByRoleSchema = z.record(
+  z.string(),
+  z.union([
+    z.boolean(),
+    z.object({
+      payment_out: z.boolean(),
+      contra: z.boolean(),
+      direct_expense: z.boolean(),
+    }),
+  ])
+);
+
 const voucherSettingsSchema = z.object({
   autoVoucherNumbering: voucherNumberingSettingsSchema,
   allowVoucherNumberEditing: voucherEditableSettingsSchema,
@@ -118,6 +146,10 @@ const voucherSettingsSchema = z.object({
   enableVoucherPrefixSelection: voucherPrefixSelectionSchema,
   enableLinkPaymentToTxns: z.boolean(),
   spendWiseEnabled: z.boolean(),
+  /** Role + voucher-type: when Spend Wise is on, require Payment In link to save. */
+  requirePaymentLinkByRole: requireLinkByRoleSchema.optional(),
+  /** On opposite vouchers (Payment In, Contra in, Direct Income): when true, "Link for spend wise" is editable; when false, read-only. */
+  spendWiseOppositeVoucherEditable: z.boolean(),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
@@ -156,6 +188,11 @@ export function VoucherSettings() {
         },
         enableLinkPaymentToTxns: true,
         spendWiseEnabled: false,
+        spendWiseOppositeVoucherEditable: false,
+        requirePaymentLinkByRole: ROLES_WITH_VOUCHER_CREATE.reduce(
+          (acc, r) => ({ ...acc, [r]: { payment_out: true, contra: true, direct_expense: true } }),
+          {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
+        ),
     },
   });
 
@@ -191,6 +228,18 @@ export function VoucherSettings() {
         },
         enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns !== false,
         spendWiseEnabled: (company as any).spendWiseEnabled === true,
+        spendWiseOppositeVoucherEditable: (company as any).spendWiseOppositeVoucherEditable === true,
+        requirePaymentLinkByRole: (() => {
+          const raw = (company as any).requirePaymentLinkByRole || {};
+          const defaultPerRole = { payment_out: true, contra: true, direct_expense: true };
+          return ROLES_WITH_VOUCHER_CREATE.reduce((acc, r) => {
+            const v = raw[r];
+            if (typeof v === "boolean") acc[r] = { ...defaultPerRole, payment_out: v, contra: v, direct_expense: v };
+            else if (v && typeof v === "object") acc[r] = { ...defaultPerRole, ...v };
+            else acc[r] = { ...defaultPerRole };
+            return acc;
+          }, {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>);
+        })(),
       });
     }
   }, [company, form]);
@@ -232,6 +281,8 @@ export function VoucherSettings() {
       enableVoucherPrefixSelection: data.enableVoucherPrefixSelection,
       enableLinkPaymentToTxns: data.enableLinkPaymentToTxns,
       spendWiseEnabled: data.spendWiseEnabled,
+      spendWiseOppositeVoucherEditable: data.spendWiseOppositeVoucherEditable,
+      requirePaymentLinkByRole: data.requirePaymentLinkByRole,
       });
       toast({ title: "Success", description: "Voucher settings have been updated." });
     } catch (error) {
@@ -303,34 +354,17 @@ export function VoucherSettings() {
             {/* Transaction Settings */}
             <div className="space-y-4">
               <h3 className="text-lg font-medium border-b pb-2">Transaction Settings</h3>
-              <Card className="p-4">
-                <FormField
-                  control={form.control}
-                  name="enableLinkPaymentToTxns"
-                  render={({ field }: any) => (
-                    <FormItem className="flex flex-row items-center justify-between">
-                      <div>
-                        <FormLabel>Enable Link Payment to Txns</FormLabel>
-                        <FormDescription className="sr-only">
-                          Allow linking received payments to specific sale invoices.
-                        </FormDescription>
-                      </div>
-                      <FormControl>
-                        <Switch checked={field.value} onCheckedChange={field.onChange} />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-                {isCompanyOwner && (
+              <div className="space-y-4">
+                <Card className="p-4">
                   <FormField
                     control={form.control}
-                    name="spendWiseEnabled"
+                    name="enableLinkPaymentToTxns"
                     render={({ field }: any) => (
-                      <FormItem className="flex flex-row items-center justify-between mt-4">
+                      <FormItem className="flex flex-row items-center justify-between">
                         <div>
-                          <FormLabel>Spend Wise (Bank/Cash)</FormLabel>
-                          <FormDescription>
-                            When ON, Payment Out must be linked to Payment In: user chooses which Payment In(s) this spend is from. When OFF, Payment Out works as normal.
+                          <FormLabel>Enable Link Payment to Txns</FormLabel>
+                          <FormDescription className="sr-only">
+                            Allow linking received payments to specific sale invoices.
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -339,8 +373,114 @@ export function VoucherSettings() {
                       </FormItem>
                     )}
                   />
+                </Card>
+                {isCompanyOwner && (
+                  <>
+                    <Card className="p-4">
+                      <FormField
+                        control={form.control}
+                        name="spendWiseEnabled"
+                        render={({ field }: any) => (
+                          <FormItem className="flex flex-row items-center justify-between">
+                            <div>
+                              <FormLabel>Spend Wise (Bank/Cash)</FormLabel>
+                              <FormDescription>
+                                When ON, Payment Out must be linked to Payment In: user chooses which Payment In(s) this spend is from. When OFF, Payment Out works as normal.
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={(checked) => {
+                                  field.onChange(checked);
+                                  const allSame = ROLES_WITH_VOUCHER_CREATE.reduce(
+                                    (acc, r) => ({ ...acc, [r]: { payment_out: checked, contra: checked, direct_expense: checked } }),
+                                    {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
+                                  );
+                                  form.setValue("requirePaymentLinkByRole", allSame);
+                                }}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    </Card>
+                    <Card className="p-4">
+                      <FormField
+                        control={form.control}
+                        name="spendWiseOppositeVoucherEditable"
+                        render={({ field }: any) => (
+                          <FormItem className="flex flex-row items-center justify-between">
+                            <div>
+                              <FormLabel>Link for spend wise on opposite voucher (Payment In, Contra in, Direct Income)</FormLabel>
+                              <FormDescription>
+                                Read-only: only view which Payment Out / Contra / Direct Expense have linked to this voucher. Editable: can manage links from this voucher too (e.g. open Link Pay from Payment In).
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-muted-foreground">Read-only</span>
+                                <Switch checked={field.value} onCheckedChange={field.onChange} />
+                                <span className="text-sm text-muted-foreground">Editable</span>
+                              </div>
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    </Card>
+                    <Card className="p-4">
+                    <div className="space-y-4 pl-1 border-l-2 border-muted pl-4">
+                      <p className="text-sm font-medium">Require Payment In link (role + voucher type)</p>
+                      <FormDescription className="!mt-0">
+                        When ON, that role must link to Payment In to save. When OFF, they can save without linking. Set per voucher: Payment Out, Contra, Direct Expense.
+                      </FormDescription>
+                      {ROLES_WITH_VOUCHER_CREATE.map((role) => {
+                        const byRole = form.watch("requirePaymentLinkByRole") || {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>;
+                        const row = byRole[role];
+                        const payment_out = typeof row === "object" && row !== null ? row.payment_out === true : false;
+                        const contra = typeof row === "object" && row !== null ? row.contra === true : false;
+                        const direct_expense = typeof row === "object" && row !== null ? row.direct_expense === true : false;
+                        const update = (key: "payment_out" | "contra" | "direct_expense", v: boolean) => {
+                          const current = form.getValues("requirePaymentLinkByRole") || {};
+                          const prev = (current[role] && typeof current[role] === "object") ? (current[role] as { payment_out: boolean; contra: boolean; direct_expense: boolean }) : { payment_out: false, contra: false, direct_expense: false };
+                          const nextRow: { payment_out: boolean; contra: boolean; direct_expense: boolean } = {
+                            payment_out: key === "payment_out" ? v : prev.payment_out,
+                            contra: key === "contra" ? v : prev.contra,
+                            direct_expense: key === "direct_expense" ? v : prev.direct_expense,
+                          };
+                          form.setValue("requirePaymentLinkByRole", { ...current, [role]: nextRow });
+                        };
+                        return (
+                          <div key={role} className="space-y-2">
+                            <p className="text-sm font-medium text-muted-foreground">{ROLE_LABELS[role] ?? role}</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                                <FormLabel className="font-normal text-sm cursor-pointer">Payment Out</FormLabel>
+                                <FormControl>
+                                  <Switch checked={payment_out} onCheckedChange={(v) => update("payment_out", v)} />
+                                </FormControl>
+                              </FormItem>
+                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                                <FormLabel className="font-normal text-sm cursor-pointer">Contra</FormLabel>
+                                <FormControl>
+                                  <Switch checked={contra} onCheckedChange={(v) => update("contra", v)} />
+                                </FormControl>
+                              </FormItem>
+                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                                <FormLabel className="font-normal text-sm cursor-pointer">Direct Expense</FormLabel>
+                                <FormControl>
+                                  <Switch checked={direct_expense} onCheckedChange={(v) => update("direct_expense", v)} />
+                                </FormControl>
+                              </FormItem>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    </Card>
+                  </>
                 )}
-              </Card>
+              </div>
             </div>
 
             {/* Auto Numbering */}

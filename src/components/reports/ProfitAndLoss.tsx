@@ -26,6 +26,7 @@ import {
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { useCompany } from "@/hooks/useCompany";
+import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { useDate } from "@/hooks/useDate";
 import { openPrintDirect } from "@/lib/printDirect";
 import { cn } from "@/lib/utils";
@@ -222,7 +223,7 @@ export function ProfitAndLossPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [activeRow, setActiveRow] = useState<ProfitLossRow | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   

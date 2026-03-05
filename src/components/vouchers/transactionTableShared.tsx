@@ -731,11 +731,14 @@ export const TransactionRow = React.memo(
       !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
     );
 
+    const rowExitTransition = isRowAnimationEnabled && animateLayout
+      ? { transition: { duration: rowAnimationDuration, ease: "easeInOut" as const } }
+      : { transition: { duration: 0 } };
     const MainRow = (
       <motion.tr
         layout={animateLayout ? "position" : false}
         initial={false}
-        exit={{ transition: { duration: 0 } }}
+        exit={rowExitTransition}
         transition={
           isRowAnimationEnabled && animateLayout
             ? { duration: rowAnimationDuration, ease: "easeInOut" }
@@ -792,7 +795,7 @@ export const TransactionRow = React.memo(
       <motion.tr
         layout={animateLayout ? "position" : false}
         initial={false}
-        exit={{ transition: { duration: 0 } }}
+        exit={rowExitTransition}
         transition={
           isRowAnimationEnabled && animateLayout
             ? { duration: rowAnimationDuration, ease: "easeInOut" }

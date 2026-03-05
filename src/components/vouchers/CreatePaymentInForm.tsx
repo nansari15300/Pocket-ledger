@@ -286,6 +286,49 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const remainingToLink = Math.max(0, amountReceived - totalLinked);
 
   const showLinkedSection = voucherType === "payment_in" && payeeType === "party" && partyId && company?.enableLinkPaymentToTxns !== false;
+
+  const currentVoucherId = voucher?.id ?? savedVoucherId;
+  const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
+  const showSpendWiseOppositeSection = !!accountId && !!currentVoucherId && (voucherType === "payment_in" || voucherType === "direct_income");
+  const spendWiseLinkedToMeRows = useMemo(() => {
+    if (!showSpendWiseOppositeSection || !allVouchers?.length || !currentVoucherId || !accountId) return [];
+    const accId = accountId;
+    const outflows = allVouchers.filter(
+      (v: any) =>
+        !v.isDeleted &&
+        Array.isArray(v.linkedPaymentInIds) &&
+        v.linkedPaymentInIds.includes(currentVoucherId) &&
+        ((v.type === "payment_out" && v.accountId === accId) ||
+          (v.type === "direct_expense" && v.accountId === accId) ||
+          (v.type === "contra" && v.fromAccountId === accId))
+    );
+    return outflows.map((v: any) => {
+      const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
+      const amount = Number(v.total ?? v.amount ?? 0) || 0;
+      const amounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? v.linkedPaymentInAmounts : {};
+      const linked = amounts[currentVoucherId] != null ? Number(amounts[currentVoucherId]) : amount / (v.linkedPaymentInIds?.length || 1);
+      const typeLabel = v.type === "payment_out" ? "Payment Out" : v.type === "direct_expense" ? "Direct Expense" : "Contra";
+      let from = "—";
+      if (v.type === "contra") {
+        const acc = processedAccounts?.find((a: any) => a.id === v.fromAccountId);
+        from = acc?.accountName ?? "—";
+      } else {
+        const p = processedParties?.find((x: any) => x.id === v.partyId);
+        const s = processedStaff?.find((x: any) => x.id === v.staffId);
+        const e = expenseAccounts?.find((x: any) => x.id === v.expenseAccountId || x.id === v.toAccountId);
+        from = p?.name ?? s?.name ?? e?.name ?? "—";
+      }
+      return {
+        id: v.id,
+        voucherNumber: v.voucherNumber ?? "—",
+        date,
+        amount,
+        linked,
+        typeLabel,
+        from,
+      };
+    }).sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+  }, [showSpendWiseOppositeSection, allVouchers, currentVoucherId, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts]);
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.[voucherType] ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.[voucherType] ?? false;
@@ -993,7 +1036,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
-                              <FormLabel className="text-xs truncate">From (Party)</FormLabel>
+                              <FormLabel className="text-xs truncate">{deleteDisabledWhenLinked ? "Received From (Party)" : "From (Party)"}</FormLabel>
                               {payeeBalance !== null && payeeBalance !== undefined && (
                                 <FormLabel className={cn("text-[10px] font-semibold mr-[2px] shrink-0", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                   {formatCurrencyForPrint(payeeBalance, { noSuffix: true, noAnimation: true })} {payeeBalance >= 0 ? 'Dr' : 'Cr'}
@@ -1030,7 +1073,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
-                              <FormLabel className="text-xs truncate">From (Staff)</FormLabel>
+                              <FormLabel className="text-xs truncate">{deleteDisabledWhenLinked ? "Received From (Staff)" : "From (Staff)"}</FormLabel>
                               {payeeBalance !== null && payeeBalance !== undefined && (
                                 <FormLabel className={cn("text-[10px] font-semibold mr-[2px] shrink-0", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                   {formatCurrencyForPrint(payeeBalance, { noSuffix: true, noAnimation: true })} {payeeBalance >= 0 ? 'Dr' : 'Cr'}
@@ -1067,7 +1110,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
-                              <FormLabel className="text-xs truncate">From (Tax)</FormLabel>
+                              <FormLabel className="text-xs truncate">{deleteDisabledWhenLinked ? "Received From (Tax)" : "From (Tax)"}</FormLabel>
                             </div>
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
@@ -1099,7 +1142,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         render={({ field }: any) => (
                           <FormItem className="min-w-0">
                             <div className="flex justify-between items-baseline mb-1 min-w-0">
-                              <FormLabel className="text-xs truncate">From (Income)</FormLabel>
+                              <FormLabel className="text-xs truncate">{deleteDisabledWhenLinked ? "Received From (Income)" : "From (Income)"}</FormLabel>
                             </div>
                             <div className="min-w-0 w-full overflow-hidden">
                               <Combobox
@@ -1168,7 +1211,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem>
                           <div className="flex justify-between items-baseline">
-                            <FormLabel>From (Party)</FormLabel>
+                            <FormLabel>{deleteDisabledWhenLinked ? "Received From (Party)" : "From (Party)"}</FormLabel>
                             {payeeBalance !== null && payeeBalance !== undefined && (
                               <FormLabel className={cn("text-xs font-semibold", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                 {payeeBalance >= 0 
@@ -1205,7 +1248,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem>
                            <div className="flex justify-between items-baseline">
-                                <FormLabel>From (Staff)</FormLabel>
+                                <FormLabel>{deleteDisabledWhenLinked ? "Received From (Staff)" : "From (Staff)"}</FormLabel>
                                 {payeeBalance !== null && payeeBalance !== undefined && (
                                     <FormLabel className={cn("text-xs font-semibold", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                        {payeeBalance >= 0 
@@ -1242,7 +1285,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem>
                           <div className="flex justify-between items-baseline">
-                            <FormLabel>From (Tax)</FormLabel>
+                            <FormLabel>{deleteDisabledWhenLinked ? "Received From (Tax)" : "From (Tax)"}</FormLabel>
                             {payeeBalance !== null && payeeBalance !== undefined && (
                                 <FormLabel className={cn("text-xs font-semibold", payeeBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                    {payeeBalance >= 0 
@@ -1278,7 +1321,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       name="incomeAccountId"
                       render={({ field }: any) => (
                         <FormItem>
-                          <FormLabel>From (Income)</FormLabel>
+                          <FormLabel>{deleteDisabledWhenLinked ? "Received From (Income)" : "From (Income)"}</FormLabel>
                             <Combobox
                                 options={expenseAccounts.map(e => ({ value: e.id, label: e.name }))}
                                 value={field.value}
@@ -1364,25 +1407,77 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   );
                 }}
               />
-              <div className={cn("grid gap-4", showLinkedSection ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
-                <FormField
-                  control={form.control}
-                  name="narration"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Narration</FormLabel>
-                      <FormControl>
-                        <Textarea placeholder="Additional details..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+              {/* PC: Link for spend wise + Linked to in one row; then Narration + Attach Files in one row */}
+              <div className={cn("grid gap-4", (showSpendWiseOppositeSection || showLinkedSection) ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
+                {showSpendWiseOppositeSection && (
+                  <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                    <div className="flex items-center gap-2 font-medium min-w-0">
+                      <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">Link for spend wise</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Payment Out / Contra / Direct Expense that have linked to this voucher.</p>
+                    {spendWiseLinkedToMeRows.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No outflow vouchers have linked to this voucher yet.</p>
+                    ) : (
+                      <div className="overflow-x-auto -mx-1 min-w-0">
+                        <table className="w-full text-sm border-collapse min-w-[480px]">
+                          <thead>
+                            <tr className="border-b bg-muted/50">
+                              <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                              <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                              <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
+                              <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                              <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {spendWiseLinkedToMeRows.map((row) => (
+                              <tr key={row.id} className="border-b last:border-b-0">
+                                <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                <td className="p-2 whitespace-nowrap">{row.from}</td>
+                                <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
+                                <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t space-y-1 text-sm min-w-0">
+                      <div className="flex justify-between font-medium">
+                        <span>Current voucher balance</span>
+                        <span className={cn(
+                          amountReceived - spendWiseLinkedToMeRows.reduce((s, r) => s + r.linked, 0) <= 0 && spendWiseLinkedToMeRows.length > 0
+                            ? "text-green-600 font-semibold"
+                            : (amountReceived - spendWiseLinkedToMeRows.reduce((s, r) => s + r.linked, 0)) >= 0
+                              ? "text-green-600"
+                              : "text-muted-foreground"
+                        )}>
+                          {(() => {
+                            const bal = amountReceived - spendWiseLinkedToMeRows.reduce((s, r) => s + r.linked, 0);
+                            return bal <= 0 && spendWiseLinkedToMeRows.length > 0
+                              ? "Settled"
+                              : `${formatCurrency(Math.max(0, bal), { noSuffix: true, noAnimation: true })} Dr`;
+                          })()}
+                        </span>
+                      </div>
+                    </div>
+                    {spendWiseOppositeEditable && (
+                      <div className="pt-2 border-t flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => sonnerToast.info("Edit the Payment Out / Contra / Direct Expense voucher to change which vouchers link to this.")}>
+                          <Link2 className="h-4 w-4 mr-2" />
+                          Manage links
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {showLinkedSection && (
-                  <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
+                  <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0">
                     <div className="flex items-center gap-2 font-medium">
                       <Link2 className="h-4 w-4 text-muted-foreground" />
-                      <span>Linked to</span>
+                      <span>Link for bill wise</span>
                     </div>
                     {linkedToRows.length === 0 ? (
                       <p className="text-sm text-muted-foreground">No sales linked to this payment.</p>
@@ -1427,6 +1522,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           {remainingToLink === 0 && totalLinked > 0 ? "Settled" : formatCurrency(remainingToLink, { noSuffix: true, noAnimation: true })}
                         </span>
                       </div>
+                      {(payeeType === "party" || payeeType === "staff" || payeeType === "tax") && payeeBalance !== null && payeeBalance !== undefined && (
+                        <div className="flex justify-between font-medium">
+                          <span>Closing balance</span>
+                          <span className={cn((payeeBalance - amountReceived) >= 0 ? "text-green-600" : "text-red-600")}>
+                            {formatCurrency(payeeBalance - amountReceived, { noSuffix: true, noAnimation: true })} {(payeeBalance - amountReceived) >= 0 ? "Dr" : "Cr"}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2 mt-2 flex-wrap">
                         {can('add_link') && (
                           <>
@@ -1445,8 +1548,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 )}
               </div>
-               <FormItem>
-                <FormLabel>Attach Files (Optional)</FormLabel>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="narration"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Narration</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="Additional details..." {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormItem>
+                  <FormLabel>Attach Files (Optional)</FormLabel>
                 <RestrictedFileUploader>
                   <div className="flex flex-wrap gap-4">
                   {files.map((file, index) => (
@@ -1490,6 +1607,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </RestrictedFileUploader>
               </FormItem>
+            </div>
             </div>
           </ScrollArea>
 
