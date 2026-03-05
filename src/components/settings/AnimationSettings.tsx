@@ -201,7 +201,6 @@ export function AnimationSettings() {
                           layout
                           initial={false}
                           exit={{ transition: { duration: 0 } }}
-
                           transition={{ 
                             duration: activeSettings.rows.enabled === true ? activeSettings.rows.duration : 0,
                             ease: "easeInOut"

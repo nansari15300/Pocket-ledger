@@ -516,10 +516,90 @@ export function TransactionsTable({
           key={key}
           className={cn(
             "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
+            context === "daybook" && "rounded-lg",
+            swBorder,
+            isPendingApproval
+              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
+              : "bg-card hover:bg-muted/30"
+          )}
+          onClick={() => onRowClick?.(t)}
+        >
+          <div className="flex justify-between items-start gap-2 min-w-0">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <p className="font-bold text-sm truncate">{titleLabel}</p>
+            </div>
+            <p className={cn("font-bold text-sm shrink-0", isCredit ? "text-green-600" : "text-red-600")}>
+              {amount > 0 ? formatAmountOrQty(amount) : "-"}
+            </p>
+          </div>
+          <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
+            <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
+              <span className="font-semibold">Narration : </span>
+              {t.narration || "—"}
+            </p>
+            {showStatusInCard && (statusLabel || statusDetailText) ? (
+              <div className="shrink-0 flex flex-col items-end gap-0.5">
+                {statusLabel ? (
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-xs font-semibold h-[22px]",
+                      useNeutralStatus ? "text-muted-foreground border-muted-foreground/40" : isPaidStatus ? "text-green-600 border-green-600/50" : isUnpaidStatus ? "text-red-600 border-red-600/50" : "text-muted-foreground border-muted-foreground/40"
+                    )}
+                  >
+                    {statusLabel}
+                  </Badge>
+                ) : null}
+                {statusDetailText ? <span className="text-[10px] text-muted-foreground">{statusDetailText}</span> : null}
+              </div>
+            ) : !hideBalanceColumn ? (
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "text-xs font-semibold px-1.5 py-0 whitespace-nowrap shrink-0",
+                  balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                )}
+              >
+                Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="flex justify-between items-end gap-2 min-w-0 mt-0.5">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              {groupAccountName ? <p className="text-xs text-muted-foreground truncate font-medium">Account: {groupAccountName}</p> : null}
+              <p className="text-xs text-muted-foreground">
+                {d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}
+                {d ? ` • ${format(d, "h:mm a")}` : ""}
+              </p>
+            </div>
+            <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
+              {showStatusInCard && !hideBalanceColumn && (
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    "text-xs font-semibold px-1.5 py-0 whitespace-nowrap",
+                    balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
+                  )}
+                >
+                  Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+                </Badge>
+              )}
+              <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {userName}</p>
+            </div>
+          </div>
+        </Card>
+      );
+    };
+
+    const groupContainerClass = (colorIndex: number) => {
+      const border = colorIndex === 1 ? "border-2 border-green-500" : colorIndex === 2 ? "border-2 border-pink-500" : "border-2 border-blue-500";
+      const bg = colorIndex === 1 ? "bg-green-50 dark:bg-green-950/30" : colorIndex === 2 ? "bg-pink-50 dark:bg-pink-950/30" : "bg-blue-50 dark:bg-blue-950/30";
+      return cn("rounded-xl overflow-hidden", border, bg);
+    };
+
     // Daybook/Recent: horizontal gap comes from parent (DaybookReport/dashboard); other contexts use px-0.5
       return (
       <div className={cn("w-full min-w-0 space-y-px pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
-
         {showOpeningBalance && (
           <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex justify-between items-start gap-2 min-w-0">
@@ -602,7 +682,6 @@ export function TransactionsTable({
             >
               {renderMobileCard(block.item, block.item.id, false)}
             </motion.div>
-
           );
         })}
       </div>
@@ -650,7 +729,6 @@ export function TransactionsTable({
                 layout
                 initial={false}
                 exit={{ transition: { duration: 0 } }}
-
                 transition={
                   isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }
                 }
@@ -719,7 +797,6 @@ export function TransactionsTable({
               transactions.map((t: any, rowIndex: number) =>
                 (t as any)._spendWiseSpacer ? (
                   <tr key={`spacer-${rowIndex}`} aria-hidden="true">
-
                     <td
                       colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
                       className="p-0 m-0 h-5 min-h-5 max-h-5 border-0 bg-transparent align-middle"
@@ -728,10 +805,9 @@ export function TransactionsTable({
                   </tr>
                 ) : (
                 <TransactionRow
-                    key={(t as any).id}
+                    key={`row-${rowIndex}`}
                     transaction={t}
                     animateLayout={true}
-
                     isSpendWiseChild={!!(t as any)._spendWiseChild}
                     isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
                     isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}

@@ -6,7 +6,6 @@ import { StaffGroupDetails } from '@/components/staff/StaffGroupDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';

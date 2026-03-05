@@ -46,7 +46,6 @@ import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import AdCalendar from "@/components/ui/ad-calendar";
-
 import {
   Select,
   SelectContent,
@@ -82,7 +81,6 @@ import { COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
-
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -141,6 +139,240 @@ export function PayeeDetails({
     useDate();
   const { vouchers, processedParties } = useVouchers();
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const party = useMemo(() => {
+    if (!processedParties || !initialParty) return initialParty;
+    const fromStore = processedParties.find(p => p.id === initialParty.id);
+    return fromStore ? { ...fromStore, type: initialParty.type } : initialParty;
+  }, [processedParties, initialParty]);
+
+  const entityType = useMemo(() => {
+      const type = party.type || 'Party'; 
+      if (type === 'Staff') return 'staff';
+      if (type === 'Tax') return 'tax';
+      if (type === 'Income' || type === 'Expense') return 'expense';
+      if (type === 'Other') return 'other';
+      return 'party'; 
+  }, [party]);
+
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
+  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
+  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+  
+  const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
+  const DEFAULT_VISIBLE_COLUMNS: VisibleColumns = {
+    date: true,
+    type: true,
+    voucherNo: true,
+    user: true,
+    dr: true,
+    cr: true,
+    status: true,
+    runningBalance: true,
+  };
+  
+  const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
+    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
+    try {
+      const saved = sessionStorage.getItem(COLUMN_VISIBILITY_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as VisibleColumns;
+        return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
+      }
+    } catch (_) {}
+    return DEFAULT_VISIBLE_COLUMNS;
+  });
+  
+  const handleColumnVisibilityChange = (key: TransactionColumnKey, checked: boolean) => {
+    const next = { ...visibleColumns, [key]: checked };
+    setVisibleColumns(next);
+    sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
+  };
+  
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  useEffect(() => {
+    setTempDateRange(dateRange);
+  }, [dateRange]);
+
+  const handleShowNarrationChange = (checked: boolean) => {
+    setShowNarration(checked);
+    sessionStorage.setItem("showNarration", String(checked));
+  };
+  
+  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = 
+    useTransactions(party, entityType, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, undefined, userNames);
+
+  const handleEditVoucher = (voucher: any) => {
+    setSelectedVoucher(voucher);
+    setIsVoucherDialogOpen(true);
+  };
+
+  const isFilterActive =
+    dateRange !== undefined || Object.values(filters).some((v) => v);
+
+  const clearFilters = () => {
+    onDateRangeChange(undefined);
+    setFilters({});
+  };
+  
+  const totalPages = rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
+  const paginatedTransactions = rowsPerPage > 0 ? processedTransactions.slice(
+      (currentPage - 1) * rowsPerPage,
+      currentPage * rowsPerPage
+  ) : processedTransactions;
+
+  const buildDateRangeText = () => {
+    if (!dateRange?.from) return "All Time";
+    const from = dateRange.from;
+    const to = dateRange.to || dateRange.from;
+    const fromAD = formatDate(from);
+    const toAD = formatDate(to);
+    const fromBS = formatDateBS(from);
+    const toBS = formatDateBS(to);
+    if (dateSystem === 'AD') return `AD: ${fromAD} to ${toAD}`;
+    else if (dateSystem === 'BS') return `BS: ${fromBS} to ${toBS}`;
+    else return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
+  };
+
+  const handlePrintStatement = (billWise: boolean = false) => {
+    if (!company) return Promise.resolve();
+    return openPrintDirect({
+      company: {
+        name: company.name,
+        pan: company.pan,
+        phone: company.phone,
+        address: company.address,
+        decimalPlaces: company.decimalPlaces,
+        showDrCr: company.showDrCr,
+        showCurrencySymbol: company.showCurrencySymbol,
+        logoUrl: company.logoUrl,
+      },
+      title: `${party.type || 'Party'} Statement: ${party.name}`,
+      context: entityType,
+      contextId: party.id,
+      dateSystem: dateSystem,
+      dateRangeText: buildDateRangeText(),
+      vouchersCount: processedTransactions.length,
+      openingBalance: openingBalanceForPeriod,
+      transactions: processedTransactions,
+      showNarration: showNarration,
+      journalAccountNames: journalAccountNames,
+      billWise: billWise,
+    }, true);
+  };
+
+  const { balanceMode } = useBalanceMode();
+  const handlePrint = () => {
+    setTimeout(async () => {
+      try {
+        await handlePrintStatement(balanceMode === "bill_wise");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Print failed. Please try again.");
+      }
+    }, 200);
+  };
+  
+  if(!party) return null;
+
+  const transactionDates = useMemo(() => {
+    if (!party || !passedTransactions) return [];
+    return passedTransactions.map((t: any) => {
+      if (t.date) {
+        const d = typeof t.date === 'string' ? new Date(t.date) : t.date.toDate();
+        return startOfDay(d);
+      }
+      return null;
+    }).filter(Boolean) as Date[];
+  }, [party, passedTransactions]);
+
+  return (
+    <>
+      <div className="h-full flex flex-col overflow-hidden">
+        {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side */}
+        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
+            {/* Part 1: account name through balance — single line, no wrap */}
+            <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
+              {isMobile && onBack && (
+                <Button variant="ghost" size="icon" onClick={onBack} className="flex-shrink-0">
+                  <ArrowLeft className="h-5 w-5" />
+                </Button>
+              )}
+              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
+                <AvatarImage src={party.fileUrl} alt={party.name} />
+                <AvatarFallback className="bg-muted text-muted-foreground">
+                  {getEntityIcon(party.type)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex items-center gap-2 flex-nowrap min-w-0">
+                <h2 className="text-xl font-semibold truncate">{party.name}</h2>
+                {party.type === 'Party' && party.id !== 'all' && (
+                  <EditPartyDialog
+                    party={party}
+                    onPartyUpdated={onPartyUpdated}
+                    onPartyDeleted={() => onPartyDeleted(party.id)}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </EditPartyDialog>
+                )}
+                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                  {formatCurrency(closingBalance, { showDrCr: true })}
+                </div>
+              </div>
+            </div>
+            {/* Part 2: date range, Add Note, print — single line, no wrap */}
+            <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                <BsDatePicker
+                  isRange
+                  valueAD={dateRange}
+                  onChangeAD={(range) => onDateRangeChange(range as DateRange | undefined)}
+                  transactionDates={transactionDates}
+                  className="w-auto"
+                />
+              )}
+              {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                <Popover open={isDesktopCalendarOpen} onOpenChange={setIsDesktopCalendarOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="date"
+                      variant={"outline"}
+                      className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {dateRange?.from ? (
+                        dateRange.to ? (
+                          <>
+                            {format(dateRange.from, "LLL dd, y")} -{" "}
+                            {format(dateRange.to, "LLL dd, y")}
+                          </>
+                        ) : (
+                          format(dateRange.from, "LLL dd, y")
+                        )
+                      ) : (
+                        <span>Pick a date range</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
                       valueAD={tempDateRange}
                       isRange
@@ -162,7 +394,6 @@ export function PayeeDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
-
                     />
                   </PopoverContent>
                 </Popover>

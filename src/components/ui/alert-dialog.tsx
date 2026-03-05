@@ -13,7 +13,6 @@ function AlertDialog(props: React.ComponentProps<typeof AlertDialogPrimitive.Roo
   return <AlertDialogPrimitive.Root {...props} />
 }
 
-
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 
 const AlertDialogPortal = AlertDialogPrimitive.Portal

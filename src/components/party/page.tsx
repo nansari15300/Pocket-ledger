@@ -40,7 +40,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
 
-
 export default function PartyPage() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();

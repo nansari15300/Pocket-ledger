@@ -66,7 +66,6 @@ export function StaffList({
                   layout
                   initial={false}
                   exit={{ transition: { duration: 0 } }}
-
                   transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0, ease: "easeInOut" }}
                 >
                   <Card

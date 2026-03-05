@@ -13,7 +13,6 @@ import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useCompany } from "@/hooks/useCompany";
@@ -38,7 +37,6 @@ import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
-
 import { Combobox } from "../ui/combobox";
 import {
   Drawer,
@@ -112,6 +110,100 @@ export function StaffGroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const openingModalRef = useRef(false);
+  const lastDesktopClickRef = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
+
+  useEffect(() => {
+    setTempDateRange(dateRange);
+  }, [dateRange]);
+
+  let { openingBalanceForPeriod, processedTransactions, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(
+    { ...group, items: staff },
+    "group",
+    dateRange,
+    undefined,
+    processedStaff,
+    undefined,
+    undefined,
+    filters,
+    undefined,
+    undefined,
+    userNames
+  );
+
+  const transactionDates = useMemo(() => {
+    const dates = new Set<number>();
+    processedTransactions.forEach((v: any) => {
+      const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+      if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
+        dates.add(startOfDay(dateValue).getTime());
+      }
+    });
+    return Array.from(dates).map((d) => new Date(d));
+  }, [processedTransactions]);
+
+  const isFilterActive = dateRange !== undefined || Object.values(filters).some((v) => v);
+
+  const clearFilters = () => {
+    onDateRangeChange(undefined);
+    setTempDateRange(undefined);
+    setFilters({});
+  };
+
+  const handleEditVoucher = (voucher: any) => {
+    openingModalRef.current = true;
+    setSelectedVoucher(voucher);
+    openModalInUrl();
+    setIsVoucherDialogOpen(true);
+  };
+
+  const handleTransactionOpen = useCallback(
+    (voucher: any) => {
+      if (isMobile) {
+        handleEditVoucher(voucher);
+        return;
+      }
+      const now = Date.now();
+      const txKey =
+        voucher?.id ||
+        `${voucher?.voucherNumber || ""}-${voucher?.type || ""}-${voucher?.date?.seconds || voucher?.date || ""}`;
+
+      if (txKey && lastDesktopClickRef.current.id === txKey && now - lastDesktopClickRef.current.at < 500) {
+        lastDesktopClickRef.current = { id: null, at: 0 };
+        handleEditVoucher(voucher);
+        return;
+      }
+      lastDesktopClickRef.current = { id: txKey, at: now };
+    },
+    [isMobile]
+  );
+
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  const anyMobilePopupOpen = isMobile && (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen);
+
+  const openModalInUrl = useCallback(() => {
+    if (!isMobile || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("modal", "1");
+    params.set("modalts", String(Date.now()));
+    router.push(`${pathname}?${params.toString()}`);
+  }, [isMobile, pathname, searchParams, router]);
+
+  const closeModalInUrl = useCallback(() => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("modal");
+    params.delete("modalts");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }, [pathname, searchParams, router]);
+
+  const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -313,7 +405,6 @@ export function StaffGroupDetails({
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -381,8 +472,32 @@ export function StaffGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
+            <div className="pb-24">
+            <TransactionsTable
+              transactions={mobileTransactionsToShow}
+              context="group"
+              contextId={group.id}
+              groupEntityType="staff"
+              openingBalance={openingBalanceForPeriod}
+              openingBalanceOutstanding={openingBalanceOutstanding}
+              openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceActions={undefined}
+              showNarration={showNarration}
+              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+              journalAccountNames={journalAccountNames}
+              accountNames={accountNamesMap}
+              userNames={userNames}
+              onRowClick={handleTransactionOpen}
+              filters={filters}
+              setFilters={setFilters}
+              activeFilter={activeFilter}
+              setActiveFilter={setActiveFilter}
+              periodDr={periodDr}
+              periodCr={periodCr}
+              closingBalance={closingBalance}
+              scrollOnlyTransactions
+            />
             </div>
-
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -468,7 +583,6 @@ export function StaffGroupDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
-
                     />
                   </div>
                 )}
@@ -649,7 +763,6 @@ export function StaffGroupDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
-
                     />
                   </PopoverContent>
                 </Popover>

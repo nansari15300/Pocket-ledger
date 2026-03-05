@@ -7,7 +7,6 @@ import { DateProvider } from "@/hooks/useDate";
 import { VoucherProvider } from "@/hooks/useVouchers";
 import { BalanceModeProvider } from "@/contexts/BalanceModeContext";
 import { DialogBackHandlerProvider } from "@/contexts/DialogBackHandlerContext";
-
 import { FirebaseErrorListener } from "@/components/FirebaseErrorListener";
 import { PrintLogoPreloader } from "@/components/PrintLogoPreloader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -36,7 +35,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
                                 </TooltipProvider>
                             </VoucherProvider>
                         </DialogBackHandlerProvider>
-
                     </BalanceModeProvider>
                 </DateProvider>
             </CompanyProvider>

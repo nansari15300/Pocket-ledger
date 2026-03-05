@@ -36,7 +36,6 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { Printer } from "lucide-react";
 import { PrintOptionsDialog } from "@/components/ui/PrintOptionsDialog";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { startOfDay, endOfDay } from "date-fns";
 
 /**

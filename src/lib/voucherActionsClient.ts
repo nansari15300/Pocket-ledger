@@ -306,7 +306,6 @@ export async function saveVoucher(
           url: m.url,
           storagePath: m.newPath ?? "",
           name: m.newPath ? m.newPath.split("/").pop() : "",
-
         }));
       }
     }

@@ -6,7 +6,6 @@ import { GroupDetails as DesktopGroupDetails } from '@/components/party/GroupDet
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc, collection, query, getDocs, where } from 'firebase/firestore';

@@ -37,7 +37,6 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import usePermissions from "@/hooks/usePermissions";
 

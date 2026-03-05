@@ -5,7 +5,6 @@ import { AccountDetails as DesktopAccountDetails } from '@/components/bank-cash/
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';

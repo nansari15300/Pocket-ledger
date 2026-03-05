@@ -18,7 +18,6 @@ import { PermissionButton } from "@/components/permission";
 import { useRouter } from "next/navigation";
 import { Users } from "lucide-react";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 

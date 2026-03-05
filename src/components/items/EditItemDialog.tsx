@@ -595,7 +595,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreateItemDialog / CreatePartyDialog. */}
         <DialogContent
             className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-4xl sm:grid sm:flex-none sm:px-6"
-
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
@@ -607,7 +606,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           <div className="overflow-y-auto min-h-0 flex-1 pr-1 sm:flex-none sm:overflow-visible">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
-
                 <Tabs value={itemType} onValueChange={(v) => form.setValue('type', v as "item" | "service")}>
                 <TabsList>
                   <TabsTrigger value="item">Item</TabsTrigger>
@@ -676,7 +674,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 <FormLabel className="text-base font-semibold">Unit Conversions</FormLabel>
                 <div className="w-full overflow-x-auto overflow-y-visible -mx-1 px-1">
                 <div className="space-y-2 min-w-[560px] pr-2">
-
                 {fields.map((field, index) => {
                     const isLastRow = index === fields.length - 1;
                     return (
@@ -728,8 +725,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         </div>
                     )
                 })}
+                </div>
+                </div>
+                <Button 
+                    type="button" 
+                    size="sm" 
+                    variant="outline" 
                     className="mt-2"
-
                      onClick={() => {
                         const lastUnit = fields.length > 0 ? form.getValues(`unitConversions.${fields.length - 1}.toUnit`) : "";
                         append({ fromUnit: lastUnit, toUnit: "", conversionFactor: 1 });
@@ -742,7 +744,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             {/* Purchase Price, Purchase Unit Prices, Sale Price, Sale Unit Prices: mobile = Purchase Price then Purchase Unit Prices then Sale then Sale Unit Prices; PC = side-by-side (do not remove order classes). */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                <div className="order-1 sm:order-1 space-y-4 border p-4 rounded-md">
-
                    <div className="space-y-2">
                         <FormLabel>Purchase Price</FormLabel>
                         <div className="grid grid-cols-2 gap-2">
@@ -756,7 +757,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     </div>
                </div>
                 <div className="order-3 sm:order-2 space-y-4 border p-4 rounded-md">
-
                     <div className="space-y-2">
                         <FormLabel>Sale Price</FormLabel>
                         <div className="grid grid-cols-2 gap-2">
@@ -770,7 +770,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                    </div>
                </div>
                 <ScrollArea className="order-2 sm:order-3 w-full">
-
                     <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
                         <FormLabel className="text-base font-semibold">Purchase Unit Prices</FormLabel>
                         <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
@@ -791,7 +790,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     <ScrollBar orientation="horizontal"/>
                 </ScrollArea>
                  <ScrollArea className="order-4 sm:order-4 w-full">
-
                     <div className="space-y-2 border p-4 rounded-md min-w-[500px]">
                         <FormLabel className="text-base font-semibold">Sale Unit Prices</FormLabel>
                          <div className="grid grid-cols-[1fr_1fr_1fr_1fr] gap-x-2 gap-y-2 items-center pr-4">
@@ -819,7 +817,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 {/* Opening Stock container: horizontal scroll when fields overflow on small screens (do not remove overflow-x-auto). */}
                 <div className="w-full overflow-x-auto overflow-y-visible -mx-1 px-1">
                 <div className="min-w-[520px] space-y-4">
-
                 <div className="flex items-center gap-4">
                     <FormLabel className="text-base font-semibold">Opening Stock</FormLabel>
                     <FormField
@@ -922,8 +919,46 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         <FormControl><Input type="number" value={openingStockAmount.toFixed(2)} readOnly className="h-9 bg-muted"/></FormControl>
                     </FormItem>
                  </div>
+                </div>
+                </div>
+                  <FormItem>
+                    <FormLabel>Attach Files (Optional)</FormLabel>
+                    {!canAddAvatar ? (
+                      <p className="text-xs text-muted-foreground">
+                        Upgrade plan to add or change files.{" "}
+                        <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Click here to upgrade</Link>
+                      </p>
+                    ) : (
+                    <RestrictedFileUploader>
+                      <div className="flex flex-wrap gap-4">
+                        {files.map((file, index) => (
+                          <FilePreview key={index} file={file} onRemove={() => removeFile(index)} />
+                        ))}
+                        {files.length < 3 && (
+                          <FormControl>
+                            <div 
+                              className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              onClick={() => fileInputRef.current?.click()}
+                            >
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1">Add File</span>
+                              <Input 
+                                type="file" 
+                                className="hidden"
+                                ref={fileInputRef}
+                                onChange={handleFileChange}
+                                accept="image/*,application/pdf"
+                                multiple
+                              />
+                            </div>
+                          </FormControl>
+                        )}
+                      </div>
+                    </RestrictedFileUploader>
+                    )}
+                  </FormItem>
+              </div>
                 <div className="space-y-2 border p-4 rounded-md">
-
                     <FormLabel className="text-base font-semibold">Opening Stock Summary</FormLabel>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 items-center pr-4">
                        <FormLabel>Unit</FormLabel>
@@ -938,7 +973,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 </div>
             </div>
             </div>
-
 
               <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end pt-4 border-t">
                 <DialogClose asChild>
@@ -972,7 +1006,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             </form>
           </Form>
           </div>
-
         </DialogContent>
       </Dialog>
       

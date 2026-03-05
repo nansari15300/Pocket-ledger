@@ -6,7 +6,6 @@ import { ExpenseGroupDetails as DesktopExpenseGroupDetails } from '@/components/
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { useIsMobile } from '@/hooks/use-mobile';

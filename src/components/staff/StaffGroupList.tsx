@@ -64,7 +64,6 @@ export function StaffGroupList({
                   layout
                   initial={false}
                   exit={{ transition: { duration: 0 } }}
-
                   transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                   <div
@@ -125,7 +124,6 @@ export function StaffGroupList({
             <div className="text-center text-muted-foreground p-8">
               No staff groups found.
             </div>
-
           )}
         </ul>
       </ScrollArea>

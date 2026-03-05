@@ -13,7 +13,6 @@ import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
 import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, Layers, BarChart2 } from "lucide-react";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
-
 import { startOfMonth, endOfMonth, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -45,7 +44,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 export default function ContraReportPage() {
     const { vouchers, loading, processedAccounts } = useVouchers();
     const isMobile = useIsMobile();
-
     const { company, companyId } = useCompany();
     const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
     const router = useRouter();
@@ -463,7 +461,6 @@ export default function ContraReportPage() {
             </header>
             {/* Mobile: no pb-20 so scroll extends to footer; inner pb-24 so last row clears fixed footer */}
             <main className={cn("p-4 space-y-4 flex-1 flex flex-col min-h-0", isMobile ? "overflow-y-auto" : "pb-20")}>
-
                 {selectedAccountId !== 'all' && (
                 <div className="grid grid-cols-3 gap-2 text-center">
                     <Card className="p-2"><CardTitle className="text-sm font-medium text-muted-foreground">Balance</CardTitle><p className={cn("font-semibold", finalData.closing >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(finalData.closing, {showDrCr: true})}</p></Card>
@@ -515,7 +512,6 @@ export default function ContraReportPage() {
                                     setActiveFilter={setActiveFilter}
                                 />
                         )}
-
                     </>
                  )}
             </main>
@@ -556,7 +552,6 @@ export default function ContraReportPage() {
                               mode="range"
                               defaultMonth={dateRange?.from}
                               selected={asCalendarRange(dateRange)}
-
                               onSelect={(range: DateRange | undefined) => {
                                   setDateRange(range);
                                   if (range?.from && range.to) {

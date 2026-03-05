@@ -367,7 +367,6 @@ export function BillwiseTransactionTable({
                 layout
                 initial={false}
                 exit={{ transition: { duration: 0 } }}
-
                 transition={
                   isRowAnimationEnabled
                     ? { duration: rowAnimationDuration, ease: "easeInOut" }
@@ -436,7 +435,6 @@ export function BillwiseTransactionTable({
                   key={t.id}
                   transaction={t}
                   animateLayout={true}
-
                   showNarration={showNarration}
                   userNames={userNames}
                   journalAccountNames={journalAccountNames}

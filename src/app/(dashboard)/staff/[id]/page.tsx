@@ -6,7 +6,6 @@ import { StaffDetails as DesktopStaffDetails } from '@/components/staff/StaffDet
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';

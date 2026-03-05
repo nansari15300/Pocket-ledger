@@ -25,7 +25,6 @@ import { CreateStaffGroupDialog } from "@/components/staff/CreateStaffGroupDialo
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";

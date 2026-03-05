@@ -6,7 +6,6 @@ import { PartyDetails as DesktopPartyDetails } from '@/components/party/PartyDet
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';

@@ -13,7 +13,6 @@ import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { doc, getDoc, collection, query, where, onSnapshot, orderBy } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useRouter } from "next/navigation";

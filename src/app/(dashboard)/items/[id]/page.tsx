@@ -6,7 +6,6 @@ import DesktopItemDetails from '@/components/items/ItemDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
 import { useRouter } from 'next/navigation';

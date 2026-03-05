@@ -30,7 +30,6 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
-
 // Custom Hook Import
 import { usePageMemory } from "@/hooks/usePageMemory";
 

@@ -16,7 +16,6 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { Printer, RotateCw, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { startOfDay, endOfDay, isSameDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { ShoppingBag, ShoppingCart, BookText, FileDigit, Landmark, TrendingUp, TrendingDown } from "lucide-react";

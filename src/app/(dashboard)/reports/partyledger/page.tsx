@@ -12,7 +12,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";

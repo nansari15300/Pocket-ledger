@@ -62,7 +62,6 @@ export function TaxList({
                   layout
                   initial={false}
                   exit={{ transition: { duration: 0 } }}
-
                   transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                     <Card

@@ -22,7 +22,6 @@ import type { Group, Party } from "@/components/party/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { cn } from "@/lib/utils";

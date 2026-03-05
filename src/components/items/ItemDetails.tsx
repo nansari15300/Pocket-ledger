@@ -45,7 +45,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdCalendar from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } from "@/components/ui/dialog";
@@ -54,7 +53,6 @@ import { EditItemDialog } from "./EditItemDialog";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
-
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -146,6 +144,236 @@ export default function ItemDetails({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const openingModalRef = useRef(false);
+  const { processedItems, vouchers, processedAccounts, processedParties, journalAccountNames, userNames: userNamesFromHook } = useVouchers();
+  const effectiveUserNames = userNames ?? userNamesFromHook ?? {};
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { balanceMode } = useBalanceMode();
+
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
+  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<"sale" | "purchase" | null>(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
+  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
+  const [isDateSearchMode, setIsDateSearchMode] = useState(false);
+  const [isDateChange, setIsDateChange] = useState(false);
+  const [selectedPartyIds, setSelectedPartyIds] = useState<string[]>(['all']);
+
+  useEffect(() => {
+    setTempDateRange(dateRange);
+  }, [dateRange]);
+
+  // FIX: Robust item merging to ensure unitConversions are never lost
+  // Use ref to track previous item to prevent unnecessary recalculations
+  const previousItemRef = useRef<Item | undefined>(undefined);
+  const currentItem = useMemo(() => {
+    if (!initialItem) return undefined;
+    const found = processedItems.find(p => p.id === initialItem.id);
+    
+    if (found) {
+        const merged = {
+            ...initialItem, 
+            ...found,       
+            unitConversions: found.unitConversions?.length ? found.unitConversions : (initialItem.unitConversions || []),
+            // Explicitly preserve opening stock fields (use found if present, else initialItem)
+            openingBalance: (found as any).openingBalance !== undefined ? (found as any).openingBalance : initialItem.openingBalance,
+            openingBalanceUnit: (found as any).openingBalanceUnit !== undefined ? (found as any).openingBalanceUnit : (initialItem as any).openingBalanceUnit,
+            openingBalanceRate: (found as any).openingBalanceRate !== undefined ? (found as any).openingBalanceRate : (initialItem as any).openingBalanceRate,
+            openingBalanceDate: (found as any).openingBalanceDate !== undefined ? (found as any).openingBalanceDate : (initialItem as any).openingBalanceDate
+        };
+        
+        // Only update if the item actually changed (compare relevant fields)
+        const prev = previousItemRef.current;
+        if (prev && prev.id === merged.id) {
+            // Check if relevant fields changed
+            const relevantFieldsChanged = 
+                prev.name !== merged.name ||
+                prev.type !== merged.type ||
+                prev.groupId !== merged.groupId ||
+                prev.openingBalance !== merged.openingBalance ||
+                ((prev as any).openingBalanceRate || 0) !== ((merged as any).openingBalanceRate || 0) ||
+                JSON.stringify(prev.unitConversions) !== JSON.stringify(merged.unitConversions);
+            
+            if (!relevantFieldsChanged) {
+                // Return previous item to prevent unnecessary re-renders
+                return prev;
+            }
+        }
+        
+        previousItemRef.current = merged;
+        return merged;
+    }
+    
+    // Only update if initialItem actually changed
+    if (previousItemRef.current?.id === initialItem.id) {
+        const relevantFieldsChanged = 
+            previousItemRef.current.name !== initialItem.name ||
+            previousItemRef.current.type !== initialItem.type ||
+            previousItemRef.current.groupId !== initialItem.groupId ||
+            previousItemRef.current.openingBalance !== initialItem.openingBalance;
+        
+        if (!relevantFieldsChanged) {
+            return previousItemRef.current;
+        }
+    }
+    
+    previousItemRef.current = initialItem;
+    return initialItem;
+  }, [processedItems, initialItem]);
+
+  const {
+    processedTransactions: allProcessedTransactions,
+    openingBalanceForPeriod,
+    periodDr: allPeriodDr,
+    periodCr: allPeriodCr,
+    closingBalance: allClosingBalance, 
+  } = useTransactions(
+    currentItem,
+    'item',
+    dateRange,
+    stockView,
+    processedItems,
+    transactions,
+    undefined,
+    filters,
+    undefined,
+    undefined,
+    effectiveUserNames
+  );
+
+  // Filter parties to show only those with transactions involving the current item
+  const partiesWithTransactions = useMemo(() => {
+    if (!currentItem || !processedParties || !allProcessedTransactions) return [];
+    
+    // Get unique party IDs that have transactions with this item
+    const partyIdsWithTransactions = new Set<string>();
+    
+    allProcessedTransactions.forEach((t: any) => {
+      if ((t.type === 'sale' || t.type === 'purchase') && t.partyId) {
+        // Check if this transaction involves the current item
+        const hasItem = t.lineItems?.some((li: any) => li.itemId === currentItem.id) ||
+                       t.items?.some((li: any) => li.itemId === currentItem.id);
+        if (hasItem) {
+          partyIdsWithTransactions.add(t.partyId);
+        }
+      }
+    });
+    
+    // Return only parties that have transactions with this item
+    return processedParties.filter(party => partyIdsWithTransactions.has(party.id));
+  }, [currentItem, processedParties, allProcessedTransactions]);
+
+  // Filter transactions by selected accounts and show only Sale/Purchase transactions
+  const filteredTransactions = useMemo(() => {
+    // First filter: Only show Sale and Purchase transactions for items
+    let transactions = allProcessedTransactions.filter(t => 
+      t.type === 'sale' || t.type === 'purchase'
+    );
+
+    // Second filter: Filter by selected parties if needed
+    if (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0) {
+      transactions = transactions.filter(t => {
+        // For Sale/Purchase transactions, filter by partyId
+        if (t.type === 'sale' || t.type === 'purchase') {
+          return selectedPartyIds.includes(t.partyId);
+        }
+        return false; // Other transaction types are already filtered out
+      });
+    }
+    return transactions;
+  }, [allProcessedTransactions, selectedPartyIds]);
+
+  // Recalculate totals for filtered transactions
+  const { processedTransactions, periodDr, periodCr, closingBalance } = useMemo(() => {
+    const dr = filteredTransactions.reduce((sum, t) => sum + (t.debit || 0), 0);
+    const cr = filteredTransactions.reduce((sum, t) => sum + (t.credit || 0), 0);
+    const balance = openingBalanceForPeriod + dr - cr;
+    return {
+      processedTransactions: filteredTransactions,
+      periodDr: dr,
+      periodCr: cr,
+      closingBalance: balance
+    };
+  }, [filteredTransactions, openingBalanceForPeriod]);
+
+
+  const transactionDates = useMemo(() => {
+    if (!currentItem) return [];
+    const dates = new Set<number>();
+    vouchers.forEach((v) => {
+        if (v.lineItems?.some((li: any) => li.itemId === currentItem.id)) {
+            const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+            if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
+                dates.add(startOfDay(dateValue).getTime());
+            }
+        }
+    });
+    return Array.from(dates).map((d) => new Date(d));
+  }, [vouchers, currentItem]);
+
+  const unitOptions = useMemo(() => {
+      if (!currentItem) return [];
+      const units = new Set<string>();
+      if ((currentItem as any).openingBalanceUnit) units.add((currentItem as any).openingBalanceUnit);
+      if (currentItem.unitConversions) {
+          currentItem.unitConversions.forEach((c: any) => {
+              if (c.fromUnit) units.add(c.fromUnit);
+              if (c.toUnit) units.add(c.toUnit);
+          });
+      }
+      return Array.from(units);
+  }, [currentItem]);
+
+  const conversions = (currentItem?.unitConversions || []) as any[];
+  const smallestUnit = conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((currentItem as any).openingBalanceUnit || '');
+  const displayUnit = itemDisplayUnits && currentItem ? itemDisplayUnits[currentItem.id] || smallestUnit : smallestUnit;
+  
+  const isFilterActive = dateRange !== undefined || Object.values(filters).some((v) => v) || (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0);
+
+  const clearFilters = () => {
+    setDateRange(undefined);
+    setFilters({});
+    setSelectedPartyIds(['all']);
+  };
+
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  const handleShowNarrationChange = (checked: boolean) => {
+    setShowNarration(checked);
+    sessionStorage.setItem("showNarration", String(checked));
+  };
+
+  const anyMobilePopupOpen = isMobile && (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen);
+
+  const openModalInUrl = useCallback(() => {
+    if (!isMobile || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("modal", "1");
+    router.push(`${pathname}?${params.toString()}`);
+  }, [isMobile, pathname, searchParams, router]);
+
+  const closeModalInUrl = useCallback(() => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("modal");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }, [pathname, searchParams, router]);
+
+  const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -396,7 +624,6 @@ export default function ItemDetails({
     <>
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-
       <div className="flex flex-col flex-shrink-0 border-b bg-background">
         {/* Row 1: Back | Item Details | Showing x of y vouchers - Party-style */}
         <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
@@ -482,7 +709,6 @@ export default function ItemDetails({
       {/* Transaction list - extends to footer line */}
       <div className="flex-1 min-h-0 overflow-auto">
         <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
-
           {openingBalanceForPeriod !== 0 && (
             <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex items-center justify-between gap-2 min-w-0">
@@ -578,7 +804,6 @@ export default function ItemDetails({
                               setIsCalendarOpen(false);
                             }
                           }}
-
                         />
                       </div>
                     )}
@@ -681,7 +906,6 @@ export default function ItemDetails({
                         setIsDesktopCalendarOpen(false);
                       }
                     }}
-
                   />
                 </PopoverContent>
               </Popover>
@@ -905,7 +1129,6 @@ export default function ItemDetails({
         voucher={selectedVoucher}
         onVoucherAction={() => setSelectedVoucher(null)}
       />
-
     </>
   );
 }

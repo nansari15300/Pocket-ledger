@@ -158,13 +158,70 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 py-4 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6">
-
         <DialogHeader>
           <DialogTitle>Create a New Group</DialogTitle>
           <DialogDescription>Add a new group to categorize your parties.</DialogDescription>
         </DialogHeader>
+        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+        <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(data => onSubmit(data, false))} className="space-y-4 py-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Group Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="e.g., Local Suppliers" {...field} className="h-9 text-sm px-3 rounded-md" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="parentId"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Parent Group</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a parent group" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>System Groups</SelectLabel>
+                        {systemGroups.map((group) => (
+                            <SelectItem key={group.id} value={group.id}>
+                                {group.name}
+                            </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+             <DialogFooter className="pt-4">
+                <DialogClose asChild>
+                    <Button type="button" variant="ghost" className="h-9 text-sm px-4 rounded-md">Cancel</Button>
+                </DialogClose>
+                <Button type="button" variant="outline" onClick={form.handleSubmit(data => onSubmit(data, true))} disabled={isLoading} className="h-9 text-sm px-4 rounded-md">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save & New
+                </Button>
+                <Button type="submit" disabled={isLoading || !companyId} className="h-9 text-sm px-4 rounded-md">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Create Group
+                </Button>
+            </DialogFooter>
+          </form>
+        </Form>
         </div>
-
       </DialogContent>
     </Dialog>
   );

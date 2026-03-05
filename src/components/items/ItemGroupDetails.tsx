@@ -37,7 +37,6 @@ import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
-
 import {
   Select,
   SelectContent,
@@ -46,7 +45,6 @@ import {
   SelectValue,
 } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -73,7 +71,6 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
-
 import { Combobox } from "@/components/ui/combobox";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -134,6 +131,150 @@ export function ItemGroupDetails({
   const itemsInGroup = useMemo(() => items.filter((i) => i.groupId === group.id), [items, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const openingModalRef = useRef(false);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
+  const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
+  const [showNarration, setShowNarration] = useState(true);
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { balanceMode } = useBalanceMode();
+  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
+  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<"sale" | "purchase" | null>(null);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
+  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+  const [selectedPartyIds, setSelectedPartyIds] = useState<string[]>(['all']);
+
+  useEffect(() => {
+    setTempDateRange(dateRange);
+  }, [dateRange]);
+
+  const {
+    openingBalanceForPeriod,
+    processedTransactions: allProcessedTransactions,
+    periodDr: allPeriodDr,
+    periodCr: allPeriodCr,
+    closingBalance: allClosingBalance,
+  } = useTransactions(
+    { ...group, items: items },
+    "group",
+    dateRange,
+    stockView,
+    allItems,
+    transactions,
+    undefined,
+    filters,
+    undefined,
+    undefined,
+    userNames
+  );
+
+  // Filter parties to show only those with transactions involving items in this group
+  const partiesWithTransactions = useMemo(() => {
+    if (!items || items.length === 0 || !processedParties || !allProcessedTransactions) return [];
+    
+    // Get item IDs in this group
+    const groupItemIds = new Set(items.map(item => item.id));
+    
+    // Get unique party IDs that have transactions with items in this group
+    const partyIdsWithTransactions = new Set<string>();
+    
+    allProcessedTransactions.forEach((t: any) => {
+      if ((t.type === 'sale' || t.type === 'purchase') && t.partyId) {
+        // Check if this transaction involves any item in this group
+        const hasGroupItem = t.lineItems?.some((li: any) => groupItemIds.has(li.itemId)) ||
+                            t.items?.some((li: any) => groupItemIds.has(li.itemId));
+        if (hasGroupItem) {
+          partyIdsWithTransactions.add(t.partyId);
+        }
+      }
+    });
+    
+    // Return only parties that have transactions with items in this group
+    return processedParties.filter(party => partyIdsWithTransactions.has(party.id));
+  }, [items, processedParties, allProcessedTransactions]);
+
+  // Filter transactions by selected accounts and show only Sale/Purchase transactions
+  const filteredTransactions = useMemo(() => {
+    // First filter: Only show Sale and Purchase transactions for items
+    let transactions = allProcessedTransactions.filter(t => 
+      t.type === 'sale' || t.type === 'purchase'
+    );
+
+    // Second filter: Filter by selected parties if needed
+    if (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0) {
+      transactions = transactions.filter(t => {
+        // For Sale/Purchase transactions, filter by partyId
+        if (t.type === 'sale' || t.type === 'purchase') {
+          return selectedPartyIds.includes(t.partyId);
+        }
+        return false; // Other transaction types are already filtered out
+      });
+    }
+    return transactions;
+  }, [allProcessedTransactions, selectedPartyIds]);
+
+  // Recalculate totals for filtered transactions
+  const { processedTransactions, periodDr, periodCr, closingBalance } = useMemo(() => {
+    const dr = filteredTransactions.reduce((sum, t) => sum + (t.debit || 0), 0);
+    const cr = filteredTransactions.reduce((sum, t) => sum + (t.credit || 0), 0);
+    const balance = openingBalanceForPeriod + dr - cr;
+    return {
+      processedTransactions: filteredTransactions,
+      periodDr: dr,
+      periodCr: cr,
+      closingBalance: balance
+    };
+  }, [filteredTransactions, openingBalanceForPeriod]);
+  
+  const transactionDates = useMemo(() => {
+    const dates = new Set<number>();
+    processedTransactions.forEach((v: any) => {
+        const dateValue = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
+            dates.add(startOfDay(dateValue).getTime());
+        }
+    });
+    return Array.from(dates).map(d => new Date(d));
+  }, [processedTransactions]);
+
+  const isFilterActive =
+    dateRange !== undefined || Object.values(filters).some((v) => v) || (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0);
+
+  const clearFilters = () => {
+    onDateRangeChange(undefined);
+    setTempDateRange(undefined);
+    setFilters({});
+    setSelectedPartyIds(['all']);
+  };
+
+  const anyMobilePopupOpen = isMobile && (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen);
+
+  const openModalInUrl = useCallback(() => {
+    if (!isMobile || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("modal", "1");
+    router.push(`${pathname}?${params.toString()}`);
+  }, [isMobile, pathname, searchParams, router]);
+
+  const closeModalInUrl = useCallback(() => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("modal");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }, [pathname, searchParams, router]);
+
+  const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -377,7 +518,6 @@ export function ItemGroupDetails({
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-
           <div className="flex flex-col flex-shrink-0 border-b bg-background">
             <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
               {onBack && (
@@ -436,7 +576,6 @@ export function ItemGroupDetails({
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
-
               {openingBalanceForPeriod !== 0 && (
                 <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
                   <div className="flex items-center justify-between gap-2 min-w-0">
@@ -511,7 +650,6 @@ export function ItemGroupDetails({
                           setIsCalendarOpen(false);
                         }
                       }}
-
                     />
                   </div>
                 )}
@@ -574,7 +712,6 @@ export function ItemGroupDetails({
           voucher={selectedVoucher}
           onVoucherUpdated={() => setSelectedVoucher(null)}
         />
-
       </>
     );
   }
@@ -672,7 +809,6 @@ export function ItemGroupDetails({
                           setIsDesktopCalendarOpen(false);
                         }
                       }}
-
                     />
                   </PopoverContent>
                 </Popover>

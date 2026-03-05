@@ -29,7 +29,6 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import type { StockView } from "@/components/items/types";
 import type { Item, ItemGroup } from "@/components/items/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";

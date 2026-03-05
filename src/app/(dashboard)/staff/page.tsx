@@ -24,7 +24,6 @@ import { PermissionButton } from "@/components/permission";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";

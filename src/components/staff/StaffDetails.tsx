@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { format, startOfDay, endOfDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -48,7 +47,6 @@ import {
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
 import AdCalendar from "@/components/ui/ad-calendar";
-
 import {
   Select,
   SelectContent,
@@ -85,7 +83,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
-
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
@@ -142,6 +139,116 @@ export function StaffDetails({
     processedTaxes,
   } = useVouchers();
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(parentDateRange);
+  const [isDateChange, setIsDateChange] = useState(false);
+    
+  const staff = useMemo(() => {
+    if (!processedStaff) return initialStaff;
+    return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
+  }, [processedStaff, initialStaff]);
+
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isNoteOpen, setIsNoteOpen] = useState(false);
+  const [showNarration, setShowNarration] = useState(true);
+  const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { balanceMode, setBalanceMode } = useBalanceMode();
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
+  const [historyVoucher, setHistoryVoucher] = useState<any>(null);
+  const [linkAdvancesVoucher, setLinkAdvancesVoucher] = useState<any>(null);
+  const [linkPaymentVoucher, setLinkPaymentVoucher] = useState<any>(null);
+  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
+  const [mobileFooterDialogOpen, setMobileFooterDialogOpen] = useState<null | "payment_in" | "payment_out" | "add_salary">(null);
+  const [isEditStaffDialogOpen, setIsEditStaffDialogOpen] = useState(false);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [mobileSearchTerm, setMobileSearchTerm] = useState("");
+  const [isDateSearchMode, setIsDateSearchMode] = useState(false);
+  const openingModalRef = useRef(false);
+
+  // Desktop Calendar State
+  const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
+  
+  // Local State for Calendar Buffer
+  const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+
+  const handleDateRangeChange = (newRange: DateRange | undefined) => {
+    setDateRange(newRange);
+    parentOnDateRangeChange(newRange);
+  };
+  
+  const transactionDates = useMemo(() => {
+    const dates = new Set<number>();
+    vouchers.forEach((v) => {
+      if (
+        v.staffId === staff.id ||
+        (v.entries && v.entries.some((e: any) => e.accountId === staff.id))
+      ) {
+        const dateValue = v.date?.toDate
+          ? v.date.toDate()
+          : new Date(v.date);
+        if (dateValue instanceof Date && !isNaN(dateValue.getTime())) {
+          dates.add(startOfDay(dateValue).getTime());
+        }
+      }
+    });
+    return Array.from(dates).map((d) => new Date(d));
+  }, [vouchers, staff.id]);
+
+
+  const {
+    processedTransactions,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    openingBalanceOutstanding,
+    openingBalanceLinkedVoucherNos,
+  } = useTransactions(staff, 'staff', dateRange, undefined, allStaff, transactions, context, filters, undefined, undefined, userNames);
+
+
+  const isFilterActive =
+    dateRange !== undefined || Object.values(filters).some((v) => v);
+
+  const clearFilters = () => {
+    handleDateRangeChange(undefined);
+    setTempDateRange(undefined);
+    setFilters({});
+  };
+
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  const anyMobilePopupOpen =
+    isMobile &&
+    (!!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen || isEditStaffDialogOpen || !!historyVoucher || !!linkAdvancesVoucher || !!linkPaymentVoucher);
+
+  const openModalInUrl = useCallback(() => {
+    if (!isMobile || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("modal", "1");
+    params.set("modalts", String(Date.now()));
+    router.push(`${pathname}?${params.toString()}`);
+  }, [isMobile, pathname, searchParams, router]);
+
+  const closeModalInUrl = useCallback(() => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("modal");
+    params.delete("modalts");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }, [pathname, searchParams, router]);
+
+  const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -417,7 +524,6 @@ export function StaffDetails({
   const renderMobileView = () => (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-
       {/* Row 1: Staff Details | Showing x of y voucher(s) */}
       <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
         {onBack && (
@@ -531,7 +637,6 @@ export function StaffDetails({
       {/* Transactions list - extends to footer line */}
       <div className="flex-1 min-h-0 overflow-auto">
         <div className="pb-24">
-
         <TransactionsTable
           transactions={mobileTransactionsToShow}
           context="staff"
@@ -564,6 +669,83 @@ export function StaffDetails({
           hideCreditColumn={false}
           scrollOnlyTransactions
         />
+        </div>
+      </div>
+      <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        <Button
+          type="button"
+          className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
+          onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+        >
+          {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
+        </Button>
+        <AddVoucherDialog
+          defaultTab="payment_out"
+          defaultVoucherData={{ payeeType: "staff", staffId: staff.id }}
+          isOpen={mobileFooterDialogOpen === "payment_out"}
+          onOpenChange={(open: boolean) => {
+            if (open) {
+              openingModalRef.current = true;
+              setMobileFooterDialogOpen("payment_out");
+              openModalInUrl();
+            } else if (mobileFooterDialogOpen === "payment_out") {
+              setMobileFooterDialogOpen(null);
+              closeModalInUrl();
+            }
+          }}
+        >
+          <Button className="flex-1 h-6 min-w-0 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium">
+            Pay Salary
+          </Button>
+        </AddVoucherDialog>
+        <AddVoucherDialog
+          defaultTab="add_salary"
+          isOpen={mobileFooterDialogOpen === "add_salary"}
+          onOpenChange={(open: boolean) => {
+            if (open) {
+              openingModalRef.current = true;
+              setMobileFooterDialogOpen("add_salary");
+              openModalInUrl();
+            } else if (mobileFooterDialogOpen === "add_salary") {
+              setMobileFooterDialogOpen(null);
+              closeModalInUrl();
+            }
+          }}
+        >
+          <Button className="flex-1 h-6 min-w-0 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">
+            Add Salary
+          </Button>
+        </AddVoucherDialog>
+        <Drawer
+          open={isCalendarOpen}
+          onOpenChange={(open: boolean) => {
+            setIsCalendarOpen(open);
+            if (open) {
+              openingModalRef.current = true;
+              openModalInUrl();
+            } else {
+              closeModalInUrl();
+            }
+          }}
+        >
+          <DrawerTrigger asChild>
+            <Button className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium px-1 bg-pink-600 hover:bg-pink-700 text-white">
+              <CalendarIcon className="h-3.5 w-3.5 shrink-0" />
+            </Button>
+          </DrawerTrigger>
+          <DrawerContent>
+            <DrawerHeader className="p-4 text-left">
+              <DrawerTitle>Select Date Range</DrawerTitle>
+              <MobileDialogDescription>
+                Select a starting and ending date for the transaction list.
+              </MobileDialogDescription>
+            </DrawerHeader>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+              {(dateSystem === "BS" || dateSystem === "Both") && (
+                <NepaliCalendar
+                  onSelect={handleNepaliSelect}
+                  valueAD={dateRange}
+                  isRange={true}
                   numberOfMonths={calendarMonths}
                 />
               )}
@@ -586,7 +768,6 @@ export function StaffDetails({
                         setIsCalendarOpen(false);
                       }
                     }}
-
                   />
                 </div>
               )}
@@ -691,7 +872,6 @@ export function StaffDetails({
                         setIsDesktopCalendarOpen(false);
                       }
                     }}
-
                   />
                 </PopoverContent>
               </Popover>
@@ -911,7 +1091,6 @@ export function StaffDetails({
           if (!open) {
             setSelectedVoucher(null);
             if (isMobile) closeModalInUrl();
-
           }
         }}
         voucher={selectedVoucher}

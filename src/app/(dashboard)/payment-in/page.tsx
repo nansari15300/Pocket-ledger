@@ -17,7 +17,6 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { PermissionButton } from "@/components/permission";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useRouter } from "next/navigation";

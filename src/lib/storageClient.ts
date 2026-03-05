@@ -16,7 +16,6 @@ const slugify = (text: string = "") =>
 
 const safeFileName = (name: string | undefined) =>
   (name ?? "")
-
     .trim()
     .replace(/[^\w.\-() ]+/g, "_")
     .replace(/\s+/g, "_")
@@ -34,7 +33,6 @@ const generateVoucherPath = (
   voucherDate: Date,
   voucherId: string,
   fileName: string | undefined
-
 ) => {
   const year = format(voucherDate, "yyyy");
   const month = format(voucherDate, "MM");

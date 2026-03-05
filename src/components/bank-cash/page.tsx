@@ -38,7 +38,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
 
-
 export default function BankCashPage() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();

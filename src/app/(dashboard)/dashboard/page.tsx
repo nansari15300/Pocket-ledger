@@ -34,7 +34,6 @@ import {
   Receipt,
   Home,
   X,
-
   Calendar as CalendarIcon,
   Printer,
   FileDigit,
@@ -55,7 +54,6 @@ import {
 } from '@/components/ui/table';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import BsDatePicker from '@/components/ui/BsDatePicker';
 import { Button } from '@/components/ui/button';
 import {
@@ -77,7 +75,6 @@ import {
 } from '@/components/ui/dialog';
 import { useDate } from '@/hooks/useDate';
 import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
-
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -88,7 +85,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
 import { useDashboard } from '@/hooks/useDashboard';
 import AdCalendar from "@/components/ui/ad-calendar";
-
 import { useAuth } from '@/hooks/useAuth';
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 import { motion, AnimatePresence } from 'framer-motion';
@@ -416,7 +412,6 @@ useEffect(() => {
                         <AnimatePresence>
                             {bankCashSummary.bankAccounts.map(acc => (
                                 <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
-
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -438,7 +433,6 @@ useEffect(() => {
                           <AnimatePresence>
                             {bankCashSummary.cashAccounts.map(acc => (
                                <motion.tr key={acc.id} layout initial={false} exit={{ transition: { duration: 0 } }} className="border-b">
-
                                     <TableCell>{acc.accountName}</TableCell>
                                     <TableCell>{acc.accountType}</TableCell>
                                     <TableCell className="text-right text-green-600">{acc.inflow > 0 ? formatCurrency(acc.inflow, { noSuffix: true, duration: 2 }) : '-'}</TableCell>
@@ -480,9 +474,45 @@ export default function DashboardPage() {
   const hideFabTimeout = useRef<NodeJS.Timeout | null>(null);
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  
+  const [loading, setLoading] = React.useState(true);
+  
+  const [userNames, setUserNames] = React.useState<Record<string, string>>({});
+  
+  const [receivablesPayablesOpen, setReceivablesPayablesOpen] = React.useState(false);
+  const [taxSummaryOpen, setTaxSummaryOpen] = useState(false);
+  
+  // Filter for Receivables & Payables Dialog
+  const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
+  const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
+  const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
+  const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
+  const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(undefined);
+  const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(undefined);
+  const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(undefined);
+  const [taxFilter, setTaxFilter] = useState<'all' | 'input' | 'output'>('all');
+  const [selectedTaxId, setSelectedTaxId] = useState<string | null>(null);
+
+    // State for new dialogs and date pickers
+    const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
+    const [cashFlowOpen, setCashFlowOpen] = useState(false);
+
+    const [showRecentNarration, setShowRecentNarration] = useState(true);
+  
+  const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
+  const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
+  const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
+  const [historyVoucher, setHistoryVoucher] = React.useState<any>(null);
+  const [linkAdvancesVoucher, setLinkAdvancesVoucher] = React.useState<any>(null);
+  const [linkPaymentVoucher, setLinkPaymentVoucher] = React.useState<any>(null);
+  const { visibleCard, setVisibleCard } = useDashboard();
+  const [greeting, setGreeting] = useState('');
+  
+  const [recentVoucherTypes, setRecentVoucherTypes] = useState<string[]>(['all']);
+  const [recentDateRange, setRecentDateRange] = React.useState<DateRange | undefined>();
   const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
-
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
   const [isDateChange, setIsDateChange] = useState(false);
@@ -1380,14 +1410,12 @@ export default function DashboardPage() {
                         }
                       }}
                     />
-
                     </PopoverContent>
                 </Popover>
             )}
             </div>
             <div className={cn("flex items-center gap-2 flex-1 min-w-0 h-9", isMobile ? "order-2" : "md:order-1")}>
                 {!isMobile && <span className="text-sm font-medium shrink-0">Show:</span>}
-
                 <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
                     <SelectTrigger className="h-9 flex-1 min-w-0 w-full max-w-[140px]">
                         <SelectValue />
@@ -1399,10 +1427,14 @@ export default function DashboardPage() {
                         <SelectItem value="0">All</SelectItem>
                     </SelectContent>
                 </Select>
+                {!isMobile && (
+                <label className="flex items-center gap-2 h-9 cursor-pointer shrink-0">
+                  <Checkbox id="recent-show-narration" checked={showRecentNarration} onCheckedChange={(c) => setShowRecentNarration(!!c)} className="h-4 w-4" />
+                  <span className="text-sm whitespace-nowrap">Show Narration</span>
+                </label>
                 )}
             </div>
              {isRecentFilterActive && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearRecentFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>}
-
           </div>
           <span className="text-sm font-medium text-muted-foreground">Showing {recentTransactions ? recentTransactions.length : 0} Vouchers Of All {allRecentTransactions ? allRecentTransactions.length : 0} Vouchers</span>
         </div>
@@ -1410,7 +1442,6 @@ export default function DashboardPage() {
       <CardContent className="px-0 pb-2">
         {/* Mobile: 2px horizontal gap so Recent transaction cards match Daybook spacing */}
         <div className={cn("w-full overflow-x-auto", isMobile && "px-[2px]")}>
-
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"

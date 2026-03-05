@@ -22,7 +22,6 @@ import { startOfDay, endOfDay, format } from "date-fns";
 import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
-
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea } from "../ui/scroll-area";
@@ -33,8 +32,31 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { openPrintDirect } from "@/lib/printDirect";
-  const calendarMonths = useCalendarMonths();
+import { useCalendarMonths } from "@/hooks/use-mobile";
 
+export function AccountGroupDetails({ 
+  group,
+  allGroups,
+  accounts,
+  groupTransactions,
+  onGroupUpdated, 
+  onGroupDeleted,
+  onAccountUpdated,
+  dateRange,
+  onDateRangeChange,
+}: { 
+  group: AccountGroup, 
+  allGroups: AccountGroup[],
+  accounts: Account[],
+  groupTransactions: any[],
+  onGroupUpdated: () => void, 
+  onGroupDeleted: () => void,
+  onAccountUpdated: () => void,
+  dateRange: DateRange | undefined;
+  onDateRangeChange: (dateRange: DateRange | undefined) => void;
+}) {
+  const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
+  const calendarMonths = useCalendarMonths();
   const { company } = useCompany();
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(['all']);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -252,7 +274,6 @@ import { openPrintDirect } from "@/lib/printDirect";
                             selected={asCalendarRange(dateRange)}
                             onSelect={onDateRangeChange}
                             numberOfMonths={calendarMonths}
-
                           />
                         </PopoverContent>
                       </Popover>

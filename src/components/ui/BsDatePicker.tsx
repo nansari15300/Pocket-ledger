@@ -9,7 +9,6 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useCalendarMonths } from "@/hooks/use-mobile";
-
 import { format, isSameDay, startOfDay } from "date-fns";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 
@@ -54,7 +53,6 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
   const calendarMonths = useCalendarMonths(); // mobile: 1 month, PC: 2 months (date range)
   const isRange = isRangeProp ?? true;
   const numberOfMonths = numberOfMonthsProp ?? (isRange ? calendarMonths : 1);
-
   
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     // ✅ FINAL FIX: Do NOT use startOfDay. Use Noon (12:00 PM).
@@ -138,7 +136,6 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
             valueAD={valueAD}
             isRange={isRange}
             numberOfMonths={numberOfMonths}
-
             transactionDates={transactionDates}
         />
       </PopoverContent>

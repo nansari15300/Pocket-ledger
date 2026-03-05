@@ -6,7 +6,6 @@ import { TaxGroupDetails } from '@/components/tax/TaxGroupDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';

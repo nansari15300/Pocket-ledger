@@ -25,7 +25,6 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
-
 import { toast as sonnerToast } from "sonner";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -350,7 +349,6 @@ export function CreateStaffForm({
       <Form {...form}>
         {/* Single scroll: do not add max-h/overflow-y-auto here; dialog wrapper in CreateStaffDialog is the only scroll container. */}
         <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6">
-
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Name */}
             <FormField
@@ -476,7 +474,6 @@ export function CreateStaffForm({
             </FormItem>
 
             {/* Address — single scroll: dialog wrapper scrolls; avoid extra overflow on this field. */}
-
             <FormField
               control={form.control}
               name="address"
@@ -485,7 +482,6 @@ export function CreateStaffForm({
                   <FormLabel>Address</FormLabel>
                   <FormControl>
                     <Textarea placeholder="Enter full address" {...field} className="resize-none" />
-
                   </FormControl>
                   <FormMessage />
                 </FormItem>

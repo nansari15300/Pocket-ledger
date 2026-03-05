@@ -46,7 +46,6 @@ import type { StockView } from "@/components/items/ItemDetails";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Item, ItemGroup } from "@/components/items/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams } from "next/navigation";

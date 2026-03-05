@@ -46,7 +46,6 @@ import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "fireb
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
-
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";

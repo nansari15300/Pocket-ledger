@@ -348,7 +348,6 @@ export function CreateBankAccountDialog({
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Must match CreatePartyDialog height/size. */}
         <DialogContent 
             className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-2xl sm:grid sm:flex-none sm:px-6"
-
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => {
@@ -377,7 +376,6 @@ export function CreateBankAccountDialog({
           <div className="overflow-y-auto min-h-0 flex-1 pr-1 sm:flex-none sm:overflow-visible">
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-4">
-
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}

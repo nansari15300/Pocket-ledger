@@ -17,7 +17,6 @@ import { startOfDay, endOfDay, format } from "date-fns";
 import { Calendar } from "../ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
-
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
@@ -32,7 +31,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
-
 import { Combobox } from "@/components/ui/combobox";
 import {
   Drawer,
@@ -119,6 +117,35 @@ export function TaxGroupDetails({
   const openingModalRef = React.useRef(false);
 
   const isMobile = useIsMobile();
+  const calendarMonths = useCalendarMonths();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    setTempDateRange(dateRange);
+  }, [dateRange]);
+
+  const anyMobilePopupOpen = isMobile && (
+    !!mobileFooterDialogOpen || isCalendarOpen || isVoucherDialogOpen || isNoteOpen
+  );
+
+  const openModalInUrl = React.useCallback(() => {
+    if (!isMobile || !pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("modal", "1");
+    router.push(`${pathname}?${params.toString()}`);
+  }, [isMobile, pathname, searchParams, router]);
+
+  const closeModalInUrl = React.useCallback(() => {
+    if (!pathname) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("modal");
+    const q = params.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname);
+  }, [pathname, searchParams, router]);
+
+  const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;
   const closeUrlModal = React.useCallback(() => {
     setMobileFooterDialogOpen(null);
@@ -194,9 +221,178 @@ export function TaxGroupDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
+    openingModalRef.current = true;
+    setSelectedVoucher(voucher);
+    openModalInUrl();
+    setIsVoucherDialogOpen(true);
+  };
+
+  const handleMobileBack = React.useCallback(() => {
+    if (mobileFooterDialogOpen) {
+      setMobileFooterDialogOpen(null);
+      closeModalInUrl();
+      return;
+    }
+    if (isCalendarOpen) {
+      setIsCalendarOpen(false);
+      closeModalInUrl();
+      return;
+    }
+    if (isVoucherDialogOpen) {
+      setIsVoucherDialogOpen(false);
+      setSelectedVoucher(null);
+      closeModalInUrl();
+      return;
+    }
+    if (isNoteOpen) {
+      setIsNoteOpen(false);
+      closeModalInUrl();
+      return;
+    }
+    onBack?.();
+  }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
+
+  const buildDateRangeText = () => {
+    const from = dateRange?.from;
+    const to = dateRange?.to;
+    let dateRangeText = "All Time";
+    if (from) {
+      const fromBS = formatDateBS(from);
+      const toBS = to ? formatDateBS(to) : fromBS;
+      const fromAD = formatDate(from);
+      const toAD = to ? formatDate(to) : fromAD;
+      if (dateSystem === "AD") dateRangeText = `AD: ${fromAD} to ${toAD}`;
+      else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS} to ${toBS}`;
+      else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
+    }
+    return dateRangeText;
+  };
+
+  const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
+    const range = dateRange;
+    if (!range?.from || (range.from && range.to)) {
+      onDateRangeChange({ from: adDate, to: undefined });
+    } else if (adDate < range.from) {
+      onDateRangeChange({ from: adDate, to: range.from });
+      setIsCalendarOpen(false);
+    } else {
+      onDateRangeChange({ from: range.from, to: adDate });
+      setIsCalendarOpen(false);
+    }
+  };
+
+  const filteredMobileTransactions = useMemo(() => {
+    if (!mobileSearchTerm) return processedTransactions;
+    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
+    return processedTransactions.filter((t: any) => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
+      return (
+        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
+        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
+        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
+        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
+        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.balance).toLowerCase().includes(lowerCaseSearch)
+      );
+    });
+  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+
+  const mobileTransactionsToShow = useMemo(() => {
+    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
+    if (hasDateFilter) return filteredMobileTransactions;
+    const list = filteredMobileTransactions;
+    if (list.length <= 10) return list;
+    return list.slice(-10);
+  }, [filteredMobileTransactions, dateRange]);
+
+  const dateRangeLabel = buildDateRangeText() || "All Time";
+  const balanceText = closingBalance >= 0 ? "To Receive" : "To Pay";
+
+  const groupDropdownOptions = useMemo(
+    () => allGroups.map((g) => ({ value: g.id, label: g.name })),
+    [allGroups]
+  );
+
+  useEffect(() => {
+    const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
+    setCurrentPage(total);
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+
+  useEffect(() => {
+    const savedState = sessionStorage.getItem("showNarration");
+    setShowNarration(savedState !== "false");
+  }, []);
+
+  const handleShowNarrationChange = (checked: boolean) => {
+    setShowNarration(checked);
+    sessionStorage.setItem("showNarration", String(checked));
+  };
+  
+  const totalPages = Math.max(1, Math.ceil(processedTransactions.length / rowsPerPage));
+  const paginatedTransactions = processedTransactions.slice(
+      (currentPage - 1) * rowsPerPage,
+      currentPage * rowsPerPage
+  );
+  
+  const handleOpenNoteDialog = (taxId?: string) => {
+    if (taxes.length === 1) {
+        setNoteEntityId(taxes[0].id);
+    } else if (taxId) {
+        setNoteEntityId(taxId);
+    }
+    setIsNoteOpen(true);
+  };
+  
+  const handlePrint = () => {
+    if (!company) return;
+    const from = dateRange?.from;
+    const to = dateRange?.to;
+    let dateRangeText = "All Time";
+    if (from) {
+      const fromBS = formatDateBS(from);
+      const toBS = to ? formatDateBS(to) : fromBS;
+      const fromAD = formatDate(from);
+      const toAD = to ? formatDate(to) : fromAD;
+
+      if (dateSystem === 'AD') dateRangeText = `AD: ${fromAD} to ${toAD}`;
+      else if (dateSystem === 'BS') dateRangeText = `BS: ${fromBS} to ${toBS}`;
+      else
+        dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
+    }
+    openPrintDirect({
+      company: {
+        name: company.name,
+        pan: company.pan,
+        phone: company.phone,
+        address: company.address,
+        decimalPlaces: company.decimalPlaces,
+        showDrCr: company.showDrCr,
+        showCurrencySymbol: company.showCurrencySymbol,
+        logoUrl: company.logoUrl,
+      },
+      title: `Tax Group Statement: ${group.name}`,
+      context: 'group',
+      contextId: group.id,
+      dateSystem: dateSystem,
+      dateRangeText: dateRangeText,
+      vouchersCount: processedTransactions.length,
+      openingBalance: openingBalanceForPeriod, 
+      transactions: processedTransactions,
+      showNarration: showNarration,
+      userNames: userNames,
+    }, true);
+  };
+
+  if (isMobile) {
+    return (
+      <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -268,8 +464,32 @@ export function TaxGroupDetails({
             </div>
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
+            <div className="pb-24">
+            <TransactionsTable
+              transactions={mobileTransactionsToShow}
+              context="group"
+              contextId={group.id}
+              groupEntityType="tax"
+              openingBalance={openingBalanceForPeriod}
+              openingBalanceOutstanding={openingBalanceOutstanding}
+              openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceActions={undefined}
+              showNarration={showNarration}
+              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+              journalAccountNames={journalAccountNames}
+              userNames={userNames}
+              onRowClick={(t) => { openModalInUrl(); handleEditVoucher(t); }}
+              filters={filters}
+              setFilters={setFilters}
+              activeFilter={activeFilter}
+              setActiveFilter={setActiveFilter}
+              periodDr={periodDr}
+              periodCr={periodCr}
+              closingBalance={closingBalance}
+              isTaxContext={true}
+              scrollOnlyTransactions
+            />
             </div>
-
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -313,7 +533,6 @@ export function TaxGroupDetails({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
-
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1">
@@ -323,13 +542,11 @@ export function TaxGroupDetails({
                       mode="range"
                       defaultMonth={dateRange?.from}
                       selected={asCalendarRange(dateRange)}
-
                       onSelect={(range) => {
                         onDateRangeChange(range as DateRange | undefined);
                         if (range?.from && range?.to) setIsCalendarOpen(false);
                       }}
                       numberOfMonths={calendarMonths}
-
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: "has-transactions" }}
                     />
@@ -476,7 +693,6 @@ export function TaxGroupDetails({
                       mode="range"
                       defaultMonth={dateRange?.from}
                       selected={asCalendarRange(tempDateRange)}
-
                       onSelect={(range) => {
                         if (range?.from) range.from.setHours(12, 0, 0, 0);
                         if (range?.to) range.to.setHours(12, 0, 0, 0);
@@ -489,7 +705,6 @@ export function TaxGroupDetails({
                         }
                       }}
                       numberOfMonths={calendarMonths}
-
                       modifiers={{ hasTransactions: transactionDates }}
                       modifiersClassNames={{ hasTransactions: 'has-transactions' }}
                     />
@@ -709,7 +924,6 @@ export function TaxGroupDetails({
         voucher={selectedVoucher}
         onVoucherUpdated={() => setSelectedVoucher(null)}
       />
-
     </>
   );
 }
