@@ -717,15 +717,17 @@ export const TransactionRow = React.memo(
       1;
 
     const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
+    /** Extra gap below last row of each group so containers don't touch during layout animation */
+    const groupGapBottom = "[&>td]:pb-3";
     const spendWiseMainInset = inSpendWiseGroup && cn(
       "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
       isSpendWiseGroupFirst && "[&>td]:pt-[6px]",
-      isSpendWiseGroupLast && !showNarrationRow && "[&>td]:pb-[6px]",
+      isSpendWiseGroupLast && !showNarrationRow && cn("[&>td]:pb-[6px]", groupGapBottom),
       !isSpendWiseGroupFirst && "[&>td]:pt-[3px]"
     );
     const spendWiseNarrInset = inSpendWiseGroup && cn(
       "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
-      isSpendWiseGroupLast && "[&>td]:pb-[6px]",
+      isSpendWiseGroupLast && cn("[&>td]:pb-[6px]", groupGapBottom),
       !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
     );
 

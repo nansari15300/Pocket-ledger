@@ -98,12 +98,12 @@ export function AccountGroupDetails({
   const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
   const BANK_GROUP_SPEND_WISE_VIEW_KEY = "bank-group-spendWiseView";
   const [spendWiseView, setSpendWiseViewState] = useState(() => {
-    if (typeof window === "undefined") return true;
+    if (typeof window === "undefined") return false;
     try {
       const stored = localStorage.getItem(BANK_GROUP_SPEND_WISE_VIEW_KEY);
-      return stored !== "false";
+      return stored === "true";
     } catch {
-      return true;
+      return false;
     }
   });
   const setSpendWiseView = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
@@ -115,6 +115,20 @@ export function AccountGroupDetails({
       return next;
     });
   }, []);
+
+  // When toggling Spend wise / Statement, disable layout animation for that transition so list doesn't animate.
+  const [disableTableLayoutAnimation, setDisableTableLayoutAnimation] = useState(false);
+  const handleSpendWiseViewToggle = useCallback(() => {
+    setDisableTableLayoutAnimation(true);
+    setSpendWiseView((prev) => !prev);
+  }, [setSpendWiseView]);
+  useEffect(() => {
+    if (!disableTableLayoutAnimation) return;
+    const id = requestAnimationFrame(() => {
+      setDisableTableLayoutAnimation(false);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [disableTableLayoutAnimation]);
   const accountsInGroup = useMemo(() => accounts.filter((a) => a.groupId === group.id), [accounts, group.id]);
   const accountIdsInGroup = useMemo(() => accountsInGroup.map((a) => a.id), [accountsInGroup]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
@@ -178,20 +192,22 @@ export function AccountGroupDetails({
         (v.type === "contra" && accountIdSet.has(v.fromAccountId));
       return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
+    const getDateMs = (v: any) => {
+      const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
+      return d.getTime();
+    };
+    /** Payment-in / contra / direct_income (main row) always first in each group; groups ordered by main row date. */
     const inVouchers = vouchers
       .filter((v: any) => {
         if (!isInVoucher(v) || v.isDeleted) return false;
         if (inRangeIds.has(v.id)) return true;
         return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
       })
-      .sort((a: any, b: any) => {
-        const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-        const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-        return da.getTime() - db.getTime();
-      });
+      .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     const rows: any[] = [];
     let groupColorIndex = 0;
     const nextColor = () => (groupColorIndex++) % 4;
+    const addedPaymentOutIds = new Set<string>();
 
     const voucherToInRow = (v: any) => {
       const existing = byId.get(v.id);
@@ -218,14 +234,19 @@ export function AccountGroupDetails({
     };
 
     inVouchers.forEach((pi: any) => {
+      const groupId = pi.id;
+      let rowIndexInGroup = 0;
       const t = voucherToInRow(pi);
-      const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
+      const linkedOuts = vouchers
+        .filter((v: any) => linkedOutFilter(v, pi.id))
+        .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
       const groupRunning = (t.debit || 0) - (t.credit || 0);
       if (hasLinkedGroup) {
         rows.push({
           ...t,
+          _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: false,
           _spendWiseRunningBalance: groupRunning,
@@ -234,14 +255,17 @@ export function AccountGroupDetails({
       } else {
         rows.push({
           ...t,
+          _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: true,
           _spendWiseRunningBalance: groupRunning,
           _spendWiseGroupColorIndex: colorIdx,
         });
-        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}` });
+        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}`, _rowKey: `grp-spacer-${groupId}` });
       }
       linkedOuts.forEach((po: any, idx: number) => {
+        if (addedPaymentOutIds.has(po.id)) return;
+        addedPaymentOutIds.add(po.id);
         const outRow = voucherToRow(po);
         const prevRunning = rows.length > 0 ? (rows[rows.length - 1] as any)._spendWiseRunningBalance : 0;
         const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
@@ -249,25 +273,30 @@ export function AccountGroupDetails({
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
         const amountDelta = (outRow.credit || 0) > (outRow.debit || 0) ? -linkedAmount : linkedAmount;
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
+        const isLastOutInThisGroup = linkedOuts.slice(idx + 1).every((v: any) => addedPaymentOutIds.has(v.id));
         rows.push({
           ...outRow,
+          _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
-          _spendWiseGroupLast: idx === linkedOuts.length - 1,
+          _spendWiseGroupLast: isLastOutInThisGroup,
           _spendWiseRunningBalance: nextRunning,
           _spendWiseGroupColorIndex: colorIdx,
           _spendWiseLinkedAmount: linkedAmount,
         });
       });
-      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}` });
+      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: `grp-spacer-end-${groupId}` });
     });
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = processedTransactions.filter((t: any) => !addedIds.has(t.id));
+    const unlinked = processedTransactions
+      .filter((t: any) => !addedIds.has(t.id))
+      .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     unlinked.forEach((t: any, idx: number) => {
       const colorIdx = nextColor();
       const voucherBalance = (t.debit || 0) - (t.credit || 0);
       rows.push({
         ...t,
+        _rowKey: `unlinked-${t.id}`,
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: true,
         _spendWiseRunningBalance: voucherBalance,
@@ -661,6 +690,7 @@ export function AccountGroupDetails({
               closingBalance={isBalanceMasked ? undefined : closingBalance}
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
+              disableLayoutAnimation={disableTableLayoutAnimation}
             />
             </div>
           </div>
@@ -671,7 +701,7 @@ export function AccountGroupDetails({
               type="button"
               className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
               variant={spendWiseView ? "default" : "outline"}
-              onClick={() => setSpendWiseView(!spendWiseView)}
+              onClick={handleSpendWiseViewToggle}
             >
               {spendWiseView ? "Statement" : "Spend wise"}
             </Button>
@@ -955,10 +985,10 @@ export function AccountGroupDetails({
               </DropdownMenu>
               {spendWiseEnabled && (
                 <Button
-                  variant={spendWiseView ? "default" : "outline"}
+                  variant="outline"
                   size="sm"
-                  onClick={() => setSpendWiseView(!spendWiseView)}
-                  className="flex-shrink-0 h-10"
+                  className={cn("flex-shrink-0 h-10", spendWiseView ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
+                  onClick={handleSpendWiseViewToggle}
                 >
                   {spendWiseView ? "Statement" : "Spend wise"}
                 </Button>
@@ -972,8 +1002,8 @@ export function AccountGroupDetails({
             </div>
           </div>
         </div>
-        <div className={cn("flex-1 flex flex-col min-h-0", spendWiseView && spendWiseEnabled ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
-          <div className={cn("py-4 flex-1 flex flex-col min-h-0 min-w-0", spendWiseView && spendWiseEnabled && "p-[2px]")}>
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim">
+          <div className={cn("py-4 min-w-0", spendWiseView && spendWiseEnabled && "p-[2px]")}>
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
@@ -1011,6 +1041,7 @@ export function AccountGroupDetails({
               periodCr={isBalanceMasked ? undefined : periodCr}
               closingBalance={isBalanceMasked ? undefined : closingBalance}
               isBalanceMasked={isBalanceMasked}
+              disableLayoutAnimation={disableTableLayoutAnimation}
             />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">

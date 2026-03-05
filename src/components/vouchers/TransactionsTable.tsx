@@ -113,6 +113,8 @@ interface TransactionsTableProps {
   statusFilterIdPrefix?: string;
   /** When context=group, indicates group type for opposite account display */
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item";
+  /** When true, disables layout animation (e.g. when switching Spend wise / Statement view) */
+  disableLayoutAnimation?: boolean;
 }
 
 export function TransactionsTable({
@@ -167,6 +169,7 @@ export function TransactionsTable({
   onStatusFilterChange,
   statusFilterIdPrefix,
   groupEntityType,
+  disableLayoutAnimation = false,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   const { user, customUser } = useAuth();
@@ -226,10 +229,9 @@ export function TransactionsTable({
   } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
   
-  // Get animation settings - check enabled flag explicitly
-  const isRowAnimationEnabled = animationSettings.rows.enabled === true;
-  // Use exact duration when enabled, 0 when disabled
-  const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  // Get animation settings - check enabled flag explicitly (match PartyList / list motion). Disable when parent asks (e.g. view toggle).
+  const isRowAnimationEnabled = !disableLayoutAnimation && animationSettings?.rows?.enabled === true;
+  const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 0.4) : 0;
   
   const getDisplayValue = useCallback((value: number) => {
     if (getDisplayValueProp) return getDisplayValueProp(value);
@@ -385,7 +387,8 @@ export function TransactionsTable({
 
   const openingBalanceColSpan = visibleBaseCols + (context === 'note' ? 1 : 0);
   const totalColSpan = visibleBaseCols;
-  
+  const fullRowColSpan = openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1;
+
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
 
   const isMobile = useIsMobile();
@@ -689,11 +692,51 @@ export function TransactionsTable({
   }
 
   const hasSpendWiseGroups = transactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+
+  // Same block logic as mobile: spacer | group (colorIndex, items) | single (item) — so PC and mobile behave identically
+  type TableBlock =
+    | { type: "spacer"; id: string }
+    | { type: "group"; colorIndex: number; items: any[] }
+    | { type: "single"; item: any };
+  const tableBlocks = useMemo((): TableBlock[] | null => {
+    if (!hasSpendWiseGroups || !transactions?.length) return null;
+    const blocks: TableBlock[] = [];
+    let i = 0;
+    while (i < transactions.length) {
+      const t = transactions[i] as any;
+      if (t._spendWiseSpacer) {
+        blocks.push({ type: "spacer", id: t.id ?? (t._rowKey ?? `spacer-${i}`) });
+        i++;
+        continue;
+      }
+      if (t._spendWiseGroupFirst === true) {
+        const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < transactions.length) {
+          const cur = transactions[i] as any;
+          if (cur._spendWiseSpacer) break;
+          items.push(cur);
+          if (cur._spendWiseGroupLast === true) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        blocks.push({ type: "group", colorIndex, items });
+        continue;
+      }
+      blocks.push({ type: "single", item: t });
+      i++;
+    }
+    return blocks;
+  }, [hasSpendWiseGroups, transactions]);
+
   const tableContent = (
       <Table
         className={cn(
           ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full",
-          hasSpendWiseGroups && "border-separate border-spacing-0"
+          hasSpendWiseGroups && "border-separate border-spacing-0",
+          "border-b-2 border-border"
         )}
         scrollContainer={false}
       >
@@ -722,7 +765,7 @@ export function TransactionsTable({
       </TableHeader>
       
       <TableBody>
-        <AnimatePresence mode="popLayout">
+        <>
             {showOpeningBalance && (
               <motion.tr 
                 key="opening-balance-row" 
@@ -794,52 +837,207 @@ export function TransactionsTable({
               </motion.tr>
             )}
             {transactions.length > 0 ? (
-              transactions.map((t: any, rowIndex: number) =>
-                (t as any)._spendWiseSpacer ? (
-                  <tr key={`spacer-${rowIndex}`} aria-hidden="true">
-                    <td
-                      colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
-                      className="p-0 m-0 h-5 min-h-5 max-h-5 border-0 bg-transparent align-middle"
-                      style={{ height: "20px", lineHeight: 0, verticalAlign: "middle" }}
-                    />
-                  </tr>
-                ) : (
-                <TransactionRow
-                    key={`row-${rowIndex}`}
-                    transaction={t}
-                    animateLayout={true}
-                    isSpendWiseChild={!!(t as any)._spendWiseChild}
-                    isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
-                    isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
-                    spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
-                    spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
-                    showNarration={showNarration}
-                    userNames={userNames}
-                    journalAccountNames={journalAccountNames}
-                    accountNames={accountNames}
-                    context={context}
-                    contextId={contextId}
-                    groupEntityType={groupEntityType}
-                    stockView={stockView}
-                    displayUnit={displayUnit}
-                    item={item}
-                    onRowClick={onRowClick}
-                    onAddLink={onAddLink}
-                    onHistoryVoucher={onHistoryVoucher}
-                    onApproveVoucher={effectiveOnApproveVoucher}
-                    onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
-                    isSelected={selectedId === t.id}
-                    getDisplayValue={getDisplayValue}
-                    isTaxContext={isTaxContext}
-                    isBalanceMasked={isBalanceMasked}
-                    hideBalanceColumn={hideBalanceColumn}
-                    hideStatusColumn={hideStatusColumn}
-                    visibleColumns={visibleColumns}
-                    useOutstandingForBalance={false}
-                    ensureMinGaps={ensureMinGaps}
-                    showFileColumn={showFileBySelection}
-                />
-              )
+              tableBlocks ? (
+                <AnimatePresence mode="popLayout">
+                  {tableBlocks.map((block) => {
+                    if (block.type === "spacer") {
+                      return (
+                        <React.Fragment key={block.id}>
+                          <motion.tr
+                            layout={false}
+                            initial={false}
+                            exit={{ transition: { duration: 0 } }}
+                            aria-hidden="true"
+                            className="spend-wise-gap-row"
+                          >
+                            <td
+                              colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
+                              className="p-0 m-0 border-0 bg-transparent align-middle"
+                              style={{ height: "12px", minHeight: "12px", lineHeight: 0, verticalAlign: "middle" }}
+                            />
+                          </motion.tr>
+                        </React.Fragment>
+                      );
+                    }
+                    if (block.type === "group") {
+                      const groupKey = `group-${block.items.map((t: any) => t.id).join("-")}`;
+                      const tableGroupCardClass = (colorIndex: number) =>
+                        cn(
+                          "rounded-xl overflow-hidden border-2 shadow-sm",
+                          colorIndex === 1 && "border-green-500 bg-green-50/50 dark:bg-green-950/20",
+                          colorIndex === 2 && "border-pink-500 bg-pink-50/50 dark:bg-pink-950/20",
+                          (colorIndex === 0 || colorIndex === 3) && "border-blue-500 bg-blue-50/50 dark:bg-blue-950/20"
+                        );
+                      return (
+                        <tr key={groupKey}>
+                          <td
+                            colSpan={fullRowColSpan}
+                            className="p-0 align-top border-none bg-transparent"
+                            style={{ verticalAlign: "top" }}
+                          >
+                            <motion.div
+                              layout
+                              initial={false}
+                              exit={{ transition: { duration: 0 } }}
+                              transition={{
+                                duration: rowAnimationDuration,
+                                ease: "easeInOut",
+                                layout: { duration: rowAnimationDuration, ease: "easeInOut" },
+                              }}
+                              style={{ willChange: "transform" }}
+                              className={tableGroupCardClass(block.colorIndex)}
+                            >
+                              <table className="w-full border-0 border-collapse">
+                                <tbody>
+                                  {block.items.map((t: any) => {
+                                    const rowKey = (t as any)._rowKey ?? (t as any).id;
+                                    return (
+                                      <TransactionRow
+                                        key={rowKey}
+                                        transaction={t}
+                                        animateLayout={true}
+                                        layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                                        isSpendWiseChild={!!(t as any)._spendWiseChild}
+                                        isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
+                                        isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                                        spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
+                                        spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                                        showNarration={showNarration}
+                                        userNames={userNames}
+                                        journalAccountNames={journalAccountNames}
+                                        accountNames={accountNames}
+                                        context={context}
+                                        contextId={contextId}
+                                        groupEntityType={groupEntityType}
+                                        stockView={stockView}
+                                        displayUnit={displayUnit}
+                                        item={item}
+                                        onRowClick={onRowClick}
+                                        onAddLink={onAddLink}
+                                        onHistoryVoucher={onHistoryVoucher}
+                                        onApproveVoucher={effectiveOnApproveVoucher}
+                                        onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
+                                        isSelected={selectedId === t.id}
+                                        getDisplayValue={getDisplayValue}
+                                        isTaxContext={isTaxContext}
+                                        isBalanceMasked={isBalanceMasked}
+                                        hideBalanceColumn={hideBalanceColumn}
+                                        hideStatusColumn={hideStatusColumn}
+                                        visibleColumns={visibleColumns}
+                                        useOutstandingForBalance={false}
+                                        ensureMinGaps={ensureMinGaps}
+                                        showFileColumn={showFileBySelection}
+                                      />
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </motion.div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    const t = block.item;
+                    const rowKey = (t as any)._rowKey ?? (t as any).id;
+                    return (
+                      <React.Fragment key={rowKey}>
+                        <TransactionRow
+                          key={rowKey}
+                          transaction={t}
+                          animateLayout={true}
+                          layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                          isSpendWiseChild={!!(t as any)._spendWiseChild}
+                          isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
+                          isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                          spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
+                          spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                          showNarration={showNarration}
+                          userNames={userNames}
+                          journalAccountNames={journalAccountNames}
+                          accountNames={accountNames}
+                          context={context}
+                          contextId={contextId}
+                          groupEntityType={groupEntityType}
+                          stockView={stockView}
+                          displayUnit={displayUnit}
+                          item={item}
+                          onRowClick={onRowClick}
+                          onAddLink={onAddLink}
+                          onHistoryVoucher={onHistoryVoucher}
+                          onApproveVoucher={effectiveOnApproveVoucher}
+                          onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
+                          isSelected={selectedId === t.id}
+                          getDisplayValue={getDisplayValue}
+                          isTaxContext={isTaxContext}
+                          isBalanceMasked={isBalanceMasked}
+                          hideBalanceColumn={hideBalanceColumn}
+                          hideStatusColumn={hideStatusColumn}
+                          visibleColumns={visibleColumns}
+                          useOutstandingForBalance={false}
+                          ensureMinGaps={ensureMinGaps}
+                          showFileColumn={showFileBySelection}
+                        />
+                      </React.Fragment>
+                    );
+                  })}
+                </AnimatePresence>
+              ) : (
+                transactions.map((t: any, rowIndex: number) => {
+                    const rowKey = (t as any)._rowKey ?? (t as any).id ?? `row-${rowIndex}`;
+                    return (t as any)._spendWiseSpacer ? (
+                      <motion.tr
+                        key={rowKey}
+                        layout={false}
+                        initial={false}
+                        exit={{ transition: { duration: 0 } }}
+                        aria-hidden="true"
+                        className="spend-wise-gap-row"
+                      >
+                        <td
+                          colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1}
+                          className="p-0 m-0 border-0 bg-transparent align-middle"
+                          style={{ height: "12px", minHeight: "12px", lineHeight: 0, verticalAlign: "middle" }}
+                        />
+                      </motion.tr>
+                    ) : (
+                      <TransactionRow
+                        key={rowKey}
+                        transaction={t}
+                        animateLayout={true}
+                        layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                        isSpendWiseChild={!!(t as any)._spendWiseChild}
+                        isSpendWiseGroupFirst={!!(t as any)._spendWiseGroupFirst}
+                        isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
+                        spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
+                        spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                        showNarration={showNarration}
+                        userNames={userNames}
+                        journalAccountNames={journalAccountNames}
+                        accountNames={accountNames}
+                        context={context}
+                        contextId={contextId}
+                        groupEntityType={groupEntityType}
+                        stockView={stockView}
+                        displayUnit={displayUnit}
+                        item={item}
+                        onRowClick={onRowClick}
+                        onAddLink={onAddLink}
+                        onHistoryVoucher={onHistoryVoucher}
+                        onApproveVoucher={effectiveOnApproveVoucher}
+                        onRowSelect={(tx: { id: string }) => setSelectedId(tx.id)}
+                        isSelected={selectedId === t.id}
+                        getDisplayValue={getDisplayValue}
+                        isTaxContext={isTaxContext}
+                        isBalanceMasked={isBalanceMasked}
+                        hideBalanceColumn={hideBalanceColumn}
+                        hideStatusColumn={hideStatusColumn}
+                        visibleColumns={visibleColumns}
+                        useOutstandingForBalance={false}
+                        ensureMinGaps={ensureMinGaps}
+                        showFileColumn={showFileBySelection}
+                      />
+                    );
+                  })
               )
             ) : (
              <tr key="no-records-row">
@@ -851,11 +1049,14 @@ export function TransactionsTable({
               </TableCell>
             </tr>
             )}
-        </AnimatePresence>
+        </>
       </TableBody>
        
        {!hideFooter && (
-        <TableFooter className="bg-white shadow-inner border-t">
+        <TableFooter className="bg-white shadow-inner border-t border-b border-border">
+           <TableRow aria-hidden className="bg-transparent border-0 hover:bg-transparent">
+                <TableCell colSpan={openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1} className="p-0 m-0 border-0 bg-transparent" style={{ height: "20px", minHeight: "6px" }} />
+           </TableRow>
            <TableRow>
                 <TableCell colSpan={totalColSpan} className="text-right font-semibold">
                     Total
@@ -872,7 +1073,7 @@ export function TransactionsTable({
                 </TableCell>}
                 <TableCell className="w-10 p-0" />
             </TableRow>
-            <TableRow className="border-t-2 border-black font-bold text-base bg-muted/30">
+            <TableRow className="border-t-2 border-black border-b-2 border-black font-bold text-base bg-muted/30">
                 <TableCell colSpan={totalColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol} className="text-right">
                     Closing Balance
                 </TableCell>
@@ -893,7 +1094,7 @@ export function TransactionsTable({
       role="grid"
       aria-label="Transactions"
       className={cn(
-        "w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none"
+        "w-full min-w-full overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none border-b-2 border-border"
       )}
       onKeyDown={handleTableKeyDown}
       onClick={() => tableContainerRef.current?.focus()}

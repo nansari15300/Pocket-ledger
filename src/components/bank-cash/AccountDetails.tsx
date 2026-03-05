@@ -334,7 +334,9 @@ export function AccountDetails({
     };
     const rows: any[] = [];
     let groupColorIndex = 0;
+    let rowKeySeed = 0;
     const nextColor = () => (groupColorIndex++) % 4;
+    const nextRowKey = () => `r-${rowKeySeed++}`;
 
     inVouchers.forEach((pi: any) => {
       const t = voucherToInRow(pi);
@@ -345,6 +347,7 @@ export function AccountDetails({
       if (hasLinkedGroup) {
         rows.push({
           ...t,
+          _rowKey: nextRowKey(),
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: false,
           _spendWiseRunningBalance: groupRunning,
@@ -353,12 +356,13 @@ export function AccountDetails({
       } else {
         rows.push({
           ...t,
+          _rowKey: nextRowKey(),
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: true,
           _spendWiseRunningBalance: groupRunning,
           _spendWiseGroupColorIndex: colorIdx,
         });
-        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}` });
+        rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}`, _rowKey: nextRowKey() });
       }
       linkedOuts.forEach((po: any, idx: number) => {
         const outRow = voucherToOutRow(po);
@@ -370,6 +374,7 @@ export function AccountDetails({
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
         rows.push({
           ...outRow,
+          _rowKey: nextRowKey(),
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: idx === linkedOuts.length - 1,
@@ -378,7 +383,7 @@ export function AccountDetails({
           _spendWiseLinkedAmount: linkedAmount,
         });
       });
-      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}` });
+      if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: nextRowKey() });
     });
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
     const unlinked = processedTransactions.filter((t: any) => !addedIds.has(t.id));
@@ -387,12 +392,13 @@ export function AccountDetails({
       const voucherBalance = (t.debit || 0) - (t.credit || 0);
       rows.push({
         ...t,
+        _rowKey: nextRowKey(),
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: true,
         _spendWiseRunningBalance: voucherBalance,
         _spendWiseGroupColorIndex: colorIdx,
       });
-      if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}` });
+      if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
     return rows.length ? rows : processedTransactions;
   }, [spendWiseView, spendWiseEnabled, processedTransactions, vouchers, account.id]);

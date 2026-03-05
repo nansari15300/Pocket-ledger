@@ -503,7 +503,7 @@ export function StaffGroupDetails({
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button
             type="button"
-            className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
+            className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
             onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
           >
             {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
@@ -791,8 +791,8 @@ export function StaffGroupDetails({
               <Button
                 variant="outline"
                 size="sm"
+                className={cn("flex-shrink-0 h-10", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
                 onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
-                className="flex-shrink-0 h-10"
               >
                 {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
               </Button>

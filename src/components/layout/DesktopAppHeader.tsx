@@ -411,12 +411,14 @@ function BalanceModeSwitcher() {
   const { isMobile, hidePcIcon } = useMobileView();
   const { showBillWiseToggle: showBillWiseOnReportParty } = useReportPartyView();
 
-  // Pages that only use statement view: hide toggle and force statement mode (parties, staff show Statement/Bill wise in header)
+  // Pages that only use statement view: hide toggle and force statement mode
   const statementOnlyPaths = ["/items", "/incomes", "/tax", "/dashboard"];
   const isStatementOnlyPage = statementOnlyPaths.some((p) => pathname?.startsWith(p));
-  // Bank/Cash: hide header Statement/Bill wise dropdown; use Statement by default; page has its own Spend wise toggle
+  // Bank/Cash, Party, Staff: hide header dropdown; each details page has its own Bill wise/Statement (or Spend wise) button
   const isBankPage = pathname != null && pathname.startsWith("/bank-cash");
-  const hideBalanceModeDropdown = isStatementOnlyPage || isBankPage;
+  const isPartyPage = pathname != null && pathname.startsWith("/party");
+  const isStaffPage = pathname != null && pathname.startsWith("/staff");
+  const hideBalanceModeDropdown = isStatementOnlyPage || isBankPage || isPartyPage || isStaffPage;
 
   // On reports: show toggle only when Group Statement or Accounts Statement has a party selected
   const isReportsPage = pathname?.startsWith("/reports");
