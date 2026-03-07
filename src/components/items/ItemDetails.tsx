@@ -4,7 +4,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "@/components/vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,6 +63,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useTransactions } from "@/hooks/use-transactions";
+import usePermissions from "@/hooks/usePermissions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { 
   Drawer, 
@@ -150,7 +151,9 @@ export default function ItemDetails({
   const { processedItems, vouchers, processedAccounts, processedParties, journalAccountNames, userNames: userNamesFromHook } = useVouchers();
   const effectiveUserNames = userNames ?? userNamesFromHook ?? {};
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const { balanceMode } = useBalanceMode();
+  const { can } = usePermissions();
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
@@ -274,21 +277,21 @@ export default function ItemDetails({
     return processedParties.filter(party => partyIdsWithTransactions.has(party.id));
   }, [currentItem, processedParties, allProcessedTransactions]);
 
-  // Filter transactions by selected accounts and show only Sale/Purchase transactions
+  // Filter transactions: show Sale, Purchase, and Notes linked to this item
   const filteredTransactions = useMemo(() => {
-    // First filter: Only show Sale and Purchase transactions for items
-    let transactions = allProcessedTransactions.filter(t => 
-      t.type === 'sale' || t.type === 'purchase'
+    // Include Sale, Purchase, and Note (notes have no partyId; show all notes for this item)
+    let transactions = allProcessedTransactions.filter(t =>
+      t.type === 'sale' || t.type === 'purchase' || t.type === 'note'
     );
 
-    // Second filter: Filter by selected parties if needed
+    // Filter by selected parties when not "all" (notes have no partyId so they stay when party filter is applied)
     if (!selectedPartyIds.includes('all') && selectedPartyIds.length > 0) {
       transactions = transactions.filter(t => {
-        // For Sale/Purchase transactions, filter by partyId
+        if (t.type === 'note') return true; // Notes: no party filter, always show
         if (t.type === 'sale' || t.type === 'purchase') {
           return selectedPartyIds.includes(t.partyId);
         }
-        return false; // Other transaction types are already filtered out
+        return false;
       });
     }
     return transactions;
@@ -429,9 +432,14 @@ export default function ItemDetails({
     }
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, onBack, closeModalInUrl]);
-  
-  const totalPages = Math.ceil(processedTransactions.length / rowsPerPage);
-  const paginatedTransactions = processedTransactions.slice(
+
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
+  const totalPages = Math.ceil(displayTransactions.length / rowsPerPage);
+  const paginatedTransactions = displayTransactions.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
@@ -508,10 +516,10 @@ export default function ItemDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
+    if (!mobileSearchTerm) return displayTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
     
-    return processedTransactions.filter((t: any) => {
+    return displayTransactions.filter((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -527,7 +535,7 @@ export default function ItemDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   // Mobile: show last 10 when no date filter (like Party), all when date filter applied
   const mobileDisplayTransactions = useMemo(() => {
@@ -983,7 +991,7 @@ export default function ItemDetails({
          <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
              <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-               <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+               <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
                <div className="flex items-center space-x-2 flex-shrink-0">
                  <Checkbox id="show-narration-item" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                  <label htmlFor="show-narration-item" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1023,6 +1031,10 @@ export default function ItemDetails({
                    })}
                  </DropdownMenuContent>
                </DropdownMenu>
+               <div className="flex items-center gap-2 flex-shrink-0">
+                 <Checkbox id="show-notes-item" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                 <label htmlFor="show-notes-item" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+               </div>
              </div>
              <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
                <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -1114,6 +1126,9 @@ export default function ItemDetails({
               }}
               initialContext={"Items"}
               initialEntityId={initialItem?.id || ''}
+              showSaveAndApproveOnCreate={can("approve_transactions")}
+              showApproveButton={can("approve_transactions")}
+              compactFooter
             />
           </div>
         </DialogContent>

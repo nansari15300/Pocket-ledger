@@ -78,7 +78,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,6 +97,7 @@ import NepaliCalendar from "../ui/nepali-calendar";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
+import usePermissions from "@/hooks/usePermissions";
 
 interface ExpenseAccountDetailsProps {
   account: ExpenseAccount & { credit?: number, balance?: number };
@@ -144,7 +145,9 @@ export function ExpenseAccountDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const { balanceMode } = useBalanceMode();
+  const { can } = usePermissions();
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   
@@ -271,17 +274,21 @@ export function ExpenseAccountDetails({
     if (isMobile) openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
-  
 
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   const totalPages =
-    rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
+    rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
   const paginatedTransactions =
     rowsPerPage > 0
-      ? processedTransactions.slice(
+      ? displayTransactions.slice(
           (currentPage - 1) * rowsPerPage,
           currentPage * rowsPerPage
         )
-      : processedTransactions;
+      : displayTransactions;
 
   const handlePrint = () => {
     if (!company) return;
@@ -344,9 +351,9 @@ export function ExpenseAccountDetails({
   };
   
   const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
+    if (!mobileSearchTerm) return displayTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return processedTransactions.filter(t => {
+    return displayTransactions.filter(t => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -362,7 +369,7 @@ export function ExpenseAccountDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -614,7 +621,7 @@ export function ExpenseAccountDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+              <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -654,6 +661,10 @@ export function ExpenseAccountDetails({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Checkbox id="show-notes-expense-account" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <label htmlFor="show-notes-expense-account" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+              </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -962,8 +973,11 @@ export function ExpenseAccountDetails({
                 onAccountUpdated();
                 setIsNoteOpen(false);
               }}
-              initialContext="Income/Expense"
+              initialContext={(account as any).type === "Income" ? "Income" : "Expense"}
               initialEntityId={account.id}
+              showSaveAndApproveOnCreate={can("approve_transactions")}
+              showApproveButton={can("approve_transactions")}
+              compactFooter
             />
           </div>
         </DialogContent>

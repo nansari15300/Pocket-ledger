@@ -752,6 +752,7 @@ export function AccountDetails({
               }}
               initialContext="Bank/Cash"
               initialEntityId={account.id}
+              compactFooter
             />
           </div>
         </DialogContent>

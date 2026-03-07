@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,7 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useTransactions, getTransactionAmounts } from "@/hooks/use-transactions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useVouchers } from "@/hooks/useVouchers";
+import usePermissions from "@/hooks/usePermissions";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
 import {
@@ -99,7 +100,9 @@ export function ExpenseGroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const { balanceMode } = useBalanceMode();
+  const { can } = usePermissions();
   const accountsInGroup = useMemo(() => {
     const fromProcessed = processedExpenseAccounts.filter((a) => a.groupId === group.id);
     if (fromProcessed.length > 0) return fromProcessed as ExpenseAccount[];
@@ -319,9 +322,14 @@ export function ExpenseGroupDetails({
     setShowNarration(checked);
     sessionStorage.setItem("showNarration", String(checked));
   };
-  
-  const totalPages = Math.max(1, Math.ceil(processedTransactions.length / rowsPerPage));
-  const paginatedTransactions = processedTransactions.slice(
+
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
+  const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
+  const paginatedTransactions = displayTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
   );
@@ -778,7 +786,7 @@ export function ExpenseGroupDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+              <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-expense-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-expense-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -818,6 +826,10 @@ export function ExpenseGroupDetails({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Checkbox id="show-notes-expense-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <label htmlFor="show-notes-expense-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+              </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -900,17 +912,24 @@ export function ExpenseGroupDetails({
                         ))}
                     </div>
                 )}
-                {noteEntityId && (
-                    <CreateNoteForm 
-                    onVoucherAction={() => {
+                {noteEntityId && (() => {
+                    const selectedAccount = accountsInGroup.find((a: any) => a.id === noteEntityId);
+                    const noteContext = selectedAccount?.type === "Income" ? "Income" : "Expense";
+                    return (
+                    <CreateNoteForm
+                        onVoucherAction={() => {
                             onAccountUpdated();
                             setIsNoteOpen(false);
                             setNoteEntityId(null);
                         }}
-                        initialContext="Income/Expense"
+                        initialContext={noteContext}
                         initialEntityId={noteEntityId}
+                        showSaveAndApproveOnCreate={can("approve_transactions")}
+                        showApproveButton={can("approve_transactions")}
+                        compactFooter
                     />
-                )}
+                    );
+                })()}
             </div>
         </DialogContent>
       </Dialog>

@@ -5,7 +5,7 @@ import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { Edit, Printer, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -97,6 +97,7 @@ export function StaffGroupDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -336,8 +337,13 @@ export function StaffGroupDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
 
-  const totalPages = Math.max(1, Math.ceil(processedTransactions.length / rowsPerPage));
-  const paginatedTransactions = processedTransactions.slice(
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
+  const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
+  const paginatedTransactions = displayTransactions.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
@@ -646,6 +652,7 @@ export function StaffGroupDetails({
                   }}
                   initialContext="Staff"
                   initialEntityId={noteEntityId}
+                  compactFooter
                 />
               )}
             </div>
@@ -851,7 +858,7 @@ export function StaffGroupDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+              <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox
                   id="show-narration-staff-group"
@@ -903,6 +910,10 @@ export function StaffGroupDetails({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Checkbox id="show-notes-staff-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <label htmlFor="show-notes-staff-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+              </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -973,6 +984,7 @@ export function StaffGroupDetails({
                 }}
                 initialContext="Staff"
                 initialEntityId={noteEntityId}
+                compactFooter
               />
             )}
           </div>

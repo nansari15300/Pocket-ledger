@@ -78,7 +78,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -214,7 +214,8 @@ export function PayeeDetails({
     setShowNarration(checked);
     sessionStorage.setItem("showNarration", String(checked));
   };
-  
+
+  const { showNotes, setShowNotes } = useShowNotes();
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = 
     useTransactions(party, entityType, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, undefined, userNames);
 
@@ -230,12 +231,18 @@ export function PayeeDetails({
     onDateRangeChange(undefined);
     setFilters({});
   };
+
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   
-  const totalPages = rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions = rowsPerPage > 0 ? processedTransactions.slice(
+  const totalPages = rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
+  const paginatedTransactions = rowsPerPage > 0 ? displayTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
-  ) : processedTransactions;
+  ) : displayTransactions;
 
   const buildDateRangeText = () => {
     if (!dateRange?.from) return "All Time";
@@ -447,7 +454,7 @@ export function PayeeDetails({
         {/* Pagination Footer */}
         <div className="flex items-center justify-end space-x-2 py-2 px-4 border-t">
           <div className="flex-1 text-sm text-muted-foreground flex items-center gap-4">
-            <span className="whitespace-nowrap">{processedTransactions.length} transaction(s).</span>
+            <span className="whitespace-nowrap">{displayTransactions.length} transaction(s).</span>
             <div className="flex items-center space-x-2">
               <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -483,6 +490,10 @@ export function PayeeDetails({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Checkbox id="show-notes-payee" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+              <label htmlFor="show-notes-payee" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+            </div>
           </div>
           <div className="flex items-center space-x-2">
             <p className="text-sm font-medium">Rows per page</p>
@@ -561,6 +572,7 @@ export function PayeeDetails({
               }}
               initialContext="Party"
               initialEntityId={party.id}
+              compactFooter
             />
           </div>
         </DialogContent>

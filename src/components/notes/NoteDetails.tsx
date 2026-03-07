@@ -272,6 +272,7 @@ export function NoteDetails({
                 onVoucherAction={() => {
                     setIsNoteDialogOpen(false);
                 }}
+                compactFooter
             />
         </DialogContent>
     </Dialog>

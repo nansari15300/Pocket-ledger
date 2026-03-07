@@ -666,9 +666,9 @@ const capitalizeFirstLetter = (str: string) => {
     <React.Fragment>
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
+        {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-4xl sm:grid sm:flex-none sm:px-6"
+            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
 
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
@@ -677,7 +677,8 @@ const capitalizeFirstLetter = (str: string) => {
             <DialogTitle>Create a New Item</DialogTitle>
             <DialogDescription>Add a new product or service to your records.</DialogDescription>
           </DialogHeader>
-          {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
+          {/* Scrollable form area: fills dialog height (85vh mobile, 90vh PC). */}
+          <div className="overflow-y-auto min-h-0 flex-1 pr-1">
           <Form {...form}>
             <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-4 py-4">
 
@@ -1062,6 +1063,7 @@ const capitalizeFirstLetter = (str: string) => {
               </DialogFooter>
             </form>
           </Form>
+          </div>
 
         </DialogContent>
       </Dialog>

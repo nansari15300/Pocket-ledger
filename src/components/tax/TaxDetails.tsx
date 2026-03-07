@@ -55,7 +55,7 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -65,6 +65,7 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   const anySelected = statusFilter.paid || statusFilter.unpaid || statusFilter.partial || statusFilter.overdue;
   if (!anySelected) return txns;
   return txns.filter((t) => {
+    if (t.type === "note") return true; // Notes have no payment status; always show
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -147,6 +148,7 @@ export function TaxDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
@@ -298,9 +300,14 @@ export function TaxDetails({
     setIsVoucherDialogOpen(true);
   }, [openModalInUrl]);
 
+  // When showNotes is off, hide note-type transactions; tick = show notes (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
+    () => filterByStatus(displayTransactions, statusFilter),
+    [displayTransactions, statusFilter]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -371,12 +378,12 @@ export function TaxDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
   
-  const totalPages = Math.ceil(processedTransactions.length / rowsPerPage);
-  const paginatedTransactions = processedTransactions.slice(
+  const totalPages = Math.ceil(searchFilteredTransactions.length / rowsPerPage);
+  const paginatedTransactions = searchFilteredTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
   );
-  
+
   const buildDateRangeText = () => {
     const from = dateRange?.from;
     const to = dateRange?.to;
@@ -651,6 +658,7 @@ export function TaxDetails({
                 onVoucherAction={() => { onTaxUpdated(); setIsNoteOpen(false); }}
                 initialContext="Tax"
                 initialEntityId={tax.id}
+                compactFooter
               />
             </div>
           </DialogContent>
@@ -833,7 +841,7 @@ export function TaxDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+              <span className="whitespace-nowrap flex-shrink-0">{searchFilteredTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-tax" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-tax" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -873,6 +881,10 @@ export function TaxDetails({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Checkbox id="show-notes-tax" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <label htmlFor="show-notes-tax" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+              </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>

@@ -77,7 +77,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -144,6 +144,7 @@ export function AccountDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const { showNotes, setShowNotes } = useShowNotes();
   const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -294,10 +295,15 @@ export function AccountDetails({
   }
 
   const spendWiseEnabled = (company as any)?.spendWiseEnabled === true;
+  // Spend Wise: never show notes. Statement view: show/hide notes by showNotes (localStorage).
+  const baseTransactions = useMemo(() => {
+    if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
+    return showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+  }, [processedTransactions, spendWiseView, showNotes]);
   const displayTransactions = useMemo(() => {
-    if (!spendWiseView || !vouchers?.length) return processedTransactions;
-    const byId = new Map(processedTransactions.map((t: any) => [t.id, t]));
-    const inRangeIds = new Set(processedTransactions.map((t: any) => t.id));
+    if (!spendWiseView || !vouchers?.length) return baseTransactions;
+    const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
+    const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
     const accountId = account.id;
     const isInVoucher = (v: any) =>
       (v.type === "payment_in" && v.accountId === accountId) ||
@@ -391,7 +397,7 @@ export function AccountDetails({
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: nextRowKey() });
     });
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = processedTransactions.filter((t: any) => !addedIds.has(t.id));
+    const unlinked = baseTransactions.filter((t: any) => !addedIds.has(t.id));
     unlinked.forEach((t: any, idx: number) => {
       const colorIdx = nextColor();
       const voucherBalance = (t.debit || 0) - (t.credit || 0);
@@ -405,8 +411,8 @@ export function AccountDetails({
       });
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
-    return rows.length ? rows : processedTransactions;
-  }, [spendWiseView, processedTransactions, vouchers, account.id]);
+    return rows.length ? rows : baseTransactions;
+  }, [spendWiseView, baseTransactions, vouchers, account.id]);
 
   const displayTransactionCount = useMemo(
     () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
@@ -1122,6 +1128,12 @@ export function AccountDetails({
                     ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {!spendWiseView && (
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <Checkbox id="show-notes-account" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                  <label htmlFor="show-notes-account" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+                </div>
+              )}
               {spendWiseView && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -1245,6 +1257,7 @@ export function AccountDetails({
               }}
               initialContext="Bank/Cash"
               initialEntityId={account.id}
+              compactFooter
             />
           </div>
         </DialogContent>

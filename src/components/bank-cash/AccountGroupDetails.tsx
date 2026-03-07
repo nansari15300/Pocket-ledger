@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -142,6 +142,7 @@ export function AccountGroupDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const { showNotes, setShowNotes } = useShowNotes();
   const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
@@ -180,11 +181,16 @@ export function AccountGroupDetails({
       closingBalance = periodDr - periodCr;
   }
 
+  // Spend Wise: never show notes. Statement view: show/hide notes by showNotes (localStorage).
+  const baseTransactions = useMemo(() => {
+    if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
+    return showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+  }, [processedTransactions, spendWiseView, showNotes]);
   const displayTransactions = useMemo(() => {
-    if (!spendWiseView || !vouchers?.length) return processedTransactions;
+    if (!spendWiseView || !vouchers?.length) return baseTransactions;
     // Date range overwrite: if any transaction in a group is in range, show full group (all linked rows)
-    const inRangeIds = new Set(processedTransactions.map((t: any) => t.id));
-    const byId = new Map(processedTransactions.map((t: any) => [t.id, t]));
+    const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
+    const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
     const accountIdSet = new Set(accountIdsInGroup);
     const isInVoucher = (v: any) =>
       (v.type === "payment_in" && accountIdSet.has(v.accountId)) ||
@@ -292,7 +298,7 @@ export function AccountGroupDetails({
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: `grp-spacer-end-${groupId}` });
     });
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
-    const unlinked = processedTransactions
+    const unlinked = baseTransactions
       .filter((t: any) => !addedIds.has(t.id))
       .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     unlinked.forEach((t: any, idx: number) => {
@@ -308,8 +314,8 @@ export function AccountGroupDetails({
       });
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}` });
     });
-    return rows.length ? rows : processedTransactions;
-  }, [spendWiseView, processedTransactions, vouchers, accountIdsInGroup]);
+    return rows.length ? rows : baseTransactions;
+  }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup]);
 
   const displayTransactionCount = useMemo(
     () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
@@ -902,6 +908,7 @@ export function AccountGroupDetails({
                   }}
                   initialContext="Bank/Cash"
                   initialEntityId={noteEntityId}
+                  compactFooter
                 />
               )}
             </div>
@@ -1153,6 +1160,12 @@ export function AccountGroupDetails({
                     ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {!spendWiseView && (
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <Checkbox id="show-notes-account-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                  <label htmlFor="show-notes-account-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+                </div>
+              )}
               {spendWiseView && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -1269,6 +1282,7 @@ export function AccountGroupDetails({
                         }}
                         initialContext="Bank/Cash"
                         initialEntityId={noteEntityId}
+                        compactFooter
                     />
                 )}
             </div>

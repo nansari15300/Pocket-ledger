@@ -81,6 +81,7 @@ import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesT
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -149,6 +150,8 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   const anySelected = statusFilter.paid || statusFilter.unpaid || statusFilter.partial || statusFilter.overdue;
   if (!anySelected) return txns;
   return txns.filter((t) => {
+    // Notes have no payment status; always show them regardless of status filter
+    if (t.type === "note") return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -348,6 +351,8 @@ export function PartyDetails({
     sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
   };
 
+  const { showNotes, setShowNotes } = useShowNotes();
+
   const handleStatusFilterChange = (key: keyof StatusFilter, checked: boolean) => {
     const next = { ...statusFilter, [key]: checked };
     setStatusFilter(next);
@@ -486,9 +491,14 @@ export function PartyDetails({
     setFilters({});
   };
   
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
+    () => filterByStatus(displayTransactions, statusFilter),
+    [displayTransactions, statusFilter]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -910,6 +920,7 @@ export function PartyDetails({
                 onVoucherAction={() => { onPartyUpdated(); setIsNoteOpen(false); }}
                 initialContext="Party"
                 initialEntityId={party.id}
+                compactFooter
               />
             </div>
           </DialogContent>
@@ -1227,6 +1238,10 @@ export function PartyDetails({
                   })}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Checkbox id="show-notes-party" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <label htmlFor="show-notes-party" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+              </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -1304,6 +1319,7 @@ export function PartyDetails({
               }}
               initialContext="Party"
               initialEntityId={party.id}
+              compactFooter
             />
           </div>
         </DialogContent>

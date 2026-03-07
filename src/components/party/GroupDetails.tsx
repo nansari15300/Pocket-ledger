@@ -35,6 +35,7 @@ import {
   Search,
 } from "lucide-react";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -152,6 +153,7 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   const anySelected = statusFilter.paid || statusFilter.unpaid || statusFilter.partial || statusFilter.overdue;
   if (!anySelected) return txns;
   return txns.filter((t) => {
+    if (t.type === "note") return true; // Notes have no payment status; always show
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -669,9 +671,15 @@ export function GroupDetails({
     setCurrentPage(1);
   };
 
+  const { showNotes, setShowNotes } = useShowNotes();
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   const statusFilteredTransactions = useMemo(
-    () => filterByStatus(processedTransactions, statusFilter),
-    [processedTransactions, statusFilter]
+    () => filterByStatus(displayTransactions, statusFilter),
+    [displayTransactions, statusFilter]
   );
 
   const totalPages = Math.max(
@@ -1389,6 +1397,10 @@ export function GroupDetails({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Checkbox id="show-notes-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+              <label htmlFor="show-notes-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+            </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -1601,6 +1613,7 @@ export function GroupDetails({
                 }}
                 initialContext="Party"
                 initialEntityId={noteEntityId}
+                compactFooter
               />
             )}
           </div>

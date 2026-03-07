@@ -663,10 +663,9 @@ export function useTransactions(
         let entityTransactions: any[] = [];
         
         // If passedTransactions is provided, use them directly (they're already filtered for the entity)
-        // Only apply entity filtering if passedTransactions is not provided
-        // EXCEPTION: For item context, always filter by itemId even if passedTransactions is provided
-        if (passedTransactions && passedTransactions.length >= 0 && context !== 'item') {
-            // Use passed transactions directly - they're already filtered for the specific entity
+        // EXCEPTION: For item context, always filter by itemId. For group context, always apply group filter
+        // so that only notes/vouchers linked to group members show (e.g. item group: only notes with entityId in group items)
+        if (passedTransactions && passedTransactions.length >= 0 && context !== 'item' && context !== 'group') {
             entityTransactions = passedTransactions;
         } else if (transactionContext && entity.id === 'all') {
             entityTransactions = transactionsToProcess.filter((v: any) => v.type === transactionContext);
@@ -734,10 +733,11 @@ export function useTransactions(
         } else if (context === 'other') {
              entityTransactions = transactionsToProcess.filter((v: any) => v.payeeName === entity.id);
         } else if (context === 'item') {
-            // For items, ONLY show transactions that contain this item in lineItems
+            // For items: lineItems/items containing this item, or notes linked to this item (entityId)
             entityTransactions = transactionsToProcess.filter((v: any) =>
-                v.lineItems?.some((li: any) => li.itemId === entity.id) || 
-                v.items?.some((li: any) => li.itemId === entity.id)
+                v.lineItems?.some((li: any) => li.itemId === entity.id) ||
+                v.items?.some((li: any) => li.itemId === entity.id) ||
+                (v.type === 'note' && v.entityId === entity.id)
             );
         } else {
             entityTransactions = transactionsToProcess.filter((v: any) => {
@@ -1016,10 +1016,9 @@ export function useTransactions(
             .map(t => {
                 const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
                 
-                // Fix: Filter out transactions with zero amounts for individual accounts/groups
-                // This ensures only relevant transactions are shown (not transactions from other accounts/groups)
-                if (context !== 'daybook' && context !== 'other' && amounts.debit === 0 && amounts.credit === 0) {
-                    // Skip transactions with no amount impact for this entity
+                // Filter out transactions with zero amounts for individual accounts/groups (so irrelevant txns don't show)
+                // Exception: Note vouchers have no debit/credit; keep them so they show on party, bank, staff, tax, item, expense pages
+                if (context !== 'daybook' && context !== 'other' && amounts.debit === 0 && amounts.credit === 0 && t.type !== 'note') {
                     return null;
                 }
                 

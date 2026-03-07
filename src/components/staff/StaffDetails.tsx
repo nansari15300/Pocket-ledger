@@ -68,7 +68,7 @@ import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import {
   DropdownMenu,
@@ -158,6 +158,7 @@ export function StaffDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { showNotes, setShowNotes } = useShowNotes();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -354,20 +355,26 @@ export function StaffDetails({
     }
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, isEditStaffDialogOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
+
+  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  const displayTransactions = useMemo(
+    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, showNotes]
+  );
   
   const totalPages = useMemo(() => {
-    return rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
-  }, [processedTransactions.length, rowsPerPage]);
+    return rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
+  }, [displayTransactions.length, rowsPerPage]);
   
   const paginatedTransactions = useMemo(() => {
     if (rowsPerPage > 0) {
-      return processedTransactions.slice(
+      return displayTransactions.slice(
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
       );
     }
-    return processedTransactions;
-  }, [processedTransactions, currentPage, rowsPerPage]);
+    return displayTransactions;
+  }, [displayTransactions, currentPage, rowsPerPage]);
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -476,9 +483,9 @@ export function StaffDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
+    if (!mobileSearchTerm) return displayTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return processedTransactions.filter(t => {
+    return displayTransactions.filter(t => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -494,7 +501,7 @@ export function StaffDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter =
       !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -964,7 +971,7 @@ export function StaffDetails({
       <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
           <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-            <span className="whitespace-nowrap flex-shrink-0">{processedTransactions.length} transaction(s).</span>
+            <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
             <div className="flex items-center space-x-2 flex-shrink-0">
               <Checkbox id="show-narration-staff" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-staff" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1004,6 +1011,10 @@ export function StaffDetails({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Checkbox id="show-notes-staff" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+              <label htmlFor="show-notes-staff" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
+            </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
             <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
@@ -1089,6 +1100,7 @@ export function StaffDetails({
               }}
               initialContext="Staff"
               initialEntityId={staff.id}
+              compactFooter
             />
           </div>
         </DialogContent>

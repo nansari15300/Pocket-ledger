@@ -55,6 +55,33 @@ export function useTransactionVisibleColumns() {
   return { visibleColumns, handleColumnVisibilityChange };
 }
 
+/** Show notes in transaction tables: persisted in localStorage, default false (untick = hide notes). Shared across all details/group pages. */
+export const SHOW_NOTES_KEY = "transactionShowNotes";
+
+export function useShowNotes() {
+  const [showNotes, setShowNotesState] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const saved = localStorage.getItem(SHOW_NOTES_KEY);
+      return saved === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const setShowNotes = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    setShowNotesState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      try {
+        localStorage.setItem(SHOW_NOTES_KEY, next ? "true" : "false");
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  return { showNotes, setShowNotes };
+}
+
 /** Spend-wise balance blink: 'all' | 'group' | 'off'. Persisted in localStorage. */
 export const SPEND_WISE_BLINK_MODE_KEY = "spendWiseBlinkMode";
 export type SpendWiseBlinkMode = "all" | "group" | "off";

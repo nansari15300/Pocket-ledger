@@ -432,6 +432,7 @@ export function AccountGroupDetails({
                         }}
                         initialContext="Bank/Cash"
                         initialEntityId={noteEntityId}
+                        compactFooter
                     />
                 )}
             </div>

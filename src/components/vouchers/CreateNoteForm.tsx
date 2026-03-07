@@ -30,8 +30,10 @@ import type { Account } from "@/components/bank-cash/types";
 import type { Staff } from "@/components/staff/types";
 import type { Tax } from "@/components/tax/types";
 import type { Item } from "@/components/items/types";
+import type { ExpenseAccount } from "@/components/expenses/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useDate } from "@/hooks/useDate";
+import { openPrintDirect } from "@/lib/printDirect";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { format, startOfDay } from "date-fns";
@@ -82,6 +84,7 @@ export function CreateNoteForm({
     showSaveAndApproveOnCreate = false,
     onApprove,
     isApproving = false,
+    compactFooter = false,
 }: {
     voucher?: any,
     onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void,
@@ -94,13 +97,15 @@ export function CreateNoteForm({
     showSaveAndApproveOnCreate?: boolean,
     onApprove?: () => void,
     isApproving?: boolean,
+    /** When true, hide History / Save & New / Save & Print / Delete (used in entity "Add a New Note for..." dialogs; keep full buttons in New Transaction → Note for edit) */
+    compactFooter?: boolean,
 }) {
   const { user, customUser } = useAuth();
   const { company, companyId, triggerSync } = useCompany();
   const { toast } = useToast();
-  const { dateSystem, formatDate } = useDate();
+  const { dateSystem, formatDate, formatDateBS } = useDate();
   const { vouchers } = useVouchers();
-  const { can, canPerformBackdatedAction, canEditRecord, fileAttachmentLimits, allowAttachments } = usePermissions();
+  const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const isMobile = useIsMobile();
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -110,16 +115,20 @@ export function CreateNoteForm({
   const [staff, setStaff] = useState<Staff[]>([]);
   const [taxes, setTaxes] = useState<Tax[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  const [expenseAccounts, setExpenseAccounts] = useState<ExpenseAccount[]>([]);
   const [files, setFiles] = useState<(File|string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  /** Delete confirmation open state (only used when !compactFooter i.e. New Transaction → Note) */
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const form = useForm<NoteFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: getInitialFormValues(voucher?.context || initialContext, voucher?.entityId || initialEntityId),
+    mode: "onChange", // Run validation on change so Save enables when form is valid
   });
 
-  const { isDirty: _isFormFieldsDirty } = form.formState;
+  const { isDirty: _isFormFieldsDirty, isValid: isFormValid } = form.formState;
   const _isFileDirty = (() => {
     const currentUrls = files.filter((f: unknown) => typeof f === "string") as string[];
     const newFiles = files.filter((f: unknown): f is File => f instanceof File);
@@ -157,10 +166,17 @@ export function CreateNoteForm({
         if (!isNaN(num) && num > maxNum) maxNum = num;
       });
       form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, maxNum + 1));
+      // Re-run validation so "Voucher number is required" clears and Save enables after auto number is set
+      form.trigger();
     } catch (error) { console.error(error); }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
   useEffect(() => { if (!voucher?.id) fetchVoucherNumber(); }, [voucher?.id, fetchVoucherNumber]);
+
+  // Run validation once when form mounts so Save/Save & Approve enable when required fields are pre-filled (e.g. from Income/Expense page)
+  useEffect(() => {
+    form.trigger();
+  }, [form]);
 
   useEffect(() => {
     if (voucher) {
@@ -185,20 +201,32 @@ export function CreateNoteForm({
       onSnapshot(query(collection(firestore, `companies/${companyId}/staff`)), (snap) => setStaff(snap.docs.map(d=>({id: d.id, ...d.data()} as Staff)))),
       onSnapshot(query(collection(firestore, `companies/${companyId}/taxes`)), (snap) => setTaxes(snap.docs.map(d=>({id: d.id, ...d.data()} as Tax)))),
       onSnapshot(query(collection(firestore, `companies/${companyId}/items`)), (snap) => setItems(snap.docs.map(d=>({id: d.id, ...d.data()} as Item)))),
+      onSnapshot(query(collection(firestore, `companies/${companyId}/expense_accounts`)), (snap) => setExpenseAccounts(snap.docs.map(d=>({id: d.id, ...d.data()} as ExpenseAccount)).filter((a: ExpenseAccount) => !(a as any).isDeleted))),
     ];
     return () => unsubFns.forEach(fn => fn());
   }, [companyId]);
 
-  const getEntityOptions = () => {
+  const getEntityOptions = useCallback(() => {
     switch (selectedContext) {
       case "Party": return parties.map(p => ({ value: p.id, label: p.name }));
       case "Bank/Cash": return accounts.map(a => ({ value: a.id, label: a.accountName }));
       case "Staff": return staff.map(s => ({ value: s.id, label: s.name }));
       case "Tax": return taxes.map(t => ({ value: t.id, label: t.name }));
       case "Items": return items.map(i => ({ value: i.id, label: i.name }));
+      case "Income": return expenseAccounts.filter((a: ExpenseAccount) => a.type === "Income").map(a => ({ value: a.id, label: a.name }));
+      case "Expense": return expenseAccounts.filter((a: ExpenseAccount) => (a.type === "Expense" || a.type === "Salary" || !a.type)).map(a => ({ value: a.id, label: a.name }));
       default: return [];
     }
-  };
+  }, [selectedContext, parties, accounts, staff, taxes, items, expenseAccounts]);
+
+  // When Link to (context) changes, clear entityId if current value is not in the new options
+  useEffect(() => {
+    const opts = getEntityOptions();
+    const currentId = form.getValues("entityId");
+    if (currentId && opts.length > 0 && !opts.some((o: { value: string }) => o.value === currentId)) {
+      form.setValue("entityId", "");
+    }
+  }, [selectedContext, getEntityOptions, form]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !allowAttachments) return;
@@ -286,7 +314,7 @@ export function CreateNoteForm({
     }
   };
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; approveAfterSave?: boolean } = {}) {
+  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
     const isValid = await form.trigger();
     if (!isValid) {
@@ -294,10 +322,10 @@ export function CreateNoteForm({
         return;
     }
     onVoucherAction?.('saved', options.saveAndNew);
-    await processAndSave(form.getValues(), options.saveAndNew, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
+    await processAndSave(form.getValues(), options.saveAndNew, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave, options.saveAndPrint);
   }
 
-  async function processAndSave(values: NoteFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
+  async function processAndSave(values: NoteFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean, saveAndPrint?: boolean) {
     if (!user || !companyId) return;
     
     try {
@@ -413,6 +441,38 @@ export function CreateNoteForm({
         }
 
         onSuccess?.();
+
+        // Save & Print: open print preview with this note as custom content
+        if (saveAndPrint && result?.id && company) {
+          const noteDate = values.date instanceof Date ? values.date : new Date(values.date);
+          const dateStr = dateSystem === "Both" ? `${formatDateBS(noteDate)} / ${formatDate(noteDate)}` : (dateSystem === "BS" ? formatDateBS(noteDate) : formatDate(noteDate));
+          openPrintDirect({
+            company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
+            title: `Note: ${values.voucherNumber}`,
+            context: "daybook",
+            dateSystem: dateSystem as "AD" | "BS" | "Both",
+            dateRangeText: dateStr,
+            vouchersCount: 1,
+            openingBalance: 0,
+            transactions: [],
+            customContent: [
+              { text: "Note", fontSize: 14, bold: true, margin: [0, 0, 0, 8] },
+              {
+                table: {
+                  body: [
+                    ["Note No.", values.voucherNumber],
+                    ["Date", dateStr],
+                    ["Title", values.title || "—"],
+                    ["Link to", values.context || "—"],
+                    ["Entity", entityName || "—"],
+                    ["Details", (values.content || "—") as string],
+                  ],
+                  widths: [100, "*"],
+                },
+              },
+            ],
+          }, true);
+        }
     } catch (err) {
         if (err instanceof PermissionDeniedError) {
           sonnerToast.error("Permission Denied", { id: toastId, description: err.message });
@@ -425,6 +485,43 @@ export function CreateNoteForm({
         setIsLoading(false);
     }
   }
+
+  /** Soft-delete note (move to bin). Used only when !compactFooter; enabled in edit when canDeleteVoucher. */
+  const handleDelete = async () => {
+    if (!voucher?.id || !companyId || !user) return;
+    try {
+      assertCan(can, "delete_records");
+      if (!canDeleteVoucher(voucher)) {
+        sonnerToast.error("Permission Denied", { description: "You cannot delete this voucher." });
+        return;
+      }
+      const voucherDate = voucher?.date?.toDate ? voucher.date.toDate() : (voucher?.date ? new Date(voucher.date) : new Date());
+      assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
+    } catch (err) {
+      if (err instanceof PermissionDeniedError) {
+        sonnerToast.error("Permission Denied", { description: err.message });
+      } else {
+        sonnerToast.error("Error", { description: "Failed to check permissions." });
+      }
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, voucher.id), {
+        isDeleted: true,
+        deletedAt: serverTimestamp(),
+        deletedBy: user.uid,
+      });
+      sonnerToast.success("Note moved to bin.");
+      onVoucherAction?.("cancelled");
+      triggerSync();
+    } catch (err) {
+      console.error("Error deleting note:", err);
+      sonnerToast.error("Error", { description: "Failed to delete note." });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <Form {...form}>
@@ -606,7 +703,7 @@ export function CreateNoteForm({
                 <FormField control={form.control} name="title" render={({ field }: any) => (<FormItem><FormLabel>Title</FormLabel><FormControl><Input placeholder="Note title" {...field} /></FormControl></FormItem>)} />
                 <div className="grid grid-cols-2 gap-4">
                      <FormField control={form.control} name="context" render={({ field }: any) => (
-                        <FormItem><FormLabel>Link to</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select context" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Party">Party</SelectItem><SelectItem value="Bank/Cash">Bank/Cash Account</SelectItem><SelectItem value="Staff">Staff</SelectItem><SelectItem value="Tax">Tax</SelectItem><SelectItem value="Items">Items</SelectItem></SelectContent></Select></FormItem>
+                        <FormItem><FormLabel>Link to</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select context" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Party">Party</SelectItem><SelectItem value="Bank/Cash">Bank/Cash Account</SelectItem><SelectItem value="Staff">Staff</SelectItem><SelectItem value="Tax">Tax</SelectItem><SelectItem value="Items">Items</SelectItem><SelectItem value="Income">Income</SelectItem><SelectItem value="Expense">Expense</SelectItem></SelectContent></Select></FormItem>
                      )} />
                     {selectedContext && (
                          <FormField control={form.control} name="entityId" render={({ field }: any) => (
@@ -662,52 +759,79 @@ export function CreateNoteForm({
                 </div>
             </div>
         </ScrollArea>
-        <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden", isMobile ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4")}>
+        <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden", isMobile ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4 flex flex-col md:flex-row items-stretch md:items-center gap-4", !isMobile && compactFooter && "justify-end", !isMobile && !compactFooter && "justify-between")}>
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
-                {/* Row 0: Delete (left) | History (middle) | Save & Print (right) - all 6 buttons always visible */}
-                <Button type="button" variant="destructive" className="w-full opacity-60" disabled>
-                  Delete
-                </Button>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>
-                  History
-                </Button>
-                <Button type="button" className={cn("w-full", BTN_PRINT_CLASS, "opacity-60")} disabled>
-                  Save & Print
-                </Button>
-                {/* Row 1: Cancel (left) | Approve or Save & Approve (middle, when can approve) | Save (right, always) */}
+                {!compactFooter && (
+                  <>
+                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}>Delete</Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>History</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
+                  </>
+                )}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>Cancel</Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : showSaveAndApproveOnCreate ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
+                <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
               </div>
             ) : (
               <>
-                <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>
-                    <History className="mr-2 h-4 w-4" /> History
-                  </Button>
-                  <Button type="button" variant="destructive" disabled className="shrink-0 rounded-full opacity-60">
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete
-                  </Button>
-                </div>
+                {!compactFooter && (
+                  <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
+                    <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                      <AlertDialogTrigger asChild>
+                        <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || (!!voucher && !canDeleteVoucher(voucher))}>
+                          <Trash2 className="mr-2 h-4 w-4" /> Delete
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>This will move the note to the recycle bin.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">Move to Bin</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS, (!voucher || !showHistoryButton || !onOpenHistory) && "opacity-60")}>
+                      <History className="mr-2 h-4 w-4" /> History
+                    </Button>
+                  </div>
+                )}
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                  <Button type="button" disabled className="shrink-0 rounded-full">Save & New</Button>
-                  <Button type="button" disabled className="shrink-0 rounded-full"><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+                  {!compactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
+                  {!compactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
+                  <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
