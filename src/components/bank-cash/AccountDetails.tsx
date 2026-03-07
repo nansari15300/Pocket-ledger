@@ -31,6 +31,7 @@ import {
   Crown,
   Columns3,
   ChevronDown,
+  Info,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { DateRange } from "@/components/ui/ad-calendar";
@@ -76,7 +77,8 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode } from "../vouchers/transactionColumnVisibility";
+import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Checkbox } from "../ui/checkbox";
@@ -141,6 +143,8 @@ export function AccountDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { spendWiseBlinkMode, setSpendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   
@@ -811,6 +815,7 @@ export function AccountDetails({
             closingBalance={showMaskedBalance ? undefined : closingBalance}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
+            blinkMode={spendWiseBlinkMode}
           />
         </div>
       </div>
@@ -1075,6 +1080,7 @@ export function AccountDetails({
               closingBalance={showMaskedBalance ? undefined : closingBalance}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
+              blinkMode={spendWiseBlinkMode}
             />
           </div>
         </div>
@@ -1116,6 +1122,32 @@ export function AccountDetails({
                     ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {spendWiseView && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0 min-w-0">
+                      <span className="truncate">{spendWiseBlinkMode === "all" ? "Blink all" : spendWiseBlinkMode === "group" ? "Blink group" : "Off"}</span>
+                      <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44 p-2">
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("all")} className={spendWiseBlinkMode === "all" ? "bg-accent" : ""}>
+                      Blink all
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("group")} className={spendWiseBlinkMode === "group" ? "bg-accent" : ""}>
+                      Blink group
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("off")} className={spendWiseBlinkMode === "off" ? "bg-accent" : ""}>
+                      Off
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setBlinkInfoOpen(true)} className="flex items-center gap-2">
+                      <Info className="h-4 w-4 shrink-0" />
+                      About
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>

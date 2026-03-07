@@ -1154,7 +1154,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                     {hasPrefix && (
                                       <FormItem className="min-w-0 w-full overflow-hidden">
                                         <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
+                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
                                           <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
                                             <SelectValue />
                                           </SelectTrigger>
@@ -1171,7 +1171,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           placeholder="e.g. ADSAL-001"
                                           {...voucherField}
                                           className="h-9 text-xs px-2 min-w-0 max-w-full w-full"
-                                          disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))}
+                                          disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))}
                                         />
                                       </FormControl>
                                     </FormItem>
@@ -1185,6 +1185,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                             isRange={false}
                                             transactionDates={transactionDates}
                                             className="h-9 text-xs w-full"
+                                            disabled={deleteDisabledWhenLinked}
                                           />
                                         </div>
                                       </FormItem>
@@ -1195,7 +1196,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                         <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
                                           <PopoverTrigger asChild>
                                             <FormControl>
-                                              <Button variant="outline" disabled={!isFormEditing} className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
+                                              <Button variant="outline" disabled={!isFormEditing || deleteDisabledWhenLinked} className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
                                                 {dateField.value instanceof Date && !isNaN(dateField.value.getTime()) ? formatDate(dateField.value) : "Pick date"}
                                                 <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
                                               </Button>
@@ -1232,7 +1233,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                           <FormLabel>Voucher No.</FormLabel>
                           <div className="flex gap-2 h-10">
                             {isPrefixSelectionEnabled && voucherPrefixes.length > 0 && (
-                              <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]}>
+                              <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
                                 <SelectTrigger className="w-32 h-10">
                                   <SelectValue />
                                 </SelectTrigger>
@@ -1246,7 +1247,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 placeholder="e.g. ADSAL-001" 
                                 {...field} 
                                 className="h-10" 
-                                disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} 
+                                disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} 
                               />
                             </FormControl>
                           </div>
@@ -1272,6 +1273,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 }} 
                                 isRange={false} 
                                 transactionDates={transactionDates} 
+                                disabled={deleteDisabledWhenLinked}
                               />
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1279,7 +1281,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 <PopoverTrigger asChild>
                                   <FormControl>
                                     <Button 
-                                      disabled={!isFormEditing} 
+                                      disabled={!isFormEditing || deleteDisabledWhenLinked} 
                                       variant={"outline"} 
                                       className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
                                     >
@@ -1353,6 +1355,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         }}
                         placeholder="Select debit account"
                         addNewLabel="+ Add New Expense Account"
+                        disabled={deleteDisabledWhenLinked}
                       />
                     </div>
                     <FormMessage />
@@ -1363,7 +1366,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                 <div className="space-y-2 px-[2px]">
                   <div className="flex justify-between items-center">
                     <FormLabel className={cn("font-semibold", isMobile ? "text-sm" : "text-base")}>Salary Details</FormLabel>
-                    {!isPaymentMode && <Button type="button" variant="outline" size="sm" onClick={handleSelectAllStaff} className={cn(isMobile && "text-xs h-8")}><UserPlus className={cn("h-4 w-4", isMobile && "mr-1")}/> {isMobile ? "Add All" : "Add All Staff"}</Button>}
+                    {!isPaymentMode && <Button type="button" variant="outline" size="sm" onClick={handleSelectAllStaff} disabled={deleteDisabledWhenLinked} className={cn(isMobile && "text-xs h-8")}><UserPlus className={cn("h-4 w-4", isMobile && "mr-1")}/> {isMobile ? "Add All" : "Add All Staff"}</Button>}
                   </div>
                   {isMobile ? (
                     <>
@@ -1402,6 +1405,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           }}
                                           placeholder="Select Staff"
                                           addNewLabel="+ Add New Staff"
+                                          disabled={deleteDisabledWhenLinked}
                                         />
                                       </div>
                                       {balance !== undefined && (
@@ -1433,6 +1437,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           }}
                                           onBlur={field.onBlur}
                                           className="h-9 text-xs" 
+                                          disabled={deleteDisabledWhenLinked}
                                         />
                                       </FormControl>
                                       <FormMessage />
@@ -1455,6 +1460,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           }
                                         }} 
                                         value={field.value}
+                                        disabled={deleteDisabledWhenLinked}
                                       >
                                         <FormControl>
                                           <SelectTrigger className="h-9 text-xs">
@@ -1540,6 +1546,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                     size="sm" 
                                     onClick={() => remove(index)}
                                     className="h-8 w-8 p-0"
+                                    disabled={deleteDisabledWhenLinked}
                                   >
                                     <Trash2 className="h-4 w-4 text-destructive"/>
                                   </Button>
@@ -1557,6 +1564,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                               size="sm" 
                               onClick={() => append({staffId: "", salary: 0, narration: "", type: "credit", taxAccountId: "", taxAmount: 0, afterTaxSalary: 0, rate: 0 })}
                               className="text-xs h-8"
+                              disabled={deleteDisabledWhenLinked}
                             >
                               <PlusCircle className="mr-2 h-4 w-4"/> Add Row
                             </Button>
@@ -1623,6 +1631,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           }}
                                           placeholder="Select Staff"
                                           addNewLabel="+ Add New Staff"
+                                          disabled={deleteDisabledWhenLinked}
                                         />
                                          {balance !== undefined && (
                                             <div className={cn("text-xs font-semibold mt-1", balance < 0 ? "text-red-600" : "text-green-600")}>
@@ -1631,14 +1640,14 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                         )}
                                         <FormMessage /></FormItem>)}/>
                                 </TableCell>
-                                <TableCell><FormField control={form.control} name={`lineItems.${index}.salary`} render={({ field }: any) => (<FormItem><FormControl><Input type="number" value={field.value || ''} onChange={(e) => { const value = e.target.value === '' ? '' : parseFloat(e.target.value) || 0; field.onChange(value); }} onBlur={field.onBlur} /></FormControl><FormMessage /></FormItem>)}/></TableCell>
+                                <TableCell><FormField control={form.control} name={`lineItems.${index}.salary`} render={({ field }: any) => (<FormItem><FormControl><Input type="number" value={field.value || ''} onChange={(e) => { const value = e.target.value === '' ? '' : parseFloat(e.target.value) || 0; field.onChange(value); }} onBlur={field.onBlur} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/></TableCell>
                                  <TableCell>
                                     <FormField control={form.control} name={`lineItems.${index}.taxAccountId`} render={({ field }: any) => (
                                         <FormItem>
                                             <Select onValueChange={(value) => {
                                                 if (value === "add-new") { setActiveLineIndex(index); setIsCreateTaxOpen(true); }
                                                 else { field.onChange(value === 'none' ? '' : value); }
-                                            }} value={field.value}>
+                                            }} value={field.value} disabled={deleteDisabledWhenLinked}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Select Tax" /></SelectTrigger></FormControl>
                                                 <SelectContent>
                                                     <SelectItem value="none">None</SelectItem>
@@ -1658,7 +1667,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 <TableCell><Input value={Number(form.watch(`lineItems.${index}.taxAmount`) || 0).toFixed(2)} readOnly className="bg-muted text-right"/></TableCell>
                                 <TableCell><Input value={Number(form.getValues(`lineItems.${index}.afterTaxSalary`) || 0).toFixed(2)} readOnly className="bg-muted text-right"/></TableCell>
                                 <TableCell><FormField control={form.control} name={`lineItems.${index}.narration`} render={({ field }: any) => (<FormItem><FormControl><Input placeholder="e.g. Salary for Baisakh" {...field}/></FormControl><FormMessage /></FormItem>)}/></TableCell>
-                                <TableCell>{!isPaymentMode && (<Button type="button" variant="ghost" size="icon" onClick={() => remove(index)}><Trash2 className="h-4 w-4 text-destructive"/></Button>)}</TableCell>
+                                <TableCell>{!isPaymentMode && (<Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} disabled={deleteDisabledWhenLinked}><Trash2 className="h-4 w-4 text-destructive"/></Button>)}</TableCell>
                               </TableRow>
                             );
                           })}
@@ -1676,7 +1685,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         </TableFooter>
                       </Table>
                       {!isPaymentMode && (
-                        <Button type="button" variant="outline" size="sm" onClick={() => append({staffId: "", salary: 0, narration: "", type: "credit", taxAccountId: "", taxAmount: 0, afterTaxSalary: 0, rate: 0 })}>
+                        <Button type="button" variant="outline" size="sm" onClick={() => append({staffId: "", salary: 0, narration: "", type: "credit", taxAccountId: "", taxAmount: 0, afterTaxSalary: 0, rate: 0 })} disabled={deleteDisabledWhenLinked}>
                           <PlusCircle className="mr-2 h-4 w-4"/> Add Row
                         </Button>
                       )}
@@ -1813,16 +1822,17 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                  <FormItem>
                   <FormLabel>Attach Files (Optional)</FormLabel>
                   <RestrictedFileUploader>
+                    {/* When linked: add/remove disabled; existing files stay clickable to open */}
                     <div className="flex flex-wrap gap-4">
                       {files.map((file, index) => (
                         <FilePreview 
                           key={index} 
                           file={file} 
-                          onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                          onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />
                       ))}
-                      {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                         <div 
                           className={cn(
                             "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
@@ -1848,7 +1858,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                               fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                             ].filter(Boolean).join(",") || "image/*,application/pdf"}
                             multiple={fileAttachmentLimits.maxFileCount > 1}
-                            disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                            disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                           />
                         </div>
                       )}

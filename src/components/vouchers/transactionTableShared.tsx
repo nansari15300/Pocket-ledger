@@ -414,6 +414,8 @@ export const TransactionRow = React.memo(
     isSpendWiseGroupLast = false,
     spendWiseRunningBalance,
     spendWiseGroupColorIndex,
+    spendWiseGroupSize,
+    blinkMode,
     animateLayout = false,
   }: any) => {
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
@@ -604,12 +606,22 @@ export const TransactionRow = React.memo(
             const displayValue = useOutstandingForBalance
               ? (isTaxContext ? (isCreditSide ? out : -out) : (isStaffPaymentOut ? out : (isCreditSide ? out : -out)))
               : balance;
+            /** Spend-wise blink: off = never; all = last row non-0 balance; group = last row non-0 only if multi-row group */
+            const isGroupBalanceNonZero =
+              blinkMode === "off" || !blinkMode
+                ? false
+                : blinkMode === "all"
+                  ? isSpendWiseGroupLast && hasSpendWiseColor && balance !== 0 && !isBalanceMasked
+                  : blinkMode === "group"
+                    ? isSpendWiseGroupLast && hasSpendWiseColor && balance !== 0 && !isBalanceMasked && (spendWiseGroupSize ?? 0) > 1
+                    : false;
             return (
               <TableCell
                 className={cn(
                   "text-right font-semibold",
                   displayValue >= 0 ? "text-green-600" : "text-red-600",
-                  ensureMinGaps && "min-w-[115px] px-[5px]"
+                  ensureMinGaps && "min-w-[115px] px-[5px]",
+                  isGroupBalanceNonZero && "animate-spend-wise-balance-blink"
                 )}
               >
                 {isBalanceMasked
@@ -717,16 +729,31 @@ export const TransactionRow = React.memo(
       1;
 
     const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
+    /** Spend-wise row type: inflow (payment in / direct income / contra in) = green bg; outflow (payment out / direct expense / contra out) = dim white, smaller text, 30px left gap */
+    const isSpendWiseInflowRow = inSpendWiseGroup && (
+      transaction.type === "payment_in" ||
+      transaction.type === "direct_income" ||
+      (transaction.type === "contra" && context === "account" && contextId && transaction.toAccountId === contextId)
+    );
+    const isSpendWiseOutflowRow = inSpendWiseGroup && (
+      transaction.type === "payment_out" ||
+      transaction.type === "direct_expense" ||
+      (transaction.type === "contra" && context === "account" && contextId && transaction.fromAccountId === contextId)
+    );
+    /** In group details (context "group") contra child rows are not classified as outflow (no single account contextId), so give them 30px indent by treating any non-inflow child as indent-worthy. */
+    const spendWiseChildNeedsIndent = isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow);
     /** Extra gap below last row of each group so containers don't touch during layout animation */
     const groupGapBottom = "[&>td]:pb-3";
     const spendWiseMainInset = inSpendWiseGroup && cn(
-      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
+      spendWiseChildNeedsIndent ? "[&>td:first-child]:pl-[30px]" : "[&>td:first-child]:pl-[6px]",
+      "[&>td:last-child]:pr-[6px]",
       isSpendWiseGroupFirst && "[&>td]:pt-[6px]",
       isSpendWiseGroupLast && !showNarrationRow && cn("[&>td]:pb-[6px]", groupGapBottom),
       !isSpendWiseGroupFirst && "[&>td]:pt-[3px]"
     );
     const spendWiseNarrInset = inSpendWiseGroup && cn(
-      "[&>td:first-child]:pl-[6px] [&>td:last-child]:pr-[6px]",
+      spendWiseChildNeedsIndent ? "[&>td:first-child]:pl-[30px]" : "[&>td:first-child]:pl-[6px]",
+      "[&>td:last-child]:pr-[6px]",
       isSpendWiseGroupLast && cn("[&>td]:pb-[6px]", groupGapBottom),
       !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
     );
@@ -749,7 +776,9 @@ export const TransactionRow = React.memo(
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
-          isSpendWiseChild && !isSelected && "bg-muted/20 [&>td]:bg-muted/20",
+          isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
+          isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
+          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow)) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           spendWiseMainInset,
           spendWiseBorderFirst,
           spendWiseBorderLast,
@@ -757,7 +786,7 @@ export const TransactionRow = React.memo(
           spendWiseBorderMid,
           isNote && !isSelected && "bg-amber-50 [&>td]:bg-amber-50 hover:bg-amber-100 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
-          isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+          isPendingApproval && !isSelected && !inSpendWiseGroup && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
           isSelected &&
             "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
           isSelected &&
@@ -824,10 +853,12 @@ export const TransactionRow = React.memo(
             swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
             "[&>td:first-child]:border-l [&>td:last-child]:border-r"
           ),
-          isPendingApproval && !isSelected && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
+          isPendingApproval && !isSelected && !inSpendWiseGroup && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
           isSelected
             ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
-            : isSpendWiseChild && "bg-muted/20 [&>td]:bg-muted/20",
+            : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
+          isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
+          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow)) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",

@@ -3,6 +3,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Spend-wise group balance: one visible blink per second when balance !== 0 */
+@keyframes spend-wise-balance-blink {
+  0%, 100% { opacity: 1; }
+  5% { opacity: 0; }
+  10% { opacity: 1; }
+}
+.animate-spend-wise-balance-blink {
+  animation: spend-wise-balance-blink 1s ease-in-out infinite;
+}
+
 body {
   font-family: Arial, Helvetica, sans-serif;
 }
@@ -542,6 +552,26 @@ button.day_selected.is-today.has-transactions {
   }
   .scrollbar-slim-dim::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.4);
+  }
+
+  /* Extra thin, dim scrollbar */
+  .scrollbar-slim-dim-extra {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(0 0% 75% / 0.4) transparent;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 2px;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.35);
   }
 }
 

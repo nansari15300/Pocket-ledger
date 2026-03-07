@@ -54,3 +54,23 @@ export function useTransactionVisibleColumns() {
 
   return { visibleColumns, handleColumnVisibilityChange };
 }
+
+/** Spend-wise balance blink: 'all' | 'group' | 'off'. Persisted in localStorage. */
+export const SPEND_WISE_BLINK_MODE_KEY = "spendWiseBlinkMode";
+export type SpendWiseBlinkMode = "all" | "group" | "off";
+
+export function useSpendWiseBlinkMode() {
+  const [blinkMode, setBlinkModeState] = useState<SpendWiseBlinkMode>(() => {
+    if (typeof window === "undefined") return "all";
+    const saved = localStorage.getItem(SPEND_WISE_BLINK_MODE_KEY);
+    if (saved === "group" || saved === "off") return saved;
+    return "all";
+  });
+
+  const setBlinkMode = useCallback((mode: SpendWiseBlinkMode) => {
+    setBlinkModeState(mode);
+    if (typeof window !== "undefined") localStorage.setItem(SPEND_WISE_BLINK_MODE_KEY, mode);
+  }, []);
+
+  return { spendWiseBlinkMode: blinkMode, setSpendWiseBlinkMode: setBlinkMode };
+}

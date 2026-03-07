@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle } from "lucide-react";
+import { CalendarIcon, Loader2, Trash2, Upload, FileText, PlusCircle, Crown, Printer, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -58,6 +58,7 @@ import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_C
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
+import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
@@ -222,6 +223,7 @@ export function CreatePaymentOutForm({
   const [isLinkToSalaryOpen, setIsLinkToSalaryOpen] = useState(false);
   const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
   const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
+  const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
 
     useEffect(() => {
@@ -959,11 +961,67 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         date,
         amount,
         linked: linkedFromThis,
+        linkedOnOthers: alreadyLinked,
         linkable,
         from,
       };
-    }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkable: number; from: string }[];
+    }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkedOnOthers: number; linkable: number; from: string }[];
   }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, accountId, amountPaid, linkedAmountByPaymentInId, paymentInDialogNames]);
+
+  const formDate = form.watch("date");
+  const formVoucherNumber = form.watch("voucherNumber");
+  /** Current Payment Out as it appears on the opposite voucher (Payment In / Direct Income / Contra in) in their "Link for spend wise (linked to me)" table — one row: this voucher's details (e.g. PYMT-006). */
+  const currentVoucherAsOnOppositeRows = useMemo(() => {
+    if (!showSpendWiseSection || !accountId) return [];
+    const date = formDate;
+    const voucherNumber = formVoucherNumber || voucher?.voucherNumber || "—";
+    const amt = amountPaid;
+    const linked = spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0);
+    let toName = "—";
+    if (payeeType === "party" && partyId) toName = processedParties.find((p) => p.id === partyId)?.name ?? "—";
+    else if (payeeType === "staff" && staffId) toName = processedStaff.find((s) => s.id === staffId)?.name ?? "—";
+    else if (payeeType === "tax" && taxAccountId) toName = processedTaxes.find((t) => t.id === taxAccountId)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label ?? "—";
+    else if (payeeType === "expense" && expenseAccountId) toName = expenseAccounts.find((e) => e.id === expenseAccountId)?.name ?? "—";
+    else if (payeeType === "other" && toAccountId) toName = expenseAccounts.find((e) => e.id === toAccountId)?.name ?? form.getValues("payeeName") ?? "—";
+    return [
+      {
+        id: "current",
+        voucherNumber,
+        date: date ? (date instanceof Date ? date : new Date(date)) : null,
+        amount: amt,
+        linked,
+        from: toName,
+      },
+    ];
+  }, [showSpendWiseSection, accountId, formDate, formVoucherNumber, voucher?.voucherNumber, amountPaid, spendWiseDisplayRows, payeeType, partyId, staffId, taxAccountId, expenseAccountId, toAccountId, processedParties, processedStaff, processedTaxes, expenseAccounts, form]);
+
+  /** Summary for Link Payment In dialog: current Payment Out shown at top (like Payment In dialog's current voucher). */
+  const paymentOutCurrentVoucherSummary = useMemo(() => {
+    if (!showSpendWiseSection || !accountId) return undefined;
+    const row = currentVoucherAsOnOppositeRows[0];
+    if (row) {
+      return {
+        voucherNumber: row.voucherNumber,
+        date: row.date,
+        from: row.from,
+        amount: row.amount,
+        linkedTotal: Number(row.linked) || 0,
+      };
+    }
+    const voucherNumber = formVoucherNumber || voucher?.voucherNumber || "—";
+    const date = formDate ? (formDate instanceof Date ? formDate : new Date(formDate)) : null;
+    let toName = "—";
+    if (payeeType === "party" && partyId) toName = processedParties.find((p) => p.id === partyId)?.name ?? "—";
+    else if (payeeType === "staff" && staffId) toName = processedStaff.find((s) => s.id === staffId)?.name ?? "—";
+    else if (payeeType === "tax" && taxAccountId) toName = processedTaxes.find((t) => t.id === taxAccountId)?.name ?? (processedTaxes.find((t) => t.id === taxAccountId) as any)?.label ?? "—";
+    else if (payeeType === "expense" && expenseAccountId) toName = expenseAccounts.find((e) => e.id === expenseAccountId)?.name ?? "—";
+    else if (payeeType === "other" && toAccountId) toName = expenseAccounts.find((e) => e.id === toAccountId)?.name ?? form.getValues("payeeName") ?? "—";
+    const linkedTotal =
+      (voucher?.linkedPaymentInAmounts && typeof voucher.linkedPaymentInAmounts === "object"
+        ? Object.values(voucher.linkedPaymentInAmounts).reduce((s: number, v: any) => s + (Number(v) || 0), 0)
+        : spendWiseDisplayRows.reduce((s: number, r) => s + (Number(r.linked) || 0), 0)) as number;
+    return { voucherNumber, date, from: toName, amount: amountPaid, linkedTotal };
+  }, [showSpendWiseSection, accountId, currentVoucherAsOnOppositeRows, formVoucherNumber, voucher?.voucherNumber, voucher?.linkedPaymentInAmounts, formDate, payeeType, partyId, staffId, taxAccountId, expenseAccountId, toAccountId, processedParties, processedStaff, processedTaxes, expenseAccounts, form, amountPaid, spendWiseDisplayRows]);
   
   const paymentPayeeTypes = [
     { value: 'party', label: 'Party' },
@@ -1012,6 +1070,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       <Select
                                         onValueChange={(prefix) => fetchVoucherNumber(prefix)}
                                         value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}
+                                        disabled={deleteDisabledWhenLinked}
                                       >
                                         <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
                                           <SelectValue/>
@@ -1025,14 +1084,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <FormItem className="min-w-0 w-full overflow-hidden">
                                     <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
                                     <FormControl>
-                                      <Input placeholder="e.g. PYMT-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                      <Input placeholder="e.g. PYMT-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
                                     </FormControl>
                                   </FormItem>
                                   {hasDateBS && (
                                     <FormItem className="min-w-0 w-full overflow-hidden">
                                       <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                       <div className="min-w-0 w-full overflow-hidden">
-                                        <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
+                                        <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
                                       </div>
                                     </FormItem>
                                   )}
@@ -1042,7 +1101,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                         <PopoverTrigger asChild>
                                           <FormControl>
-                                            <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
+                                            <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
                                               {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
                                               <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
                                             </Button>
@@ -1084,6 +1143,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   fetchVoucherNumber(prefix);
                                 }}
                                 value={voucherPrefixes.find(p => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]}
+                                disabled={deleteDisabledWhenLinked}
                               >
                                 <SelectTrigger className="w-32 h-10">
                                   <SelectValue/>
@@ -1094,7 +1154,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </Select>
                             ) : null}
                             <FormControl>
-                              <Input placeholder="e.g. PYMT-001" {...field} className="h-10" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                              <Input placeholder="e.g. PYMT-001" {...field} className="h-10" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
                             </FormControl>
                           </div>
                           <FormMessage />
@@ -1114,7 +1174,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 if (d) d.setHours(12, 0, 0, 0);
                                 field.onChange(d as Date); 
                                 setIsCalendarOpen(false); 
-                              }} isRange={false} transactionDates={transactionDates} />
+                              }} isRange={false} transactionDates={transactionDates} disabled={deleteDisabledWhenLinked} />
                             )}
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
                               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
@@ -1123,6 +1183,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     <Button
                                       variant={"outline"}
                                       className={cn("h-10 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}
+                                      disabled={deleteDisabledWhenLinked}
                                     >
                                       {field.value ? formatDate(field.value) : <span>Pick a date</span>}
                                       <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
@@ -1149,43 +1210,80 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </>
               )}
 
-               <FormField
-                control={form.control}
-                name="payeeType"
-                render={({ field }: any) => (
-                    <FormItem className="space-y-3">
-                        <FormLabel>Pay To</FormLabel>
-                        <FormControl>
-                            <RadioGroup
-                            onValueChange={(value) => {
-                                field.onChange(value);
-                                form.setValue('partyId', '');
-                                form.setValue('staffId', '');
-                                form.setValue('taxAccountId', '');
-                                form.setValue('expenseAccountId', '');
-                                form.setValue('toAccountId', '');
-                                form.setValue('payeeName', '');
-                            }}
-                            value={field.value}
-                            className="flex space-x-4"
-                            >
-                            {currentPayeeTypes.map(type => (
-                              <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
-                                <FormControl><RadioGroupItem value={type.value} /></FormControl>
-                                <FormLabel className="font-normal">{type.label}</FormLabel>
-                              </FormItem>
-                            ))}
-                            </RadioGroup>
-                        </FormControl>
-                        <FormMessage />
-                    </FormItem>
-                )}
-                />
-
               {isMobile ? (
                 <>
-                  {/* Mobile: To and From accounts - grid-cols-2 so browser handles equal column width */}
-                  <div className="grid grid-cols-2 gap-2 w-full">
+                  {/* Mobile: From Bank/Cash in a box (height matches Pay To), Pay To right */}
+                  <div className="grid grid-cols-2 gap-2 w-full items-stretch">
+                    <div className="h-full min-h-0 rounded-lg border bg-muted/20 p-2 flex flex-col">
+                    <FormField
+                      control={form.control}
+                      name="accountId"
+                      render={({ field }: any) => (
+                        <FormItem className="min-w-0 flex-1 flex flex-col min-h-0">
+                          <div className="flex justify-between items-baseline mb-1 min-w-0">
+                            <FormLabel className="text-[10px] text-muted-foreground truncate">From Bank/Cash</FormLabel>
+                            {accountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrency(accountBalance, {noAnimation: true, noSuffix: true})}</FormLabel>}
+                          </div>
+                          <div className="min-w-0 w-full overflow-hidden">
+                            <Combobox
+                              triggerClassName="w-full min-w-0"
+                              options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
+                              value={field.value}
+                              onChange={(value, newName) => {
+                                if (value === "add-new") {
+                                  setIsCreateAccountOpen(true);
+                                  setTimeout(() => {
+                                    document.dispatchEvent(new CustomEvent('prefill-create-bank-account-name', { detail: newName }));
+                                  }, 100);
+                                } else {
+                                  field.onChange(value);
+                                }
+                              }}
+                              placeholder="Select account"
+                              addNewLabel="+ Add New Account"
+                              disabled={deleteDisabledWhenLinked}
+                            />
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    </div>
+                    <div className="space-y-2 min-w-0">
+                      <FormField
+                        control={form.control}
+                        name="payeeType"
+                        render={({ field }: any) => (
+                          <FormItem className="space-y-2 min-w-0">
+                            <FormLabel className="text-xs">Pay To</FormLabel>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={(value) => {
+                                  if (deleteDisabledWhenLinked) return;
+                                  field.onChange(value);
+                                  form.setValue('partyId', '');
+                                  form.setValue('staffId', '');
+                                  form.setValue('taxAccountId', '');
+                                  form.setValue('expenseAccountId', '');
+                                  form.setValue('toAccountId', '');
+                                  form.setValue('payeeName', '');
+                                }}
+                                value={field.value}
+                                className="flex flex-wrap gap-x-3 gap-y-1"
+                                disabled={deleteDisabledWhenLinked}
+                              >
+                                {currentPayeeTypes.map(type => (
+                                  <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
+                                    <FormControl><RadioGroupItem value={type.value} disabled={deleteDisabledWhenLinked} /></FormControl>
+                                    <FormLabel className="font-normal text-xs">{type.label}</FormLabel>
+                                  </FormItem>
+                                ))}
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     {payeeType === 'party' && (
                       <FormField
                         control={form.control}
@@ -1215,6 +1313,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select supplier"
                                 addNewLabel="+ Add New Party"
+                                disabled={deleteDisabledWhenLinked}
                               />
                             </div>
                             <FormMessage />
@@ -1251,6 +1350,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select staff"
                                 addNewLabel="+ Add New Staff"
+                                disabled={deleteDisabledWhenLinked}
                               />
                             </div>
                             <FormMessage />
@@ -1287,6 +1387,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select tax"
                                 addNewLabel="+ Add New Tax Ledger"
+                                disabled={deleteDisabledWhenLinked}
                               />
                             </div>
                             <FormMessage />
@@ -1323,6 +1424,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select account"
                                 addNewLabel="+ Add New Expense Account"
+                                disabled={deleteDisabledWhenLinked}
                               />
                             </div>
                             <FormMessage />
@@ -1330,43 +1432,78 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                       />
                     )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-2 gap-6 min-w-0 items-stretch">
+                  <div className="h-full min-h-0 rounded-lg border bg-muted/20 p-3 flex flex-col">
                     <FormField
                       control={form.control}
                       name="accountId"
                       render={({ field }: any) => (
-                        <FormItem className="min-w-0">
-                          <div className="flex justify-between items-baseline mb-1 min-w-0">
-                            <FormLabel className="text-xs truncate">From Bank/Cash</FormLabel>
-                            {accountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrency(accountBalance, {noAnimation: true, noSuffix: true})}</FormLabel>}
+                        <FormItem className="flex flex-col flex-1 min-h-0">
+                           <div className="flex justify-between items-baseline">
+                            <FormLabel className="text-xs text-muted-foreground">From Bank/Cash</FormLabel>
+                            {accountBalance !== null && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance)}</FormLabel>}
                           </div>
-                          <div className="min-w-0 w-full overflow-hidden">
-                            <Combobox
-                              triggerClassName="w-full min-w-0"
-                              options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
-                              value={field.value}
-                              onChange={(value, newName) => {
-                                if (value === "add-new") {
-                                  setIsCreateAccountOpen(true);
-                                  setTimeout(() => {
-                                    document.dispatchEvent(new CustomEvent('prefill-create-bank-account-name', { detail: newName }));
-                                  }, 100);
-                                } else {
-                                  field.onChange(value);
-                                }
-                              }}
-                              placeholder="Select account"
-                              addNewLabel="+ Add New Account"
-                              disabled={deleteDisabledWhenLinked}
+                           <Combobox
+                                options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
+                                value={field.value}
+                                onChange={(value, newName) => {
+                                  if (value === "add-new") {
+                                      setIsCreateAccountOpen(true);
+                                      setTimeout(() => {
+                                        document.dispatchEvent(new CustomEvent('prefill-create-bank-account-name', { detail: newName }));
+                                      }, 100);
+                                  } else {
+                                      field.onChange(value);
+                                  }
+                                }}
+                                placeholder="Select an account"
+                                addNewLabel="+ Add New Account"
+                                disabled={deleteDisabledWhenLinked}
                             />
-                          </div>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
                   </div>
-                </>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3 min-w-0">
+                    <FormField
+                      control={form.control}
+                      name="payeeType"
+                      render={({ field }: any) => (
+                        <FormItem className="space-y-3">
+                          <FormLabel>Pay To</FormLabel>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={(value) => {
+                                if (deleteDisabledWhenLinked) return;
+                                field.onChange(value);
+                                form.setValue('partyId', '');
+                                form.setValue('staffId', '');
+                                form.setValue('taxAccountId', '');
+                                form.setValue('expenseAccountId', '');
+                                form.setValue('toAccountId', '');
+                                form.setValue('payeeName', '');
+                              }}
+                              value={field.value}
+                              className="flex space-x-4"
+                              disabled={deleteDisabledWhenLinked}
+                            >
+                              {currentPayeeTypes.map(type => (
+                                <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
+                                  <FormControl><RadioGroupItem value={type.value} disabled={deleteDisabledWhenLinked} /></FormControl>
+                                  <FormLabel className="font-normal">{type.label}</FormLabel>
+                                </FormItem>
+                              ))}
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                   {payeeType === 'party' && (
                     <FormField
                       control={form.control}
@@ -1397,6 +1534,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             }}
                             placeholder="Select a supplier"
                             addNewLabel="+ Add New Party"
+                            disabled={deleteDisabledWhenLinked}
                           />
                           <FormMessage />
                         </FormItem>
@@ -1433,6 +1571,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select a staff member"
                                 addNewLabel="+ Add New Staff"
+                                disabled={deleteDisabledWhenLinked}
                             />
                           <FormMessage />
                         </FormItem>
@@ -1469,6 +1608,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select a tax ledger"
                                 addNewLabel="+ Add New Tax Ledger"
+                                disabled={deleteDisabledWhenLinked}
                             />
                           <FormMessage />
                         </FormItem>
@@ -1505,43 +1645,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select an expense account"
                                 addNewLabel="+ Add New Expense Account"
+                                disabled={deleteDisabledWhenLinked}
                             />
                           <FormMessage />
                         </FormItem>
                       )}
                     />
                  )}
-
-                <FormField
-                  control={form.control}
-                  name="accountId"
-                  render={({ field }: any) => (
-                    <FormItem>
-                       <div className="flex justify-between items-baseline">
-                        <FormLabel>From Bank/Cash Account</FormLabel>
-                        {accountBalance !== null && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance)}</FormLabel>}
-                      </div>
-                       <Combobox
-                            options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
-                            value={field.value}
-                            onChange={(value, newName) => {
-                              if (value === "add-new") {
-                                  setIsCreateAccountOpen(true);
-                                  setTimeout(() => {
-                                    document.dispatchEvent(new CustomEvent('prefill-create-bank-account-name', { detail: newName }));
-                                  }, 100);
-                              } else {
-                                  field.onChange(value);
-                              }
-                            }}
-                            placeholder="Select an account"
-                            addNewLabel="+ Add New Account"
-                            disabled={deleteDisabledWhenLinked}
-                        />
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                  </div>
               </div>
               )}
 
@@ -1551,6 +1662,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 name="amount"
                 render={({ field }: any) => {
                   const hasLinks = allocations.length > 0;
+                  const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                   return (
                   <FormItem>
                     <FormLabel>Amount Paid</FormLabel>
@@ -1559,11 +1671,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         type="number" 
                         value={field.value ?? ''} 
                         onChange={(e) => {
-                          if (hasLinks) return;
+                          if (amountDisabled) return;
                           field.onChange(e.target.value === '' ? 0 : Number(e.target.value));
                         }}
-                        disabled={hasLinks}
-                        className={hasLinks ? "bg-muted" : ""}
+                        disabled={amountDisabled}
+                        className={amountDisabled ? "bg-muted" : ""}
                       />
                     </FormControl>
                     <FormMessage />
@@ -1572,64 +1684,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 }}
               />
               {(showSpendWiseSection || showLinkedSection) && (
-                <div className={cn("grid gap-4 min-w-0 max-w-full", showSpendWiseSection && showLinkedSection ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1")}>
-                  {showSpendWiseSection && (
-                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
-                      <div className="flex items-center gap-2 font-medium min-w-0">
-                        <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="truncate">Link for spend wise</span>
-                      </div>
-                      {spendWiseDisplayRows.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No Payment In / Direct Income / Contra linked. Click Link Pay to select.</p>
-                      ) : (
-                        <div className="overflow-x-auto -mx-1 min-w-0">
-                          <table className="w-full text-sm border-collapse min-w-[480px]">
-                            <thead>
-                              <tr className="border-b bg-muted/50">
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {spendWiseDisplayRows.map((row) => (
-                                <tr key={row.id} className="border-b last:border-b-0">
-                                  <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
-                                  <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                  <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
-                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      <div className="pt-2 border-t space-y-1 text-sm min-w-0">
-                        <div className="flex justify-between gap-2 min-w-0 overflow-hidden">
-                          <span className="text-muted-foreground shrink-0">Total linked</span>
-                          <span className="min-w-0 truncate text-right whitespace-nowrap">
-                            {formatCurrency(spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0), { noSuffix: true, noAnimation: true })} Dr
-                          </span>
-                        </div>
-                        <div className="flex justify-between gap-2 font-medium min-w-0 overflow-hidden">
-                          <span className="shrink-0">Balance</span>
-                          <span className={cn("min-w-0 truncate text-right whitespace-nowrap", amountMatched ? "text-green-600 font-semibold" : "")}>
-                            {amountMatched ? "Settled" : `${formatCurrency(Math.max(0, amountPaid - spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0)), { noSuffix: true, noAnimation: true })} Dr`}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="pt-2 border-t flex flex-wrap gap-2">
-                        <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
-                          <Link2 className="h-4 w-4 mr-2" />
-                          Link Pay
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  {showLinkedSection && (
+                <>
+                <div className={cn(
+                  "grid gap-4 min-w-0 max-w-full",
+                  showSpendWiseSection && showLinkedSection && voucherType === "payment_out"
+                    ? "grid-cols-1"
+                    : showSpendWiseSection && showLinkedSection
+                      ? "grid-cols-1 md:grid-cols-2"
+                      : "grid-cols-1"
+                )}>
+                  {/* Payment Out: bill wise first, then spend wise below. Direct Expense: spend wise then bill wise side-by-side on PC */}
+                  {voucherType === "payment_out" && showLinkedSection && (
                     <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden [&_span]:truncate [&_.truncate]:text-ellipsis">
                       <div className="flex items-center gap-2 font-medium min-w-0">
                         <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -1669,17 +1734,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           ))}
                         </div>
                       )}
-                      <div className="pt-2 border-t space-y-1 text-sm min-w-0">
-                        <div className="flex justify-between gap-2 min-w-0 overflow-hidden">
-                          <span className="text-muted-foreground shrink-0">Total linked</span>
-                          <span className="min-w-0 truncate text-right">{formatCurrency(totalLinked, { noSuffix: true, noAnimation: true })}</span>
+                      <div className="pt-2 border-t flex justify-end min-w-0">
+                        <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                            <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrency(totalLinked, { noSuffix: true, noAnimation: true })}</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate leading-tight">Balance</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className={cn("truncate text-right whitespace-nowrap leading-tight", remainingToLink === 0 && totalLinked > 0 ? "text-green-600 font-semibold" : "")}>
+                              {remainingToLink === 0 && totalLinked > 0 ? "Settled" : formatCurrency(remainingToLink, { noSuffix: true, noAnimation: true })}
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex justify-between gap-2 font-medium min-w-0 overflow-hidden">
-                          <span className="shrink-0">Balance</span>
-                          <span className={cn("min-w-0 truncate text-right", remainingToLink === 0 && totalLinked > 0 ? "text-green-600 font-semibold" : "")}>
-                            {remainingToLink === 0 && totalLinked > 0 ? "Settled" : formatCurrency(remainingToLink, { noSuffix: true, noAnimation: true })}
-                          </span>
-                        </div>
+                      </div>
                         <div className="flex items-center gap-2 mt-2 flex-wrap min-w-0">
                           {payeeType === "party" && can('add_link') && (
                             <>
@@ -1701,9 +1773,306 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           )}
                         </div>
                       </div>
+                  )}
+                  {(voucherType === "payment_out" || voucherType === "direct_expense") && showSpendWiseSection && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0 w-full">
+                      {/* Left: From Voucher */}
+                      <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center gap-2 font-medium min-w-0">
+                            <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate">Link for spend wise</span>
+                          </div>
+                          <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher</span>
+                        </div>
+                        {spendWiseDisplayRows.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No Payment In / Direct Income / Contra linked. Click Link Pay Out to select.</p>
+                        ) : (
+                          <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
+                            <table className="w-full text-sm border-collapse min-w-[400px]">
+                              <thead>
+                                <tr className="border-b bg-muted/50">
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                                  <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                                  <th className="text-right p-2 font-medium whitespace-nowrap">Linked on others</th>
+                                  <th className="text-right p-2 font-medium whitespace-nowrap">Linked on current</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {spendWiseDisplayRows.map((row) => (
+                                  <tr key={row.id} className="border-b last:border-b-0">
+                                    <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                    <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                    <td className="p-2 whitespace-nowrap">{row.from}</td>
+                                    <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
+                                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linkedOnOthers ?? 0, { noSuffix: true, noAnimation: true })} Dr</td>
+                                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <div className="pt-2 border-t flex justify-end min-w-0">
+                          <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                              <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate text-right whitespace-nowrap leading-tight">
+                                {formatCurrency(spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0), { noSuffix: true, noAnimation: true })} Dr
+                              </span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate leading-tight">Balance</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", (() => { const bal = spendWiseDisplayRows.reduce((s, r) => s + (r.amount - r.linked - (r.linkedOnOthers ?? 0)), 0); return bal <= 0 && spendWiseDisplayRows.length > 0; })() ? "text-green-600 font-semibold" : "")}>
+                                {(() => {
+                                  const fromVoucherBalance = spendWiseDisplayRows.reduce((s, r) => s + (r.amount - r.linked - (r.linkedOnOthers ?? 0)), 0);
+                                  return fromVoucherBalance <= 0 && spendWiseDisplayRows.length > 0
+                                    ? "Settled"
+                                    : `${formatCurrency(Math.max(0, fromVoucherBalance), { noSuffix: true, noAnimation: true })} Dr`;
+                                })()}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="pt-2 border-t flex flex-wrap gap-2 items-center">
+                          <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
+                            <Link2 className="h-4 w-4 mr-2" />
+                            Link Pay Out
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
+                            <Info className="h-4 w-4 shrink-0" />
+                            Read me
+                          </Button>
+                        </div>
+                      </div>
+                      {/* Right: To Voucher */}
+                      <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center gap-2 font-medium min-w-0">
+                            <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate">Link for spend wise</span>
+                          </div>
+                          <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">To Voucher ( current voucher )</span>
+                        </div>
+                        {currentVoucherAsOnOppositeRows.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">Save the voucher to see how it appears on the opposite voucher.</p>
+                        ) : (
+                          <div className="overflow-x-auto -mx-1 min-w-0">
+                            <table className="w-full text-sm border-collapse min-w-[400px]">
+                              <thead>
+                                <tr className="border-b bg-muted/50">
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                                  <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
+                                  {/* To Voucher: keep compact view (Amount is redundant vs Linked + bottom balance) */}
+                                  <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {currentVoucherAsOnOppositeRows.map((row) => (
+                                  <tr key={row.id} className="border-b last:border-b-0">
+                                    <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                    <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                    <td className="p-2 whitespace-nowrap">{row.from}</td>
+                                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        {currentVoucherAsOnOppositeRows.length > 0 && (
+                          <div className="pt-2 border-t flex justify-end min-w-0">
+                            <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                                <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                                <span className="truncate text-right whitespace-nowrap leading-tight">
+                                  {formatCurrency(currentVoucherAsOnOppositeRows[0].linked, { noSuffix: true, noAnimation: true })} Dr
+                                </span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                                <span className="truncate leading-tight">Balance</span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0 ? "text-green-600 font-semibold" : "")}>
+                                  {currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0
+                                    ? "Settled"
+                                    : `${formatCurrency(Math.max(0, currentVoucherAsOnOppositeRows[0].amount - currentVoucherAsOnOppositeRows[0].linked), { noSuffix: true, noAnimation: true })} Dr`}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {/* Link Pay In: open same link dialog from current voucher card; Read me to the right of button inside box */}
+                        <div className="pt-2 border-t flex flex-wrap gap-2 items-center">
+                          <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
+                            <Link2 className="h-4 w-4 mr-2" />
+                            Link Pay In
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
+                            <Info className="h-4 w-4 shrink-0" />
+                            Read me
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   )}
+                  {voucherType !== "payment_out" && voucherType !== "direct_expense" && showSpendWiseSection && (
+                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                      <div className="flex items-center gap-2 font-medium min-w-0">
+                        <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">Link for spend wise</span>
+                      </div>
+                      {spendWiseDisplayRows.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No Payment In / Direct Income / Contra linked. Click Link Pay Out to select.</p>
+                      ) : (
+                        <div className="overflow-x-auto -mx-1 min-w-0">
+                          <table className="w-full text-sm border-collapse min-w-[480px]">
+                            <thead>
+                              <tr className="border-b bg-muted/50">
+                                <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                                <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                                <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                                <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {spendWiseDisplayRows.map((row) => (
+                                <tr key={row.id} className="border-b last:border-b-0">
+                                  <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                  <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                  <td className="p-2 whitespace-nowrap">{row.from}</td>
+                                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
+                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      <div className="pt-2 border-t flex justify-end min-w-0">
+                        <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                            <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate text-right whitespace-nowrap leading-tight">
+                              {formatCurrency(spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0), { noSuffix: true, noAnimation: true })} Dr
+                            </span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate leading-tight">Balance</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className={cn("truncate text-right whitespace-nowrap leading-tight", amountMatched ? "text-green-600 font-semibold" : "")}>
+                              {amountMatched ? "Settled" : `${formatCurrency(Math.max(0, amountPaid - spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0)), { noSuffix: true, noAnimation: true })} Dr`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t flex flex-wrap gap-2 items-center">
+                        <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
+                          <Link2 className="h-4 w-4 mr-2" />
+                          Link Pay Out
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
+                          <Info className="h-4 w-4 shrink-0" />
+                          Read me
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {voucherType !== "payment_out" && showLinkedSection && (
+                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden [&_span]:truncate [&_.truncate]:text-ellipsis">
+                      <div className="flex items-center gap-2 font-medium min-w-0">
+                        <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">Link for bill wise</span>
+                      </div>
+                      {linkedToRows.length === 0 ? (
+                        <p className="text-sm text-muted-foreground break-words">
+                          {payeeType === "party" ? "No purchases linked to this payment." : "No salary vouchers linked to this payment."}
+                        </p>
+                      ) : (
+                        <div className="space-y-1.5 text-sm min-w-0 overflow-hidden">
+                          {linkedToRows.map((r) => (
+                            <div
+                              key={r.voucherId}
+                              {...(can('edit_link')
+                                ? {
+                                    role: "button" as const,
+                                    tabIndex: 0,
+                                    className: "flex justify-between items-center gap-2 rounded-md px-2 py-1.5 -mx-2 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 min-w-0",
+                                    onClick: () => (payeeType === "party" ? setIsLinkDialogOpen(true) : setIsLinkToSalaryOpen(true)),
+                                    onKeyDown: (e: React.KeyboardEvent) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        payeeType === "party" ? setIsLinkDialogOpen(true) : setIsLinkToSalaryOpen(true);
+                                      }
+                                    },
+                                  }
+                                : { className: "flex justify-between items-center gap-2 rounded-md px-2 py-1.5 -mx-2 min-w-0" })}
+                            >
+                              <span className="truncate text-muted-foreground min-w-0">
+                                {r.voucherNumber === "Opening Balance"
+                                  ? "Opening Balance"
+                                  : `${r.date ? (dateSystem === "BS" ? formatDateBS(r.date) : formatDate(r.date)) : "—"} · ${r.voucherNumber}`}
+                              </span>
+                              <span className="shrink-0 min-w-0 truncate text-right">{formatCurrency(r.amount, { noSuffix: true, noAnimation: true })}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="pt-2 border-t flex justify-end min-w-0">
+                        <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                            <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrency(totalLinked, { noSuffix: true, noAnimation: true })}</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className="truncate leading-tight">Balance</span>
+                          </div>
+                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                            <span className={cn("truncate text-right whitespace-nowrap leading-tight", remainingToLink === 0 && totalLinked > 0 ? "text-green-600 font-semibold" : "")}>
+                              {remainingToLink === 0 && totalLinked > 0 ? "Settled" : formatCurrency(remainingToLink, { noSuffix: true, noAnimation: true })}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap min-w-0">
+                          {payeeType === "party" && can('add_link') && (
+                            <>
+                              <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => setIsLinkDialogOpen(true)}>
+                                <Link2 className="h-4 w-4 mr-2" />
+                                Link to Txns
+                              </Button>
+                              <Button type="button" variant="outline" size="sm" className="w-fit" disabled={remainingToLink <= 0 || paymentOutAlloc.purchasesWithOutstanding.length === 0} onClick={() => { setAllocations(paymentOutAlloc.autoLink(amountPaid)); sonnerToast.success("Auto link applied."); }}>
+                                <Zap className="h-4 w-4 mr-2" />
+                                Auto Link
+                              </Button>
+                            </>
+                          )}
+                          {payeeType === "staff" && can('add_link') && (
+                            <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => setIsLinkToSalaryOpen(true)}>
+                              <Link2 className="h-4 w-4 mr-2" />
+                              Link to Salary
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                  )}
                 </div>
+                </>
               )}
               <div className="grid gap-4 min-w-0 max-w-full grid-cols-1 md:grid-cols-2">
                 <FormField
@@ -1722,16 +2091,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <FormItem>
                   <FormLabel>Attach Files (Optional)</FormLabel>
                   <RestrictedFileUploader>
+                    {/* When linked: add/remove disabled; existing files stay clickable to open */}
                     <div className="flex flex-wrap gap-4">
                     {files.map((file, index) => (
                       <FilePreview 
                         key={index} 
                         file={file} 
-                        onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                       />
                     ))}
-                    {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                       <div 
                         className={cn(
                           "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
@@ -1757,7 +2127,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                           ].filter(Boolean).join(",") || "image/*,application/pdf"}
                           multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                         />
                       </div>
                     )}
@@ -2057,8 +2427,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           names={paymentInDialogNames}
           requiredAmount={amountPaid}
           currentVoucherId={voucher?.id ?? savedVoucherId ?? undefined}
+          currentVoucherLinkedAmounts={
+            voucher?.linkedPaymentInAmounts && typeof voucher.linkedPaymentInAmounts === "object"
+              ? voucher.linkedPaymentInAmounts
+              : {}
+          }
+          accountName={processedAccounts?.find((a: any) => a.id === accountId)?.accountName ?? undefined}
+          currentVoucherSummary={paymentOutCurrentVoucherSummary}
         />
       )}
+      <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
     </>
   );
 }

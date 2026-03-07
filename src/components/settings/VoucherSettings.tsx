@@ -414,14 +414,24 @@ export function VoucherSettings() {
                             <div>
                               <FormLabel>Link for spend wise on opposite voucher (Payment In, Contra in, Direct Income)</FormLabel>
                               <FormDescription>
-                                Read-only: only view which Payment Out / Contra / Direct Expense have linked to this voucher. Editable: can manage links from this voucher too (e.g. open Link Pay from Payment In).
+                                Off: link section and all &quot;Require Payment In link&quot; toggles below are off. On: link section is editable and all require-link toggles turn on.
                               </FormDescription>
                             </div>
                             <FormControl>
                               <div className="flex items-center gap-2">
-                                <span className="text-sm text-muted-foreground">Read-only</span>
-                                <Switch checked={field.value} onCheckedChange={field.onChange} />
-                                <span className="text-sm text-muted-foreground">Editable</span>
+                                <span className="text-sm text-muted-foreground">Off</span>
+                                <Switch
+                                  checked={field.value}
+                                  onCheckedChange={(checked) => {
+                                    field.onChange(checked);
+                                    const allSame = ROLES_WITH_VOUCHER_CREATE.reduce(
+                                      (acc, r) => ({ ...acc, [r]: { payment_out: checked, contra: checked, direct_expense: checked } }),
+                                      {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
+                                    );
+                                    form.setValue("requirePaymentLinkByRole", allSame);
+                                  }}
+                                />
+                                <span className="text-sm text-muted-foreground">On</span>
                               </div>
                             </FormControl>
                           </FormItem>

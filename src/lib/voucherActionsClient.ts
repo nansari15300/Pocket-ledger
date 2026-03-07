@@ -351,6 +351,46 @@ export async function saveVoucher(
 }
 
 /**
+ * Client-only: Update only spend-wise link fields on a voucher (Payment Out / Contra / Direct Expense).
+ * Used when linking from Payment In "Link Pay" so we don't overwrite the whole voucher.
+ */
+export async function updateVoucherSpendWiseLinks(
+  companyId: string,
+  voucherId: string,
+  linkedPaymentInIds: string[],
+  linkedPaymentInAmounts: Record<string, number>,
+  userId: string
+): Promise<void> {
+  if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
+  const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
+  const authUser = auth.currentUser;
+  const currentUserName = authUser?.displayName || authUser?.email?.split("@")?.[0] || userId;
+  const now = new Date();
+  const oldSnap = await getDoc(voucherRef);
+  if (!oldSnap.exists()) throw new Error("Voucher not found");
+  const oldData = oldSnap.data() as any;
+  const existingHistory = Array.isArray(oldData?.history) ? oldData.history : [];
+  const newEntry = {
+    changedAt: now,
+    changedBy: userId,
+    changes: {
+      linkedPaymentInIds: { from: oldData?.linkedPaymentInIds ?? [], to: linkedPaymentInIds },
+      linkedPaymentInAmounts: { from: oldData?.linkedPaymentInAmounts ?? {}, to: linkedPaymentInAmounts },
+      lastEditedByUserName: { from: oldData?.lastEditedByUserName ?? "N/A", to: currentUserName },
+      lastEditedAt: { from: oldData?.lastEditedAt ?? null, to: now },
+    },
+  };
+  const newHistory = [newEntry, ...existingHistory].slice(0, 10);
+  await updateDoc(voucherRef, {
+    linkedPaymentInIds,
+    linkedPaymentInAmounts,
+    lastEditedByUserName: currentUserName,
+    lastEditedAt: serverTimestamp(),
+    history: newHistory,
+  });
+}
+
+/**
  * Approve a voucher and append a history entry with approver metadata.
  * Uses a transaction so we read the latest doc (including any just-saved edit history) and append approval.
  */

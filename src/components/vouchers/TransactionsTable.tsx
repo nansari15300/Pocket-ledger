@@ -43,6 +43,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Card } from "@/components/ui/card";
 import { format } from "date-fns";
 import { useCompany } from "@/hooks/useCompany";
+import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { useAuth } from "@/hooks/useAuth";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { toast } from "sonner";
@@ -115,6 +116,8 @@ interface TransactionsTableProps {
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item";
   /** When true, disables layout animation (e.g. when switching Spend wise / Statement view) */
   disableLayoutAnimation?: boolean;
+  /** Spend-wise balance blink: 'all' = inflow non-0 balance; 'group' = only multi-row groups with non-0 balance; 'off' = no blink */
+  blinkMode?: SpendWiseBlinkMode;
 }
 
 export function TransactionsTable({
@@ -170,6 +173,7 @@ export function TransactionsTable({
   statusFilterIdPrefix,
   groupEntityType,
   disableLayoutAnimation = false,
+  blinkMode,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   const { user, customUser } = useAuth();
@@ -198,6 +202,17 @@ export function TransactionsTable({
   useEffect(() => {
     if (selectedId && !transactions.some((t) => t.id === selectedId)) setSelectedId(null);
   }, [transactions, selectedId]);
+
+  // Unselect when user clicks anywhere in the app outside the table (empty area, sidebar, etc.)
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      const el = tableContainerRef.current;
+      if (!el || !selectedId) return;
+      if (!el.contains(e.target as Node)) setSelectedId(null);
+    };
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, [selectedId]);
 
   const handleTableKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -898,6 +913,8 @@ export function TransactionsTable({
                                         isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
                                         spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
                                         spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                                        spendWiseGroupSize={block.items.length}
+                                        blinkMode={blinkMode}
                                         showNarration={showNarration}
                                         userNames={userNames}
                                         journalAccountNames={journalAccountNames}
@@ -947,6 +964,8 @@ export function TransactionsTable({
                           isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
                           spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
                           spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                          spendWiseGroupSize={1}
+                          blinkMode={blinkMode}
                           showNarration={showNarration}
                           userNames={userNames}
                           journalAccountNames={journalAccountNames}
@@ -1006,6 +1025,7 @@ export function TransactionsTable({
                         isSpendWiseGroupLast={!!(t as any)._spendWiseGroupLast}
                         spendWiseRunningBalance={(t as any)._spendWiseRunningBalance}
                         spendWiseGroupColorIndex={(t as any)._spendWiseGroupColorIndex}
+                        blinkMode={blinkMode}
                         showNarration={showNarration}
                         userNames={userNames}
                         journalAccountNames={journalAccountNames}

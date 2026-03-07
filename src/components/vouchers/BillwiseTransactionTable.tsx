@@ -137,6 +137,17 @@ export function BillwiseTransactionTable({
     if (selectedId && !transactions.some((t) => t.id === selectedId)) setSelectedId(null);
   }, [transactions, selectedId]);
 
+  // Unselect when user clicks anywhere in the app outside the table (empty area, sidebar, etc.)
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      const el = tableContainerRef.current;
+      if (!el || !selectedId) return;
+      if (!el.contains(e.target as Node)) setSelectedId(null);
+    };
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, [selectedId]);
+
   const conversionFactor = useMemo(() => {
     if (context === "item" && stockView === "qty" && item) {
       return getConversionFactor(item, displayUnit);

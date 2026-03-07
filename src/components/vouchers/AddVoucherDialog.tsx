@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, Suspense, useCallback } from "react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import React, { useState, useEffect, useMemo, Suspense, useCallback, useRef } from "react";
+import { Dialog, DialogContent, DialogClose, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -30,7 +30,7 @@ import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CheckCircle } from "lucide-react";
-import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
+import { hasPaymentLinks, hasSpendWiseLinks } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 
@@ -232,16 +232,137 @@ function VoucherDialogContent({
   );
 }
 
+const DEFAULT_DIALOG_W = 900;
+const DEFAULT_DIALOG_H = 700;
+const MIN_DIALOG_W = 420;
+const MIN_DIALOG_H = 320;
+const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
+
 export function AddVoucherDialog(props: any) {
   const { children, isOpen, onOpenChange, voucher, defaultVoucherData, ...rest } = props;
   const { companyId, company } = useCompany();
   const { user, customUser } = useAuth();
   const { can, canEditRecord } = usePermissions();
   const { vouchers } = useVouchers();
+  const isMobile = useIsMobile();
+  const isDesktop = !isMobile;
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [isApproving, setIsApproving] = useState(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
   const [editingDisabled, setEditingDisabled] = useState(false);
+
+  // Draggable & resizable (desktop only)
+  const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
+  const [dialogSize, setDialogSize] = useState({ w: DEFAULT_DIALOG_W, h: DEFAULT_DIALOG_H });
+  const dragRef = useRef<{ startX: number; startY: number; startLeft: number; startTop: number } | null>(null);
+  const resizeRef = useRef<{ handle: string; startX: number; startY: number; startW: number; startH: number; startLeft: number; startTop: number } | null>(null);
+
+  const prevOpenRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen || !isDesktop || typeof window === "undefined") return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    try {
+      const raw = localStorage.getItem(VOUCHER_DIALOG_STORAGE_KEY);
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && typeof saved.x === "number" && typeof saved.y === "number" && typeof saved.w === "number" && typeof saved.h === "number") {
+        const w = Math.max(MIN_DIALOG_W, Math.min(saved.w, vw));
+        const h = Math.max(MIN_DIALOG_H, Math.min(saved.h, vh));
+        const x = Math.max(0, Math.min(saved.x, vw - w));
+        const y = Math.max(0, Math.min(saved.y, vh - h));
+        setDialogSize({ w, h });
+        setDialogPosition({ x, y });
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    const w = Math.min(DEFAULT_DIALOG_W, Math.max(MIN_DIALOG_W, vw * 0.9));
+    const h = Math.min(DEFAULT_DIALOG_H, Math.max(MIN_DIALOG_H, vh * 0.9));
+    setDialogSize({ w, h });
+    setDialogPosition({ x: (vw - w) / 2, y: (vh - h) / 2 });
+  }, [isOpen, isDesktop]);
+
+  useEffect(() => {
+    if (prevOpenRef.current && !isOpen && isDesktop && typeof window !== "undefined") {
+      try {
+        localStorage.setItem(
+          VOUCHER_DIALOG_STORAGE_KEY,
+          JSON.stringify({ x: dialogPosition.x, y: dialogPosition.y, w: dialogSize.w, h: dialogSize.h })
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    prevOpenRef.current = isOpen;
+  }, [isOpen, isDesktop, dialogPosition.x, dialogPosition.y, dialogSize.w, dialogSize.h]);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (!isDesktop || (e.target as HTMLElement).closest("button")) return;
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startLeft: dialogPosition.x, startTop: dialogPosition.y };
+    const onMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      setDialogPosition({
+        x: Math.max(0, dragRef.current.startLeft + e.clientX - dragRef.current.startX),
+        y: Math.max(0, dragRef.current.startTop + e.clientY - dragRef.current.startY),
+      });
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [isDesktop, dialogPosition.x, dialogPosition.y]);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent, handle: string) => {
+    if (!isDesktop) return;
+    e.preventDefault();
+    e.stopPropagation();
+    resizeRef.current = {
+      handle,
+      startX: e.clientX,
+      startY: e.clientY,
+      startW: dialogSize.w,
+      startH: dialogSize.h,
+      startLeft: dialogPosition.x,
+      startTop: dialogPosition.y,
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const { handle: h, startX, startY, startW, startH, startLeft, startTop } = resizeRef.current;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      let w = startW;
+      let hh = startH;
+      let x = startLeft;
+      let y = startTop;
+      if (h === "e" || h === "se" || h === "ne") w = Math.max(MIN_DIALOG_W, startW + dx);
+      if (h === "w" || h === "sw" || h === "nw") {
+        const dw = Math.min(dx, startW - MIN_DIALOG_W);
+        w = startW - dw;
+        x = startLeft + dw;
+      }
+      if (h === "s" || h === "se" || h === "sw") hh = Math.max(MIN_DIALOG_H, startH + dy);
+      if (h === "n" || h === "nw" || h === "ne") {
+        const dh = Math.min(dy, startH - MIN_DIALOG_H);
+        hh = startH - dh;
+        y = startTop + dh;
+      }
+      setDialogSize({ w, h: hh });
+      if (h === "w" || h === "sw" || h === "nw") setDialogPosition((prev) => ({ ...prev, x }));
+      if (h === "n" || h === "nw" || h === "ne") setDialogPosition((prev) => ({ ...prev, y }));
+    };
+    const onUp = () => {
+      resizeRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [isDesktop, dialogSize.w, dialogSize.h, dialogPosition.x, dialogPosition.y]);
 
   // When editing, subscribe to voucher doc so unlink/allocations updates enable Save & convert
   useEffect(() => {
@@ -261,7 +382,9 @@ export function AddVoucherDialog(props: any) {
   }, [isOpen, voucher?.id, companyId]);
 
   const effectiveVoucher = liveVoucher ?? voucher;
-  const hasLinks = !!effectiveVoucher?.id && hasPaymentLinks(effectiveVoucher);
+  const hasBillWiseLinks = !!effectiveVoucher?.id && hasPaymentLinks(effectiveVoucher);
+  const hasSpendWise = !!effectiveVoucher?.id && hasSpendWiseLinks(effectiveVoucher, vouchers || []);
+  const hasLinks = hasBillWiseLinks || hasSpendWise;
 
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
   useEffect(() => {
@@ -358,47 +481,138 @@ export function AddVoucherDialog(props: any) {
     }
   }, [onOpenChange, companyId, defaultVoucherData?.unassignedFile?.id, props]);
 
+  const headerBlock = (
+    <DialogHeader className={cn("px-[2px] py-6 pb-2 md:p-6 md:pb-2 border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center", hasLinks && "min-h-[140px]", isDesktop && "cursor-grab active:cursor-grabbing select-none")} onMouseDown={isDesktop ? handleDragStart : undefined}>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <DialogTitle className="text-2xl font-bold font-headline text-inherit">
+            {!!voucher?.id ? "Edit Transaction" : "New Transaction"}
+          </DialogTitle>
+        </div>
+        {isDesktop && (
+          <DialogClose className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none shrink-0">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogClose>
+        )}
+      </div>
+      {hasLinks && (
+        <div className="w-fit max-w-full mx-auto mt-3 bg-gray-600 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
+          <p className="text-xl font-semibold text-center text-[#ff0000] m-0">
+            Voucher Edit disabled — To convert or edit, unlink linked transactions first.
+          </p>
+        </div>
+      )}
+    </DialogHeader>
+  );
+
+  const bodyBlock = (
+    <>
+      <VoucherDialogContent 
+        {...rest}
+        voucher={effectiveVoucher}
+        defaultVoucherData={defaultVoucherData}
+        onVoucherAction={handleAction}
+        onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
+        showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
+        editingDisabled={editingDisabled}
+        restrictConvertWhenLinked={hasLinks}
+        deleteDisabledWhenLinked={hasLinks}
+        showApproveButton={showApproveButton}
+        showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
+        onApprove={handleApprove}
+        isApproving={isApproving}
+      />
+      <HistoryDialog
+        voucher={historyVoucher}
+        isOpen={!!historyVoucher}
+        onOpenChange={(open) => !open && setHistoryVoucher(null)}
+        onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+      />
+    </>
+  );
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      <DialogContent className="flex flex-col p-0 w-[calc(100vw-4px)] md:w-[calc(100vw-40px)] max-w-7xl h-[calc(100vh-40px)] max-h-[90vh] rounded-lg md:rounded-lg">
-        <DialogHeader className="px-[2px] py-6 pb-2 md:p-6 md:pb-2 border-b">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <DialogTitle className="text-2xl font-bold font-headline">
-                {!!voucher?.id ? "Edit Transaction" : "New Transaction"}
-              </DialogTitle>
-              <DialogDescription>Attach documents and record your transaction.</DialogDescription>
+      {isDesktop ? (
+        <DialogContent
+          hideCloseButton
+          className="flex flex-col p-0 md:!left-0 md:!top-0 md:!translate-x-0 md:!translate-y-0 md:w-full md:h-full md:max-w-none md:max-h-none md:border-0 md:bg-transparent md:shadow-none md:rounded-none"
+        >
+          <div
+            className="flex flex-col rounded-lg border bg-background shadow-lg overflow-hidden flex-1 min-h-0"
+            style={{
+              position: "fixed",
+              left: dialogPosition.x,
+              top: dialogPosition.y,
+              width: dialogSize.w,
+              height: dialogSize.h,
+              minWidth: MIN_DIALOG_W,
+              minHeight: MIN_DIALOG_H,
+            }}
+          >
+            {headerBlock}
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              {bodyBlock}
             </div>
+            {/* Resize handle - top edge */}
+            <div
+              className="absolute left-0 right-0 top-0 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-t"
+              onMouseDown={(e) => handleResizeStart(e, "n")}
+              aria-hidden
+            />
+            {/* Resize handle - top-left corner */}
+            <div
+              className="absolute left-0 top-0 w-4 h-4 cursor-nw-resize hover:bg-primary/20 transition-colors rounded-tl"
+              onMouseDown={(e) => handleResizeStart(e, "nw")}
+              aria-hidden
+            />
+            {/* Resize handle - top-right corner */}
+            <div
+              className="absolute right-0 top-0 w-4 h-4 cursor-ne-resize hover:bg-primary/20 transition-colors rounded-tr"
+              onMouseDown={(e) => handleResizeStart(e, "ne")}
+              aria-hidden
+            />
+            {/* Resize handle - left edge */}
+            <div
+              className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-l"
+              onMouseDown={(e) => handleResizeStart(e, "w")}
+              aria-hidden
+            />
+            {/* Resize handle - right edge */}
+            <div
+              className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors rounded-r"
+              style={{ top: 0, bottom: 0 }}
+              onMouseDown={(e) => handleResizeStart(e, "e")}
+              aria-hidden
+            />
+            {/* Resize handle - bottom edge */}
+            <div
+              className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-primary/20 transition-colors rounded-b"
+              onMouseDown={(e) => handleResizeStart(e, "s")}
+              aria-hidden
+            />
+            {/* Resize handle - bottom-left corner */}
+            <div
+              className="absolute left-0 bottom-0 w-4 h-4 cursor-sw-resize hover:bg-primary/20 transition-colors rounded-bl"
+              onMouseDown={(e) => handleResizeStart(e, "sw")}
+              aria-hidden
+            />
+            {/* Resize handle - bottom-right corner */}
+            <div
+              className="absolute right-0 bottom-0 w-4 h-4 cursor-se-resize hover:bg-primary/20 transition-colors rounded-br"
+              onMouseDown={(e) => handleResizeStart(e, "se")}
+              aria-hidden
+            />
           </div>
-          {hasLinks && (
-            <p className="text-sm text-amber-600 dark:text-amber-500 font-medium text-center w-full mt-2">
-              To convert or edit, unlink linked transactions first.
-            </p>
-          )}
-        </DialogHeader>
-        <VoucherDialogContent 
-          {...rest}
-          voucher={effectiveVoucher}
-          defaultVoucherData={defaultVoucherData}
-          onVoucherAction={handleAction}
-          onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
-          showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
-          editingDisabled={editingDisabled || hasLinks}
-          restrictConvertWhenLinked={hasLinks}
-          deleteDisabledWhenLinked={hasLinks}
-          showApproveButton={showApproveButton}
-          showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
-          onApprove={handleApprove}
-          isApproving={isApproving}
-        />
-        <HistoryDialog
-          voucher={historyVoucher}
-          isOpen={!!historyVoucher}
-          onOpenChange={(open) => !open && setHistoryVoucher(null)}
-          onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
-        />
-      </DialogContent>
+        </DialogContent>
+      ) : (
+        <DialogContent className="flex flex-col p-0 w-[calc(100vw-4px)] md:w-[calc(100vw-40px)] max-w-7xl h-[calc(100vh-40px)] max-h-[90vh] rounded-lg md:rounded-lg">
+          {headerBlock}
+          {bodyBlock}
+        </DialogContent>
+      )}
     </Dialog>
   );
 }

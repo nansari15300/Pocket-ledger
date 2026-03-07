@@ -37,7 +37,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "../ui/alert-dialog";
 
-import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, ArrowRight, Link2, History, CheckCircle } from "lucide-react";
+import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, ArrowRight, Link2, History, CheckCircle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -55,6 +55,7 @@ import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
+import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { getLinkedAmountsToVoucher, hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 
@@ -262,6 +263,8 @@ export function CreateSaleForm({
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkAdvancesOpen, setIsLinkAdvancesOpen] = useState(false);
+  // Keep "Read me" help controlled from this form so sale link section can open the shared multilingual guide.
+  const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher;
   const isEditingAndConverting = voucher && voucher.type !== "sale";
   
@@ -1134,7 +1137,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     {hasPrefix && (
                                       <FormItem className="min-w-0 w-full overflow-hidden">
                                         <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
+                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
                                           <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
                                             <SelectValue />
                                           </SelectTrigger>
@@ -1147,14 +1150,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     <FormItem className="min-w-0 w-full overflow-hidden">
                                       <FormLabel className="text-xs truncate">Invoice No.</FormLabel>
                                       <FormControl>
-                                        <Input placeholder="e.g. INV-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                        <Input placeholder="e.g. INV-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
                                       </FormControl>
                                     </FormItem>
                                     {hasDateBS && (
                                       <FormItem className="min-w-0 w-full overflow-hidden">
                                         <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
                                         <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
+                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
                                         </div>
                                       </FormItem>
                                     )}
@@ -1164,7 +1167,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                           <PopoverTrigger asChild>
                                             <FormControl>
-                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
+                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
                                                 {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
                                                 <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
                                               </Button>
@@ -1225,6 +1228,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               }}
                               placeholder="Select customer"
                               addNewLabel="+ Add New Party"
+                              disabled={deleteDisabledWhenLinked}
                             />
                           </div>
                           <FormMessage />
@@ -1249,6 +1253,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               value={field.value}
                               onChange={(val) => { field.onChange(val) }}
                               placeholder="Select account"
+                              disabled={deleteDisabledWhenLinked}
                             />
                           </div>
                           <FormMessage />
@@ -1321,7 +1326,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
                                 <FormLabel className="truncate">Prefix</FormLabel>
-                                <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]}>
+                                <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
                                   <SelectTrigger className="h-10 w-full min-w-0 shrink-0">
                                     <SelectValue />
                                   </SelectTrigger>
@@ -1340,7 +1345,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
                               <FormLabel className="truncate">Invoice No.</FormLabel>
                               <FormControl>
-                                <Input placeholder="e.g. INV-001" {...field} className="h-10 w-full min-w-0 shrink-0" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                <Input placeholder="e.g. INV-001" {...field} className="h-10 w-full min-w-0 shrink-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -1354,7 +1359,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               {hasDateBS && (
                                 <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
                                   <FormLabel className="truncate">Date (BS)</FormLabel>
-                                  <BsDatePicker valueAD={field.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-10 w-full shrink-0" />
+                                  <BsDatePicker valueAD={field.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); field.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-10 w-full shrink-0" disabled={deleteDisabledWhenLinked} />
                                   <FormMessage />
                                 </FormItem>
                               )}
@@ -1364,7 +1369,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                                     <PopoverTrigger asChild>
                                       <FormControl>
-                                        <Button variant="outline" className={cn("h-10 w-full min-w-0 shrink-0 pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                                        <Button variant="outline" className={cn("h-10 w-full min-w-0 shrink-0 pl-3 text-left font-normal", !field.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
                                           {field.value ? formatDate(field.value) : "Pick a date"}
                                           <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
                                         </Button>
@@ -1388,7 +1393,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
               {/* Items / Services Toggle */}
               <div className={cn(isMobile && "flex justify-start")}>
-                <Tabs value={itemType} onValueChange={(v) => setItemType(v as "item" | "service")} className={cn(isMobile && "w-auto")}>
+                <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
                   <TabsList className={cn(
                     isMobile && "flex gap-[2px] px-[2px]"
                   )}>
@@ -1415,7 +1420,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 "border rounded-lg overflow-hidden relative",
                 isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px]" : "px-[2px]"
               )}>
-                {hasItemEditLock && (
+                {(hasItemEditLock || deleteDisabledWhenLinked) && (
                   <div className="absolute inset-0 z-10 flex flex-col rounded-lg bg-muted/25">
                     <div className="flex-shrink-0 border-b border-amber-500/40 bg-amber-50 dark:bg-amber-950/40 px-4 py-2.5 rounded-t-lg">
                       <p className="text-sm font-medium text-amber-800 dark:text-amber-200 text-center">
@@ -1902,7 +1907,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={hasItemEditLock}
+                        disabled={hasItemEditLock || deleteDisabledWhenLinked}
                         onClick={() =>
                           append({
                             type: itemType,
@@ -2183,7 +2188,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           type="button"
                           variant="outline"
                           size="sm"
-                          disabled={hasItemEditLock}
+                          disabled={hasItemEditLock || deleteDisabledWhenLinked}
                           onClick={() =>
                             append({
                               type: itemType,
@@ -2307,19 +2312,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem>
                       <FormLabel className="text-sm">Attach Files</FormLabel>
                       <RestrictedFileUploader>
+                        {/* When linked: add/remove disabled; existing files stay clickable to open */}
                         <div className="grid grid-cols-3 gap-2 px-[2px]">
                           {files.map((file, index) => (
                             <FilePreview 
                               key={index} 
                               file={file} 
-                              onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
                                 "h-16"
                               )}
                             />
                           ))}
-                          {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                          {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
                               <div 
                                 className={cn(
@@ -2346,7 +2352,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                                   ].filter(Boolean).join(",") || "image/*,application/pdf"}
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </div>
                             </FormControl>
@@ -2370,7 +2376,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem className="space-y-1">
                           <FormLabel className="text-xs">Discount:</FormLabel>
                           <FormControl>
-                            <Input type="number" className="w-full border rounded p-1 text-right text-xs h-7" {...field} />
+                            <Input type="number" className="w-full border rounded p-1 text-right text-xs h-7" {...field} disabled={deleteDisabledWhenLinked} />
                           </FormControl>
                         </FormItem>
                       )}
@@ -2423,9 +2429,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           </div>
                         </div>
                         {partyId && company?.enableLinkPaymentToTxns !== false && can('add_link') && (
-                          <div className="mt-[5px]">
+                          <div className="mt-[5px] flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
                               <Link2 className="mr-2 h-4 w-4" /> Link to Txns
+                            </Button>
+                            {/* Read me to the right of Link to Txns, inside the link section box */}
+                            <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
+                              <Info className="h-4 w-4 shrink-0" />
+                              Read me
                             </Button>
                           </div>
                         )}
@@ -2483,6 +2494,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     isRange={false}
                                     numberOfMonths={1}
                                     className="h-9 w-full"
+                                    disabled={deleteDisabledWhenLinked}
                                   />
                                 </div>
                               )}
@@ -2494,6 +2506,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         <Button
                                           variant="outline"
                                           className={cn("w-full justify-start text-left font-normal h-9", !field.value && "text-muted-foreground")}
+                                          disabled={deleteDisabledWhenLinked}
                                         >
                                           <CalendarIcon className="mr-2 h-4 w-4" />
                                           {field.value ? formatDate(field.value) : "Pick date"}
@@ -2520,16 +2533,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       <RestrictedFileUploader>
+                        {/* When linked: add/remove disabled; existing files stay clickable to open */}
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
                             <FilePreview 
                               key={index} 
                               file={file} 
-                              onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />
                           ))}
-                          {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                          {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
                               <div 
                                 className={cn(
@@ -2556,7 +2570,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                                   ].filter(Boolean).join(",") || "image/*,application/pdf"}
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </div>
                             </FormControl>
@@ -2580,7 +2594,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem className="flex justify-between items-center">
                           <FormLabel>Discount:</FormLabel>
                           <FormControl>
-                            <Input type="number" className="w-32 text-right" {...field} />
+                            <Input type="number" className="w-32 text-right" {...field} disabled={deleteDisabledWhenLinked} />
                           </FormControl>
                         </FormItem>
                       )}
@@ -2632,9 +2646,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           </div>
                         </div>
                         {partyId && company?.enableLinkPaymentToTxns !== false && can('add_link') && (
-                          <div className="mt-2">
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
                               <Link2 className="mr-2 h-4 w-4" /> Link to Txns
+                            </Button>
+                            {/* Read me to the right of Link to Txns, inside the link section box */}
+                            <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
+                              <Info className="h-4 w-4 shrink-0" />
+                              Read me
                             </Button>
                           </div>
                         )}
@@ -2784,6 +2803,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           onDone={() => triggerSync()}
         />
       )}
+      <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
     </>
   );
 }

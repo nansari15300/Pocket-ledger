@@ -284,3 +284,33 @@ export function hasPaymentLinks(voucherData: any): boolean {
   const alloc = (voucherData.allocations as any[] | undefined) ?? [];
   return from.length > 0 || to.length > 0 || alloc.length > 0;
 }
+
+/** Returns true if the voucher has spend-wise links (Link for spend wise). Used with bill-wise hasPaymentLinks to disable voucher edit until both are unlinked. */
+export function hasSpendWiseLinks(voucherData: any, allVouchers: any[]): boolean {
+  if (!voucherData?.id || !Array.isArray(allVouchers)) return false;
+  const id = voucherData.id;
+  const type = voucherData.type;
+  if (type === "payment_out" || type === "direct_expense") {
+    const ids = (voucherData.linkedPaymentInIds as string[] | undefined) ?? [];
+    return ids.length > 0;
+  }
+  if (type === "payment_in" || type === "direct_income") {
+    return allVouchers.some(
+      (v: any) =>
+        !v.isDeleted &&
+        Array.isArray(v.linkedPaymentInIds) &&
+        v.linkedPaymentInIds.includes(id)
+    );
+  }
+  if (type === "contra") {
+    const fromIds = (voucherData.linkedPaymentInIds as string[] | undefined) ?? [];
+    if (fromIds.length > 0) return true;
+    return allVouchers.some(
+      (v: any) =>
+        !v.isDeleted &&
+        Array.isArray(v.linkedPaymentInIds) &&
+        v.linkedPaymentInIds.includes(id)
+    );
+  }
+  return false;
+}

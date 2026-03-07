@@ -5,9 +5,10 @@ import * as React from "react";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search } from "lucide-react";
+import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
+import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode } from "../vouchers/transactionColumnVisibility";
+import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -140,6 +141,8 @@ export function AccountGroupDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
+  const { spendWiseBlinkMode, setSpendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -194,16 +197,7 @@ export function AccountGroupDetails({
         (v.type === "contra" && accountIdSet.has(v.fromAccountId));
       return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
-    /** Owner = first payment_in in linkedPaymentInIds so group never changes with card position/date. */
-    const paymentOutToOwnerId = new Map<string, string>();
-    vouchers.forEach((v: any) => {
-      const hasAccount =
-        (v.type === "payment_out" && accountIdSet.has(v.accountId)) ||
-        (v.type === "direct_expense" && accountIdSet.has(v.accountId)) ||
-        (v.type === "contra" && accountIdSet.has(v.fromAccountId));
-      if (hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.length > 0)
-        paymentOutToOwnerId.set(v.id, v.linkedPaymentInIds[0]);
-    });
+    /** Match account details: each inflow shows all its linked outflows (same outflow can appear under multiple inflows). */
     const getDateMs = (v: any) => {
       const d = v.date?.toDate ? v.date.toDate() : new Date(v.date);
       return d.getTime();
@@ -219,7 +213,6 @@ export function AccountGroupDetails({
     const rows: any[] = [];
     let groupColorIndex = 0;
     const nextColor = () => (groupColorIndex++) % 4;
-    const addedPaymentOutIds = new Set<string>();
 
     const voucherToInRow = (v: any) => {
       const existing = byId.get(v.id);
@@ -250,7 +243,7 @@ export function AccountGroupDetails({
       let rowIndexInGroup = 0;
       const t = voucherToInRow(pi);
       const linkedOuts = vouchers
-        .filter((v: any) => linkedOutFilter(v, pi.id) && paymentOutToOwnerId.get(v.id) === pi.id)
+        .filter((v: any) => linkedOutFilter(v, pi.id))
         .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
@@ -276,16 +269,15 @@ export function AccountGroupDetails({
         rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-pi-${pi.id}`, _rowKey: `grp-spacer-${groupId}` });
       }
       linkedOuts.forEach((po: any, idx: number) => {
-        if (addedPaymentOutIds.has(po.id)) return;
-        addedPaymentOutIds.add(po.id);
         const outRow = voucherToRow(po);
         const prevRunning = rows.length > 0 ? (rows[rows.length - 1] as any)._spendWiseRunningBalance : 0;
         const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
         const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
-        const amountDelta = (outRow.credit || 0) > (outRow.debit || 0) ? -linkedAmount : linkedAmount;
+        // Linked row is always an outflow for this group: subtract from running balance (Dr − Cr). Do not use outRow.debit/credit — byId row can have contra/other shape and give wrong sign.
+        const amountDelta = -linkedAmount;
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
-        const isLastOutInThisGroup = linkedOuts.slice(idx + 1).every((v: any) => addedPaymentOutIds.has(v.id));
+        const isLastOutInThisGroup = idx === linkedOuts.length - 1;
         rows.push({
           ...outRow,
           _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
@@ -766,6 +758,7 @@ export function AccountGroupDetails({
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
               disableLayoutAnimation={disableTableLayoutAnimation}
+              blinkMode={spendWiseBlinkMode}
             />
             </div>
           </div>
@@ -1113,6 +1106,7 @@ export function AccountGroupDetails({
               closingBalance={isBalanceMasked ? undefined : closingBalance}
               isBalanceMasked={isBalanceMasked}
               disableLayoutAnimation={disableTableLayoutAnimation}
+              blinkMode={spendWiseBlinkMode}
             />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
@@ -1159,6 +1153,32 @@ export function AccountGroupDetails({
                     ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {spendWiseView && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0 min-w-0">
+                      <span className="truncate">{spendWiseBlinkMode === "all" ? "Blink all" : spendWiseBlinkMode === "group" ? "Blink group" : "Off"}</span>
+                      <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44 p-2">
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("all")} className={spendWiseBlinkMode === "all" ? "bg-accent" : ""}>
+                      Blink all
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("group")} className={spendWiseBlinkMode === "group" ? "bg-accent" : ""}>
+                      Blink group
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("off")} className={spendWiseBlinkMode === "off" ? "bg-accent" : ""}>
+                      Off
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setBlinkInfoOpen(true)} className="flex items-center gap-2">
+                      <Info className="h-4 w-4 shrink-0" />
+                      About
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+              {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
