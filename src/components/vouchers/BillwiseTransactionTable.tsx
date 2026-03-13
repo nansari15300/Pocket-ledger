@@ -132,6 +132,8 @@ export function BillwiseTransactionTable({
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Party/Staff/Group billwise: status shows only bill-wise link voucher no, not spend-wise (RCPT/PYMT/Contra).
+  const statusBillWiseOnly = context === "party" || context === "staff" || context === "group";
 
   useEffect(() => {
     if (selectedId && !transactions.some((t) => t.id === selectedId)) setSelectedId(null);
@@ -300,6 +302,7 @@ export function BillwiseTransactionTable({
       tabIndex={0}
       role="grid"
       aria-label="Transactions"
+      data-theme-table="transactions"
       className="w-full min-w-0 overflow-x-auto scrollbar-slim-dim outline-none focus:outline-none"
       onKeyDown={handleTableKeyDown}
       onClick={() => tableContainerRef.current?.focus()}
@@ -375,6 +378,7 @@ export function BillwiseTransactionTable({
             {showOpeningBalance && (
               <motion.tr
                 key="opening-balance-row"
+                data-row="opening-balance"
                 layout
                 initial={false}
                 exit={{ transition: { duration: 0 } }}
@@ -468,6 +472,7 @@ export function BillwiseTransactionTable({
                   useOutstandingForBalance={true}
                   isBillWise={true}
                   ensureMinGaps={ensureMinGaps}
+                  statusBillWiseOnly={statusBillWiseOnly}
                 />
               ))
             ) : (

@@ -55,7 +55,9 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -310,10 +312,17 @@ export function TaxDetails({
     [displayTransactions, statusFilter]
   );
 
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+    [statusFilteredTransactions, sortBy, sortOrder]
+  );
+
   const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm.trim()) return statusFilteredTransactions;
+    if (!mobileSearchTerm.trim()) return sortedTransactions;
     const q = mobileSearchTerm.toLowerCase().trim();
-    return statusFilteredTransactions.filter((t) => {
+    return sortedTransactions.filter((t) => {
       const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
       const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
       const timeStr = d ? format(d, "h:mm a") : "";
@@ -333,7 +342,7 @@ export function TaxDetails({
         userStr.toLowerCase().includes(q)
       );
     });
-  }, [statusFilteredTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
+  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -887,6 +896,12 @@ export function TaxDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode="statement"
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

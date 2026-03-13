@@ -31,7 +31,9 @@ import {
   Columns3,
 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -350,11 +352,17 @@ export function ItemGroupDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
   const totalPages = Math.max(
     1,
-    Math.ceil(displayTransactions.length / rowsPerPage)
+    Math.ceil(sortedTransactions.length / rowsPerPage)
   );
-  const paginatedTransactions = displayTransactions.slice(
+  const paginatedTransactions = sortedTransactions.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
@@ -948,6 +956,12 @@ export function ItemGroupDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode="statement"
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

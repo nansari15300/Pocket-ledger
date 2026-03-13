@@ -3,8 +3,8 @@
 
 import { createContext, useContext, useEffect, useState } from 'react';
 
-type Theme = "theme-pure-white" | "theme-vagawa" | "theme-soft-green" | "theme-dim-soft-green" | "theme-soft-blue" | "theme-sky-blue" | "theme-soft-yellow" | "theme-soft-pink";
-type PrimaryColor = "primary-pure-white" | "primary-vagawa" | "primary-soft-green" | "primary-dim-soft-green" | "primary-soft-blue" | "primary-sky-blue" | "primary-soft-yellow" | "primary-soft-pink";
+type Theme = "theme-pure-white" | "theme-vagawa" | "theme-soft-green" | "theme-dim-soft-green" | "theme-soft-blue" | "theme-sky-blue" | "theme-soft-yellow" | "theme-soft-pink" | "theme-colorfull";
+type PrimaryColor = "primary-pure-white" | "primary-vagawa" | "primary-soft-green" | "primary-dim-soft-green" | "primary-soft-blue" | "primary-sky-blue" | "primary-soft-yellow" | "primary-soft-pink" | "primary-colorfull";
 
 
 type ThemeContextType = {

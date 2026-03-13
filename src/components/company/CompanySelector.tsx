@@ -397,7 +397,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className={cn("w-full justify-between h-9", !isOpen && "justify-center aspect-square p-0")}>
+          <Button variant="outline" className={cn("w-full justify-between h-9", !isOpen && "justify-center aspect-square p-0")} data-theme-header="company-selector">
             <div className="flex items-center gap-2 truncate">
               <Building2 />
               {isOpen && <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>}

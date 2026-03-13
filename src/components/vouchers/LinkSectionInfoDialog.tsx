@@ -31,15 +31,16 @@ const LINK_SECTION_INFO = {
       "Always check Total linked and Balance. If balance is zero, that bill-side payment is fully settled.",
     ],
     spendWise: [
+      // Keep spend-wise guidance aligned with current two-card UI labels: Current Voucher and To Voucher.
       "Spend wise is used to map one inflow to one or more outflows, so fund usage is visible voucher by voucher.",
-      "In this layout, \"From Voucher\" usually shows source inflow and \"To Voucher\" shows where that money got used.",
-      "Try to keep linked amount equal to voucher amount, so status becomes \"Settled\" and no hidden balance remains.",
+      "\"Current Voucher\" shows the source inflow or outflow, and \"To Voucher\" shows the current account inflow or outflow where the amount is used.",
     ],
     contra: [
-      "1. What is a Contra voucher? Contra is the voucher in which you transfer money between your own two accounts. No customer or supplier is involved. E.g.: Bank → Cash or Cash → Bank (example: Voucher No. 001). So money only moves from one account to another.",
-      "To track which voucher of the account from which money went was used to give this, the \"Other voucher in To Contra out (account Name)\" section above is provided.",
-      "2. Meaning of \"Contra in to other out\" — Contra in = money that came into an account via Contra (as above). Other out = any payment or expense from that same account (e.g. expense from Voucher No. 001). There is only one voucher but two types of links, so Contra shows 2 sections. When money that came via Contra (Voucher No. 1) is linked with the expense from that same account, it is called \"Contra in to other out\". For this, the section below is there.",
-      "— Flow: Bank → Cash (Contra) → expense from that Cash (Payment Out) | Link: Contra in ↔ Other out.",
+      // Keep Contra examples focused on tracing where transferred money was finally used.
+      "1. What is a Contra voucher? Contra is the voucher where you transfer money between your own Bank/Cash accounts. No customer or supplier is involved. Example: Bank → Cash or Cash → Bank. So money moves only between your own accounts.",
+      "But to track from which voucher number of that same outgoing account the money was given, use \"Contra in to Other out\" and link the voucher where money was used.",
+      // Example line clarifies voucher-number tracing in spend-wise view across Payment Out/Contra Out/Direct Expense.
+      "2. Example: From Contra in Voucher No. 001, Rs 50 was spent. You can track in which Payment Out / Contra Out / Direct Expense voucher number that amount was used. If that used voucher number is linked with Contra in voucher 001, the bank page spend-wise view clearly shows where that individual inflow amount went.",
     ],
   },
   hi: {
@@ -58,15 +59,16 @@ const LINK_SECTION_INFO = {
       "Total linked और Balance जरूर देखें। Balance zero मतलब bill-side payment पूरी तरह settled है।",
     ],
     spendWise: [
+      // Keep spend-wise guidance aligned with current two-card UI labels: Current Voucher and To Voucher.
       "Spend wise में एक inflow को एक या कई outflow से जोड़ा जाता है, ताकि fund flow पूरी तरह trace हो सके।",
-      "\"From Voucher\" में source inflow दिखता है और \"To Voucher\" में current usage side दिखती है।",
-      "Linked amount को voucher amount के बराबर रखें, तब status \"Settled\" रहेगा और hidden balance नहीं बचेगा।",
+      "\"Current Voucher\" में source inflow / outflow दिखता है और \"To Voucher\" में रकम जहां उपयोग होती है उस current account का inflow / outflow दिखता है।",
     ],
     contra: [
-      "1. Contra voucher क्या होता है? Contra वह voucher होता है जिसमें आप पैसा अपने ही दो accounts के बीच transfer करते हैं। इसमें बाहर कोई ग्राहक या सप्लायर शामिल नहीं होता। जैसे: Bank → Cash या Cash → Bank (उदाहरण: Voucher No. 001)। यानी पैसा सिर्फ एक account से दूसरे account में जाता है।",
-      "जिस account से पैसा जाता है, उस account का कौन सा voucher से दिया — यह track करने के लिए ऊपर वाला \"Other voucher in To Contra out (account Name)\" section बनाया गया है।",
-      "2. \"Contra in to other out\" का मतलब — Contra in = Contra से किसी account में आया हुआ पैसा (जैसे ऊपर बताया)। Other out = उसी account से किया गया कोई payment या खर्च (जैसे Voucher No. 001 से खर्च)। Voucher एक ही है लेकिन link दो तरह के होते हैं, इसलिए Contra में 2 section दिखते हैं। जब Contra से आए पैसे (Voucher No. 1) को उसी account से हुए खर्च के साथ link किया जाता है, उसे \"Contra in to other out\" कहते हैं। इसके लिए नीचे का section है।",
-      "— Flow: Bank → Cash (Contra) → उसी Cash से खर्च (Payment Out) | Link: Contra in ↔ Other out।",
+      // Contra text is kept aligned with the same tracing flow used in English/Nepali.
+      "1. Contra voucher क्या होता है? Contra वह voucher है जिसमें आप अपने ही Bank/Cash accounts के बीच पैसा transfer करते हैं। इसमें बाहर का कोई customer या supplier शामिल नहीं होता। जैसे: Bank → Cash या Cash → Bank। यानी पैसा सिर्फ अपने accounts के बीच जाता है।",
+      "लेकिन जिस account से पैसा गया, उसी account के किस voucher number से पैसा दिया गया, यह track करने के लिए \"Contra in to Other out\" में उस voucher को link करें जहां पैसा use हुआ है।",
+      // यह उदाहरण spend-wise view में exact voucher number tracking को स्पष्ट करता है।
+      "2. उदाहरण: Voucher No. Contra in 001 से Rs 50 खर्च हुआ। यह amount Payment Out / Contra Out / Direct Expense के किस voucher number में use/खर्च हुआ, इसे track किया जा सकता है। यदि उस used/खर्च voucher number को Contra in voucher 001 से link किया जाए, तो bank page के spend-wise view में individual inflow का पैसा कहां गया, यह साफ दिखता है।",
     ],
   },
   ne: {
@@ -85,15 +87,17 @@ const LINK_SECTION_INFO = {
       "Total linked र Balance अनिवार्य जाँच गर्नुहोस्। Balance zero भए bill-side payment पूर्ण settle भएको हो।",
     ],
     spendWise: [
+      // Keep spend-wise guidance aligned with current two-card UI labels: Current Voucher and To Voucher.
       "Spend wise मा एउटा inflow लाई एक वा धेरै outflow सँग जोडेर fund flow लाई स्पष्ट रूपमा track गरिन्छ।",
-      "\"From Voucher\" मा source inflow देखिन्छ र \"To Voucher\" मा रकम प्रयोग भएको current side देखिन्छ।",
-      "Linked amount लाई voucher amount बराबर राख्नुहोस्, त्यसपछि status \"Settled\" देखिन्छ।",
+      "\"Current Voucher\" मा हाल काम भइरहेको voucher देखिन्छ, र \"To Voucher\" मा रकम प्रयोग हुने current account को inflow / outflow देखिन्छ।",
+      "यदि Current Voucher मा inflow छ भने \"From Voucher\" मा सोही account का outflow vouchers देखिन्छन्। त्यसैगरी, Current Voucher मा outflow छ भने \"From Voucher\" मा सोही account का inflow vouchers देखिन्छन्।",
     ],
     contra: [
-      "1. Contra voucher के हो? Contra त्यो voucher हो जसमा तपाईंले आफ्नै दुई accounts बीच पैसा स्थानान्तरण गर्नुहुन्छ। बाहिर कोही ग्राहक वा सप्लायर समावेश छैन। जस्तै: Bank → Cash वा Cash → Bank (उदाहरण: Voucher No. 001)। यानी पैसा एक account बाट अर्को account मा मात्र जान्छ।",
-      "जुन account बाट पैसा जान्छ, त्यो account को कुन voucher बाट दियो — त्यो track गर्न माथि \"Other voucher in To Contra out (account Name)\" section दिइएको छ।",
-      "2. \"Contra in to other out\" को अर्थ — Contra in = Contra बाट कुनै account मा आएको पैसा (माथि जस्तै)। Other out = त्यही account बाट गरिएको कुनै पनि payment वा खर्च (जस्तै Voucher No. 001 बाट खर्च)। Voucher एक हो तर link दुई प्रकारका हुन्छन्, त्यसैले Contra मा 2 section देखिन्छ। जब Contra बाट आएको पैसा (Voucher No. 1) लाई त्यही account बाट भएको खर्च सँग link गरिन्छ, त्यसलाई \"Contra in to other out\" भनिन्छ। यसको लागि तलको section छ।",
-      "— Flow: Bank → Cash (Contra) → त्यही Cash बाट खर्च (Payment Out) | Link: Contra in ↔ Other out।",
+      // Nepali guidance mirrors the same Contra-in to Other-out tracking behavior.
+      "1. Contra voucher के हो? Contra त्यो voucher हो जसमा तपाईंले आफ्नै Bank/Cash accounts बीच पैसा स्थानान्तरण गर्नुहुन्छ। बाहिर कोही ग्राहक वा सप्लायर समावेश हुँदैन। जस्तै: Bank → Cash वा Cash → Bank। यानी पैसा आफ्नै accounts बीच मात्र जान्छ।",
+      "तर जुन account बाट पैसा जान्छ, त्यो same account को कुन voucher number बाट दियो भन्ने track गर्न \"Contra in to Other out\" मा पैसा प्रयोग भएको voucher लाई link गर्नुपर्छ।",
+      // यो उदाहरणले spend-wise view मा प्रयोग भएको exact voucher number track गर्ने तरिका देखाउँछ।
+      "2. उदाहरण: Voucher No. Contra in 001 बाट Rs 50 खर्च भयो। त्यो amount Payment Out / Contra Out / Direct Expense को कुन voucher number मा प्रयोग/खर्च भयो, track गर्न सकिन्छ। यदि त्यो used/खर्च voucher number लाई Contra in voucher 001 सँग link गरियो भने, bank page को spend-wise view मा individual inflow को रकम कहाँ गयो भन्ने स्पष्ट देखिन्छ।",
     ],
   },
 } as const;
@@ -122,15 +126,11 @@ function SectionBox({
       <h4 className="text-base font-bold text-foreground mb-2">{title}</h4>
       <div className="space-y-2">
         {paragraphs.map((p) => {
-          // Tree/flow style: paragraphs with arrow or "Step" get a distinct box so flow is easy to follow.
-          const isFlow = /→|Step \d/i.test(p);
+          // Keep all help text in one normal style (no flow-highlight bar), so numbered lines render uniformly.
           return (
             <p
               key={p}
-              className={cn(
-                "text-base font-medium text-foreground leading-relaxed break-words",
-                isFlow && "font-mono text-sm font-medium pl-2 py-1.5 rounded border-l-2 border-muted-foreground/30 bg-muted/20"
-              )}
+              className="text-base font-medium text-foreground leading-relaxed break-words"
             >
               {p}
             </p>
@@ -169,8 +169,9 @@ export function LinkSectionInfoDialog({
     <div className="flex flex-col gap-[30px]">
       <SectionBox title="General" paragraphs={LINK_SECTION_INFO[lang].general} />
       <SectionBox title="Bill wise" paragraphs={LINK_SECTION_INFO[lang].billWise} />
-      <SectionBox title="Spend wise: Payment In / Direct Income → Payment Out / Direct Expense" paragraphs={LINK_SECTION_INFO[lang].spendWise} />
-      <SectionBox title="Contra  (special) contra to Contra & contra to other " paragraphs={LINK_SECTION_INFO[lang].contra} />
+      <SectionBox title="Spend wise: Payment In / Direct Income / contra in → Payment Out / Direct Expense / contra out" paragraphs={LINK_SECTION_INFO[lang].spendWise} />
+      {/* Keep Contra heading concise and aligned with current linking flow wording. */}
+      <SectionBox title="Contra In to other out" paragraphs={LINK_SECTION_INFO[lang].contra} />
     </div>
   );
 

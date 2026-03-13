@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -219,22 +221,26 @@ export function AccountGroupDetails({
     const rows: any[] = [];
     let groupColorIndex = 0;
     const nextColor = () => (groupColorIndex++) % 4;
+    /** Per payment-out id: total amount already shown in linked groups (so remainder can show as separate row). */
+    const linkedAmountByOutId = new Map<string, number>();
 
     const voucherToInRow = (v: any) => {
       const existing = byId.get(v.id);
       if (existing) return existing;
       const amount = Number(v.amount ?? v.total ?? 0) || 0;
-      return { id: v.id, date: v.date, type: v.type, voucherNumber: v.voucherNumber, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
+      const voucherNo = v.type === "contra" ? (v.voucherNumberIn ?? v.voucherNumber) : v.voucherNumber;
+      return { id: v.id, date: v.date, type: v.type, voucherNumber: voucherNo, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
     };
     const voucherToRow = (po: any) => {
       const existing = byId.get(po.id);
       if (existing) return existing;
       const amount = Number(po.total ?? po.amount ?? 0) || 0;
+      const voucherNo = po.type === "contra" ? (po.voucherNumberOut ?? po.voucherNumber) : po.voucherNumber;
       return {
         id: po.id,
         date: po.date,
         type: po.type,
-        voucherNumber: po.voucherNumber,
+        voucherNumber: voucherNo,
         debit: 0,
         credit: amount,
         userId: po.userId,
@@ -280,12 +286,14 @@ export function AccountGroupDetails({
         const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
         const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
+        linkedAmountByOutId.set(po.id, (linkedAmountByOutId.get(po.id) ?? 0) + linkedAmount);
         // Linked row is always an outflow for this group: subtract from running balance (Dr − Cr). Do not use outRow.debit/credit — byId row can have contra/other shape and give wrong sign.
         const amountDelta = -linkedAmount;
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
         const isLastOutInThisGroup = idx === linkedOuts.length - 1;
         rows.push({
           ...outRow,
+          id: `${po.id}-in-${pi.id}`,
           _rowKey: `grp-${groupId}-${rowIndexInGroup++}`,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
@@ -302,29 +310,44 @@ export function AccountGroupDetails({
       .filter((t: any) => !addedIds.has(t.id))
       .sort((a: any, b: any) => getDateMs(a) - getDateMs(b));
     unlinked.forEach((t: any, idx: number) => {
+      const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
+      const alreadyShown = linkedAmountByOutId.get(t.id) ?? 0;
+      const remainder = fullAmount - alreadyShown;
+      if (remainder <= 0) return;
       const colorIdx = nextColor();
-      const voucherBalance = (t.debit || 0) - (t.credit || 0);
-      rows.push({
-        ...t,
-        _rowKey: `unlinked-${t.id}`,
+      const isOutflow = (t.credit || 0) > (t.debit || 0);
+      const remainderRow = {
+        ...voucherToRow(t),
+        id: t.id,
+        _rowKey: alreadyShown > 0 ? `unlinked-${t.id}-remainder` : `unlinked-${t.id}`,
+        debit: isOutflow ? 0 : remainder,
+        credit: isOutflow ? remainder : 0,
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: true,
-        _spendWiseRunningBalance: voucherBalance,
+        _spendWiseRunningBalance: isOutflow ? -remainder : remainder,
         _spendWiseGroupColorIndex: colorIdx,
-      });
-      if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}` });
+      };
+      rows.push(remainderRow);
+      if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: `spacer-unlinked-${t.id}` });
     });
     return rows.length ? rows : baseTransactions;
   }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup]);
 
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(() => {
+    if (spendWiseView) return displayTransactions;
+    return sortTransactions(displayTransactions, sortBy, sortOrder);
+  }, [displayTransactions, spendWiseView, sortBy, sortOrder]);
+
   const displayTransactionCount = useMemo(
-    () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [displayTransactions]
+    () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
+    [sortedTransactions]
   );
 
   /** Rows-per-page overwrite: paginate by full groups so we never split a group across pages. */
   const displayBlocks = useMemo(() => {
-    const list = displayTransactions;
+    const list = sortedTransactions;
     if (!list.length) return [];
     const blocks: any[][] = [];
     let i = 0;
@@ -350,22 +373,22 @@ export function AccountGroupDetails({
       i = end;
     }
     return blocks;
-  }, [displayTransactions]);
+  }, [sortedTransactions]);
 
   const { totalPages, paginatedTransactions } = useMemo(() => {
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, paginatedTransactions: displayTransactions };
+      return { totalPages: 1, paginatedTransactions: sortedTransactions };
     }
-    const hasSpendWiseGroups = displayTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
+    const hasSpendWiseGroups = sortedTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
     if (!hasSpendWiseGroups) {
-      const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
+      const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
       const start = (currentPage - 1) * rowsPerPage;
-      const paginatedTransactions = displayTransactions.slice(start, start + rowsPerPage);
+      const paginatedTransactions = sortedTransactions.slice(start, start + rowsPerPage);
       return { totalPages, paginatedTransactions };
     }
     const blocks = displayBlocks;
     if (!blocks.length) {
-      return { totalPages: 1, paginatedTransactions: displayTransactions };
+      return { totalPages: 1, paginatedTransactions: sortedTransactions };
     }
     const rowCounts = blocks.map((b) => b.length);
     const pages: number[][] = [];
@@ -386,9 +409,9 @@ export function AccountGroupDetails({
     const blockIndices = pages[pageIndex] ?? [];
     const paginatedTransactions = blockIndices.length > 0
       ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
-      : displayTransactions;
+      : sortedTransactions;
     return { totalPages, paginatedTransactions };
-  }, [displayTransactions, displayBlocks, rowsPerPage, currentPage]);
+  }, [sortedTransactions, displayBlocks, rowsPerPage, currentPage]);
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -411,7 +434,9 @@ export function AccountGroupDetails({
 
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
-    setSelectedVoucher(voucher);
+    // Contra group rows use _baseVoucherId so we open the actual voucher, not the leg id (e.g. xyz-out)
+    const voucherToOpen = voucher._baseVoucherId != null ? { ...voucher, id: voucher._baseVoucherId } : voucher;
+    setSelectedVoucher(voucherToOpen);
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -492,9 +517,9 @@ export function AccountGroupDetails({
   };
 
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return displayTransactions.filter((t: any) => {
+    return sortedTransactions.filter((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -510,7 +535,7 @@ export function AccountGroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -739,11 +764,13 @@ export function AccountGroupDetails({
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             <div className="pb-24">
+            {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <TransactionsTable
               transactions={mobileTransactionsToShow}
               context="group"
               contextId={group.id}
               groupEntityType="account"
+              forceBalanceMode="statement"
               openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
@@ -1075,11 +1102,13 @@ export function AccountGroupDetails({
         </div>
         <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim">
           <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
+            {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
               contextId={group.id}
               groupEntityType="account"
+              forceBalanceMode="statement"
               showNarration={showNarration}
               visibleColumns={visibleColumns}
               openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
@@ -1194,6 +1223,12 @@ export function AccountGroupDetails({
               {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode={spendWiseView ? "spend_wise" : "statement"}
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

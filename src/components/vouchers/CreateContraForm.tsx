@@ -58,7 +58,11 @@ const formSchema = z.object({
   fromAccountId: z.string().min(1, "Please select the source account."),
   toAccountId: z.string().min(1, "Please select the destination account."),
   date: z.date({ message: "A date is required." }),
-  voucherNumber: z.string().min(1, "Voucher number is required."),
+  voucherNumber: z.string().optional(),
+  /** From-account leg: e.g. CNTR Out - 001. Treated as voucher number; required. */
+  voucherNumberOut: z.string().min(1, "Voucher No. (Out) is required."),
+  /** To-account leg: e.g. CNTR In - 001. Treated as voucher number; required. */
+  voucherNumberIn: z.string().min(1, "Voucher No. (In) is required."),
   amount: z.coerce.number().min(0.01, "Amount must be positive."),
   narration: z.string().optional(),
   files: z.array(fileSchema).optional(),
@@ -67,6 +71,8 @@ const formSchema = z.object({
 type ContraFormValues = z.infer<typeof formSchema>;
 
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.contra && prefixes.contra[0]) || "CNTR-";
+/** Base prefix for Contra Out/In (e.g. "CNTR-" → "CNTR"). Used to build "CNTR Out - 001" and "CNTR In - 001". */
+const getContraBasePrefix = (prefixes?: Record<string, string[]>) => normalizePrefix(getVoucherPrefix(prefixes)) || "CNTR";
 const MAX_FILE_SIZE_MB = 0.5;
 
 
@@ -113,8 +119,7 @@ export function CreateContraForm({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
   const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
-  /** Which card opened the link dialog: 'allReceived' = top-left (all received vouchers), 'currentVoucherOnly' = top-right/bottom-left (current voucher only). */
-  const [linkDialogMode, setLinkDialogMode] = useState<'allReceived' | 'currentVoucherOnly'>('allReceived');
+  /** Keep only one Pay In dialog state so Contra Out linking is always handled from the top-left card. */
   const [isLinkPaymentOutDialogOpen, setIsLinkPaymentOutDialogOpen] = useState(false);
   /** Pending Link Pay Out selection (applied to server only on Save, not on Done). */
   const [pendingLinkedPaymentOut, setPendingLinkedPaymentOut] = useState<{ ids: string[]; amountsByVoucherId: Record<string, number> } | null>(null);
@@ -135,12 +140,14 @@ export function CreateContraForm({
   const form = useForm<ContraFormValues>({
     resolver: zodResolver(formSchema) as Resolver<ContraFormValues>,
     defaultValues: voucher
-      ? { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) }
+      ? { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date), voucherNumberOut: voucher.voucherNumberOut ?? "", voucherNumberIn: voucher.voucherNumberIn ?? "" }
       : {
           fromAccountId: "",
           toAccountId: "",
           date: startOfDay(new Date()),
           voucherNumber: "",
+          voucherNumberOut: "",
+          voucherNumberIn: "",
           amount: 0,
           narration: "",
           files: [],
@@ -164,6 +171,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const fromAccountId = form.watch("fromAccountId");
   const toAccountId = form.watch("toAccountId");
   const amount = Number(form.watch("amount")) || 0;
+  // Keep edit context aligned with the clicked contra row; add-new defaults to Out leg.
+  const selectedContraLeg: 'in' | 'out' = (voucher?._contraLeg === 'in' ? 'in' : 'out');
 
   useEffect(() => {
     const ids = Array.isArray(voucher?.linkedPaymentInIds) ? [...voucher.linkedPaymentInIds] : [];
@@ -178,17 +187,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (typeof byRole === "boolean") return byRole;
     return byRole.contra === true;
   })();
+  // Rule: Out leg links same-account inflows; In leg links same-account outflows.
+  const spendWiseInAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
+  const spendWiseOutAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
   const linkedAmountByPaymentInId = useMemo(() => {
     const map = new Map<string, number>();
-    if (!allVouchers?.length || !fromAccountId) return map;
+    // Compute already-linked amounts using the same opposite account used by Link Pay In.
+    if (!allVouchers?.length || !spendWiseInAccountId) return map;
     const currentId = voucher?.id ?? savedVoucherId;
     allVouchers
       .filter(
         (v: any) => {
           const isOut =
-            (v.type === "payment_out" && v.accountId === fromAccountId) ||
-            (v.type === "direct_expense" && v.accountId === fromAccountId) ||
-            (v.type === "contra" && v.fromAccountId === fromAccountId);
+            (v.type === "payment_out" && v.accountId === spendWiseInAccountId) ||
+            (v.type === "direct_expense" && v.accountId === spendWiseInAccountId) ||
+            (v.type === "contra" && v.fromAccountId === spendWiseInAccountId);
           return (
             isOut &&
             Array.isArray(v.linkedPaymentInIds) &&
@@ -208,16 +221,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
       });
     return map;
-  }, [allVouchers, fromAccountId, voucher?.id, savedVoucherId]);
+  }, [allVouchers, spendWiseInAccountId, voucher?.id, savedVoucherId]);
   const linkedPaymentInTotal = useMemo(() => {
-    if (!allVouchers?.length || !linkedPaymentInIds?.length || !fromAccountId) return 0;
+    if (!allVouchers?.length || !linkedPaymentInIds?.length || !spendWiseInAccountId) return 0;
     return linkedPaymentInIds.reduce((sum, id) => {
-      const v = allVouchers.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === fromAccountId);
+      // Keep amount-matching check aligned with dialog filter (including legacy account fields).
+      const v = allVouchers.find((x: any) =>
+        x.id === id &&
+        (
+          ((x.type === "payment_in" || x.type === "direct_income") && ((x.accountId ?? x.toAccountId ?? x.bankAccountId) === spendWiseInAccountId)) ||
+          (x.type === "contra" && (x.toAccountId ?? x.accountId) === spendWiseInAccountId)
+        )
+      );
       const amt = Number(v?.total ?? v?.amount ?? 0) || 0;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       return sum + Math.max(0, amt - alreadyLinked);
     }, 0);
-  }, [allVouchers, linkedPaymentInIds, fromAccountId, linkedAmountByPaymentInId]);
+  }, [allVouchers, linkedPaymentInIds, spendWiseInAccountId, linkedAmountByPaymentInId]);
   const amountMatched = amount > 0 && linkedPaymentInTotal >= amount;
   const showLinkPayMode = !!fromAccountId && amount > 0;
 
@@ -233,15 +253,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const showSpendWiseSection = showLinkPayMode;
   const isInVoucherForAccountContra = (x: any, accId: string) =>
-    (x.type === "payment_in" && x.accountId === accId) ||
-    (x.type === "direct_income" && x.accountId === accId) ||
-    (x.type === "contra" && x.toAccountId === accId);
+    // Legacy safety: some old in-vouchers keep bank account in toAccountId/bankAccountId.
+    ((x.type === "payment_in" || x.type === "direct_income") && ((x.accountId ?? x.toAccountId ?? x.bankAccountId) === accId)) ||
+    // Contra in side uses destination account.
+    (x.type === "contra" && (x.toAccountId ?? x.accountId) === accId);
   const spendWiseDisplayRows = useMemo(() => {
-    if (!showSpendWiseSection || !allVouchers?.length || !linkedPaymentInIds?.length || !fromAccountId) return [];
+    if (!showSpendWiseSection || !allVouchers?.length || !linkedPaymentInIds?.length || !spendWiseInAccountId) return [];
     const uniqueIds = [...new Set(linkedPaymentInIds)];
-    const allocated = allocatePaymentInAmounts(amount, linkedPaymentInIds, allVouchers, fromAccountId, linkedAmountByPaymentInId);
+    // Allocate using opposite-account inflows to keep Link Pay In behavior consistent.
+    const allocated = allocatePaymentInAmounts(amount, linkedPaymentInIds, allVouchers, spendWiseInAccountId, linkedAmountByPaymentInId);
     return uniqueIds.map((id) => {
-      const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccountContra(x, fromAccountId));
+      const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccountContra(x, spendWiseInAccountId));
       if (!v) return null;
       const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
       const amt = Number(v.total ?? v.amount ?? 0) || 0;
@@ -263,7 +285,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         from,
       };
     }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkedOnOthers: number; linkable: number; from: string }[];
-  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, fromAccountId, amount, linkedAmountByPaymentInId, paymentInDialogNames]);
+  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, spendWiseInAccountId, amount, linkedAmountByPaymentInId, paymentInDialogNames]);
+
+  /** Spend wise: count of Payment In / Direct Income / Contra for fromAccountId with linkable amount. Message uses "bcz" spelling. */
+  const spendWiseLinkableCount = useMemo(() => {
+    if (!spendWiseInAccountId || !allVouchers?.length) return 0;
+    return allVouchers.filter((v: any) => {
+      if (!isInVoucherForAccountContra(v, spendWiseInAccountId)) return false;
+      const amt = Number(v.total ?? v.amount ?? 0) || 0;
+      const alreadyLinked = linkedAmountByPaymentInId.get(v.id) ?? 0;
+      return amt - alreadyLinked > 0;
+    }).length;
+  }, [spendWiseInAccountId, allVouchers, linkedAmountByPaymentInId]);
 
   /** Top-left card (From Voucher): live Total linked and Balance so they update as soon as user links in dialog (add new or edit). */
   const spendWiseFromCardTotalLinked = useMemo(() => spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0), [spendWiseDisplayRows]);
@@ -273,10 +306,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const currentContraVoucherId = voucher?.id ?? savedVoucherId;
   const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   /** Show lower row (Contra voucher in To Other out) in both add new and edit — so user sees spend wise link cards. */
-  const showSpendWiseOppositeSection = !!toAccountId;
+  const showSpendWiseOppositeSection = !!spendWiseOutAccountId;
   const spendWiseLinkedToMeRows = useMemo(() => {
-    if (!showSpendWiseOppositeSection || !allVouchers?.length || !currentContraVoucherId || !toAccountId) return [];
-    const accId = toAccountId;
+    if (!showSpendWiseOppositeSection || !allVouchers?.length || !currentContraVoucherId || !spendWiseOutAccountId) return [];
+    const accId = spendWiseOutAccountId;
     const outflows = allVouchers.filter(
       (v: any) =>
         !v.isDeleted &&
@@ -312,12 +345,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         from,
       };
     }).sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, toAccountId, processedParties, processedStaff, allProcessedAccounts, processedExpenseAccounts]);
+  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, spendWiseOutAccountId, processedParties, processedStaff, allProcessedAccounts, processedExpenseAccounts]);
 
   /** Card display: when Done is clicked (pending set), show pending links live; otherwise server data. */
   const displayLinkedToMeRows = useMemo(() => {
-    if (!pendingLinkedPaymentOut || !toAccountId || !allVouchers?.length) return spendWiseLinkedToMeRows;
-    const accId = toAccountId;
+    if (!pendingLinkedPaymentOut || !spendWiseOutAccountId || !allVouchers?.length) return spendWiseLinkedToMeRows;
+    const accId = spendWiseOutAccountId;
     const rows = pendingLinkedPaymentOut.ids
       .map((id) => {
         const v = allVouchers.find((x: any) => x.id === id);
@@ -342,28 +375,58 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       .filter(Boolean);
     const typed = rows as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; typeLabel: string; from: string }[];
     return typed.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, toAccountId, allProcessedAccounts, processedParties, processedStaff, processedExpenseAccounts]);
+  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, spendWiseOutAccountId, allProcessedAccounts, processedParties, processedStaff, processedExpenseAccounts]);
 
-  /** Lower card (To Voucher): total linked to Payment Out from this contra — for "link spend wise" require-settled when setting ON. */
+  /** Count must match Link Pay Out dialog's To Voucher rows (linkable + already selected rows). */
+  const spendWiseOutDialogRowCount = useMemo(() => {
+    if (!spendWiseOutAccountId || !allVouchers?.length) return 0;
+    const selectedIds = pendingLinkedPaymentOut ? pendingLinkedPaymentOut.ids : spendWiseLinkedToMeRows.map((r) => r.id);
+    const selectedSet = new Set(selectedIds);
+    const currentLinkedAmounts = pendingLinkedPaymentOut
+      ? pendingLinkedPaymentOut.amountsByVoucherId
+      : Object.fromEntries(spendWiseLinkedToMeRows.map((r) => [r.id, r.linked]));
+    return allVouchers
+      .filter(
+        (v: any) =>
+          !v.isDeleted &&
+          ((v.type === "payment_out" && v.accountId === spendWiseOutAccountId) ||
+            (v.type === "direct_expense" && v.accountId === spendWiseOutAccountId) ||
+            (v.type === "contra" && v.fromAccountId === spendWiseOutAccountId))
+      )
+      .map((v: any) => {
+        const amount = Number(v.total ?? v.amount ?? 0) || 0;
+        const amounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? v.linkedPaymentInAmounts : {};
+        const alreadyLinked = Object.values(amounts).reduce<number>((s, val) => s + (Number(val) || 0), 0);
+        const currentLinked = Number((currentLinkedAmounts as Record<string, number>)[v.id] ?? 0) || 0;
+        const linkable = Math.max(0, amount - alreadyLinked + currentLinked);
+        return { id: v.id, linkable };
+      })
+      .filter((r) => r.linkable > 0 || selectedSet.has(r.id)).length;
+  }, [spendWiseOutAccountId, allVouchers, pendingLinkedPaymentOut, spendWiseLinkedToMeRows]);
+
+  // Card count: Contra In follows Pay Out popup count; Contra Out keeps inflow-link count.
+  const spendWiseCardAvailableCount = selectedContraLeg === 'in' ? spendWiseOutDialogRowCount : spendWiseLinkableCount;
+
+  /** Total linked from this contra to Payment Out (used by Link Pay Out dialog summary). */
   const lowerCardTotalLinked = useMemo(() => displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0), [displayLinkedToMeRows]);
-  const lowerCardSettled = amount <= 0 || lowerCardTotalLinked >= amount;
-  /** Only block Save when link spend wise is ON: require both upper card (Payment In link) and lower card (Payment Out link) settled. */
+
+  /** Block Save when link spend wise is ON and upper card (Payment In link) not settled. */
   const saveDisabledByLink =
     requirePaymentLink &&
-    (
-      ((!linkedPaymentInIds?.length) || (!!linkedPaymentInIds?.length && !amountMatched)) ||
-      (showSpendWiseOppositeSection && amount > 0 && !lowerCardSettled)
-    );
+    ((!linkedPaymentInIds?.length) || (!!linkedPaymentInIds?.length && !amountMatched));
   const linkPayOthersDisabled = saveDisabledByLink;
 
   const formDate = form.watch("date");
-  const formVoucherNumber = form.watch("voucherNumber") || voucher?.voucherNumber || "—";
+  const currentContraAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
+  const formVoucherNumber = selectedContraLeg === 'in'
+    ? (form.watch("voucherNumberIn") || form.watch("voucherNumber") || voucher?.voucherNumberIn || voucher?.voucherNumber || "—")
+    : (form.watch("voucherNumberOut") || form.watch("voucherNumber") || voucher?.voucherNumberOut || voucher?.voucherNumber || "—");
   const currentVoucherAsOnOppositeRows = useMemo(() => {
-    if (!showSpendWiseSection || !fromAccountId) return [];
+    if (!showSpendWiseSection || !currentContraAccountId) return [];
     const date = formDate;
     const amt = amount;
     const linked = spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0);
-    const from = allProcessedAccounts?.find((a: any) => a.id === fromAccountId)?.accountName ?? "—";
+    const from = allProcessedAccounts?.find((a: any) => a.id === currentContraAccountId)?.accountName ?? "—";
     return [
       {
         id: "current",
@@ -375,7 +438,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         from,
       },
     ];
-  }, [showSpendWiseSection, fromAccountId, formDate, formVoucherNumber, voucher?.voucherNumber, amount, spendWiseDisplayRows, allProcessedAccounts]);
+  }, [showSpendWiseSection, currentContraAccountId, formDate, formVoucherNumber, voucher?.voucherNumber, amount, spendWiseDisplayRows, allProcessedAccounts]);
 
   const { displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
   const { displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
@@ -388,22 +451,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!companyId || !company || !isAutoVoucherEnabled) return;
     const prefixes = company?.voucherPrefixes?.contra || [getVoucherPrefix(company.voucherPrefixes as Record<string, string[]> | undefined)];
     const VOUCHER_PREFIX = selectedPrefix || prefixes[0];
-    
+    const base = getContraBasePrefix(company.voucherPrefixes as Record<string, string[]> | undefined);
+
     try {
       const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", "contra"));
       const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().voucherNumber as string);
-      
       let maxNum = 0;
-      voucherNumbers.forEach(numStr => {
-        if (numStr && (numStr.startsWith(normalizePrefix(VOUCHER_PREFIX)) || numStr.startsWith(VOUCHER_PREFIX))) {
-          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX);
+      querySnapshot.docs.forEach(doc => {
+        const d = doc.data();
+        const outStr = d.voucherNumberOut ?? d.voucherNumber;
+        const inStr = d.voucherNumberIn ?? d.voucherNumber;
+        for (const numStr of [outStr, inStr].filter(Boolean)) {
+          const num = parseVoucherNumberPart(numStr, VOUCHER_PREFIX) || parseVoucherNumberPart(numStr, base + " Out") || parseVoucherNumberPart(numStr, base + " In");
           if (!isNaN(num) && num > maxNum) maxNum = num;
         }
       });
-      
-      const nextVoucherNumber = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
+
+      const nextNum = maxNum + 1;
+      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum));
+      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum));
+      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum));
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
@@ -411,16 +478,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (voucher) {
-      const initialValues = { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+      const initialValues: any = { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
       if (isEditingAndConverting) {
           initialValues.voucherNumber = "";
+      }
+      // Contra Out/In: use stored values or derive from voucherNumber for old vouchers
+      const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+      const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+      if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
+        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+        initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
+      }
+      if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
+        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+        initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
       }
       form.reset(initialValues);
       setSavedVoucherId(voucher.id);
       setFiles(voucher.fileUrls || []);
       initialFilesRef.current = voucher.fileUrls || [];
     }
-}, [voucher, form, isEditingAndConverting]);
+}, [voucher, form, isEditingAndConverting, company?.voucherPrefixes]);
 
   
   useEffect(() => {
@@ -521,8 +599,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         return;
       }
       if (linkedPaymentInIds?.length) {
+        // Save-time validation must match the same pay-from account used in Link Pay In dialog.
+        const spendWiseAccountForSave = (data as any).fromAccountId;
         const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
-          const v = allVouchers?.find((x: any) => x.id === id && x.type === "payment_in" && x.accountId === data.fromAccountId);
+          // Use same compatibility matcher as dialog so save-validation doesn't hide valid legacy vouchers.
+          const v = allVouchers?.find((x: any) =>
+            x.id === id &&
+            (
+              ((x.type === "payment_in" || x.type === "direct_income") && ((x.accountId ?? x.toAccountId ?? x.bankAccountId) === spendWiseAccountForSave)) ||
+              (x.type === "contra" && (x.toAccountId ?? x.accountId) === spendWiseAccountForSave)
+            )
+          );
           const amt = Number(v?.total ?? v?.amount ?? 0) || 0;
           const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
           return sum + Math.max(0, amt - alreadyLinked);
@@ -532,20 +619,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           return;
         }
       }
-      if (data.toAccountId && amount > 0 && !lowerCardSettled) {
-        sonnerToast.error("Settle To Voucher link", { description: "Link for spend wise (lower card) must be settled: link this contra to Payment Out / Direct Expense so total linked meets the amount." });
-        return;
-      }
     }
 
     const toastId = sonnerToast.loading("Saving contra entry...");
     setIsLoading(true);
 
+    // Contra: primary number for duplicate check and save (Out/In treated as voucher numbers).
+    const effectiveVoucherNumber = (data as any).voucherNumberOut ?? (data as any).voucherNumber;
+
     try {
-      if (!savedVoucherId || data.voucherNumber !== voucher?.voucherNumber) {
+      if (!savedVoucherId || effectiveVoucherNumber !== (voucher?.voucherNumberOut ?? voucher?.voucherNumber)) {
         const q = query(
           collection(firestore, `companies/${companyId}/vouchers`),
-          where("voucherNumber", "==", data.voucherNumber),
+          where("voucherNumber", "==", effectiveVoucherNumber),
           where("type", "==", "contra")
         );
         const existingVoucherSnap = await getDocs(q);
@@ -562,7 +648,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const submissionData: any = {
         fromAccountId: (data as any).fromAccountId,
         toAccountId: (data as any).toAccountId,
-        voucherNumber: (data as any).voucherNumber,
+        voucherNumber: effectiveVoucherNumber,
+        voucherNumberOut: (data as any).voucherNumberOut ?? (data as any).voucherNumber,
+        voucherNumberIn: (data as any).voucherNumberIn ?? (data as any).voucherNumber,
         narration: (data as any).narration ?? '',
         date: date.toISOString(),
         amount,
@@ -574,7 +662,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       submissionData.linkedPaymentInIds = linkIds;
       submissionData.linkedPaymentInAmounts =
         linkIds.length > 0
-          ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], data.fromAccountId, linkedAmountByPaymentInId)
+          // Persist spend-wise allocations against the same pay-from account used in Link Pay In dialog.
+          ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], (data as any).fromAccountId, linkedAmountByPaymentInId)
           : {};
       
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
@@ -665,13 +754,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           if (isEdit) {
             const oldV = voucher as any;
             const changes = getChangedFieldLabels(
-              { amount: oldV?.amount, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, fromAccountId: oldV?.fromAccountId, toAccountId: oldV?.toAccountId },
-              { amount: submissionData.amount, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, fromAccountId: submissionData.fromAccountId, toAccountId: submissionData.toAccountId },
+              { amount: oldV?.amount, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, voucherNumberOut: oldV?.voucherNumberOut, voucherNumberIn: oldV?.voucherNumberIn, fromAccountId: oldV?.fromAccountId, toAccountId: oldV?.toAccountId },
+              { amount: submissionData.amount, narration: submissionData.narration, date: submissionData.date, voucherNumber: submissionData.voucherNumber, voucherNumberOut: submissionData.voucherNumberOut, voucherNumberIn: submissionData.voucherNumberIn, fromAccountId: submissionData.fromAccountId, toAccountId: submissionData.toAccountId },
               [
                 { key: "amount", label: "Amount" },
                 { key: "narration", label: "Narration" },
                 { key: "date", label: "Date" },
                 { key: "voucherNumber", label: "Voucher number" },
+                { key: "voucherNumberOut", label: "Voucher No. (Out)" },
+                { key: "voucherNumberIn", label: "Voucher No. (In)" },
                 { key: "fromAccountId", label: "From account" },
                 { key: "toAccountId", label: "To account" },
               ]
@@ -701,7 +792,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
 
         if (saveAndNew) {
-            form.reset({ fromAccountId: "", toAccountId: "", date: startOfDay(new Date()), voucherNumber: "", amount: 0, narration: "" });
+            form.reset({ fromAccountId: "", toAccountId: "", date: startOfDay(new Date()), voucherNumber: "", voucherNumberOut: "", voucherNumberIn: "", amount: 0, narration: "" });
             setFiles([]);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
@@ -883,6 +974,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     return false;
   });
+  // Contra out (from account): show balance in option label and block non-positive balances.
+  const fromBankCashAccountOptions = useMemo(
+    () =>
+      availableFromAccounts.map((a: any) => ({
+        value: a.id,
+        label: `${a.accountName} (${a.accountType}) — Balance: ${formatCurrency(Number(a.balance) || 0)}`,
+        isSpecial: a.isSpecial,
+        disabled: (Number(a.balance) || 0) <= 0,
+      })),
+    [availableFromAccounts, formatCurrency]
+  );
 
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.contra || [getVoucherPrefix()], [company]);
   
@@ -899,80 +1001,63 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
-                  {/* Mobile: Prefix + Voucher No. + Date(s) in one row, 2/3/4 equal-sized boxes */}
-                  {(() => {
-                    const hasPrefix = isPrefixSelectionEnabled && voucherPrefixes.length > 0;
-                    const hasDateBS = dateSystem === 'BS' || dateSystem === 'Both';
-                    const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
-                    const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
-                    return (
-                      <FormField
-                        control={form.control}
-                        name="voucherNumber"
-                        render={({ field: voucherField }: any) => (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name="date"
-                              render={({ field: dateField }: any) => (
-                                <>
-                                  <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
-                                    {hasPrefix && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
-                                          <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
-                                            <SelectValue/>
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {voucherPrefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                          </SelectContent>
-                                        </Select>
-                                      </FormItem>
-                                    )}
-                                    <FormItem className="min-w-0 w-full overflow-hidden">
-                                      <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
-                                      <FormControl>
-                                        <Input placeholder="e.g. CNTR-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
-                                      </FormControl>
-                                    </FormItem>
-                                    {hasDateBS && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
-                                        <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
-                                        </div>
-                                      </FormItem>
-                                    )}
-                                    {hasDateAD && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date</FormLabel>
-                                        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
-                                          <PopoverTrigger asChild>
-                                            <FormControl>
-                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
-                                                {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
-                                                <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
-                                              </Button>
-                                            </FormControl>
-                                          </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0 z-[102]" align="start">
-                                            <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
-                                          </PopoverContent>
-                                        </Popover>
-                                      </FormItem>
-                                    )}
-                                  </div>
-                                  <FormMessage />
-                                </>
-                              )}
-                            />
-                            <FormMessage />
-                          </>
-                        )}
-                      />
-                    );
-                  })()}
+                  {/* Mobile: Date top-left only (old Voucher No. removed; Out/In are voucher numbers). */}
+                  <FormField
+                    control={form.control}
+                    name="date"
+                    render={({ field: dateField }: any) => (
+                      <>
+                        <div className="grid gap-2 w-full min-w-0 grid-cols-1 sm:grid-cols-2">
+                          {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                            <FormItem className="min-w-0 w-full overflow-hidden">
+                              <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
+                              <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
+                            </FormItem>
+                          )}
+                          {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                            <FormItem className="min-w-0 w-full overflow-hidden">
+                              <FormLabel className="text-xs truncate">Date</FormLabel>
+                              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
+                                <PopoverTrigger asChild>
+                                  <FormControl>
+                                    <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
+                                      {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
+                                      <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
+                                    </Button>
+                                  </FormControl>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                  <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
+                                </PopoverContent>
+                              </Popover>
+                            </FormItem>
+                          )}
+                        </div>
+                        <FormMessage />
+                      </>
+                    )}
+                  />
+                  {/* Mobile: Contra Out and Contra In above From/To account — width responsive */}
+                  <div className="grid grid-cols-2 gap-2 w-full">
+                    <FormField control={form.control} name="voucherNumberOut" render={({ field }: any) => (
+                      <FormItem className="min-w-0">
+                        <FormLabel className="text-xs truncate">Voucher No. (Out)</FormLabel>
+                        <FormControl>
+                          <Input placeholder="CNTR Out - 001" {...field} value={field.value ?? ""} className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={form.control} name="voucherNumberIn" render={({ field }: any) => (
+                      <FormItem className="min-w-0">
+                        <FormLabel className="text-xs truncate">Voucher No. (In)</FormLabel>
+                        <FormControl>
+                          <Input placeholder="CNTR In - 001" {...field} value={field.value ?? ""} className="h-9 text-xs w-full min-w-0" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </div>
                   {/* Mobile: From Account and To Account - grid-cols-2 so fields fit inside dialog */}
                   <div className="grid grid-cols-2 gap-2 w-full">
                     <FormField 
@@ -987,7 +1072,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <div className="min-w-0 w-full overflow-hidden">
                             <Combobox 
                               triggerClassName="w-full min-w-0"
-                              options={availableFromAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} 
+                              options={fromBankCashAccountOptions}
                               value={field.value} 
                               onChange={(value, newName) => { 
                                 if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); 
@@ -1033,41 +1118,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </>
               ) : (
                 <>
-                  {/* PC View: Voucher No. and Date */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:justify-end md:items-end">
-                    {/* Voucher No. */}
-                    <FormField
-                      control={form.control}
-                      name="voucherNumber"
-                      render={({ field }: any) => (
-                        <FormItem className="flex flex-col">
-                          <FormLabel>Voucher No.</FormLabel>
-                          <div className="flex gap-2 h-10">
-                            {isPrefixSelectionEnabled && voucherPrefixes.length > 0 ? (
-                              <Select
-                                onValueChange={(prefix) => {
-                                  fetchVoucherNumber(prefix);
-                                }}
-                                value={voucherPrefixes.find(p => field.value?.startsWith(normalizePrefix(p)) || field.value?.startsWith(p)) || voucherPrefixes[0]}
-                                disabled={deleteDisabledWhenLinked}
-                              >
-                                <SelectTrigger className="w-32 h-10">
-                                  <SelectValue/>
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {voucherPrefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                </SelectContent>
-                              </Select>
-                            ) : null}
-                            <FormControl>
-                              <Input placeholder="e.g. CNTR-001" {...field} className="h-10" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
-                            </FormControl>
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    {/* Date */}
+                  {/* PC View: Date top-left (old Voucher No. field removed; Out/In treated as voucher numbers). */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:justify-start md:items-end">
                     <FormField
                       control={form.control}
                       name="date"
@@ -1113,6 +1165,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                     />
                   </div>
+                  {/* PC View: Contra Out (above From account) and Contra In (above To account) — width like date, responsive */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <FormField
+                      control={form.control}
+                      name="voucherNumberOut"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Voucher No. (Out)</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g. CNTR Out - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="voucherNumberIn"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Voucher No. (In)</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g. CNTR In - 001" {...field} value={field.value ?? ""} className={cn("w-full max-w-[14rem] md:max-w-[12rem]")} disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
                   {/* PC View: From Account and To Account */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="fromAccountId" render={({ field }: any) => (<FormItem>
@@ -1120,7 +1201,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FormLabel>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", fromAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(fromAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        <Combobox options={availableFromAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account (kun bata deiyeko)" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
+                        <Combobox options={fromBankCashAccountOptions} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account (kun bata deiyeko)" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
                     <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem>
                          <div className="flex justify-between items-baseline">
                             <FormLabel>To Account (Debit)</FormLabel>
@@ -1131,17 +1212,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </>
               )}
               <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
-              {(showSpendWiseSection || showSpendWiseOppositeSection) && (
+              {showSpendWiseSection && (
                 <div className="space-y-4 min-w-0 w-full">
                   {/* Upper row: single main container for To Voucher + To Voucher (current) */}
                   <div className="min-w-0 w-full rounded-xl border-4 border-foreground/40 bg-muted/20 p-4">
                     <div className="flex justify-center mb-3">
                     <span className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 text-center">
-                      Other voucher in To Contra out{fromAccountId ? ` ( account ${allProcessedAccounts?.find((a: any) => a.id === fromAccountId)?.accountName ?? "—"} )` : ""}
+                      {/* Show opposite account name so user knows which inflow side is being linked. */}
+                      Other voucher in To Contra out{spendWiseInAccountId ? ` ( account ${allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.accountName ?? "—"} )` : ""}
                     </span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0 w-full items-stretch">
-                  {/* Top left: To Voucher — light green */}
+                  {/* Top left: From Voucher — message inside card when Link for Bill Wise is ON */}
                   <div className="flex flex-col h-full min-h-0 space-y-2 rounded-lg border border-green-200 p-3 bg-green-50/80 min-w-0 w-full max-w-full overflow-hidden">
                     <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
                       <div className="flex items-center gap-2 font-medium min-w-0">
@@ -1150,12 +1232,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                       <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher</span>
                     </div>
+                    {requirePaymentLink && (
+                      <p className="text-sm text-blue-600">
+                        {spendWiseCardAvailableCount > 0
+                            ? `${spendWiseCardAvailableCount} voucher${spendWiseCardAvailableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
+                            : "You can save this voucher without linking, bcz no voucher to link."}
+                      </p>
+                    )}
+                    <p className="text-sm text-muted-foreground">
+                      {spendWiseCardAvailableCount} voucher(s) available to link.{spendWiseDisplayRows.length > 0 && ` ${spendWiseDisplayRows.length} linked.`}
+                    </p>
                     <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
                     {!showSpendWiseSection ? (
                       <p className="text-sm text-muted-foreground">Select From account to link Payment In / Direct Income / Contra.</p>
-                    ) : spendWiseDisplayRows.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No Payment In / Direct Income / Contra linked. Click Link Pay In to select.</p>
-                    ) : (
+                    ) : spendWiseDisplayRows.length === 0 ? null : (
                       <div className="overflow-x-auto -mx-1 min-w-0">
                         <table className="w-full text-sm border-collapse min-w-[400px]">
                           <thead>
@@ -1207,9 +1297,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2 items-center">
-                            <Button type="button" onClick={() => { setLinkDialogMode('allReceived'); setIsLinkPaymentInDialogOpen(true); }} className={cn("w-fit", BTN_SAVE_CLASS)}>
+                            {/* Contra In should behave like Payment In: open outflow linker; Contra Out keeps inflow linker. */}
+                            <Button
+                              type="button"
+                              onClick={() => selectedContraLeg === 'in' ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
+                              className={cn("w-fit", BTN_SAVE_CLASS)}
+                            >
                               <Link2 className="h-4 w-4 mr-2" />
-                              Link Pay In
+                              {selectedContraLeg === 'in' ? 'Link Pay Out' : 'Link Pay In'}
                             </Button>
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                               <Info className="h-4 w-4 shrink-0" />
@@ -1284,7 +1379,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       )}
                       <div className="flex flex-wrap gap-2 items-center">
-                        <Button type="button" onClick={() => { setLinkDialogMode('currentVoucherOnly'); setIsLinkPaymentInDialogOpen(true); }} className={cn("w-fit", BTN_SAVE_CLASS)}>
+                        {/* Link Pay Out must open the outflow dialog so only same-account out vouchers are shown. */}
+                        <Button type="button" onClick={() => setIsLinkPaymentOutDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
                           <Link2 className="h-4 w-4 mr-2" />
                           Link Pay Out
                         </Button>
@@ -1295,168 +1391,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                     </div>
                   </div>
-                    </div>
-                  </div>
-                  {/* Lower row: single main container for From Voucher (current) + To Voucher linked */}
-                  <div className="min-w-0 w-full rounded-xl border-4 border-foreground/40 bg-muted/20 p-4">
-                    <div className="flex justify-center mb-3">
-                    <span className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 text-center">
-                      Contra voucher in To Other out{toAccountId ? ` ( account ${allProcessedAccounts?.find((a: any) => a.id === toAccountId)?.accountName ?? "—"} )` : ""}
-                    </span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0 w-full items-stretch">
-                  {showSpendWiseSection && (
-                    <div className="flex flex-col h-full min-h-0 space-y-2 rounded-lg border border-sky-200 p-3 bg-sky-50/80 min-w-0 w-full max-w-full overflow-hidden">
-                      <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
-                        <div className="flex items-center gap-2 font-medium min-w-0">
-                          <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">Link for spend wise</span>
-                        </div>
-                        <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher ( current voucher )</span>
-                      </div>
-                      <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
-                      {currentVoucherAsOnOppositeRows.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">Save the voucher to see how it appears on the opposite voucher.</p>
-                      ) : (
-                        <div className="overflow-x-auto -mx-1 min-w-0">
-                          <table className="w-full text-sm border-collapse min-w-[400px]">
-                            <thead>
-                              <tr className="border-b bg-muted/50">
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked on others</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked on current</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {currentVoucherAsOnOppositeRows.map((row) => (
-                                <tr key={`bottom-${row.id}`} className="border-b last:border-b-0">
-                                  <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
-                                  <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                  <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
-                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency((row as { linkedOnOthers?: number }).linkedOnOthers ?? 0, { noSuffix: true, noAnimation: true })} Dr</td>
-                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      </div>
-                      <div className="pt-2 border-t space-y-2 shrink-0">
-                        {currentVoucherAsOnOppositeRows.length > 0 && (
-                          <div className="flex justify-end min-w-0">
-                            <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
-                                <span className="text-muted-foreground truncate leading-tight">Total linked</span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                                <span className="truncate text-right whitespace-nowrap leading-tight">
-                                  {formatCurrency(currentVoucherAsOnOppositeRows[0].linked, { noSuffix: true, noAnimation: true })} Dr
-                                </span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
-                                <span className="truncate leading-tight">Balance</span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0 ? "text-green-600 font-semibold" : "")}>
-                                  {currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0
-                                    ? "Settled"
-                                    : `${formatCurrency(Math.max(0, currentVoucherAsOnOppositeRows[0].amount - currentVoucherAsOnOppositeRows[0].linked), { noSuffix: true, noAnimation: true })} Dr`}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-2">
-                          <Button type="button" onClick={() => { setLinkDialogMode('currentVoucherOnly'); setIsLinkPaymentInDialogOpen(true); }} className={cn("w-fit", BTN_SAVE_CLASS)}>
-                            <Link2 className="h-4 w-4 mr-2" />
-                            Link Pay In
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {showSpendWiseOppositeSection && (
-                    <div className="flex flex-col h-full min-h-0 space-y-2 rounded-lg border border-pink-200 p-3 bg-pink-50/80 min-w-0 w-full max-w-full overflow-hidden">
-                      <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
-                        <div className="flex items-center gap-2 font-medium min-w-0">
-                          <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">Link for spend wise</span>
-                        </div>
-                        <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">To Voucher</span>
-                      </div>
-                      <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
-                      {displayLinkedToMeRows.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No outflow vouchers have linked to this Contra yet.</p>
-                      ) : (
-                        <div className="overflow-x-auto -mx-1 min-w-0">
-                          <table className="w-full text-sm border-collapse min-w-[480px]">
-                            <thead>
-                              <tr className="border-b bg-muted/50">
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {displayLinkedToMeRows.map((row) => (
-                                <tr key={row.id} className="border-b last:border-b-0">
-                                  <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
-                                  <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                  <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
-                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      </div>
-                      <div className="pt-2 border-t space-y-2 shrink-0">
-                        {displayLinkedToMeRows.length > 0 && (
-                          <div className="flex justify-end min-w-0">
-                            <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
-                                <span className="text-muted-foreground truncate leading-tight">Total linked</span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                                <span className="truncate text-right whitespace-nowrap leading-tight">
-                                  {formatCurrency(displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0), { noSuffix: true, noAnimation: true })} Dr
-                                </span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
-                                <span className="truncate leading-tight">Balance</span>
-                              </div>
-                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", amount - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0) <= 0 ? "text-green-600 font-semibold" : "")}>
-                                  {amount - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0) <= 0
-                                    ? "Settled"
-                                    : `${formatCurrency(Math.max(0, amount - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0)), { noSuffix: true, noAnimation: true })} Dr`}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex flex-wrap gap-2 items-center">
-                          <Button type="button" onClick={() => setIsLinkPaymentOutDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
-                            <Link2 className="h-4 w-4 mr-2" />
-                            Link Pay Out
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
-                            <Info className="h-4 w-4 shrink-0" />
-                            Read me
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
                     </div>
                   </div>
                 </div>
@@ -1522,7 +1456,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                       Delete
                     </Button>
                   </AlertDialogTrigger>
@@ -1539,7 +1473,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={linkPayOthersDisabled || !voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || linkPayOthersDisabled || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
@@ -1561,8 +1495,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
                 {showLinkPayMode && (
-                  <Button type="button" onClick={() => setIsLinkPaymentInDialogOpen(true)} className={cn("w-full", BTN_SAVE_CLASS)}>
-                    <Link2 className="mr-2 h-4 w-4" /> Link Pay
+                  <Button
+                    type="button"
+                    onClick={() => selectedContraLeg === 'in' ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
+                    className={cn("w-full", BTN_SAVE_CLASS)}
+                  >
+                    <Link2 className="mr-2 h-4 w-4" /> {selectedContraLeg === 'in' ? 'Link Pay Out' : 'Link Pay In'}
                   </Button>
                 )}
                 <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -1572,12 +1510,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             ) : (
               <>
                 <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
                   <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                     <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
@@ -1629,42 +1567,51 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         </form>
       </Form>
       <CreateBankAccountDialog onAccountCreated={handleAccountCreated} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
-      {/* Link dialog: top-left = all received (fromAccountId), top-right & bottom-left = current voucher only (toAccountId). */}
-      {isLinkPaymentInDialogOpen && (linkDialogMode === 'allReceived' ? fromAccountId : toAccountId) && (
+      {/* Link Pay In dialog uses same pay-from account so only relevant in-vouchers are listed. */}
+      {/* Open in-voucher picker only for Contra Out leg; Contra In uses outflow picker (payment_in-like behavior). */}
+      {isLinkPaymentInDialogOpen && selectedContraLeg === 'out' && spendWiseInAccountId && (
         <LinkPaymentInToPaymentOutDialog
           isOpen={isLinkPaymentInDialogOpen}
           onOpenChange={setIsLinkPaymentInDialogOpen}
-          accountId={linkDialogMode === 'allReceived' ? fromAccountId! : toAccountId!}
+          // Same-account mapping: CNTR Out -> same account's Payment In/Direct Income/Contra In.
+          accountId={spendWiseInAccountId}
           vouchers={allVouchers ?? []}
-          selectedIds={linkDialogMode === 'allReceived' ? linkedPaymentInIds : (currentContraVoucherId ? [currentContraVoucherId] : [])}
-          onConfirm={linkDialogMode === 'allReceived' ? (ids) => setLinkedPaymentInIds([...new Set(ids)]) : () => {}}
+          selectedIds={linkedPaymentInIds}
+          onConfirm={(ids) => setLinkedPaymentInIds([...new Set(ids)])}
           names={paymentInDialogNames}
-          requiredAmount={linkDialogMode === 'allReceived' ? amount : 0}
+          requiredAmount={amount}
           currentVoucherId={voucher?.id ?? savedVoucherId ?? undefined}
           currentVoucherLinkedAmounts={
             voucher?.linkedPaymentInAmounts && typeof voucher.linkedPaymentInAmounts === "object"
               ? voucher.linkedPaymentInAmounts
               : {}
           }
-          filterToVoucherId={linkDialogMode === 'currentVoucherOnly' ? (currentContraVoucherId ?? null) : undefined}
-          displayOnly={linkDialogMode === 'currentVoucherOnly'}
-          accountName={allProcessedAccounts?.find((a: any) => a.id === (linkDialogMode === 'allReceived' ? fromAccountId : toAccountId))?.accountName ?? undefined}
+          // Show current contra row in Link Pay In dialog so layout mirrors Link Pay Out dialog.
+          currentVoucherSummary={{
+            voucherNumber: formVoucherNumber,
+            date: formDate ? (formDate instanceof Date ? formDate : new Date(formDate)) : null,
+            from: allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.accountName ?? "—",
+            amount,
+            linkedTotal: spendWiseFromCardTotalLinked,
+          }}
+          accountName={allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.accountName ?? undefined}
         />
       )}
-      {/* Bottom-right: Link Pay Out — show toAccountId's Payment Out vouchers and update their links to this Contra. */}
-      {toAccountId && currentContraVoucherId && (
+      {/* Bottom-right: Link Pay Out — always show same-account out vouchers of current contra leg. */}
+      {/* Outflow picker is used by both right card and Contra In left-card behavior. */}
+      {spendWiseOutAccountId && currentContraVoucherId && (
         <LinkPaymentOutToPaymentInDialog
           isOpen={isLinkPaymentOutDialogOpen}
           onOpenChange={setIsLinkPaymentOutDialogOpen}
-          accountId={toAccountId}
+          accountId={spendWiseOutAccountId}
           currentPaymentInId={currentContraVoucherId}
           vouchers={allVouchers ?? []}
           selectedIds={pendingLinkedPaymentOut ? pendingLinkedPaymentOut.ids : spendWiseLinkedToMeRows.map((r) => r.id)}
           names={paymentInDialogNames}
           requiredAmount={amount}
-          accountName={allProcessedAccounts?.find((a: any) => a.id === toAccountId)?.accountName ?? undefined}
+          accountName={allProcessedAccounts?.find((a: any) => a.id === spendWiseOutAccountId)?.accountName ?? undefined}
           currentVoucherLinkedAmounts={pendingLinkedPaymentOut ? pendingLinkedPaymentOut.amountsByVoucherId : Object.fromEntries(spendWiseLinkedToMeRows.map((r) => [r.id, r.linked]))}
-          currentVoucherSummary={{ voucherNumber: formVoucherNumber, date: formDate ? (formDate instanceof Date ? formDate : new Date(formDate)) : null, from: allProcessedAccounts?.find((a: any) => a.id === fromAccountId)?.accountName ?? "—", amount, linkedTotal: lowerCardTotalLinked }}
+          currentVoucherSummary={{ voucherNumber: formVoucherNumber, date: formDate ? (formDate instanceof Date ? formDate : new Date(formDate)) : null, from: allProcessedAccounts?.find((a: any) => a.id === currentContraAccountId)?.accountName ?? "—", amount, linkedTotal: lowerCardTotalLinked }}
           onConfirm={(selectedIds, amountsByVoucherId) => {
             setPendingLinkedPaymentOut({ ids: selectedIds, amountsByVoucherId });
             setIsLinkPaymentOutDialogOpen(false);

@@ -344,59 +344,59 @@ function HeaderActions() {
     <>
       {/* ✅ Sale */}
       <AddVoucherDialog defaultTab="sale" voucher={undefined} isOpen={openSale} onOpenChange={setOpenSale}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSale(true)}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSale(true)} data-theme-btn="add-sale">
           <ShoppingBag className="mr-1 h-4 w-4" /> Add Sale
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Purchase */}
       <AddVoucherDialog defaultTab="purchase" voucher={undefined} isOpen={openPurchase} onOpenChange={setOpenPurchase}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPurchase(true)}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPurchase(true)} data-theme-btn="add-purchase">
           <ShoppingCart className="mr-1 h-4 w-4" /> Add Purchase
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Payment In */}
       <AddVoucherDialog defaultTab="payment_in" voucher={undefined} isOpen={openPaymentIn} onOpenChange={setOpenPaymentIn}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentIn(true)}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentIn(true)} data-theme-btn="payment-in">
           <ArrowRight className="mr-1 h-4 w-4" /> Payment In
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Payment Out */}
       <AddVoucherDialog defaultTab="payment_out" voucher={undefined} isOpen={openPaymentOut} onOpenChange={setOpenPaymentOut}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentOut(true)}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentOut(true)} data-theme-btn="payment-out">
           <ArrowLeft className="mr-1 h-4 w-4" /> Payment Out
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Salary */}
       <AddVoucherDialog defaultTab="add_salary" voucher={undefined} isOpen={openSalary} onOpenChange={setOpenSalary}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSalary(true)}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSalary(true)} data-theme-btn="add-salary">
           <FileDigit className="mr-1 h-4 w-4" /> Add Salary
         </PermissionButton>
       </AddVoucherDialog>
 
       <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-party">
           <Users className="mr-1 h-4 w-4" /> Add Party
         </PermissionButton>
       </CreatePartyDialog>
 
       <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-item">
           <BookText className="mr-1 h-4 w-4" /> Add Item
         </PermissionButton>
       </CreateItemDialog>
 
       <CreateBankAccountDialog onAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-bank">
           <Landmark className="mr-1 h-4 w-4" /> Add Bank
         </PermissionButton>
       </CreateBankAccountDialog>
 
       <CreateStaffDialog onStaffCreated={() => {}} groups={[]} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-staff">
           <Briefcase className="mr-1 h-4 w-4" /> Add Staff
         </PermissionButton>
       </CreateStaffDialog>
@@ -425,11 +425,12 @@ function BalanceModeSwitcher() {
   const isReportPartyView = isReportsPage && showBillWiseOnReportParty;
   const hideToggleOnReports = isReportsPage && !showBillWiseOnReportParty;
 
+  // Only force statement on pages that have no bill-wise option (items, incomes, tax, dashboard). Do not override on party/staff/bank where mode is persisted in localStorage.
   React.useEffect(() => {
-    if (hideBalanceModeDropdown || hideToggleOnReports) {
+    if (isStatementOnlyPage || hideToggleOnReports) {
       setBalanceMode("statement");
     }
-  }, [pathname, setBalanceMode, hideBalanceModeDropdown, hideToggleOnReports]);
+  }, [pathname, setBalanceMode, isStatementOnlyPage, hideToggleOnReports]);
 
   // In mobile view, hide to keep header minimal (company, date, PC, avatar, full screen only)
   if (isMobile) return null;
@@ -721,7 +722,7 @@ function DateSystemSwitcher() {
       <div className="flex items-center gap-2 flex-shrink-0">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="whitespace-nowrap h-9">
+            <Button variant="outline" size="sm" className="whitespace-nowrap h-9" data-theme-header="date-selector">
               <span>{dateSystem}</span>
               <ChevronDown className="ml-2 h-4 w-4" />
             </Button>
@@ -741,7 +742,7 @@ function DateSystemSwitcher() {
     <div className="flex items-center gap-2 flex-shrink-0">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className={cn("whitespace-nowrap h-9", isMobile && "px-3")}>
+          <Button variant="outline" size="sm" className={cn("whitespace-nowrap h-9", isMobile && "px-3")} data-theme-header="date-selector">
             {!isMobile && <CalendarDays className="mr-2 h-4 w-4" />}
             <span>{dateSystem}</span>
             <ChevronDown className="ml-2 h-4 w-4" />
@@ -759,6 +760,7 @@ function DateSystemSwitcher() {
           title="Switch to PC View"
           onClick={handlePCClick}
           className="h-9 w-9"
+          data-theme-header="view-toggle"
         >
           <Monitor className="h-4 w-4" />
         </Button>
@@ -769,6 +771,7 @@ function DateSystemSwitcher() {
           title="Switch to Mobile View"
           onClick={handleMobileClick}
           className="h-9 w-9"
+          data-theme-header="view-toggle"
         >
           <Smartphone className="h-4 w-4" />
         </Button>

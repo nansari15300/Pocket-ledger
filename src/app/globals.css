@@ -13,6 +13,16 @@
   animation: spend-wise-balance-blink 1s ease-in-out infinite;
 }
 
+/* Related row blink: same voucher, not selected — subtle pulse once per second */
+@keyframes spend-wise-related-blink {
+  0%, 100% { opacity: 1; }
+  5% { opacity: 0.6; }
+  10% { opacity: 1; }
+}
+.animate-spend-wise-related-blink {
+  animation: spend-wise-related-blink 1s ease-in-out infinite;
+}
+
 body {
   font-family: Arial, Helvetica, sans-serif;
 }
@@ -126,6 +136,38 @@ body {
     --sidebar-foreground: var(--foreground);
   }
 
+  /* Colorfull: sab jagah same dim green background; sidebar bold nahi; buttons alag-alag single color; saari lines black 20% kam (dark grey) */
+  .theme-colorfull {
+    --background: 140 28% 94%;
+    --foreground: 140 30% 18%;
+    --card: 140 22% 96%;
+    --card-foreground: 140 30% 18%;
+    --popover: 140 22% 96%;
+    --popover-foreground: 140 30% 18%;
+    --muted: 140 20% 90%;
+    --muted-foreground: 140 25% 40%;
+    --border: 0 0% 20%;
+    --sidebar-background: 140 22% 88%;
+    --sidebar-foreground: 140 35% 18%;
+    --sidebar-primary: 140 50% 38%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 140 25% 88%;
+    --sidebar-accent-foreground: 140 35% 18%;
+    --sidebar-border: 0 0% 20%;
+    --sidebar-ring: 140 50% 38%;
+    --input: 0 0% 20%;
+    --header-bg: 140 28% 94%;
+    --list-page-bg: 140 28% 94%;
+    --details-header-bg: 140 28% 94%;
+    --table-header-bg: 210 40% 88%;
+    --table-header-fg: 0 0% 0%;
+    --row-odd-bg: 140 18% 98%;
+    --row-even-bg: 140 22% 95%;
+    /* 50% tint: account list aur tab ke liye (sidebar card color ka 50% feel) */
+    --colorfull-tint: 140 22% 95%;
+    --colorfull-tint-active: 140 28% 90%;
+  }
+
   .primary-pure-white { --primary: 22 96% 54%; --primary-foreground: 210 40% 98%; --ring: 22 96% 54%; }
   .primary-soft-green { --primary: 95 35% 45%; --primary-foreground: 95 35% 95%; --ring: 95 35% 45%; }
   .primary-dim-soft-green { --primary: 140 70% 50%; --primary-foreground: 140 70% 95%; --ring: 140 70% 50%; }
@@ -133,6 +175,7 @@ body {
   .primary-sky-blue { --primary: 199 89% 50%; --primary-foreground: 199 89% 95%; --ring: 199 89% 50%; }
   .primary-soft-yellow { --primary: 45 95% 55%; --primary-foreground: 45 95% 20%; --ring: 45 95% 55%; }
   .primary-soft-pink { --primary: 350 80% 60%; --primary-foreground: 350 80% 95%; --ring: 350 80% 60%; }
+  .primary-colorfull { --primary: 270 70% 50%; --primary-foreground: 0 0% 100%; --ring: 270 70% 50%; }
 
   .dark {
     --background: 220 13% 10%;
@@ -163,6 +206,265 @@ body {
     --sidebar-border: 220 13% 25%;
     --sidebar-ring: 22 96% 54%;
   }
+}
+
+/* Colorfull theme: saari vertical/horizontal lines same color – black 20% kam (dark grey); sidebar vertical line bhi same thick (2px) jitna baaki structural borders */
+body.theme-colorfull .app-main-border.border-l {
+  border-left-width: 2px !important;
+  border-left-color: hsl(var(--border)) !important;
+}
+body.theme-colorfull header.border-b {
+  background: hsl(var(--header-bg)) !important;
+}
+body.theme-colorfull main {
+  background: hsl(var(--list-page-bg));
+}
+body.theme-colorfull main > div > div.border-b:first-of-type {
+  background: hsl(var(--details-header-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead tr {
+  background: hsl(var(--table-header-bg)) !important;
+  color: hsl(var(--table-header-fg)) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead th {
+  color: hsl(var(--table-header-fg)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead th[data-theme-header="file"] {
+  color: #000 !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(odd) {
+  background: hsl(var(--row-odd-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(even) {
+  background: hsl(var(--row-even-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td {
+  color: #000 !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td .text-green-700,
+body.theme-colorfull [data-theme-table="transactions"] table tbody td span.text-green-700 {
+  color: rgb(21 128 61) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td[data-cell-settled="true"] {
+  color: rgb(22 163 74) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td.text-green-600 {
+  color: rgb(22 163 74) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td.text-red-600 {
+  color: rgb(220 38 38) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
+  color: #000 !important;
+}
+
+/* Opening balance row ke niche bold line – Statement aur Bill wise dono view */
+[data-theme-table="transactions"] table tbody tr[data-row="opening-balance"] td {
+  border-bottom-width: 2px !important;
+  border-bottom-style: solid !important;
+}
+
+/* Colorfull: har action button alag single color (header + list/detail pages) */
+body.theme-colorfull [data-theme-btn="add-sale"] { background: hsl(142 55% 42%) !important; color: white !important; border-color: hsl(142 55% 35%) !important; }
+body.theme-colorfull [data-theme-btn="add-sale"]:hover { background: hsl(142 55% 36%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"] { background: hsl(210 70% 48%) !important; color: white !important; border-color: hsl(210 70% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"]:hover { background: hsl(210 70% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="payment-in"] { background: hsl(168 60% 38%) !important; color: white !important; border-color: hsl(168 60% 32%) !important; }
+body.theme-colorfull [data-theme-btn="payment-in"]:hover { background: hsl(168 60% 32%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="payment-out"] { background: hsl(0 65% 48%) !important; color: white !important; border-color: hsl(0 65% 40%) !important; }
+body.theme-colorfull [data-theme-btn="payment-out"]:hover { background: hsl(0 65% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-salary"] { background: hsl(262 55% 52%) !important; color: white !important; border-color: hsl(262 55% 44%) !important; }
+body.theme-colorfull [data-theme-btn="add-salary"]:hover { background: hsl(262 55% 45%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-party"] { background: hsl(25 85% 52%) !important; color: white !important; border-color: hsl(25 85% 44%) !important; }
+body.theme-colorfull [data-theme-btn="add-party"]:hover { background: hsl(25 85% 45%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-item"] { background: hsl(45 90% 48%) !important; color: hsl(45 90% 12%) !important; border-color: hsl(45 90% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-item"]:hover { background: hsl(45 90% 42%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"] { background: hsl(199 75% 45%) !important; color: white !important; border-color: hsl(199 75% 38%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"]:hover { background: hsl(199 75% 38%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-staff"] { background: hsl(320 60% 48%) !important; color: white !important; border-color: hsl(320 60% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-staff"]:hover { background: hsl(320 60% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="statement"] { background: hsl(142 45% 88%) !important; color: hsl(142 55% 22%) !important; border-color: hsl(142 40% 75%) !important; }
+body.theme-colorfull [data-theme-btn="statement"]:hover { background: hsl(142 45% 82%) !important; color: hsl(142 55% 18%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"] { background: hsl(210 50% 88%) !important; color: hsl(210 55% 22%) !important; border-color: hsl(210 45% 75%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"]:hover { background: hsl(210 50% 82%) !important; color: hsl(210 55% 18%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"] { background: hsl(160 55% 42%) !important; color: white !important; border-color: hsl(160 55% 35%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"]:hover { background: hsl(160 55% 36%) !important; color: white !important; }
+
+/* Colorfull: sidebar nav cards – 25% kam bold (saturation ~75%, lightness thoda up) */
+body.theme-colorfull [data-theme-nav] {
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  min-height: 2.5rem;
+}
+body.theme-colorfull [data-theme-nav="dashboard"] { background: hsl(210 52% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="dashboard"]:hover { background: hsl(210 52% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="dashboard"][data-active="true"] { background: hsl(210 52% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="party"] { background: hsl(142 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="party"]:hover { background: hsl(142 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="party"][data-active="true"] { background: hsl(142 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="bank-cash"] { background: hsl(199 56% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="bank-cash"]:hover { background: hsl(199 56% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="bank-cash"][data-active="true"] { background: hsl(199 56% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="staff"] { background: hsl(320 45% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="staff"]:hover { background: hsl(320 45% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="staff"][data-active="true"] { background: hsl(320 45% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="tax"] { background: hsl(45 67% 58%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-nav="tax"]:hover { background: hsl(45 67% 52%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-nav="tax"][data-active="true"] { background: hsl(45 67% 48%) !important; color: hsl(45 90% 12%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="incomes"] { background: hsl(168 45% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="incomes"]:hover { background: hsl(168 45% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="incomes"][data-active="true"] { background: hsl(168 45% 40%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="items"] { background: hsl(25 64% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="items"]:hover { background: hsl(25 64% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="items"][data-active="true"] { background: hsl(25 64% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="reports"] { background: hsl(262 41% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="reports"]:hover { background: hsl(262 41% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="reports"][data-active="true"] { background: hsl(262 41% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="gallery"] { background: hsl(330 49% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="gallery"]:hover { background: hsl(330 49% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="gallery"][data-active="true"] { background: hsl(330 49% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="production"] { background: hsl(22 67% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="production"]:hover { background: hsl(22 67% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="production"][data-active="true"] { background: hsl(22 67% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="sale-note"] { background: hsl(152 41% 50%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="sale-note"]:hover { background: hsl(152 41% 44%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="sale-note"][data-active="true"] { background: hsl(152 41% 42%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="purchase-note"] { background: hsl(200 52% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="purchase-note"]:hover { background: hsl(200 52% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="purchase-note"][data-active="true"] { background: hsl(200 52% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="quotations"] { background: hsl(270 41% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="quotations"]:hover { background: hsl(270 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="quotations"][data-active="true"] { background: hsl(270 41% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="messages"] { background: hsl(210 49% 60%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="messages"]:hover { background: hsl(210 49% 54%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="messages"][data-active="true"] { background: hsl(210 49% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="billing"] { background: hsl(240 41% 60%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="billing"]:hover { background: hsl(240 41% 54%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="billing"][data-active="true"] { background: hsl(240 41% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="distributor-signup"] { background: hsl(160 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="distributor-signup"]:hover { background: hsl(160 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="distributor-signup"][data-active="true"] { background: hsl(160 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="backup"] { background: hsl(215 37% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="backup"]:hover { background: hsl(215 37% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="backup"][data-active="true"] { background: hsl(215 37% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="import-export"] { background: hsl(190 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="import-export"]:hover { background: hsl(190 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="import-export"][data-active="true"] { background: hsl(190 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="recycle-bin"] { background: hsl(0 49% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="recycle-bin"]:hover { background: hsl(0 49% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="recycle-bin"][data-active="true"] { background: hsl(0 49% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="settings"] { background: hsl(220 11% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="settings"]:hover { background: hsl(220 11% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="settings"][data-active="true"] { background: hsl(220 11% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="admin"] { background: hsl(262 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="admin"]:hover { background: hsl(262 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="admin"][data-active="true"] { background: hsl(262 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+
+/* Colorfull: account list cards aur tabs – 50% color (sidebar card jaisa soft tint) */
+body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border {
+  background: hsl(var(--colorfull-tint)) !important;
+}
+body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border[class*="border-primary"] {
+  background: hsl(var(--colorfull-tint-active)) !important;
+}
+/* Tabs (Parties/Groups): dono active aur inactive button jaisa color */
+body.theme-colorfull main [role="tablist"] {
+  background: hsl(140 20% 92%) !important;
+}
+body.theme-colorfull main [role="tab"] {
+  font-weight: 600;
+}
+body.theme-colorfull main [role="tab"]:not([data-state="active"]) {
+  background: hsl(210 30% 92%) !important;
+  color: hsl(210 30% 30%) !important;
+  border: 1px solid hsl(210 25% 85%) !important;
+}
+body.theme-colorfull main [role="tab"]:not([data-state="active"]):hover {
+  background: hsl(210 30% 88%) !important;
+  color: hsl(210 30% 25%) !important;
+}
+body.theme-colorfull main [role="tab"][data-state="active"] {
+  background: hsl(142 41% 52%) !important;
+  color: white !important;
+}
+
+/* Colorfull: app header – company selector, date selector, mobile/PC icon ko color */
+body.theme-colorfull [data-theme-header="company-selector"] {
+  background: hsl(199 50% 92%) !important;
+  color: hsl(199 55% 28%) !important;
+  border-color: hsl(199 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-header="company-selector"]:hover {
+  background: hsl(199 50% 86%) !important;
+  color: hsl(199 55% 22%) !important;
+}
+body.theme-colorfull [data-theme-header="date-selector"] {
+  background: hsl(142 40% 92%) !important;
+  color: hsl(142 45% 28%) !important;
+  border-color: hsl(142 35% 75%) !important;
+}
+body.theme-colorfull [data-theme-header="date-selector"]:hover {
+  background: hsl(142 40% 86%) !important;
+  color: hsl(142 45% 22%) !important;
+}
+body.theme-colorfull [data-theme-header="view-toggle"] {
+  background: hsl(262 40% 92%) !important;
+  color: hsl(262 50% 32%) !important;
+  border-color: hsl(262 35% 78%) !important;
+}
+body.theme-colorfull [data-theme-header="view-toggle"]:hover {
+  background: hsl(262 40% 86%) !important;
+  color: hsl(262 50% 26%) !important;
+}
+
+/* Colorfull: details header ke saare boxes – date range, Members, Add Note, Print, Edit – alag color */
+body.theme-colorfull [data-theme-detail="date-range"] {
+  background: hsl(45 55% 92%) !important;
+  color: hsl(45 50% 28%) !important;
+  border-color: hsl(45 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="date-range"]:hover {
+  background: hsl(45 55% 86%) !important;
+  color: hsl(45 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="members"] {
+  background: hsl(270 45% 92%) !important;
+  color: hsl(270 50% 28%) !important;
+  border-color: hsl(270 40% 78%) !important;
+}
+body.theme-colorfull [data-theme-detail="members"]:hover {
+  background: hsl(270 45% 86%) !important;
+  color: hsl(270 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="add-note"] {
+  background: hsl(152 45% 92%) !important;
+  color: hsl(152 50% 28%) !important;
+  border-color: hsl(152 40% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="add-note"]:hover {
+  background: hsl(152 45% 86%) !important;
+  color: hsl(152 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="print"] {
+  background: hsl(200 50% 92%) !important;
+  color: hsl(200 55% 28%) !important;
+  border-color: hsl(200 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="print"]:hover {
+  background: hsl(200 50% 86%) !important;
+  color: hsl(200 55% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="edit"] {
+  background: hsl(25 55% 92%) !important;
+  color: hsl(25 55% 28%) !important;
+  border-color: hsl(25 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="edit"]:hover {
+  background: hsl(25 55% 86%) !important;
+  color: hsl(25 55% 22%) !important;
 }
 
 @layer base {
@@ -534,24 +836,24 @@ button.day_selected.is-today.has-transactions {
     display: none;  /* Chrome, Safari and Opera */
   }
 
-  /* Slim, dim scrollbar – thin and low-contrast */
+  /* Slim, dim scrollbar – patla aur dim (thin and low-contrast) */
   .scrollbar-slim-dim {
     scrollbar-width: thin;  /* Firefox: slim */
-    scrollbar-color: hsl(0 0% 72%) transparent;  /* Firefox: dim thumb */
+    scrollbar-color: hsl(0 0% 75% / 0.5) transparent;  /* Firefox: dim thumb */
   }
   .scrollbar-slim-dim::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
   }
   .scrollbar-slim-dim::-webkit-scrollbar-track {
     background: transparent;
   }
   .scrollbar-slim-dim::-webkit-scrollbar-thumb {
-    background: hsl(var(--muted-foreground) / 0.25);
-    border-radius: 3px;
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 2px;
   }
   .scrollbar-slim-dim::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.4);
+    background: hsl(var(--muted-foreground) / 0.35);
   }
 
   /* Extra thin, dim scrollbar */
@@ -573,6 +875,18 @@ button.day_selected.is-today.has-transactions {
   .scrollbar-slim-dim-extra::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.35);
   }
+
+  /* Link dialogs: table light fill + rows cycle through max 7 light colors */
+  .table-row-stripe-7 {
+    background: hsl(var(--muted) / 0.5);
+  }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 1) { background: hsl(210 20% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 2) { background: hsl(200 40% 95% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 3) { background: hsl(150 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 4) { background: hsl(45 40% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 5) { background: hsl(260 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 6) { background: hsl(350 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 7) { background: hsl(180 30% 95% / 0.9); }
 }
 
 @media print {

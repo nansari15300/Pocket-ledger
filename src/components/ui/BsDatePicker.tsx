@@ -125,6 +125,7 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
           className={cn("w-auto justify-start text-left font-normal h-10 px-2 gap-1 min-w-0", !valueAD && "text-muted-foreground", className)} 
           disabled={disabled}
           onClick={() => setOpen(true)}
+          data-theme-detail="date-range"
         >
             <Icon className="h-4 w-4 shrink-0" />
             <span className="truncate min-w-0">{displayValue()}</span>

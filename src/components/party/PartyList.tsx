@@ -69,7 +69,7 @@ export const PartyList = React.memo(({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
+      <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
         <ScrollArea className="flex-1 min-h-0">
           <ul className="p-2 space-y-1">
             <AnimatePresence mode="popLayout">

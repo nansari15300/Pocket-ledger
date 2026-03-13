@@ -22,7 +22,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 
 type ComboboxProps = {
-  options: { value: string; label: string; isSpecial?: boolean }[];
+  // Option-level disabled is used by voucher account dropdowns to block non-selectable accounts.
+  options: { value: string; label: string; isSpecial?: boolean; disabled?: boolean }[];
   value?: string | string[];
   onChange?: (value: string, newName?: string) => void;
   onMultiChange?: (values: string[]) => void;
@@ -145,8 +146,17 @@ export function Combobox({
                 <CommandItem
                   key={option.value}
                   value={option.label}
-                  onSelect={() => isMultiSelect ? handleMultiSelect(option.value) : handleSingleSelect(option.value)}
-                  className={cn("flex items-center", option.isSpecial && "text-amber-600 font-medium")}
+                  // Respect per-option disabled state so user cannot pick blocked accounts.
+                  disabled={option.disabled}
+                  onSelect={() => {
+                    if (option.disabled) return;
+                    return isMultiSelect ? handleMultiSelect(option.value) : handleSingleSelect(option.value);
+                  }}
+                  className={cn(
+                    "flex items-center",
+                    option.isSpecial && "text-amber-600 font-medium",
+                    option.disabled && "opacity-50 cursor-not-allowed"
+                  )}
                 >
                   <Check
                     className={cn(

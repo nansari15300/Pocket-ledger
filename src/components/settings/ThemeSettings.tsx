@@ -14,6 +14,7 @@ const themes = [
   { name: "Sky Blue", themeValue: "theme-sky-blue", primaryValue: "primary-sky-blue", color: "hsl(199, 89%, 50%)" },
   { name: "Soft Yellow", themeValue: "theme-soft-yellow", primaryValue: "primary-soft-yellow", color: "hsl(45, 95%, 55%)" },
   { name: "Soft Pink", themeValue: "theme-soft-pink", primaryValue: "primary-soft-pink", color: "hsl(350, 80%, 60%)" },
+  { name: "Colorfull", themeValue: "theme-colorfull", primaryValue: "primary-colorfull", color: "hsl(270, 70%, 55%)" },
 ];
 
 export function ThemeSettings() {

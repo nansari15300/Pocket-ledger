@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Edit, FilePlus, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Filter, XCircle, Printer } from "lucide-react";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -129,13 +131,19 @@ export function NoteDetails({
     }, true);
   };
 
-  const totalPages = rowsPerPage > 0 ? Math.ceil(currentTransactions.length / rowsPerPage) : 1;
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(currentTransactions, sortBy, sortOrder),
+    [currentTransactions, sortBy, sortOrder]
+  );
+  const totalPages = rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
   const paginatedTransactions = rowsPerPage > 0
-    ? currentTransactions.slice(
+    ? sortedTransactions.slice(
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
       )
-    : currentTransactions;
+    : sortedTransactions;
   
   return (
     <>
@@ -197,6 +205,12 @@ export function NoteDetails({
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            <TransactionTableSortDropdown
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+              viewMode="statement"
+            />
             <p className="text-sm font-medium">Rows per page</p>
             <Select
               value={`${rowsPerPage}`}

@@ -306,9 +306,9 @@ export function VoucherSettings() {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-            {/* Save Button at Top */}
+            {/* Save Button at Top — blue so user spots save action */}
             <div className="flex justify-end pb-4 border-b">
-              <Button type="submit" disabled={isLoading}>
+              <Button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Voucher Settings
               </Button>
@@ -326,6 +326,9 @@ export function VoucherSettings() {
                         return (
                         <div key={key} className="space-y-2">
                                 <FormLabel>{prefixLabels[key]}</FormLabel>
+                                {key === "contra" && (
+                                  <FormDescription className="text-xs mt-0.5">Used for both Contra Out (from account) and Contra In (to account). e.g. CNTR → CNTR Out - 001, CNTR In - 001.</FormDescription>
+                                )}
                             <div className="flex gap-2">
                                 <Input
                                     value={newPrefixValues[key]}
@@ -362,9 +365,9 @@ export function VoucherSettings() {
                     render={({ field }: any) => (
                       <FormItem className="flex flex-row items-center justify-between">
                         <div>
-                          <FormLabel>Enable Link Payment to Txns</FormLabel>
+                          <FormLabel>Link for Bill Wise</FormLabel>
                           <FormDescription className="sr-only">
-                            Allow linking received payments to specific sale invoices.
+                            When ON, bill-wise link section is available; when required by role, user must link to save voucher.
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -376,35 +379,6 @@ export function VoucherSettings() {
                 </Card>
                 {isCompanyOwner && (
                   <>
-                    <Card className="p-4">
-                      <FormField
-                        control={form.control}
-                        name="spendWiseEnabled"
-                        render={({ field }: any) => (
-                          <FormItem className="flex flex-row items-center justify-between">
-                            <div>
-                              <FormLabel>Spend Wise (Bank/Cash)</FormLabel>
-                              <FormDescription>
-                                When ON, Payment Out must be linked to Payment In: user chooses which Payment In(s) this spend is from. When OFF, Payment Out works as normal.
-                              </FormDescription>
-                            </div>
-                            <FormControl>
-                              <Switch
-                                checked={field.value}
-                                onCheckedChange={(checked) => {
-                                  field.onChange(checked);
-                                  const allSame = ROLES_WITH_VOUCHER_CREATE.reduce(
-                                    (acc, r) => ({ ...acc, [r]: { payment_out: checked, contra: checked, direct_expense: checked } }),
-                                    {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
-                                  );
-                                  form.setValue("requirePaymentLinkByRole", allSame);
-                                }}
-                              />
-                            </FormControl>
-                          </FormItem>
-                        )}
-                      />
-                    </Card>
                     <Card className="p-4">
                       <FormField
                         control={form.control}
@@ -498,9 +472,9 @@ export function VoucherSettings() {
               <div className="flex items-center justify-between border-b pb-2">
                 <h3 className="text-lg font-medium">Voucher Number & Rate Settings</h3>
               </div>
-              {/* Middle Button */}
+              {/* Middle Button — blue to match other save buttons */}
               <div className="flex justify-end">
-                <Button type="submit" disabled={isLoading} size="sm" variant="outline">
+                <Button type="submit" disabled={isLoading} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white border-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Voucher Settings
                 </Button>
@@ -509,6 +483,67 @@ export function VoucherSettings() {
                 {Object.keys(prefixLabels).map((key) => {
                    const voucherKey = key as keyof VoucherPrefixValues;
                    const canEditRate = voucherKey === 'sale' || voucherKey === 'purchase';
+                   if (voucherKey === 'contra') {
+                     return (
+                       <Card key={voucherKey} className="p-4 md:col-span-2">
+                         <CardTitle className="text-base mb-1">Contra Entry (In & Out)</CardTitle>
+                         <CardDescription className="mb-4 text-xs">One set of settings for both Contra In and Contra Out. Changing any switch applies to both.</CardDescription>
+                         {/* PC: Contra In left, Contra Out right; mobile: stacked */}
+                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                           <div className="rounded border border-muted/60 bg-muted/20 p-3 space-y-3">
+                             <p className="text-sm font-medium text-muted-foreground">Contra In</p>
+                             <FormField control={form.control} name="autoVoucherNumbering.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Auto Number</FormLabel>
+                                 <FormControl>
+                                   <Switch checked={field.value} onCheckedChange={(checked) => { field.onChange(checked); if (!checked) form.setValue("allowVoucherNumberEditing.contra", true); }} />
+                                 </FormControl>
+                               </FormItem>
+                             )} />
+                             <FormField control={form.control} name="allowVoucherNumberEditing.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Allow Editing No.</FormLabel>
+                                 <FormControl>
+                                   <Switch checked={field.value} onCheckedChange={field.onChange} disabled={!form.watch("autoVoucherNumbering.contra")} />
+                                 </FormControl>
+                               </FormItem>
+                             )} />
+                             <FormField control={form.control} name="enableVoucherPrefixSelection.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Enable Prefix Selection</FormLabel>
+                                 <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                               </FormItem>
+                             )} />
+                           </div>
+                           <div className="rounded border border-muted/60 bg-muted/20 p-3 space-y-3">
+                             <p className="text-sm font-medium text-muted-foreground">Contra Out</p>
+                             <FormField control={form.control} name="autoVoucherNumbering.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Auto Number</FormLabel>
+                                 <FormControl>
+                                   <Switch checked={field.value} onCheckedChange={(checked) => { field.onChange(checked); if (!checked) form.setValue("allowVoucherNumberEditing.contra", true); }} />
+                                 </FormControl>
+                               </FormItem>
+                             )} />
+                             <FormField control={form.control} name="allowVoucherNumberEditing.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Allow Editing No.</FormLabel>
+                                 <FormControl>
+                                   <Switch checked={field.value} onCheckedChange={field.onChange} disabled={!form.watch("autoVoucherNumbering.contra")} />
+                                 </FormControl>
+                               </FormItem>
+                             )} />
+                             <FormField control={form.control} name="enableVoucherPrefixSelection.contra" render={({ field }: any) => (
+                               <FormItem className="flex flex-row items-center justify-between">
+                                 <FormLabel>Enable Prefix Selection</FormLabel>
+                                 <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                               </FormItem>
+                             )} />
+                           </div>
+                         </div>
+                       </Card>
+                     );
+                   }
                    return (
                       <Card key={voucherKey} className="p-4">
                          <CardTitle className="text-base mb-4">{prefixLabels[voucherKey]}</CardTitle>
@@ -588,9 +623,9 @@ export function VoucherSettings() {
               </div>
             </div>
 
-            {/* Bottom Button */}
+            {/* Bottom Button — blue to match other save buttons */}
             <div className="flex justify-end pt-4 border-t">
-              <Button type="submit" disabled={isLoading}>
+              <Button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Voucher Settings
               </Button>

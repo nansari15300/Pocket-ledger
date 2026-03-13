@@ -77,7 +77,9 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -331,14 +333,16 @@ export function AccountDetails({
       const existing = byId.get(v.id);
       if (existing) return existing;
       const amount = Number(v.amount ?? v.total ?? 0) || 0;
-      return { id: v.id, date: v.date, type: v.type, voucherNumber: v.voucherNumber, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
+      const voucherNo = v.type === "contra" && accountId === v.toAccountId ? (v.voucherNumberIn ?? v.voucherNumber) : v.voucherNumber;
+      return { id: v.id, date: v.date, type: v.type, voucherNumber: voucherNo, debit: amount, credit: 0, userId: v.userId, narration: v.narration, accountId: v.accountId, ...v };
     };
     const voucherToOutRow = (v: any) => {
       const existing = byId.get(v.id);
       if (existing) return existing;
       const amount = Number(v.total ?? v.amount ?? 0) || 0;
+      const voucherNo = v.type === "contra" && accountId === v.fromAccountId ? (v.voucherNumberOut ?? v.voucherNumber) : v.voucherNumber;
       return {
-        id: v.id, date: v.date, type: v.type, voucherNumber: v.voucherNumber,
+        id: v.id, date: v.date, type: v.type, voucherNumber: voucherNo,
         debit: 0, credit: amount,
         userId: v.userId, narration: v.narration, accountId: v.accountId, ...v,
       };
@@ -348,6 +352,8 @@ export function AccountDetails({
     let rowKeySeed = 0;
     const nextColor = () => (groupColorIndex++) % 4;
     const nextRowKey = () => `r-${rowKeySeed++}`;
+    /** Per payment-out id: total amount already shown in linked groups (so we can show remainder as separate row). */
+    const linkedAmountByOutId = new Map<string, number>();
 
     inVouchers.forEach((pi: any) => {
       const t = voucherToInRow(pi);
@@ -381,10 +387,12 @@ export function AccountDetails({
         const fullAmount = Number(po.total ?? po.amount ?? 0) || Math.abs((outRow.debit || 0) - (outRow.credit || 0)) || 0;
         const linkedAmounts = po.linkedPaymentInAmounts && typeof po.linkedPaymentInAmounts === "object" ? po.linkedPaymentInAmounts : null;
         const linkedAmount = linkedAmounts?.[pi.id] != null ? Number(linkedAmounts[pi.id]) : fullAmount / (po.linkedPaymentInIds?.length || 1);
+        linkedAmountByOutId.set(po.id, (linkedAmountByOutId.get(po.id) ?? 0) + linkedAmount);
         const amountDelta = (outRow.credit || 0) > (outRow.debit || 0) ? -linkedAmount : linkedAmount;
         const nextRunning = typeof prevRunning === "number" ? prevRunning + amountDelta : prevRunning;
         rows.push({
           ...outRow,
+          id: `${po.id}-in-${pi.id}`,
           _rowKey: nextRowKey(),
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
@@ -399,29 +407,45 @@ export function AccountDetails({
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
     const unlinked = baseTransactions.filter((t: any) => !addedIds.has(t.id));
     unlinked.forEach((t: any, idx: number) => {
+      const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
+      const alreadyShown = linkedAmountByOutId.get(t.id) ?? 0;
+      const remainder = fullAmount - alreadyShown;
+      if (remainder <= 0) return;
       const colorIdx = nextColor();
-      const voucherBalance = (t.debit || 0) - (t.credit || 0);
-      rows.push({
-        ...t,
+      const isOutflow = (t.credit || 0) > (t.debit || 0);
+      const remainderRow = {
+        ...voucherToOutRow(t),
+        id: t.id,
         _rowKey: nextRowKey(),
+        debit: isOutflow ? 0 : remainder,
+        credit: isOutflow ? remainder : 0,
         _spendWiseGroupFirst: true,
         _spendWiseGroupLast: true,
-        _spendWiseRunningBalance: voucherBalance,
+        _spendWiseRunningBalance: isOutflow ? -remainder : remainder,
         _spendWiseGroupColorIndex: colorIdx,
-      });
+      };
+      rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
     return rows.length ? rows : baseTransactions;
   }, [spendWiseView, baseTransactions, vouchers, account.id]);
 
+  // Sort only in statement view; spend-wise keeps group order
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(() => {
+    if (spendWiseView) return displayTransactions;
+    return sortTransactions(displayTransactions, sortBy, sortOrder);
+  }, [displayTransactions, spendWiseView, sortBy, sortOrder]);
+
   const displayTransactionCount = useMemo(
-    () => displayTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [displayTransactions]
+    () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
+    [sortedTransactions]
   );
 
   /** Rows-per-page overwrite: paginate by full groups so we never split a group (PC view). */
   const displayBlocks = useMemo(() => {
-    const list = displayTransactions;
+    const list = sortedTransactions;
     if (!list.length) return [];
     const blocks: any[][] = [];
     let i = 0;
@@ -447,21 +471,21 @@ export function AccountDetails({
       i = end;
     }
     return blocks;
-  }, [displayTransactions]);
+  }, [sortedTransactions]);
 
   const { totalPages, paginatedTransactions } = useMemo(() => {
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, paginatedTransactions: displayTransactions };
+      return { totalPages: 1, paginatedTransactions: sortedTransactions };
     }
-    const hasSpendWiseGroups = displayTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
+    const hasSpendWiseGroups = sortedTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
     if (!hasSpendWiseGroups) {
-      const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
+      const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
       const start = (currentPage - 1) * rowsPerPage;
-      return { totalPages, paginatedTransactions: displayTransactions.slice(start, start + rowsPerPage) };
+      return { totalPages, paginatedTransactions: sortedTransactions.slice(start, start + rowsPerPage) };
     }
     const blocks = displayBlocks;
     if (!blocks.length) {
-      return { totalPages: 1, paginatedTransactions: displayTransactions };
+      return { totalPages: 1, paginatedTransactions: sortedTransactions };
     }
     const rowCounts = blocks.map((b) => b.length);
     const pages: number[][] = [];
@@ -482,9 +506,9 @@ export function AccountDetails({
     const blockIndices = pages[pageIndex] ?? [];
     const paginatedTransactions = blockIndices.length > 0
       ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
-      : displayTransactions;
+      : sortedTransactions;
     return { totalPages, paginatedTransactions };
-  }, [displayTransactions, displayBlocks, rowsPerPage, currentPage]);
+  }, [sortedTransactions, displayBlocks, rowsPerPage, currentPage]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
@@ -602,14 +626,15 @@ export function AccountDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return displayTransactions.filter(t => {
+    const rowMatches = (t: any) => {
+      if ((t as any)._spendWiseSpacer) return false;
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
         t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
+        (t.type ?? "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
         t.narration?.toLowerCase().includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
@@ -619,8 +644,25 @@ export function AccountDetails({
         String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
-    });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+    };
+    // Spend wise: keep groups intact — if any row in a group matches, show the whole group
+    if (spendWiseView && displayBlocks.length > 0) {
+      const included = new Set<number>();
+      for (let i = 0; i < displayBlocks.length; i++) {
+        const block = displayBlocks[i];
+        const isSpacerBlock = block.length === 1 && (block[0] as any)._spendWiseSpacer;
+        if (isSpacerBlock) continue;
+        if (block.some((r: any) => rowMatches(r))) included.add(i);
+      }
+      for (let i = 0; i < displayBlocks.length; i++) {
+        const block = displayBlocks[i];
+        const isSpacerBlock = block.length === 1 && (block[0] as any)._spendWiseSpacer;
+        if (isSpacerBlock && (included.has(i - 1) || included.has(i + 1))) included.add(i);
+      }
+      return ([] as any[]).concat(...displayBlocks.filter((_, i) => included.has(i)));
+    }
+    return sortedTransactions.filter(t => rowMatches(t));
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, spendWiseView, displayBlocks]);
 
   // Mobile: show last 10 by default (no date filter), all when date filter applied. When no date filter, keep full groups (don't cut a group).
   const mobileTransactionsToShow = useMemo(() => {
@@ -799,10 +841,12 @@ export function AccountDetails({
       {/* Transaction list - fills to footer line; inner pb-24 so last row scrolls above fixed footer */}
       <div className={cn("flex-1 min-h-0 overflow-auto", spendWiseView && "p-[2px]")}>
         <div className="pb-24">
+          {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
           <TransactionsTable
             transactions={mobileTransactionsToShow}
             context="account"
             contextId={account.id}
+            forceBalanceMode="statement"
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
@@ -943,7 +987,7 @@ export function AccountDetails({
                     onAccountDeleted={onAccountDeleted}
                     hasTransactions={processedTransactions.length > 0}
                   >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
                       <Edit className="h-4 w-4" />
                     </Button>
                   </EditAccountDialog>
@@ -979,6 +1023,7 @@ export function AccountDetails({
                       id="date"
                       variant={"outline"}
                       className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                      data-theme-detail="date-range"
                     >
                       <CalendarIcon className="mr-2 h-4 w-4" />
                       {dateRange?.from ? (
@@ -1035,10 +1080,10 @@ export function AccountDetails({
               >
                 {spendWiseView ? "Statement" : "Spend wise"}
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className="flex-shrink-0 h-10">
+              <Button variant="outline" size="sm" onClick={() => setIsNoteOpen(true)} className="flex-shrink-0 h-10" data-theme-detail="add-note">
                 <FilePlus className="mr-2 h-4 w-4" /> Add Note
               </Button>
-              <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10">
+              <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
                 <Printer className="h-4 w-4" />
               </Button>
             </div>
@@ -1048,11 +1093,13 @@ export function AccountDetails({
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
           <div className={cn("py-4 flex-1 flex flex-col min-h-0 min-w-0", spendWiseView && "p-[2px]")}>
+            {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
             <TransactionsTable
               key={`account-${account.id}-${effectiveBalanceMode}`}
               transactions={paginatedTransactions}
               context="account"
               contextId={account.id}
+              forceBalanceMode="statement"
               openingBalance={showMaskedBalance ? 0 : openingBalanceForPeriod}
               openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
@@ -1162,6 +1209,12 @@ export function AccountDetails({
               {spendWiseView && <SpendWiseBlinkInfoDialog open={blinkInfoOpen} onOpenChange={setBlinkInfoOpen} />}
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode={spendWiseView ? "spend_wise" : "statement"}
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

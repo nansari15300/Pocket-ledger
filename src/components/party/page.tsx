@@ -273,11 +273,11 @@ export default function PartyPage() {
         </div>
         {activeView === 'parties' ? (
           <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
-            <Button size="sm" onClick={() => setIsCreatePartyOpen(true)}>+ Add Party</Button>
+            <Button size="sm" onClick={() => setIsCreatePartyOpen(true)} data-theme-btn="add-party">+ Add Party</Button>
           </CreatePartyDialog>
         ) : (
           <CreateGroupDialog onGroupCreated={() => {}} groups={processedGroups} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
-            <Button size="sm" onClick={() => setIsCreateGroupOpen(true)}>+ Add Group</Button>
+            <Button size="sm" onClick={() => setIsCreateGroupOpen(true)} data-theme-btn="add-group">+ Add Group</Button>
           </CreateGroupDialog>
         )}
       </div>

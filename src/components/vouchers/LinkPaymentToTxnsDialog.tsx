@@ -9,20 +9,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
-import { X, RotateCcw, HelpCircle, Link2 } from "lucide-react";
+import { RotateCcw, Link2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import {
@@ -91,41 +83,61 @@ export function LinkPaymentToTxnsDialog({
 }: LinkPaymentToTxnsDialogProps) {
   const { vouchers } = useVouchers();
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
+  const isMobile = useIsMobile();
   const effectiveAccountId = accountId ?? null;
   const accountIdStr = effectiveAccountId ? String(effectiveAccountId) : "";
 
 
   const isOut = variant === "payment_out";
 
-  // Total amount already allocated to opening balance by this party's payment vouchers (for outstanding OB row).
-  const totalAllocatedToOB = useMemo(() => {
+  // Total consumed from Opening Balance: (1) Payment In/Out allocations to OB + (2) Sale/Purchase openingBalanceAllocated (same party). So linkable = obAmount - this total.
+  const totalConsumedFromOB = useMemo(() => {
     if (!partyId || !vouchers?.length) return 0;
+    const partyIdStr = String(partyId);
+    let fromPayments = 0;
     const payType = isOut ? ["payment_out", "direct_expense"] : ["payment_in", "direct_income"];
-    let sum = 0;
     (vouchers as any[]).forEach((v) => {
-      if (!payType.includes(v.type) || String((v as any).partyId ?? "") !== String(partyId)) return;
+      if (!payType.includes(v.type) || String((v as any).partyId ?? "") !== partyIdStr) return;
       const allocs = (v.allocations as Allocation[] | undefined) || [];
       allocs.forEach((a) => {
-        if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) sum += getAllocationTotal(a);
+        if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) fromPayments += getAllocationTotal(a);
       });
     });
-    return sum;
+    const fromBillwise = (vouchers as any[]).reduce((sum, v) => {
+      if (v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service") return sum;
+      if (String((v as any).partyId ?? "") !== partyIdStr) return sum;
+      return sum + (Number((v as any).openingBalanceAllocated) || 0);
+    }, 0);
+    return fromPayments + fromBillwise;
   }, [partyId, isOut, vouchers]);
 
   const partyOB = Number(partyOpeningBalance) || 0;
   const showOBInPaymentIn = partyOB > 0;
   const showOBInPaymentOut = partyOB < 0;
   const obAmount = partyOB > 0 ? partyOB : Math.abs(partyOB);
-  const obOutstandingIn = Math.max(0, obAmount - totalAllocatedToOB);
+  const obOutstandingIn = Math.max(0, obAmount - totalConsumedFromOB);
   const obOutstanding = isOut ? (showOBInPaymentOut ? obOutstandingIn : 0) : (showOBInPaymentIn ? obOutstandingIn : 0);
 
-  // Payment In links only to Sales (same party). Show Opening Balance row only when OB is Dr (> 0).
+  // Payment In links to Sales (same party) and Payment Outs (contra). Show Opening Balance when OB is Dr (> 0).
   const combinedInList = useMemo(() => {
     if (variant !== "payment_in" || !vouchers?.length || !partyId) return [];
     const paymentInVouchers = (vouchers as any[]).filter(
       (v) => (v.type === "payment_in" || v.type === "direct_income") && (paymentInId == null || v.id !== paymentInId)
     );
-    const allocatedToSales = getAllocatedByVoucherId(paymentInVouchers);
+    const allocatedByPaymentIns = getAllocatedByVoucherId(paymentInVouchers);
+    const allocatedByPurchases = (() => {
+      const m = new Map<string, number>();
+      for (const v of vouchers as any[]) {
+        if (v.type !== "purchase" && v.type !== "purchase_service") continue;
+        const allocations = (v.allocations as Allocation[] | undefined) || [];
+        for (const a of allocations) {
+          if (!a.voucherId) continue;
+          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+        }
+      }
+      return m;
+    })();
+    const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(vid) ?? 0) + (allocatedByPurchases.get(vid) ?? 0);
     const salesForParty = (vouchers as any[]).filter(
       (v) =>
         (v.type === "sale" || v.type === "sale_service") &&
@@ -133,7 +145,7 @@ export function LinkPaymentToTxnsDialog({
     );
     const sales = salesForParty.map((v) => {
       const total = Number(v.total ?? v.amount ?? 0);
-      const allocated = allocatedToSales.get(v.id) ?? 0;
+      const allocated = totalAllocatedTo(v.id);
       const outstanding = getOutstanding(total, allocated);
       return {
         id: v.id,
@@ -142,31 +154,77 @@ export function LinkPaymentToTxnsDialog({
         refNo: v.invoiceNumber ?? v.voucherNumber ?? "—",
         total,
         outstanding,
+        allocatedToOthers: allocated,
       };
-    }).filter((s) => s.outstanding > 0);
-    sales.sort((a, b) => {
+    });
+    const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+    const salesFiltered = sales.filter((s) => s.outstanding > 0 || hasExistingAlloc(s.id));
+    const paymentOutsForParty = (vouchers as any[]).filter(
+      (v) =>
+        (v.type === "payment_out" || v.type === "direct_expense") &&
+        String((v as any).partyId ?? "") === String(partyId)
+    );
+    const paymentOuts = paymentOutsForParty.map((v) => {
+      const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+      const allocated = totalAllocatedTo(v.id);
+      const outstanding = getOutstanding(total, allocated);
+      return {
+        id: v.id,
+        date: v.date,
+        type: "Payment Out" as const,
+        refNo: (v as any).voucherNumber ?? "—",
+        total,
+        outstanding,
+        allocatedToOthers: allocated,
+      };
+    });
+    const paymentOutsFiltered = paymentOuts.filter((p) => p.outstanding > 0 || hasExistingAlloc(p.id));
+    const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dA - dB;
-    });
-    const ob = showOBInPaymentIn && obOutstandingIn > 0 ? [{
+    };
+    salesFiltered.sort(byDate);
+    paymentOutsFiltered.sort(byDate);
+    const ob = showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       date: null,
       type: "Opening Balance" as const,
       refNo: "—",
       total: obAmount,
       outstanding: obOutstandingIn,
+      allocatedToOthers: totalConsumedFromOB,
     }] : [];
-    return [...ob, ...sales];
-  }, [variant, effectiveAccountId, accountIdStr, partyId, paymentInId, vouchers, partyOB, showOBInPaymentIn, obOutstandingIn]);
+    const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered];
+    combined.sort((a, b) => {
+      const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+      const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+      return dA - dB;
+    });
+    return combined;
+  }, [variant, effectiveAccountId, accountIdStr, partyId, paymentInId, vouchers, partyOB, showOBInPaymentIn, obOutstandingIn, totalConsumedFromOB, existingAllocations]);
 
-  // Payment Out links only to Purchases (same party). Show Opening Balance row only when OB is Cr (< 0).
+  // Payment Out links to Purchases (same party) and Payment Ins (contra). Show Opening Balance when OB is Cr (< 0).
   const combinedOutList = useMemo(() => {
     if (variant !== "payment_out" || !vouchers?.length || !partyId) return [];
+    const hasExistingAllocOut = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
     const paymentOutVouchers = (vouchers as any[]).filter(
       (v) => (v.type === "payment_out" || v.type === "direct_expense") && (paymentOutId == null || v.id !== paymentOutId)
     );
-    const allocatedToPurchases = getAllocatedByVoucherIdFromPaymentOuts(paymentOutVouchers);
+    const allocatedByPaymentOuts = getAllocatedByVoucherIdFromPaymentOuts(paymentOutVouchers);
+    const allocatedBySales = (() => {
+      const m = new Map<string, number>();
+      for (const v of vouchers as any[]) {
+        if (v.type !== "sale" && v.type !== "sale_service") continue;
+        const allocations = (v.allocations as Allocation[] | undefined) || [];
+        for (const a of allocations) {
+          if (!a.voucherId) continue;
+          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+        }
+      }
+      return m;
+    })();
+    const totalAllocatedToOut = (vid: string) => (allocatedByPaymentOuts.get(vid) ?? 0) + (allocatedBySales.get(vid) ?? 0);
     const purchasesForParty = (vouchers as any[]).filter(
       (v) =>
         (v.type === "purchase" || v.type === "purchase_service") &&
@@ -174,7 +232,7 @@ export function LinkPaymentToTxnsDialog({
     );
     const purchases = purchasesForParty.map((v) => {
       const total = Number(v.total ?? v.amount ?? 0);
-      const allocated = allocatedToPurchases.get(v.id) ?? 0;
+      const allocated = totalAllocatedToOut(v.id);
       const outstanding = getOutstanding(total, allocated);
       return {
         id: v.id,
@@ -183,23 +241,54 @@ export function LinkPaymentToTxnsDialog({
         refNo: (v as any).invoiceNumber ?? v.voucherNumber ?? "—",
         total,
         outstanding,
+        allocatedToOthers: allocated,
       };
-    }).filter((p) => p.outstanding > 0);
-    purchases.sort((a, b) => {
+    });
+    const purchasesFiltered = purchases.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
+    const paymentInsForParty = (vouchers as any[]).filter(
+      (v) =>
+        (v.type === "payment_in" || v.type === "direct_income") &&
+        String((v as any).partyId ?? "") === String(partyId)
+    );
+    const paymentIns = paymentInsForParty.map((v) => {
+      const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+      const allocated = totalAllocatedToOut(v.id);
+      const outstanding = getOutstanding(total, allocated);
+      return {
+        id: v.id,
+        date: v.date,
+        type: "Payment In" as const,
+        refNo: (v as any).voucherNumber ?? "—",
+        total,
+        outstanding,
+        allocatedToOthers: allocated,
+      };
+    });
+    const paymentInsFiltered = paymentIns.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
+    const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dA - dB;
-    });
-    const ob = showOBInPaymentOut && obOutstandingIn > 0 ? [{
+    };
+    purchasesFiltered.sort(byDate);
+    paymentInsFiltered.sort(byDate);
+    const ob = showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAllocOut(OPENING_BALANCE_VOUCHER_ID)) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       date: null,
       type: "Opening Balance" as const,
       refNo: "—",
       total: obAmount,
       outstanding: obOutstandingIn,
+      allocatedToOthers: totalConsumedFromOB,
     }] : [];
-    return [...ob, ...purchases];
-  }, [variant, partyId, paymentOutId, vouchers, partyOB, showOBInPaymentOut, obOutstandingIn]);
+    const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered];
+    combined.sort((a, b) => {
+      const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+      const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+      return dA - dB;
+    });
+    return combined;
+  }, [variant, partyId, paymentOutId, vouchers, partyOB, showOBInPaymentOut, obOutstandingIn, totalConsumedFromOB, existingAllocations]);
 
   const targetList = isOut ? combinedOutList : combinedInList;
 
@@ -291,8 +380,9 @@ export function LinkPaymentToTxnsDialog({
     onOpenChange(false);
   };
 
-  const setLinkedForVoucher = (voucherId: string, value: string) => {
-    const num = parseFloat(String(value).replace(/[^0-9.]/g, "")) || 0;
+  const setLinkedForVoucher = (voucherId: string, value: string, cap?: number) => {
+    let num = parseFloat(String(value).replace(/[^0-9.]/g, "")) || 0;
+    if (cap != null && cap >= 0) num = Math.min(num, cap);
     setLinkedAmounts((prev) => {
       if (num === 0) {
         const { [voucherId]: _, ...rest } = prev;
@@ -304,183 +394,141 @@ export function LinkPaymentToTxnsDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col" hideCloseButton>
-        <DialogHeader className="flex-shrink-0">
-          <div className="flex items-center justify-between pr-8">
-            <DialogTitle className="text-xl">
-              {isOut ? "Link Payment Out to Txns" : "Link Payment In to Txns"}
-            </DialogTitle>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onOpenChange(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+      <DialogContent
+        className={cn(
+          "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
+          isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
+        )}
+        hideCloseButton
+      >
+        <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
+          {/* Code (1) = Link Payment In/Out to Txns popup — so user can say which popup when reporting */}
+          <p className="text-xs text-muted-foreground leading-tight">Link for bill wise (1)</p>
+          <DialogTitle className="text-xl leading-tight">
+            {isOut ? "Link Payment Out to Txns" : "Link Payment In to Txns"}
+          </DialogTitle>
+          <div className="flex flex-wrap items-center justify-center gap-4 text-sm pt-1 hidden md:flex">
+            <span className="text-muted-foreground">{isOut ? "Paid" : "Received"}: <strong className="text-foreground">{formatCurrency(received, { noSuffix: true })}</strong></span>
+            <span className="text-muted-foreground">Total linked: <strong className="text-foreground">{formatCurrency(totalLinked, { noSuffix: true })}</strong></span>
+            <span className="text-muted-foreground">Balance: <strong className="text-foreground">{formatCurrency(remaining, { noSuffix: true })}</strong></span>
           </div>
         </DialogHeader>
 
         <div className="space-y-4 flex-1 min-h-0 flex flex-col">
-          {/* Payment In/Out details at top: header above value, full width */}
-          <div className="rounded-md border flex-shrink-0 p-4 w-full">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full">
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Party</span>
-                <span className="text-sm font-medium">{partyName || "—"}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Date</span>
-                <span className="text-sm">{isOut ? paymentOutDateFormatted : paymentInDateFormatted}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Voucher No.</span>
-                <span className="text-sm">{isOut ? (paymentOutVoucherNumber || "—") : (paymentInVoucherNumber || "—")}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <div className="grid grid-cols-[minmax(0,1fr)_100px] items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                  <div className="min-w-0" />
-                  <span className="text-sm font-medium text-muted-foreground w-[100px] text-right pr-4">{isOut ? "Paid" : "Received"}</span>
-                  <div className="min-w-0" />
-                  <div className="w-[100px] flex justify-end">
-                    <Input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={received || ""}
-                      readOnly
-                      className="h-7 w-[100px] text-sm text-right tabular-nums px-2 bg-muted/50 cursor-not-allowed"
-                    />
-                  </div>
-                  <span className="whitespace-nowrap min-w-0">Total linked:</span>
-                  <span className="tabular-nums font-medium text-foreground text-right w-[100px]">{formatCurrency(totalLinked, { noSuffix: true })}</span>
-                  {received > 0 && (
-                    <>
-                      <span className="whitespace-nowrap min-w-0">Balance:</span>
-                      <span className="tabular-nums font-medium text-foreground text-right w-[100px]">{formatCurrency(remaining, { noSuffix: true })}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
+          {/* To Voucher: payment details — same table style as LinkAdvances */}
+          <p className="text-sm font-medium text-muted-foreground shrink-0 text-center">To Voucher</p>
+          <div className="rounded-md border flex-shrink-0 overflow-x-auto">
+            <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[400px]">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                  <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                  <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b last:border-b-0">
+                  <td className="p-2 text-muted-foreground whitespace-nowrap">{isOut ? paymentOutDateFormatted : paymentInDateFormatted}</td>
+                  <td className="p-2 font-medium whitespace-nowrap">{isOut ? (paymentOutVoucherNumber || "—") : (paymentInVoucherNumber || "—")}</td>
+                  <td className="p-2 whitespace-nowrap">{partyName || "—"}</td>
+                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(received, { noSuffix: true })}</td>
+                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(totalLinked, { noSuffix: true })}</td>
+                  <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(remaining, { noSuffix: true })}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" size="sm" onClick={handleAutoLink}>
-                <Link2 className="h-4 w-4 mr-2" />
-                AUTO LINK
-              </Button>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <HelpCircle className="h-3.5 w-3.5" />
-                {isOut ? "Allocate paid amount to purchases & payment ins (oldest first)." : "Allocate received amount to sales & payment outs (oldest first)."}
-              </span>
-            </div>
-            <Button type="button" size="sm" variant="outline" onClick={handleReset}>
-              <RotateCcw className="h-4 w-4 mr-2" />
-              RESET
-            </Button>
-          </div>
-
-          <div className="flex-1 min-h-0 border rounded-md overflow-hidden">
-            <p className="text-sm font-medium mb-2">{isOut ? "Purchases (same party)" : "Sales (same party)"}</p>
-            <ScrollArea className="h-full w-full">
-              <Table className="table-fixed w-full">
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className={cn(dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>Date</TableHead>
-                    <TableHead className="w-[90px]">Type</TableHead>
-                    <TableHead className="min-w-0">Ref/Inv No.</TableHead>
-                    <TableHead className="text-right w-[110px]">Total</TableHead>
-                    <TableHead className="text-right w-[120px]">Linked Amount</TableHead>
-                    <TableHead className="text-right w-[110px]">Balance</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {targetList.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        {isOut ? "No purchases for this party." : "No sales for this party."}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    targetList.map((row: any) => {
+          <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1 text-center">From Voucher</p>
+          <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block text-center">
+            {isOut ? "Cr transactions (same party) (only linkable or already selected)" : "Dr transactions (same party) (only linkable or already selected)"}
+          </p>
+          <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
+            {targetList.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">
+                {isOut ? "No purchases or payment in for this party." : "No sales or payment out for this party."}
+              </p>
+            ) : (
+              <div className="min-w-0 overflow-x-auto">
+                <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[600px]">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left p-2 w-10 whitespace-nowrap"></th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Other Linked</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Current Link</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Linkable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {targetList.map((row: any) => {
                       const d = safeToDate(row.date);
                       const linked = linkedAmounts[row.id] ?? 0;
-                      const balanceAfterLink = Math.max(0, (row.outstanding ?? 0) - linked);
-                      const rowType = row.type ?? (isOut ? "Purchase" : "Sale");
-                      const rowRefNo = row.refNo ?? row.invoiceNumber ?? row.voucherNumber ?? "—";
-                      const isOBRow = row.id === OPENING_BALANCE_VOUCHER_ID;
-                      const obLinkedStatus = isOBRow && linked > 0 ? formatCurrency(linked, { noSuffix: true }) : null;
+                      const otherLinked = row.allocatedToOthers ?? 0;
+                      const rowMax = row.outstanding ?? 0;
+                      const maxAllowed = Math.min(rowMax, remaining + linked);
+                      const cannotAddMore = remaining <= 0 && linked === 0;
+                      const rowType = row.type === "Opening Balance" ? "Opening Balance" : (row.type ?? (isOut ? "Purchase" : "Sale")).toLowerCase();
+                      const amountSuffix = isOut ? " Cr" : " Dr";
                       return (
-                        <TableRow key={row.id}>
-                          <TableCell className={cn("align-middle", dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>
-                            {d ? (
-                              dateSystem === "AD" ? formatDate(d) :
-                              dateSystem === "BS" ? formatDateBS(d) :
-                              <span className="whitespace-nowrap">{formatDateBS(d)} ({formatDate(d)})</span>
-                            ) : "—"}
-                          </TableCell>
-                          <TableCell className="align-middle w-[90px]">{rowType}</TableCell>
-                          <TableCell className="align-middle min-w-0 truncate">
-                            {rowRefNo}
-                            {obLinkedStatus != null && (
-                              <span className="block text-xs text-muted-foreground mt-0.5">Linked: {obLinkedStatus}</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[110px] tabular-nums">
-                            {formatCurrency(row.total, { noSuffix: true })}
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[120px] p-2">
-                            <div className="flex items-center gap-1 justify-end">
-                              <Input
-                                type="number"
-                                min={0}
-                                max={row.outstanding}
-                                step={0.01}
-                                value={linked > 0 ? linked : ""}
-                                onChange={(e) => setLinkedForVoucher(row.id, e.target.value)}
-                                placeholder="0"
-                                className="h-8 w-full min-w-0 text-right tabular-nums"
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
-                                onClick={() => setLinkedForVoucher(row.id, "0")}
-                                title="Reset this row"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[110px] font-medium tabular-nums">
-                            {formatCurrency(balanceAfterLink, { noSuffix: true })}
-                          </TableCell>
-                        </TableRow>
+                        <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                          <td className="p-2 w-10 whitespace-nowrap align-middle">
+                            <Checkbox
+                              checked={linked > 0}
+                              disabled={cannotAddMore}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  const cap = maxAllowed > 0 ? maxAllowed : rowMax;
+                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : Math.min(0.01, rowMax)) : 0;
+                                  if (initial > 0) setLinkedForVoucher(row.id, String(initial), cap);
+                                } else {
+                                  setLinkedForVoucher(row.id, "0");
+                                }
+                              }}
+                              title={cannotAddMore ? "Required amount already linked" : linked > 0 ? "Clear this row" : "Include this row"}
+                            />
+                          </td>
+                          <td className="p-2 text-muted-foreground whitespace-nowrap align-middle">
+                            {d ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : <span className="whitespace-nowrap">{formatDateBS(d)} ({formatDate(d)})</span>) : "—"}
+                          </td>
+                          <td className="p-2 font-medium whitespace-nowrap align-middle">{row.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (row.refNo ?? "—")}</td>
+                          <td className="p-2 whitespace-nowrap align-middle">{rowType}</td>
+                          <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap align-middle tabular-nums">{formatCurrency(row.total ?? 0, { noSuffix: true })}{amountSuffix}</td>
+                          <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(otherLinked, { noSuffix: true })}{amountSuffix}</td>
+                          <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(linked, { noSuffix: true })}{amountSuffix}</td>
+                          <td className="p-2 text-right font-medium whitespace-nowrap align-middle tabular-nums">{formatCurrency(Math.max(0, rowMax - linked), { noSuffix: true })}{amountSuffix}</td>
+                        </tr>
                       );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-              <ScrollBar orientation="horizontal" />
-            </ScrollArea>
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
-          <div className="flex flex-shrink-0 items-center justify-between gap-4 pt-2 border-t">
-            <p className="text-xs text-muted-foreground max-w-md">
-              Link and unlink are saved when you click Done. You do not need to click Save in the voucher dialog.
-            </p>
-            <div className="flex items-center gap-4 shrink-0">
-              {totalLinked > (Number(receivedAmount) || 0) && (
-                <span className="text-sm text-destructive font-medium">
-                  Total linked exceeds {isOut ? "paid" : "received"} amount. Reduce linked amounts.
-                </span>
-              )}
+          <div className="flex flex-shrink-0 items-center gap-2 pt-2 border-t flex-wrap justify-between">
+            <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+              Cancel
+            </Button>
+            <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+              <Button type="button" size="sm" onClick={handleAutoLink} className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0">
+                <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Auto Link
+              </Button>
+              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Reset
+              </Button>
               <Button
                 onClick={handleDone}
                 disabled={totalLinked > (Number(receivedAmount) || 0)}
+                className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0"
               >
                 DONE
               </Button>

@@ -9,23 +9,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
-import { getTaxNetAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getTaxNetAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getPaymentInRemaining, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { Link2, Zap, X, RotateCcw, HelpCircle } from "lucide-react";
+import { Link2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 function getAddSalaryNetTotal(v: any): number {
   if (!Array.isArray(v.entries) || v.entries.length === 0) return Number(v.total ?? v.amount ?? 0) || 0;
@@ -42,8 +34,11 @@ export interface LinkPaymentOutToSalaryDialogProps {
   paymentOutId: string | null;
   amountPaid: number;
   existingAllocations: Allocation[];
-  /** Staff opening balance, signed: Dr > 0 (we owe them), Cr < 0 (they have money with us). Show OB when Dr or Cr so payment out can reduce either. */
+  /** Staff opening balance, signed: Dr > 0 and Cr < 0. Payment Out can only settle credit-side OB here. */
   staffOpeningBalance?: number;
+  /** For "To Voucher" row (same layout as Link payment to this salary). */
+  paymentOutVoucherNumber?: string | null;
+  paymentOutDate?: unknown;
   onDone: (allocations: Allocation[]) => void;
 }
 
@@ -56,10 +51,12 @@ export function LinkPaymentOutToSalaryDialog({
   amountPaid,
   existingAllocations,
   staffOpeningBalance = 0,
+  paymentOutVoucherNumber,
+  paymentOutDate,
   onDone,
 }: LinkPaymentOutToSalaryDialogProps) {
   const { vouchers } = useVouchers();
-  const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
+  const { formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint, dateSystem } = useDate();
   const [linkedAmounts, setLinkedAmounts] = useState<Record<string, number>>({});
 
   const totalAllocatedToOB = useMemo(() => {
@@ -76,10 +73,16 @@ export function LinkPaymentOutToSalaryDialog({
   }, [staffId, vouchers]);
 
   const staffOB = Number(staffOpeningBalance) || 0;
-  const showOBRow = staffOB !== 0;
+  // Payment Out is debit-side, so only credit-side opening balance belongs in this dialog.
+  const showOBRow = staffOB < 0;
   const obAmount = Math.abs(staffOB);
   const obOutstanding = Math.max(0, obAmount - totalAllocatedToOB);
   const obIsDr = staffOB > 0;
+  /** Amount this payment out has already linked to OB (so we show OB row for edit even when obOutstanding is 0). */
+  const obAllocatedToCurrent = useMemo(() => {
+    const a = existingAllocations.find((x) => x.voucherId === OPENING_BALANCE_VOUCHER_ID);
+    return a ? getAllocationTotal(a) : 0;
+  }, [existingAllocations]);
 
   const salaryVouchersWithOutstanding = useMemo(() => {
     if (!staffId || !vouchers?.length) return [];
@@ -110,7 +113,34 @@ export function LinkPaymentOutToSalaryDialog({
         const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
         return dA - dB;
       });
-    const obRow = showOBRow && obOutstanding > 0 ? [{
+    const paymentInRows = (vouchers as any[])
+      .filter((v: any) => (v.type === "payment_in" || v.type === "direct_income") && v.staffId === staffId)
+      .map((v: any) => {
+        const allocations = (v.allocations as Allocation[] | undefined) || [];
+        const allocatedToOthers = paymentOutId
+          ? allocations.filter((a) => a.voucherId !== paymentOutId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        const currentAllocated = paymentOutId
+          ? allocations.filter((a) => a.voucherId === paymentOutId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : 0;
+        const remaining = getPaymentInRemaining(v);
+        return {
+          id: v.id,
+          voucherNumber: v.voucherNumber ?? "—",
+          date: v.date,
+          netTotal: Number(v.amount ?? v.total ?? 0) || 0,
+          allocated: allocatedToOthers,
+          outstanding: remaining + currentAllocated,
+          sourceType: "payment_in" as const,
+        };
+      })
+      .filter((r: any) => r.outstanding > 0)
+      .sort((a: any, b: any) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dA - dB;
+      });
+    const obRow = showOBRow && obAmount > 0 && (obOutstanding > 0 || obAllocatedToCurrent > 0) ? [{
       id: OPENING_BALANCE_VOUCHER_ID,
       voucherNumber: "—",
       date: null,
@@ -118,9 +148,10 @@ export function LinkPaymentOutToSalaryDialog({
       allocated: totalAllocatedToOB,
       outstanding: obOutstanding,
       isDr: obIsDr,
+      sourceType: "opening_balance" as const,
     }] : [];
-    return [...obRow, ...list];
-  }, [staffId, vouchers, paymentOutId, staffOB, showOBRow, obOutstanding, obAmount, obIsDr, totalAllocatedToOB]);
+    return [...obRow, ...list.map((row: any) => ({ ...row, sourceType: "add_salary" as const })), ...paymentInRows];
+  }, [staffId, vouchers, paymentOutId, staffOB, showOBRow, obOutstanding, obAmount, obIsDr, totalAllocatedToOB, obAllocatedToCurrent]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -179,17 +210,6 @@ export function LinkPaymentOutToSalaryDialog({
     onOpenChange(false);
   };
 
-  const setLinkedForVoucher = (voucherId: string, value: string) => {
-    const num = parseFloat(String(value).replace(/[^0-9.]/g, "")) || 0;
-    setLinkedAmounts((prev) => {
-      if (num === 0) {
-        const { [voucherId]: _, ...rest } = prev;
-        return rest;
-      }
-      return { ...prev, [voucherId]: num };
-    });
-  };
-
   const safeToDate = (date: unknown): Date | null => {
     if (!date) return null;
     if (date instanceof Date) return date;
@@ -198,166 +218,164 @@ export function LinkPaymentOutToSalaryDialog({
     return isNaN(parsed.getTime()) ? null : parsed;
   };
 
+  const isMobile = useIsMobile();
+  const targetRequired = amountPaid;
+  const remainingToLink = Math.max(0, targetRequired - totalLinked);
+
+  const setLinkedFor = (voucherId: string, value: string, cap?: number) => {
+    const num = parseFloat(String(value).replace(/[^0-9.]/g, "")) || 0;
+    const final = cap != null && cap > 0 ? Math.min(num, cap) : num;
+    setLinkedAmounts((prev) => {
+      if (final <= 0) {
+        const { [voucherId]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [voucherId]: final };
+    });
+  };
+
+  const targetVoucherDate = safeToDate(paymentOutDate);
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col" hideCloseButton>
-        <DialogHeader className="flex-shrink-0">
-          <div className="flex items-center justify-between pr-8">
-            <DialogTitle className="text-xl flex items-center gap-2">
-              <Link2 className="h-5 w-5" />
-              Link to Salary
-            </DialogTitle>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onOpenChange(false)}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+      <DialogContent
+        className={cn(
+          "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
+          isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
+        )}
+        hideCloseButton
+      >
+        <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
+          <p className="text-xs text-muted-foreground leading-tight">Link for salary</p>
+          {/* Keep salary link title consistent across both salary-link flows. */}
+          <DialogTitle className="text-xl leading-tight">Link payment to salary</DialogTitle>
+          {targetRequired > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-sm pt-1 px-1">
+              <span className="text-muted-foreground">Required: <strong className="text-foreground">{formatCurrency(targetRequired)}</strong></span>
+              <span className="text-muted-foreground">Selected: <strong className="text-foreground">{formatCurrency(totalLinked)}</strong></span>
+              <span className="text-muted-foreground">
+                Balance: {remainingToLink === 0 ? <strong className="text-green-600">Settled</strong> : <strong className="text-foreground">{formatCurrency(remainingToLink)}</strong>}
+              </span>
+              {totalLinked < targetRequired && totalLinked > 0 && (
+                <span className="text-amber-600 font-medium">Choose more</span>
+              )}
+            </div>
+          )}
         </DialogHeader>
         <div className="space-y-4 flex-1 min-h-0 flex flex-col">
-          {/* Top card: same layout as Payment Out Link to Txns */}
-          <div className="rounded-md border flex-shrink-0 p-4 w-full">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full">
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Staff</span>
-                <span className="text-sm font-medium">{staffName || "—"}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Amount paid</span>
-                <span className="text-sm font-medium tabular-nums">{formatCurrency(amountPaid, { noSuffix: true })}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Total linked</span>
-                <span className="text-sm tabular-nums">{formatCurrency(totalLinked, { noSuffix: true })}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-muted-foreground">Balance</span>
-                <span className="text-sm font-medium tabular-nums">{formatCurrency(remaining, { noSuffix: true })}</span>
-              </div>
-            </div>
+          {/* To Voucher: this payment out (same layout as Link payment to this salary) */}
+          <p className="text-sm font-medium text-muted-foreground shrink-0 text-center">To Voucher</p>
+          <div className="rounded-md border flex-shrink-0 overflow-x-auto">
+            <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[400px]">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                  <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                  <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                  <th className="text-right p-2 font-medium whitespace-nowrap">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b last:border-b-0">
+                  <td className="p-2 text-muted-foreground whitespace-nowrap">{targetVoucherDate ? (dateSystem === "AD" ? formatDate(targetVoucherDate) : dateSystem === "BS" ? formatDateBS(targetVoucherDate) : `${formatDateBS(targetVoucherDate)} (${formatDate(targetVoucherDate)})`) : "—"}</td>
+                  <td className="p-2 font-medium whitespace-nowrap">{paymentOutVoucherNumber ?? "—"}</td>
+                  <td className="p-2 whitespace-nowrap">{staffName || "Staff"}</td>
+                  <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(amountPaid, { noSuffix: true })}</td>
+                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(totalLinked, { noSuffix: true })}</td>
+                  <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(remainingToLink, { noSuffix: true })}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleAutoLink}
-              disabled={remaining <= 0 || salaryVouchersWithOutstanding.length === 0}
-            >
-              <Link2 className="h-4 w-4 mr-2" />
-              AUTO LINK
-            </Button>
-            <Button type="button" size="sm" variant="outline" onClick={handleReset}>
-              <RotateCcw className="h-4 w-4 mr-2" />
-              RESET
-            </Button>
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <HelpCircle className="h-3.5 w-3.5" />
-              Allocate this payment to Add Salary vouchers (oldest first).
-            </span>
-          </div>
-          <div className="flex-1 min-h-0 border rounded-md overflow-hidden">
-            <p className="text-sm font-medium mb-2">Add Salary (same staff)</p>
-            <ScrollArea className="h-full w-full">
-              <Table className="table-fixed w-full">
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className={cn(dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>Date</TableHead>
-                    <TableHead className="w-[90px]">Type</TableHead>
-                    <TableHead className="min-w-0">Ref/Inv No.</TableHead>
-                    <TableHead className="text-right w-[110px]">Total</TableHead>
-                    <TableHead className="text-right w-[120px]">Linked Amount</TableHead>
-                    <TableHead className="text-right w-[110px]">Balance</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {salaryVouchersWithOutstanding.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        No outstanding Add Salary vouchers for this staff.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    salaryVouchersWithOutstanding.map((row: any) => {
+          <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1 text-center">From Voucher</p>
+          <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block text-center">Credit-side vouchers for same staff (Add Salary, Payment In, Opening Balance)</p>
+          <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
+            {salaryVouchersWithOutstanding.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">No credit-side staff vouchers available to link.</p>
+            ) : (
+              <div className="min-w-0 overflow-x-auto">
+                <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[600px]">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left p-2 w-10 whitespace-nowrap"></th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                      <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Other Linked</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Current Link</th>
+                      <th className="text-right p-2 font-medium whitespace-nowrap">Linkable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {salaryVouchersWithOutstanding.map((row: any) => {
                       const d = safeToDate(row.date);
                       const linked = linkedAmounts[row.id] ?? 0;
-                      const balanceAfterLink = Math.max(0, row.outstanding - linked);
-                      const dateStr = d
-                        ? dateSystem === "AD"
-                          ? formatDate(d)
-                          : dateSystem === "BS"
-                            ? formatDateBS(d)
-                            : `${formatDateBS(d)} (${formatDate(d)})`
-                        : "—";
+                      const linkableAfter = Math.max(0, row.outstanding - linked);
+                      const dateStr = d ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} (${formatDate(d)})`) : "—";
+                      const rowMax = row.outstanding;
+                      const maxAllowed = Math.min(rowMax, remainingToLink + linked);
+                      const cannotAddMore = remainingToLink <= 0 && linked === 0;
+                      const fromLabel = row.id === OPENING_BALANCE_VOUCHER_ID ? "Opening Balance" : row.sourceType === "payment_in" ? "Payment In" : "Add Salary";
+                      // Use print formatter inside string interpolation so Opening Balance never renders as [object Object].
+                      const amountStr = row.id === OPENING_BALANCE_VOUCHER_ID
+                        ? `${formatCurrencyForPrint(Number(row.netTotal ?? row.outstanding) || 0, { noSuffix: true })} ${row.isDr ? "Dr" : "Cr"}`
+                        : formatCurrencyForPrint(Number(row.netTotal ?? row.outstanding) || 0, { noSuffix: true });
                       return (
-                        <TableRow key={row.id}>
-                          <TableCell className={cn("align-middle", dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>
-                            {dateStr}
-                          </TableCell>
-                          <TableCell className="align-middle w-[90px]">{row.id === OPENING_BALANCE_VOUCHER_ID ? "Opening Balance" : "Add Salary"}</TableCell>
-                          <TableCell className="align-middle min-w-0 truncate">
-                            {row.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (row.voucherNumber ?? "—")}
-                            {row.id === OPENING_BALANCE_VOUCHER_ID && linked > 0 && (
-                              <span className="block text-xs text-muted-foreground mt-0.5">Linked: {formatCurrency(linked, { noSuffix: true })}</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[110px] tabular-nums">
-                            {row.id === OPENING_BALANCE_VOUCHER_ID ? (
-                              <span className={row.isDr ? "text-green-600" : "text-red-600"}>
-                                {formatCurrency(row.netTotal ?? row.outstanding, { noSuffix: true })} {row.isDr ? "Dr" : "Cr"}
-                              </span>
-                            ) : (
-                              formatCurrency(row.netTotal ?? row.outstanding, { noSuffix: true })
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[120px] p-2">
-                            <div className="flex items-center gap-1 justify-end">
-                              <Input
-                                type="number"
-                                min={0}
-                                max={Math.max(row.outstanding, linked)}
-                                step={0.01}
-                                value={linked > 0 ? linked : ""}
-                                onChange={(e) => setLinkedForVoucher(row.id, e.target.value)}
-                                placeholder="0"
-                                className="h-8 w-full min-w-0 text-right tabular-nums"
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
-                                onClick={() => setLinkedForVoucher(row.id, "0")}
-                                title="Reset this row"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right align-middle w-[110px] font-medium tabular-nums">
-                            {row.id === OPENING_BALANCE_VOUCHER_ID ? (
-                              <span className={row.isDr ? "text-green-600" : "text-red-600"}>
-                                {formatCurrency(balanceAfterLink, { noSuffix: true })} {row.isDr ? "Dr" : "Cr"}
-                              </span>
-                            ) : (
-                              formatCurrency(balanceAfterLink, { noSuffix: true })
-                            )}
-                          </TableCell>
-                        </TableRow>
+                        <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                          <td className="p-2 w-10 whitespace-nowrap align-middle">
+                            <Checkbox
+                              checked={linked > 0}
+                              disabled={cannotAddMore}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  const cap = maxAllowed > 0 ? maxAllowed : rowMax;
+                                  const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : Math.min(0.01, rowMax)) : 0;
+                                  if (initial > 0) setLinkedFor(row.id, String(initial), cap);
+                                } else {
+                                  setLinkedFor(row.id, "0");
+                                }
+                              }}
+                              title={cannotAddMore ? "Required amount already linked" : linked > 0 ? "Clear this row" : "Include this row"}
+                            />
+                          </td>
+                          <td className="p-2 text-muted-foreground whitespace-nowrap align-middle">{dateStr}</td>
+                          <td className="p-2 font-medium whitespace-nowrap align-middle">{row.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (row.voucherNumber ?? "—")}</td>
+                          <td className="p-2 whitespace-nowrap align-middle">{fromLabel}</td>
+                          <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap align-middle tabular-nums">{amountStr}</td>
+                          <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(row.allocated ?? 0, { noSuffix: true })} Dr</td>
+                          <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrency(linked, { noSuffix: true })} Dr</td>
+                          <td className="p-2 text-right font-medium whitespace-nowrap align-middle tabular-nums">{formatCurrency(linkableAfter, { noSuffix: true })} Dr</td>
+                        </tr>
                       );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-              <ScrollBar orientation="horizontal" />
-            </ScrollArea>
-          </div>
-          <div className="flex flex-shrink-0 items-center justify-end gap-4 pt-2 border-t">
-            {totalLinked > amountPaid && (
-              <span className="text-sm text-destructive font-medium">
-                Total linked exceeds amount paid. Reduce linked amounts.
-              </span>
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
-            <Button onClick={handleDone} disabled={totalLinked > amountPaid}>
-              DONE
+          </div>
+          {totalLinked < targetRequired && totalLinked > 0 && (
+            <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
+          )}
+          <div className="flex flex-shrink-0 items-center gap-2 pt-2 border-t flex-wrap justify-between">
+            <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+              Cancel
             </Button>
+            <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+              <Button type="button" size="sm" onClick={handleAutoLink} disabled={targetRequired <= 0 || salaryVouchersWithOutstanding.length === 0} className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0">
+                <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Auto Link
+              </Button>
+              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Reset
+              </Button>
+              <Button onClick={handleDone} disabled={totalLinked > amountPaid} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">
+                DONE
+              </Button>
+            </div>
           </div>
         </div>
       </DialogContent>

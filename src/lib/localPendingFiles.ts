@@ -36,6 +36,42 @@ export function isLocalFileRef(url: string): boolean {
   return typeof url === "string" && url.startsWith(LOCAL_FILE_PREFIX);
 }
 
+export async function uploadPendingLocalFileRef(
+  localFileRef: string,
+  storagePathPrefix: string
+): Promise<string> {
+  if (!isLocalFileRef(localFileRef)) return localFileRef;
+  const localId = localFileRef.slice(LOCAL_FILE_PREFIX.length);
+  if (!localId) return localFileRef;
+  const pending = await getPendingFiles();
+  const item = pending.find((row) => row.id === localId);
+  // If the local payload is missing, keep original ref so caller can retry later without data loss.
+  if (!item) return localFileRef;
+  // Upload one local file ref and return its final public URL for caller-side payload replacement.
+  const storagePath = `${storagePathPrefix}/${Date.now()}_${item.fileName || "file"}`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
+  const url = await getDownloadURL(storageRef);
+  const docRef = doc(firestore, item.docPath);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) {
+    throw new Error("Document not found");
+  }
+  const data = snap.data();
+  const current = data[item.field];
+  if (Array.isArray(current)) {
+    const arr = [...current];
+    const idx = arr.findIndex((v) => v === `${LOCAL_FILE_PREFIX}${item.id}`);
+    if (idx >= 0) arr[idx] = url;
+    else arr.push(url);
+    await updateDoc(docRef, { [item.field]: arr });
+  } else {
+    await updateDoc(docRef, { [item.field]: url });
+  }
+  await removePendingFile(item.id);
+  return url;
+}
+
 export async function putPendingFile(payload: PendingFilePayload): Promise<void> {
   const db = await openDB();
   return new Promise((resolve, reject) => {

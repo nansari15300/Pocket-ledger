@@ -68,7 +68,9 @@ import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import {
   DropdownMenu,
@@ -361,20 +363,27 @@ export function StaffDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
+
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
   
   const totalPages = useMemo(() => {
-    return rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
-  }, [displayTransactions.length, rowsPerPage]);
+    return rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
+  }, [sortedTransactions.length, rowsPerPage]);
   
   const paginatedTransactions = useMemo(() => {
     if (rowsPerPage > 0) {
-      return displayTransactions.slice(
+      return sortedTransactions.slice(
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
       );
     }
-    return displayTransactions;
-  }, [displayTransactions, currentPage, rowsPerPage]);
+    return sortedTransactions;
+  }, [sortedTransactions, currentPage, rowsPerPage]);
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -483,9 +492,9 @@ export function StaffDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return displayTransactions.filter(t => {
+    return sortedTransactions.filter(t => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -501,7 +510,7 @@ export function StaffDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter =
       !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -684,6 +693,7 @@ export function StaffDetails({
           type="button"
           className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
           onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+          data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
         >
           {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
         </Button>
@@ -816,7 +826,7 @@ export function StaffDetails({
                 onStaffUpdated={onStaffUpdated}
                 onStaffDeleted={() => onStaffDeleted(staff.id)}
               >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
                   <Edit className="h-4 w-4" />
                 </Button>
               </EditStaffDialog>
@@ -842,6 +852,7 @@ export function StaffDetails({
                     id="date"
                     variant={"outline"}
                     className={cn("justify-start text-left font-normal h-10 px-2 w-auto flex-shrink-0", !dateRange && "text-muted-foreground")}
+                    data-theme-detail="date-range"
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
                     {dateRange?.from ? (
@@ -894,6 +905,7 @@ export function StaffDetails({
               size="sm"
               className={cn("flex-shrink-0 h-10", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
               onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+              data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
             >
               {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
             </Button>
@@ -902,6 +914,7 @@ export function StaffDetails({
               size="sm"
               onClick={() => setIsNoteOpen(true)}
               className="flex-shrink-0 h-10"
+              data-theme-detail="add-note"
             >
               <FilePlus className="mr-2 h-4 w-4" />
               Add Note
@@ -911,7 +924,7 @@ export function StaffDetails({
                 All Vouchers
               </Button>
             )}
-            <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10">
+            <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
               <Printer className="h-4 w-4" />
             </Button>
           </div>
@@ -1017,6 +1030,12 @@ export function StaffDetails({
             </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <TransactionTableSortDropdown
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+            />
             <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
             <Select
               value={`${rowsPerPage}`}

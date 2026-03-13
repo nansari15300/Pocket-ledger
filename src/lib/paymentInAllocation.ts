@@ -3,10 +3,11 @@
  * Used by Payment Out, Direct Expense, and Contra (pay-from side) when linking (Spend Wise).
  */
 function isInVoucherForAccount(v: any, accountId: string): boolean {
+  // Compatibility matcher: handle both current and legacy account key locations.
+  const inAccountId = v.accountId ?? v.toAccountId ?? v.bankAccountId;
   return (
-    (v.type === "payment_in" && v.accountId === accountId) ||
-    (v.type === "direct_income" && v.accountId === accountId) ||
-    (v.type === "contra" && v.toAccountId === accountId)
+    ((v.type === "payment_in" || v.type === "direct_income") && inAccountId === accountId) ||
+    (v.type === "contra" && (v.toAccountId ?? v.accountId) === accountId)
   );
 }
 

@@ -143,6 +143,15 @@ export function LinkPaymentOutToPaymentInDialog({
   const needsMore = requiredAmount > 0 && selectedTotal < requiredAmount;
   /** When selected total >= required amount, disable unchecked rows (like Contra / Payment Out link dialog). */
   const selectionFull = requiredAmount > 0 && selectedTotal >= requiredAmount;
+  // Show live RCPT status in the current-voucher summary while user selects linked payments.
+  const currentVoucherStatus = React.useMemo(() => {
+    if (!currentVoucherSummary) return null;
+    if (selectedTotal <= 0) return { label: "Unpaid", className: "text-red-600 border-red-300 bg-red-50" };
+    if (selectedTotal >= currentVoucherSummary.amount && currentVoucherSummary.amount > 0) {
+      return { label: "Paid", className: "text-green-600 border-green-300 bg-green-50" };
+    }
+    return { label: "Partial", className: "text-amber-600 border-amber-300 bg-amber-50" };
+  }, [currentVoucherSummary, selectedTotal]);
 
   const handleToggle = (id: string) => {
     setChecked((prev) => {
@@ -192,6 +201,8 @@ export function LinkPaymentOutToPaymentInDialog({
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
+          {/* Keep spend-wise popup header consistent across all link dialogs. */}
+          <p className="text-xs text-muted-foreground leading-tight">Link for spend wise</p>
           <DialogTitle>Select Payment Out / Direct Expense / Contra (out){accountName ? ` from ${accountName}` : ""}</DialogTitle>
           <p className="text-sm text-muted-foreground">
             Tick which Payment Out, Direct Expense or Contra (out) vouchers this receipt is paying. Amount will be linked to selected vouchers.
@@ -201,7 +212,7 @@ export function LinkPaymentOutToPaymentInDialog({
               <span className="text-muted-foreground">Amount received: <strong className="text-foreground">{formatCurrency(requiredAmount)}</strong></span>
               <span className="text-muted-foreground">Selected: <strong className="text-foreground">{formatCurrency(selectedTotal)}</strong></span>
               {needsMore && <span className="text-amber-600 font-medium">Choose more</span>}
-              <Button type="button" variant="secondary" size="sm" onClick={handleAutoLink}>
+              <Button type="button" size="sm" onClick={handleAutoLink} className="bg-blue-600 hover:bg-blue-700 text-white border-0">
                 Auto Link
               </Button>
             </div>
@@ -210,7 +221,10 @@ export function LinkPaymentOutToPaymentInDialog({
         {/* From Voucher (current voucher): only the voucher we're working on */}
         {currentVoucherSummary && (
           <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3">
-            <p className="text-sm font-medium text-muted-foreground">From Voucher (current voucher)</p>
+            <p className="text-sm font-medium text-muted-foreground">
+              {/* Show account in section title so user can verify current voucher's account context. */}
+              From Voucher (current voucher){accountName ? ` - Account: ${accountName}` : ""}
+            </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse min-w-[400px]">
                 <thead>
@@ -220,6 +234,7 @@ export function LinkPaymentOutToPaymentInDialog({
                     <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
                     <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
                     <th className="text-right p-2 font-medium whitespace-nowrap">Linked on current</th>
+                    <th className="text-center p-2 font-medium whitespace-nowrap">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -228,14 +243,24 @@ export function LinkPaymentOutToPaymentInDialog({
                     <td className="p-2 font-medium whitespace-nowrap">{currentVoucherSummary.voucherNumber}</td>
                     <td className="p-2 whitespace-nowrap">{currentVoucherSummary.from}</td>
                     <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(currentVoucherSummary.amount)} Dr</td>
-                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(currentVoucherSummary.linkedTotal)} Dr</td>
+                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(selectedTotal)} Dr</td>
+                    <td className="p-2 text-center whitespace-nowrap">
+                      {currentVoucherStatus && (
+                        <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-xs font-medium", currentVoucherStatus.className)}>
+                          {currentVoucherStatus.label}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
         )}
-        <p className="text-sm font-medium text-muted-foreground shrink-0">To Voucher — Payment Out / Direct Expense / Contra (out) of this account (only linkable or already selected)</p>
+        <p className="text-sm font-medium text-muted-foreground shrink-0">
+          {/* Show account in section title so user can identify which account's vouchers are listed. */}
+          To Voucher{accountName ? ` - Account: ${accountName}` : ""} — Payment Out / Direct Expense / Contra (out) of this account (only linkable or already selected)
+        </p>
         <ScrollArea className="flex-1 min-h-0 border rounded-md">
           <div className="p-0 min-w-0 max-w-full overflow-x-auto">
             {displayList.length === 0 ? (
@@ -306,10 +331,10 @@ export function LinkPaymentOutToPaymentInDialog({
           <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than amount received. Choose more vouchers to cover the amount.</p>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button onClick={() => onOpenChange(false)} className="bg-orange-500 hover:bg-orange-600 text-white border-0">
             Cancel
           </Button>
-          <Button onClick={handleConfirm}>Done</Button>
+          <Button onClick={handleConfirm} className="bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

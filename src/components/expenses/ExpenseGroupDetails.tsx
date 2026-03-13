@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -328,8 +330,14 @@ export function ExpenseGroupDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
-  const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
-  const paginatedTransactions = displayTransactions.slice(
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
+  const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
+  const paginatedTransactions = sortedTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
   );
@@ -832,6 +840,12 @@ export function ExpenseGroupDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

@@ -8,11 +8,22 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import { Link2, RotateCcw } from "lucide-react";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -21,6 +32,14 @@ const safeToDate = (date: unknown): Date | null => {
     return (date as { toDate: () => Date }).toDate();
   const parsed = new Date(date as string | number);
   return isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getContraVoucherNumberForInAccount = (v: any, accountId: string): string => {
+  // Show the correct contra leg number for the account context (In account should see CNTR In).
+  if (v?.type !== "contra") return v?.voucherNumber ?? "—";
+  if ((v.toAccountId ?? v.accountId) === accountId) return v.voucherNumberIn ?? v.voucherNumber ?? "—";
+  if (v.fromAccountId === accountId) return v.voucherNumberOut ?? v.voucherNumber ?? "—";
+  return v.voucherNumber ?? "—";
 };
 
 export interface LinkPaymentInToPaymentOutDialogProps {
@@ -49,6 +68,8 @@ export interface LinkPaymentInToPaymentOutDialogProps {
   displayOnlyVariant?: 'in' | 'out';
   /** When provided (e.g. from Payment Out form), show current voucher (Payment Out) at top — "To Voucher (current voucher)". */
   currentVoucherSummary?: { voucherNumber: string; date: Date | null; from: string; amount: number; linkedTotal: number };
+  /** When true, show all account vouchers in table (even if linkable is 0) for visibility/debug clarity. */
+  showAllRows?: boolean;
 }
 
 export function LinkPaymentInToPaymentOutDialog({
@@ -67,11 +88,14 @@ export function LinkPaymentInToPaymentOutDialog({
   accountName,
   displayOnlyVariant = 'in',
   currentVoucherSummary,
+  showAllRows = false,
 }: LinkPaymentInToPaymentOutDialogProps) {
   const { formatDate, formatCurrency } = useDate();
   const [checked, setChecked] = React.useState<Set<string>>(new Set(selectedIds));
   /** Order in which user ticked rows: first-ticked gets allocation first. */
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
+  const [resetConfirmOpen, setResetConfirmOpen] = React.useState(false);
+  // Selection is local until user clicks Done; nothing is saved to server until then (parent saves on onConfirm).
 
   const prevOpenRef = React.useRef(false);
   React.useEffect(() => {
@@ -128,11 +152,17 @@ export function LinkPaymentInToPaymentOutDialog({
     return map;
   }, [vouchers, accountId, currentVoucherId]);
 
-  /** In-flow vouchers for this account: Payment In, Direct Income, and Contra (where this account receives). */
-  const isInVoucherForAccount = (v: any) =>
-    (v.type === "payment_in" && v.accountId === accountId) ||
-    (v.type === "direct_income" && v.accountId === accountId) ||
-    (v.type === "contra" && v.toAccountId === accountId);
+  /** In-flow vouchers for this account: support both current and legacy account keys. */
+  const isInVoucherForAccount = (v: any) => {
+    // Legacy safety: some old vouchers can keep bank/cash account in toAccountId/bankAccountId.
+    const inAccountId = v.accountId ?? v.toAccountId ?? v.bankAccountId;
+    return (
+      (v.type === "payment_in" && inAccountId === accountId) ||
+      (v.type === "direct_income" && inAccountId === accountId) ||
+      // Contra "in" is identified by destination account.
+      (v.type === "contra" && (v.toAccountId ?? v.accountId) === accountId)
+    );
+  };
 
   const paymentInList = React.useMemo(() => {
     return vouchers
@@ -144,6 +174,8 @@ export function LinkPaymentInToPaymentOutDialog({
         const fromCurrent = Number(currentVoucherLinkedAmounts[v.id]) || 0;
         const alreadyLinked = fromOthers + fromCurrent;
         const linkable = Math.max(0, amount - alreadyLinked);
+        // For contra rows, render CNTR In/CNTR Out according to the current account leg.
+        const voucherNumber = getContraVoucherNumberForInAccount(v, accountId);
         const from =
           v.type === "contra"
             ? (names[v.fromAccountId] ?? "—")
@@ -153,7 +185,7 @@ export function LinkPaymentInToPaymentOutDialog({
               names[v.incomeAccountId] ||
               v.payeeName ||
               "—";
-        return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount, alreadyLinked, linkable, from };
+        return { id: v.id, voucherNumber, date, amount, alreadyLinked, linkable, from };
       })
       .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
   }, [vouchers, accountId, names, linkedAmountByPaymentInId, currentVoucherLinkedAmounts]);
@@ -166,12 +198,14 @@ export function LinkPaymentInToPaymentOutDialog({
 
   /** Add new: hide linkable 0. Edit: show linkable 0 only if already linked (in selectedIds). */
   const displayList = React.useMemo(() => {
+    // Optional visibility mode: show all matched vouchers so user can inspect why linkable is zero.
+    if (showAllRows) return paymentInListFiltered;
     const isEdit = currentVoucherId != null && currentVoucherId !== "";
     const selectedSet = new Set(Array.isArray(selectedIds) ? selectedIds : []);
     const list = paymentInListFiltered;
     if (!isEdit) return list.filter((r) => r.linkable > 0);
     return list.filter((r) => r.linkable > 0 || selectedSet.has(r.id));
-  }, [paymentInListFiltered, currentVoucherId, selectedIds]);
+  }, [paymentInListFiltered, currentVoucherId, selectedIds, showAllRows]);
 
   /** Tentative allocation: include already-linked-from-current first, then distribute remaining requiredAmount in selection order. */
   const tentativeLinkedByRowId = React.useMemo(() => {
@@ -209,6 +243,9 @@ export function LinkPaymentInToPaymentOutDialog({
   const selectionFull = requiredAmount > 0 && selectedTotal >= requiredAmount;
 
   const handleToggle = (id: string) => {
+    // Never allow selecting non-linkable rows unless they are already selected (for clean uncheck flow).
+    const row = paymentInListFiltered.find((r) => r.id === id);
+    if (!checked.has(id) && (row?.linkable ?? 0) <= 0) return;
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -243,18 +280,32 @@ export function LinkPaymentInToPaymentOutDialog({
     onOpenChange(false);
   };
 
+  const handleReset = () => {
+    setChecked(new Set());
+    setSelectedOrder([]);
+    setResetConfirmOpen(false);
+  };
+
+  const isMobile = useIsMobile();
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>{displayOnly ? `Current voucher ${displayOnlyVariant === 'out' ? 'payment out' : 'in voucher'}${accountName ? ` from ${accountName}` : ""}` : `Select Payment In / Direct Income / Contra (in)${accountName ? ` from ${accountName}` : ""}`}</DialogTitle>
+      <DialogContent
+        className={cn(
+          "max-w-2xl md:max-w-[54.6rem] max-h-[85vh] flex flex-col overflow-hidden rounded-lg pt-3 px-[3px]",
+          isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
+        )}
+        hideCloseButton
+      >
+        <DialogHeader className="space-y-0.5">
+          <p className="text-xs text-muted-foreground leading-tight">Link for spend wise</p>
+          <DialogTitle className="leading-tight">{displayOnly ? `Current voucher ${displayOnlyVariant === 'out' ? 'payment out' : 'in voucher'}${accountName ? ` from ${accountName}` : ""}` : `Select Payment In / Direct Income / Contra (in)${accountName ? ` from ${accountName}` : ""}`}</DialogTitle>
           {!displayOnly && (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground hidden md:block">
             Tick which Payment In, Direct Income or Contra (in) vouchers this payment is spending from. Amount will be linked from selected vouchers.
           </p>
           )}
           {!displayOnly && requiredAmount > 0 && (
-            <div className="flex flex-wrap items-center gap-4 text-sm pt-1">
+            <div className="flex flex-wrap items-center gap-4 text-sm pt-1 hidden md:flex">
               <span className="text-muted-foreground">Required: <strong className="text-foreground">{formatCurrency(requiredAmount)}</strong></span>
               <span className="text-muted-foreground">Selected: <strong className="text-foreground">{formatCurrency(selectedTotal)}</strong></span>
               {needsMore && (
@@ -269,16 +320,20 @@ export function LinkPaymentInToPaymentOutDialog({
         {/* To Voucher (current voucher): the Payment Out we're editing — show at top like Payment In dialog. */}
         {currentVoucherSummary && !displayOnly && (
           <div className="space-y-1.5 rounded-lg border bg-muted/30 p-3 shrink-0">
-            <p className="text-sm font-medium text-muted-foreground">To Voucher (current voucher)</p>
+            <p className="text-sm font-medium text-muted-foreground">
+              {/* Show account in section title so user can confirm which account this current voucher belongs to. */}
+              To Voucher (current voucher){accountName ? ` - Account: ${accountName}` : ""}
+            </p>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse min-w-[400px]">
+              <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[400px]">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
                     <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
                     <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
                     <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                    <th className="text-right p-2 font-medium whitespace-nowrap">Linked on current</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Balance</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -288,25 +343,33 @@ export function LinkPaymentInToPaymentOutDialog({
                     <td className="p-2 whitespace-nowrap">{currentVoucherSummary.from}</td>
                     <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(currentVoucherSummary.amount)} Dr</td>
                     <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(currentVoucherSummary.linkedTotal)} Dr</td>
+                    <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(Math.max(0, currentVoucherSummary.amount - currentVoucherSummary.linkedTotal))} Dr</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
         )}
-        {currentVoucherSummary && !displayOnly && (
-          <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1">From Voucher — Payment In / Direct Income / Contra (in) of this account (only linkable or already selected)</p>
+        {!displayOnly && (
+          <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1">
+            {/* Show account in section title so user clearly sees which account list is being shown. */}
+            From Voucher{accountName ? ` - Account: ${accountName}` : ""}
+          </p>
         )}
-        <ScrollArea className="flex-1 min-h-0 border rounded-md">
-          <div className="p-0 min-w-0 max-w-full overflow-x-auto">
-            {displayList.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                {paymentInListFiltered.length === 0
-                  ? (filterToVoucherId ? "Current voucher not found for this account." : "No Payment In, Direct Income or Contra (in) found for this account.")
-                  : "No linkable amount remaining."}
-              </p>
-            ) : (
-              <table className="w-full text-sm min-w-[600px]">
+        {currentVoucherSummary && !displayOnly && (
+          <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block">Payment In / Direct Income / Contra (in) of this account (only linkable or already selected)</p>
+        )}
+        {/* Single scroll container: horizontal + vertical so mobile shows full table; thin dim scrollbar */}
+        <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
+          {displayList.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              {paymentInListFiltered.length === 0
+                ? (filterToVoucherId ? "Current voucher not found for this account." : "No Payment In, Direct Income or Contra (in) found for this account.")
+                : "No linkable amount remaining."}
+            </p>
+          ) : (
+            <div className="min-w-0 overflow-x-auto">
+              <table className="table-row-stripe-7 w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left p-2 w-10 whitespace-nowrap"></th>
@@ -314,12 +377,18 @@ export function LinkPaymentInToPaymentOutDialog({
                     <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
                     <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
                     <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                    <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Other Linked</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Current Link</th>
                     <th className="text-right p-2 font-medium whitespace-nowrap">Linkable</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {displayList.map((row) => (
+                  {displayList.map((row) => {
+                    const currentVoucherLinked = Number(currentVoucherLinkedAmounts[row.id]) || 0;
+                    const tentative = tentativeLinkedByRowId[row.id] ?? 0;
+                    const otherLinked = Math.max(0, (row.alreadyLinked ?? 0) - currentVoucherLinked);
+                    const currentLink = currentVoucherLinked + tentative;
+                    return (
                     <tr
                       key={row.id}
                       role={displayOnly ? undefined : "button"}
@@ -332,37 +401,65 @@ export function LinkPaymentInToPaymentOutDialog({
                       )}
                     >
                       <td className="p-2 w-10 whitespace-nowrap" onClick={(e) => displayOnly ? undefined : e.stopPropagation()}>
-                        {!displayOnly && (
+                        {/* Always show tick box: in displayOnly show checked+disabled; otherwise interactive. */}
                         <Checkbox
-                          checked={checked.has(row.id)}
-                          onCheckedChange={() => handleToggle(row.id)}
-                          disabled={!checked.has(row.id) && selectionFull}
+                          checked={displayOnly ? true : checked.has(row.id)}
+                          onCheckedChange={displayOnly ? () => {} : () => handleToggle(row.id)}
+                          disabled={displayOnly || (!checked.has(row.id) && (selectionFull || row.linkable <= 0))}
                         />
-                        )}
                       </td>
                       <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
                       <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                       <td className="p-2 whitespace-nowrap">{row.from}</td>
                       <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount)}</td>
-                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency((row.alreadyLinked ?? 0) - (Number(currentVoucherLinkedAmounts[row.id]) || 0) + (tentativeLinkedByRowId[row.id] ?? 0))}</td>
-                      <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(Math.max(0, row.linkable + (Number(currentVoucherLinkedAmounts[row.id]) || 0) - (tentativeLinkedByRowId[row.id] ?? 0)))}</td>
+                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(otherLinked)}</td>
+                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(currentLink)}</td>
+                      <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(Math.max(0, row.linkable + currentVoucherLinked - tentative))}</td>
                     </tr>
-                  ))}
+                  ); })}
                 </tbody>
               </table>
-            )}
-          </div>
-        </ScrollArea>
+            </div>
+          )}
+        </div>
         {!displayOnly && needsMore && (
           <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
         )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="!flex-row flex flex-wrap items-center gap-2 w-full justify-between sm:justify-between">
+          <Button size="sm" onClick={() => onOpenChange(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
             {displayOnly ? "Close" : "Cancel"}
           </Button>
-          {!displayOnly && <Button onClick={handleConfirm}>Done</Button>}
+          {!displayOnly && (
+            <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+              {requiredAmount > 0 && (
+                <Button type="button" size="sm" onClick={handleAutoLink} className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0">
+                  <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                  Auto Link
+                </Button>
+              )}
+              <Button type="button" size="sm" onClick={() => setResetConfirmOpen(true)} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                Reset
+              </Button>
+              <Button onClick={handleConfirm} className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0">Done</Button>
+            </div>
+          )}
         </DialogFooter>
       </DialogContent>
+      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your selection will be cleared. Nothing is saved to the server until you click save on voucher.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleReset}>Reset</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

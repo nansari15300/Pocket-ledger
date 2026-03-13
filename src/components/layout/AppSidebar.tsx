@@ -377,8 +377,21 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader>
         <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/20">
-                <Flame className="h-6 w-6 text-primary" />
+            {/* App icon: pocket + notebook/pen; zoomed so pic bada dikhe, white border kam */}
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/20">
+                <img
+                  src="/app-icon.png"
+                  alt="Pocket Ledger"
+                  className="h-full w-full scale-125 object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (fallback) fallback.style.display = "flex";
+                  }}
+                />
+                <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+                  <Flame />
+                </span>
             </div>
             {isOpen && <h1 className="font-headline text-xl font-semibold">Pocket Ledger</h1>}
         </div>
@@ -400,6 +413,7 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     isActive={pathname.startsWith(item.href)}
                     tooltip={tooltipText}
+                    data-theme-nav={item.id}
                     onClick={(e) => {
                       if (isMobile) {
                         e.preventDefault(); 
@@ -430,6 +444,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                         isActive={pathname.startsWith("/admin")}
                         tooltip="Admin Panel"
+                        data-theme-nav="admin"
                         onClick={() => { if (isMobile) setIsOpen(false); }}
                     >
                         <Shield />
@@ -452,6 +467,7 @@ export function AppSidebar() {
                                 <SidebarMenuButton
                                     isActive={pathname.startsWith(item.href)}
                                     tooltip={item.label}
+                                    data-theme-nav={item.id}
                                     onClick={(e) => {
                                         if (isMobile) {
                                           e.preventDefault();
@@ -495,6 +511,7 @@ export function AppSidebar() {
                                 <SidebarMenuButton
                                     isActive={pathname.startsWith(item.href)}
                                     tooltip={item.label}
+                                    data-theme-nav={item.id}
                                     onClick={() => { if (isMobile) setIsOpen(false); }}
                                 >
                                     <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">

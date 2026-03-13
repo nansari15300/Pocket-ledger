@@ -35,7 +35,9 @@ import {
   Search,
 } from "lucide-react";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -682,11 +684,18 @@ export function GroupDetails({
     [displayTransactions, statusFilter]
   );
 
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+    [statusFilteredTransactions, sortBy, sortOrder]
+  );
+
   const totalPages = Math.max(
     1,
-    Math.ceil(statusFilteredTransactions.length / rowsPerPage)
+    Math.ceil(sortedTransactions.length / rowsPerPage)
   );
-  const paginatedTransactions = statusFilteredTransactions.slice(
+  const paginatedTransactions = sortedTransactions.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
@@ -779,9 +788,9 @@ export function GroupDetails({
   };
 
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return statusFilteredTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return statusFilteredTransactions.filter((t) => {
+    return sortedTransactions.filter((t) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -799,7 +808,7 @@ export function GroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [statusFilteredTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   const totalPagesMobile = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
   const paginatedMobileTransactions = filteredMobileTransactions.slice(
@@ -979,7 +988,7 @@ export function GroupDetails({
             </div>
             {group.id !== "ungrouped" && (
               <EditGroupDialog group={group} allGroups={allGroups} onGroupUpdated={onGroupUpdated} onGroupDeleted={onGroupDeleted} hasAccounts={partiesInGroup.length > 0 || childGroups.length > 0}>
-                <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0">
+                <Button variant="outline" size="icon" className="h-9 w-8 flex-shrink-0" data-theme-detail="edit">
                   <Edit className="h-4 w-4" />
                 </Button>
               </EditGroupDialog>
@@ -1043,6 +1052,7 @@ export function GroupDetails({
           type="button"
           className="flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0 bg-orange-600 hover:bg-orange-700 text-white border-0"
           onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+          data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
         >
           {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
         </Button>
@@ -1202,6 +1212,7 @@ export function GroupDetails({
                         "justify-start text-left font-normal h-10 px-2 w-auto",
                         !dateRange && "text-muted-foreground"
                       )}
+                      data-theme-detail="date-range"
                     >
                       <CalendarIcon className="mr-2 h-4 w-4" />
                       {dateRange?.from ? (
@@ -1266,6 +1277,7 @@ export function GroupDetails({
                 <Button
                   variant="outline"
                   className="w-[200px] justify-between flex-shrink-0 h-10"
+                  data-theme-detail="members"
                 >
                   <span className="truncate">Members ({partiesInGroup.length})</span>
                   <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -1284,6 +1296,7 @@ export function GroupDetails({
               size="sm"
               onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
               className="flex-shrink-0 h-10"
+              data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
             >
               {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
             </Button>
@@ -1292,10 +1305,11 @@ export function GroupDetails({
               size="sm"
               onClick={() => handleOpenNoteDialog()}
               className="flex-shrink-0 h-10"
+              data-theme-detail="add-note"
             >
               <FilePlus className="mr-2 h-4 w-4" /> Add Note
             </Button>
-            <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10">
+            <Button variant="outline" size="icon" onClick={handlePrint} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
               <Printer className="h-4 w-4" />
             </Button>
           </div>
@@ -1403,6 +1417,12 @@ export function GroupDetails({
             </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+            <TransactionTableSortDropdown
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+            />
             <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
             <Select
               value={`${rowsPerPage}`}

@@ -78,7 +78,9 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -280,15 +282,21 @@ export function ExpenseAccountDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
   const totalPages =
-    rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
+    rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
   const paginatedTransactions =
     rowsPerPage > 0
-      ? displayTransactions.slice(
+      ? sortedTransactions.slice(
           (currentPage - 1) * rowsPerPage,
           currentPage * rowsPerPage
         )
-      : displayTransactions;
+      : sortedTransactions;
 
   const handlePrint = () => {
     if (!company) return;
@@ -351,9 +359,9 @@ export function ExpenseAccountDetails({
   };
   
   const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return displayTransactions.filter(t => {
+    return sortedTransactions.filter(t => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -369,7 +377,7 @@ export function ExpenseAccountDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -667,6 +675,12 @@ export function ExpenseAccountDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode="statement"
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

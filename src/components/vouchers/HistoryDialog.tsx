@@ -82,8 +82,11 @@ const FIELD_ORDER: Record<string, number> = {
   total: 10,
   // 5. Narration (overall)
   narration: 11,
-  // 6. Linked voucher
+  // 6. Linked voucher & link/unlink (bill wise / spend wise)
   linkedVoucherNo: 12,
+  allocations: 12.1,
+  linkedPaymentInIds: 12.2, LinkedPaymentInIds: 12.2,
+  linkedPaymentInAmounts: 12.3, LinkedPaymentInAmounts: 12.3,
   // 7. File attachments
   fileUrls: 13, fileUrl: 13, url: 13,
   // 8. Approval fields
@@ -96,6 +99,22 @@ const FIELD_ORDER: Record<string, number> = {
   // 10. User info (at end)
   UserDisplayName: 19, userDisplayName: 19,
 };
+
+/** Entity name by field + voucher type: Party, Bank/Cash, Staff, etc. (instead of generic "Account"). */
+function getEntityLabelForField(field: string, voucherType: string | undefined): string | null {
+  const t = (voucherType || '').toLowerCase();
+  if (field === 'partyId') return 'Party';
+  if (field === 'fromAccountId') return 'From Bank/Cash';
+  if (field === 'toAccountId') return 'To Bank/Cash';
+  if (field === 'accountId') {
+    if (['payment_in', 'payment_out', 'direct_income', 'direct_expense'].includes(t)) return 'Bank/Cash';
+    if (t === 'add_salary') return 'Staff';
+    if (t === 'contra') return 'Bank/Cash';
+    return 'Account';
+  }
+  if (field === 'debitAccountId') return 'Expense Account';
+  return null;
+}
 
 /** Human-readable labels for history fields. */
 const FIELD_LABELS: Record<string, string> = {
@@ -115,6 +134,9 @@ const FIELD_LABELS: Record<string, string> = {
   total: 'Total',
   narration: 'Overall Narration',
   linkedVoucherNo: 'Linked Voucher No',
+  allocations: 'Bill wise linked/unlinked',
+  linkedPaymentInIds: 'Spend wise linked/unlinked', LinkedPaymentInIds: 'Spend wise linked/unlinked',
+  linkedPaymentInAmounts: 'Spend wise linked/unlinked (amounts)', LinkedPaymentInAmounts: 'Spend wise linked/unlinked (amounts)',
   fileUrls: 'File URLs', fileUrl: 'File URL', url: 'URL',
   ApprovedByUserName: 'Approved By', approvedByUserName: 'Approved By',
   approvedAt: 'Approved At', ApprovedAt: 'Approved At',
@@ -144,6 +166,90 @@ function renderUrlValue(value: any): React.ReactNode {
 }
 
 const URL_FIELDS = new Set(['fileUrls', 'fileUrl', 'url', 'imageUrl', 'logoUrl']);
+
+/** Bill wise / Spend wise: field keys for voucher-no row (From V. No. ... to V. No. ...). */
+const LINK_UNLINK_VOUCHER_FIELDS = new Set([
+  'allocations', 'Allocations',
+  'linkedPaymentInIds', 'LinkedPaymentInIds',
+]);
+/** Amount-only row: show only linked amounts (e.g. 50 when only 50 of 100 was linked). */
+const LINK_UNLINK_AMOUNT_FIELDS = new Set([
+  'linkedPaymentInAmounts', 'LinkedPaymentInAmounts',
+]);
+const LINK_UNLINK_FIELDS = new Set([
+  ...LINK_UNLINK_VOUCHER_FIELDS,
+  ...LINK_UNLINK_AMOUNT_FIELDS,
+]);
+
+function isEmptyLinkValue(val: any): boolean {
+  if (val == null) return true;
+  if (Array.isArray(val)) return val.length === 0;
+  if (typeof val === 'object') return Object.keys(val).length === 0;
+  return false;
+}
+
+/** Label: "Bill wise linked" / "unlinked" / "linked/unlinked" based on old→new. Same for Spend wise. */
+function getLinkUnlinkFieldLabel(field: string, from: any, to: any): string {
+  const isAmounts = LINK_UNLINK_AMOUNT_FIELDS.has(field);
+  const base = field === 'allocations' || field === 'Allocations' ? 'Bill wise' : 'Spend wise';
+  const suffix = isAmounts ? ' (amounts)' : '';
+  const oldEmpty = isEmptyLinkValue(from);
+  const newEmpty = isEmptyLinkValue(to);
+  if (oldEmpty && !newEmpty) return `${base} linked${suffix}`;
+  if (!oldEmpty && newEmpty) return `${base} unlinked${suffix}`;
+  return `${base} linked/unlinked${suffix}`;
+}
+
+/**
+ * Format link/unlink history value for Old/New: "From V. No. X to V. No. Y" (voucher numbers only).
+ * val: [] | [id, ...] | [{ voucherId, amount }, ...]
+ */
+function formatLinkUnlinkDisplay(val: any, idToVoucherNo: Map<string, string>): string {
+  if (val == null) return '—';
+  if (Array.isArray(val)) {
+    if (val.length === 0) return '—';
+    const ids = val.map((x: any) => (typeof x === 'object' && x?.voucherId) ? x.voucherId : x).filter(Boolean);
+    const vNos = ids.map((id: string) => idToVoucherNo.get(id) || `#${id.slice(0, 8)}`);
+    return vNos.length === 0 ? '—' : `From V. No. ${vNos.join(' to V. No. ')}`;
+  }
+  if (typeof val === 'object' && !Array.isArray(val)) {
+    const ids = Object.keys(val).filter((k) => val[k] != null && val[k] !== 0);
+    if (ids.length === 0) return '—';
+    const vNos = ids.map((id: string) => idToVoucherNo.get(id) || `#${id.slice(0, 8)}`);
+    return vNos.length === 0 ? '—' : `From V. No. ${vNos.join(' to V. No. ')}`;
+  }
+  return '—';
+}
+
+/**
+ * Format link/unlink amounts only: show only the amount that was linked (e.g. 50 when 50 of 100 linked).
+ * val: { voucherId: amount } | [{ voucherId, amount }, ...] → "Rs 50" or "V. No. X: Rs 50, V. No. Y: Rs 100"
+ */
+function formatLinkUnlinkAmountsDisplay(val: any, idToVoucherNo: Map<string, string>): string {
+  if (val == null) return '—';
+  const pairs: { vNo: string; amount: number }[] = [];
+  if (Array.isArray(val)) {
+    val.forEach((x: any) => {
+      const id = typeof x === 'object' && x?.voucherId ? x.voucherId : null;
+      const amt = typeof x === 'object' && x?.amount != null ? Number(x.amount) : 0;
+      if (id != null && amt !== 0) {
+        const vNo = idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
+        pairs.push({ vNo, amount: amt });
+      }
+    });
+  } else if (typeof val === 'object') {
+    Object.entries(val).forEach(([id, amt]) => {
+      const n = Number(amt);
+      if (n !== 0 && !Number.isNaN(n)) {
+        const vNo = idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
+        pairs.push({ vNo, amount: n });
+      }
+    });
+  }
+  if (pairs.length === 0) return '—';
+  if (pairs.length === 1) return `Rs ${pairs[0].amount}`;
+  return pairs.map((p) => `V. No. ${p.vNo}: Rs ${p.amount}`).join(', ');
+}
 
 /**
  * Merges multiple history entries (from the same user, same timeframe) into one.
@@ -462,7 +568,7 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   // ms timestamps of entries that were deleted locally — excluded from display immediately
   const [deletedMs, setDeletedMs] = useState<Set<number>>(new Set());
-  const { processedParties, processedAccounts, processedStaff, processedTaxes, processedItems, expenseAccounts, userNames: vouchersUserNames } = useVouchers();
+  const { processedParties, processedAccounts, processedStaff, processedTaxes, processedItems, expenseAccounts, userNames: vouchersUserNames, vouchers } = useVouchers();
   const { can } = usePermissions();
   const { companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
@@ -618,6 +724,16 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
   };
 
   const canReset = can("reset_voucher_history") && (voucher?.history?.length ?? 0) > 0;
+
+  /** Map voucher id → voucher number for link/unlink history display (From V. No. X to V. No. Y). */
+  const idToVoucherNo = useMemo(() => {
+    const m = new Map<string, string>();
+    (vouchers || []).forEach((v: any) => {
+      if (v?.id && v?.voucherNumber != null) m.set(v.id, String(v.voucherNumber));
+    });
+    return m;
+  }, [vouchers]);
+
   const getHistoryChangedAt = useCallback((changedAt: any): Date | null => {
     if (!changedAt) return null;
     if (changedAt?.toDate instanceof Function) return changedAt.toDate();
@@ -909,8 +1025,9 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
                         const isTimestampLike = (v: any) => v?.toDate instanceof Function || (v?._seconds !== undefined);
                         if (!isApprovedField && !isTimestampLike(values.from) && !isTimestampLike(displayTo) && JSON.stringify(values.from) === JSON.stringify(displayTo)) return null;
 
-                        // --- label ---
-                        const fieldLabel = FIELD_LABELS[field] ?? capitalizeFirst(field);
+                        // --- label: entity name (Party, Bank/Cash, Staff) for account/party fields ---
+                        const entityLabel = getEntityLabelForField(field, voucher?.type);
+                        const fieldLabel = (entityLabel != null ? entityLabel : FIELD_LABELS[field]) ?? capitalizeFirst(field);
 
                         // --- URL fields: render as clickable links ---
                         if (URL_FIELDS.has(field) || field.toLowerCase().includes('url')) {
@@ -919,6 +1036,26 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
                               <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{fieldLabel}</TableCell>
                               <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{renderUrlValue(values.from)}</TableCell>
                               <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{renderUrlValue(displayTo)}</TableCell>
+                            </TableRow>
+                          );
+                        }
+
+                        // --- Bill wise / Spend wise: dynamic label (linked / unlinked / linked-unlinked) + Old/New ---
+                        if (LINK_UNLINK_FIELDS.has(field)) {
+                          const linkLabel = getLinkUnlinkFieldLabel(field, values.from, values.to);
+                          const isAmountRow = LINK_UNLINK_AMOUNT_FIELDS.has(field);
+                          const oldText = isAmountRow
+                            ? formatLinkUnlinkAmountsDisplay(values.from, idToVoucherNo)
+                            : formatLinkUnlinkDisplay(values.from, idToVoucherNo);
+                          const newText = isAmountRow
+                            ? formatLinkUnlinkAmountsDisplay(values.to, idToVoucherNo)
+                            : formatLinkUnlinkDisplay(values.to, idToVoucherNo);
+                          if (oldText === '—' && newText === '—') return null;
+                          return (
+                            <TableRow key={field} className="even:bg-muted/30">
+                              <TableCell className="font-medium min-w-[160px] w-1/3 align-top text-left pr-2.5 whitespace-normal break-words">{linkLabel}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left px-2.5 whitespace-normal break-words">{oldText}</TableCell>
+                              <TableCell className="min-w-[140px] w-1/3 align-top text-left pl-2.5 whitespace-normal break-words">{newText}</TableCell>
                             </TableRow>
                           );
                         }

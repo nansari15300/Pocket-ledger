@@ -19,6 +19,8 @@ import { ref as storageRef, deleteObject } from "firebase/storage";
 import { moveFilesToVoucherDateClient } from "./storageClient";
 import { getPlan, type PlanId } from "@/config/plans";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
+import type { Allocation } from "@/lib/payment-allocation-utils";
+import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 
 function removeUndefined(obj: any): any {
   if (Array.isArray(obj)) return obj.map(removeUndefined);
@@ -388,6 +390,71 @@ export async function updateVoucherSpendWiseLinks(
     lastEditedAt: serverTimestamp(),
     history: newHistory,
   });
+}
+
+/**
+ * Bill-wise bilateral sync: when a Payment In or Payment Out is saved with allocations (Link to Dr/Cr),
+ * update each target voucher so it has the reverse allocation. So RCPT→Sale and PYMT→Purchase (and Payment↔Payment) show on both sides.
+ */
+export async function syncBillWiseAllocationsToTargetVouchers(
+  companyId: string,
+  sourceVoucherId: string,
+  newAllocations: Allocation[],
+  previousAllocations: Allocation[] = []
+): Promise<void> {
+  if (!companyId || !sourceVoucherId) return;
+  const voucherPath = `companies/${companyId}/vouchers`;
+  const prevIds = new Set(
+    previousAllocations
+      .filter((a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID)
+      .map((a) => a.voucherId)
+  );
+  const newIds = new Set(
+    newAllocations
+      .filter((a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID)
+      .map((a) => a.voucherId)
+  );
+  const toRemove = [...prevIds].filter((id) => !newIds.has(id));
+  for (const targetId of toRemove) {
+    const ref = doc(firestore, voucherPath, targetId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) continue;
+    const data = snap.data();
+    const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
+    const filtered = allocations.filter((a) => a.voucherId !== sourceVoucherId);
+    if (filtered.length !== allocations.length) {
+      await updateDoc(ref, { allocations: filtered });
+    }
+  }
+  // Sanitize allocation so Firestore never gets undefined
+  const sanitizeAllocation = (x: Allocation): Allocation => {
+    const out: Allocation = { voucherId: x.voucherId, amount: Number(x.amount) || 0 };
+    if ((x as any).taxAmount !== undefined && (x as any).taxAmount !== null) out.taxAmount = Number((x as any).taxAmount);
+    if ((x as any).netAmount !== undefined && (x as any).netAmount !== null) out.netAmount = Number((x as any).netAmount);
+    return out;
+  };
+
+  for (const a of newAllocations) {
+    if (!a.voucherId || a.voucherId === OPENING_BALANCE_VOUCHER_ID) continue;
+    const amt = getAllocationTotal(a);
+    if (amt <= 0) continue;
+    const ref = doc(firestore, voucherPath, a.voucherId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) continue;
+    const data = snap.data();
+    const rawAllocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
+    const allocations = rawAllocations.map(sanitizeAllocation);
+    const idx = allocations.findIndex((x) => x.voucherId === sourceVoucherId);
+    const entry = sanitizeAllocation({
+      voucherId: sourceVoucherId,
+      amount: amt,
+      taxAmount: (a as any).taxAmount,
+      netAmount: (a as any).netAmount,
+    } as Allocation);
+    if (idx >= 0) allocations[idx] = entry;
+    else allocations.push(entry);
+    await updateDoc(ref, { allocations });
+  }
 }
 
 /**

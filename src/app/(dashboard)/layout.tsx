@@ -607,9 +607,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         }
     }, [user, loading]);
 
-    // Auto-logout after 20 min with no activity. Same user multi-tab: if any tab has activity, all tabs stay logged in.
-    const INACTIVITY_LOGOUT_MS = 20 * 60 * 1000; // 20 minutes
-    const logoutDesc = "20 minutes";
+    // Auto-logout after 100 min with no activity. Same user multi-tab: if any tab has activity, all tabs stay logged in.
+    const INACTIVITY_LOGOUT_MS = 100 * 60 * 1000; // 100 minutes
+    const logoutDesc = "100 minutes";
     const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const toastRef = useRef(toast);
     toastRef.current = toast;
@@ -633,8 +633,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
         const scheduleLogout = () => {
             clearInactivityTimer();
-            inactivityTimerRef.current = setTimeout(() => {
+                inactivityTimerRef.current = setTimeout(() => {
                 inactivityTimerRef.current = null;
+                try { sessionStorage.setItem("logout_reason", "inactivity"); } catch (_) {}
                 import("@/lib/navigation-memory").then(({ clearNavigationMemory }) => clearNavigationMemory());
                 signOut(auth).then(() => {
                     toastRef.current({ title: "Session Expired", description: `You have been logged out due to inactivity (${logoutDesc}).` });
@@ -728,7 +729,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                 <DeviceLimitProvider>
                   <div id="app-container" className="relative flex h-screen bg-background">
                     <AppSidebar />
-                    <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l")}>
+                    <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l app-main-border")}>
                       <AppHeader />
                       <main className={cn("flex-1 overflow-y-auto")}>{children}</main>
                       <MobileFloatingButton />

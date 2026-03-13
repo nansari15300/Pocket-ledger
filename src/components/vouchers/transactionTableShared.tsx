@@ -358,21 +358,26 @@ const getOverdueDays = (t: any): number => {
   return differenceInDays(today, dueOnly);
 };
 
-/** Status detail: payment show "to PUR-1", purchase/sale show "from PYMT-7". More than one link => "Multi link". No link => "" (only Unpaid badge). */
-export const getStatusDetail = (t: any) => {
-  const from = (t.linkedFromVoucherNos as string[] | undefined) || [];
-  const to = (t.linkedToVoucherNos as string[] | undefined) || [];
+/** Status detail: payment show "to PUR-1", purchase/sale show "from PYMT-7". More than one link => "Multi link". No link => "" (only Unpaid badge).
+ * When billWiseOnly: use only bill-wise links (sale/purchase/salary/OB); do not show spend-wise voucher nos in party/staff/group billwise view. */
+export const getStatusDetail = (t: any, opts?: { billWiseOnly?: boolean }) => {
+  const useBillWise = opts?.billWiseOnly && (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
+  const from = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
+  const to = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
   if (from.length === 0 && to.length === 0) return "";
   const isPaymentOrDirect = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(t.type);
   const isSaleOrPurchase = t.type === "sale" || t.type === "purchase";
   const isAddSalary = t.type === "journal" && t.subType === "add_salary";
   if (isPaymentOrDirect) {
-    if (to.length > 1) return "Multi link";
+    if (from.length > 1 || to.length > 1) return "Multi link";
+    if (from.length) return `from ${from[0]}`;
     return to.length ? `to ${to[0]}` : "";
   }
   if (isSaleOrPurchase || isAddSalary) {
-    if (from.length > 1) return "Multi link";
-    return from.length ? `from ${from[0]}` : "";
+    if (from.length > 1 || to.length > 1) return "Multi link";
+    if (from.length) return `from ${from[0]}`;
+    if (to.length) return `to ${to[0]}`;
+    return "";
   }
   if (to.length > 1 || from.length > 1) return "Multi link";
   if (to.length) return `to ${to[0]}`;
@@ -399,6 +404,7 @@ export const TransactionRow = React.memo(
     onApproveVoucher,
     onRowSelect,
     isSelected,
+    isRelatedBlink = false,
     getDisplayValue,
     isTaxContext,
     isBalanceMasked,
@@ -417,6 +423,7 @@ export const TransactionRow = React.memo(
     spendWiseGroupSize,
     blinkMode,
     animateLayout = false,
+    statusBillWiseOnly = false,
   }: any) => {
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
     const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
@@ -563,7 +570,7 @@ export const TransactionRow = React.memo(
             const useNeutralBadge = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
             const paidByLabel = statusLabel === "Paid";
             const unpaidByLabel = statusLabel === "Partial" || statusLabel === "Unpaid";
-            const statusDetailText = getStatusDetail(transaction);
+            const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
             const isOverdueRow = statusLabel === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
             const overdueDays = isOverdueRow ? getOverdueDays(transaction) : 0;
             return (
@@ -606,6 +613,9 @@ export const TransactionRow = React.memo(
             const displayValue = useOutstandingForBalance
               ? (isTaxContext ? (isCreditSide ? out : -out) : (isStaffPaymentOut ? out : (isCreditSide ? out : -out)))
               : balance;
+            // When balance/outstanding is 0 show "Settled" (running balance and bill-wise both)
+            const valueToShow = useOutstandingForBalance ? displayValue : balance;
+            const isZeroBalance = !isBalanceMasked && (typeof valueToShow === "number" && Math.abs(valueToShow) < 1e-6);
             /** Spend-wise blink: off = never; all = last row non-0 balance; group = last row non-0 only if multi-row group */
             const isGroupBalanceNonZero =
               blinkMode === "off" || !blinkMode
@@ -619,16 +629,19 @@ export const TransactionRow = React.memo(
               <TableCell
                 className={cn(
                   "text-right font-semibold",
-                  displayValue >= 0 ? "text-green-600" : "text-red-600",
+                  isZeroBalance ? "text-green-600" : (displayValue >= 0 ? "text-green-600" : "text-red-600"),
                   ensureMinGaps && "min-w-[115px] px-[5px]",
                   isGroupBalanceNonZero && "animate-spend-wise-balance-blink"
                 )}
+                {...(isZeroBalance ? { "data-cell-settled": "true" } : {})}
               >
                 {isBalanceMasked
                   ? "*****"
-                  : useOutstandingForBalance
-                    ? formatBalanceCell(displayValue)
-                    : formatBalanceCell(balance)}
+                  : isZeroBalance
+                    ? "Settled"
+                    : useOutstandingForBalance
+                      ? formatBalanceCell(displayValue)
+                      : formatBalanceCell(balance)}
               </TableCell>
             );
           })()}
@@ -700,7 +713,7 @@ export const TransactionRow = React.memo(
           (showFileColumn ? 1 : 0) +
           (showCol("dr") ? 1 : 0) +
           (showCol("cr") ? 1 : 0);
-    const statusDetailText = getStatusDetail(transaction);
+    const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
     const showNarrationRow =
       showNarration &&
       (narrationText || (showCol("status") && !hideStatusColumn && statusDetailText));
@@ -800,10 +813,11 @@ export const TransactionRow = React.memo(
           isSelected && !showNarrationRow && "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
           isSelected && !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
           isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
+          isRelatedBlink && !isSelected && "animate-spend-wise-related-blink [&>td]:animate-spend-wise-related-blink",
           showNarrationRow && isBillWise && "[&>td]:pb-0.5",
           !showNarrationRow && "md:[&>td]:pb-1",
           showNarration &&
-            (narrationText || (!hideStatusColumn && getStatusDetail(transaction)))
+            (narrationText || (!hideStatusColumn && getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly })))
             ? "border-b-0"
             : (isSpendWiseGroupFirst || isSpendWiseChild || isSpendWiseGroupLast)
               ? "border-b-0"
@@ -862,6 +876,7 @@ export const TransactionRow = React.memo(
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
+          isRelatedBlink && !isSelected && "animate-spend-wise-related-blink [&>td]:animate-spend-wise-related-blink",
           "md:[&>td]:pb-1"
         )}
       >

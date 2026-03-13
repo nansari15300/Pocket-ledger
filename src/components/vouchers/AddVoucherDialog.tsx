@@ -30,7 +30,7 @@ import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CheckCircle } from "lucide-react";
-import { hasPaymentLinks, hasSpendWiseLinks } from "@/lib/payment-allocation-utils";
+import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 
@@ -95,6 +95,7 @@ function VoucherDialogContent({
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  onEffectiveLinksChange,
 }: { 
   voucher?: any, 
   defaultVoucherData?: any,
@@ -110,6 +111,8 @@ function VoucherDialogContent({
   showSaveAndApproveOnCreate?: boolean,
   onApprove?: () => void,
   isApproving?: boolean,
+  /** Sale/Purchase/Payment Out/Direct Expense: report effective has-links so dialog locks fields as soon as user links (or enables after unlink). */
+  onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void,
 }) {
   const { processedStaff } = useVouchers();
   const isEditing = !!voucher?.id;
@@ -224,6 +227,7 @@ function VoucherDialogContent({
               showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
               onApprove={onApprove}
               isApproving={isApproving}
+              onEffectiveLinksChange={activeTab === 'sale' || activeTab === 'purchase' || activeTab === 'payment_in' || activeTab === 'direct_income' || activeTab === 'payment_out' || activeTab === 'direct_expense' || activeTab === 'add_salary' ? onEffectiveLinksChange : undefined}
             />
           ) : null}
         </Suspense>
@@ -232,8 +236,9 @@ function VoucherDialogContent({
   );
 }
 
-const DEFAULT_DIALOG_W = 900;
-const DEFAULT_DIALOG_H = 700;
+// Default open size only: max 15" width, 12" height; small screens 90vw × 80vh. Resize is unlimited (no max).
+const DEFAULT_MAX_W_PX = 15 * 96;  // 15in
+const DEFAULT_MAX_H_PX = 12 * 96;  // 12in
 const MIN_DIALOG_W = 420;
 const MIN_DIALOG_H = 320;
 const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
@@ -250,38 +255,49 @@ export function AddVoucherDialog(props: any) {
   const [isApproving, setIsApproving] = useState(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
   const [editingDisabled, setEditingDisabled] = useState(false);
+  /** When sale/purchase form has pending link changes (e.g. user unlinked in dialog), form reports effective state so we enable edit locally. */
+  const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
 
   // Draggable & resizable (desktop only)
   const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
-  const [dialogSize, setDialogSize] = useState({ w: DEFAULT_DIALOG_W, h: DEFAULT_DIALOG_H });
+  const [dialogSize, setDialogSize] = useState({ w: DEFAULT_MAX_W_PX, h: DEFAULT_MAX_H_PX });
   const dragRef = useRef<{ startX: number; startY: number; startLeft: number; startTop: number } | null>(null);
   const resizeRef = useRef<{ handle: string; startX: number; startY: number; startW: number; startH: number; startLeft: number; startTop: number } | null>(null);
 
   const prevOpenRef = useRef(false);
   useEffect(() => {
+    if (!isOpen) setEffectiveHasLinksFromForm(null);
+  }, [isOpen, voucher?.id]);
+  // Default open (both Add New & Edit): max 15"×12"; small screen 90vw×80vh. Restore saved size for Edit only (unlimited); New always default.
+  useEffect(() => {
     if (!isOpen || !isDesktop || typeof window === "undefined") return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    try {
-      const raw = localStorage.getItem(VOUCHER_DIALOG_STORAGE_KEY);
-      const saved = raw ? JSON.parse(raw) : null;
-      if (saved && typeof saved.x === "number" && typeof saved.y === "number" && typeof saved.w === "number" && typeof saved.h === "number") {
-        const w = Math.max(MIN_DIALOG_W, Math.min(saved.w, vw));
-        const h = Math.max(MIN_DIALOG_H, Math.min(saved.h, vh));
-        const x = Math.max(0, Math.min(saved.x, vw - w));
-        const y = Math.max(0, Math.min(saved.y, vh - h));
-        setDialogSize({ w, h });
-        setDialogPosition({ x, y });
-        return;
+    const isNew = !voucher?.id;
+    if (!isNew) {
+      try {
+        const raw = localStorage.getItem(VOUCHER_DIALOG_STORAGE_KEY);
+        const saved = raw ? JSON.parse(raw) : null;
+        if (saved && typeof saved.x === "number" && typeof saved.y === "number" && typeof saved.w === "number" && typeof saved.h === "number") {
+          const w = Math.max(MIN_DIALOG_W, Math.min(saved.w, vw));
+          const h = Math.max(MIN_DIALOG_H, Math.min(saved.h, vh));
+          const x = Math.max(0, Math.min(saved.x, vw - w));
+          const y = Math.max(0, Math.min(saved.y, vh - h));
+          setDialogSize({ w, h });
+          setDialogPosition({ x, y });
+          return;
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
     }
-    const w = Math.min(DEFAULT_DIALOG_W, Math.max(MIN_DIALOG_W, vw * 0.9));
-    const h = Math.min(DEFAULT_DIALOG_H, Math.max(MIN_DIALOG_H, vh * 0.9));
+    const maxW = Math.min(DEFAULT_MAX_W_PX, vw * 0.9);
+    const maxH = Math.min(DEFAULT_MAX_H_PX, vh * 0.8);
+    const w = Math.max(MIN_DIALOG_W, Math.min(maxW, vw));
+    const h = Math.max(MIN_DIALOG_H, Math.min(maxH, vh));
     setDialogSize({ w, h });
     setDialogPosition({ x: (vw - w) / 2, y: (vh - h) / 2 });
-  }, [isOpen, isDesktop]);
+  }, [isOpen, isDesktop, voucher?.id]);
 
   useEffect(() => {
     if (prevOpenRef.current && !isOpen && isDesktop && typeof window !== "undefined") {
@@ -333,27 +349,27 @@ export function AddVoucherDialog(props: any) {
     const onMove = (e: MouseEvent) => {
       if (!resizeRef.current) return;
       const { handle: h, startX, startY, startW, startH, startLeft, startTop } = resizeRef.current;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       let w = startW;
       let hh = startH;
-      let x = startLeft;
-      let y = startTop;
-      if (h === "e" || h === "se" || h === "ne") w = Math.max(MIN_DIALOG_W, startW + dx);
+      if (h === "e" || h === "se" || h === "ne") w = Math.max(MIN_DIALOG_W, Math.min(startW + dx, vw));
       if (h === "w" || h === "sw" || h === "nw") {
         const dw = Math.min(dx, startW - MIN_DIALOG_W);
-        w = startW - dw;
-        x = startLeft + dw;
+        w = Math.max(MIN_DIALOG_W, Math.min(startW - dw, vw));
       }
-      if (h === "s" || h === "se" || h === "sw") hh = Math.max(MIN_DIALOG_H, startH + dy);
+      if (h === "s" || h === "se" || h === "sw") hh = Math.max(MIN_DIALOG_H, Math.min(startH + dy, vh));
       if (h === "n" || h === "nw" || h === "ne") {
         const dh = Math.min(dy, startH - MIN_DIALOG_H);
-        hh = startH - dh;
-        y = startTop + dh;
+        hh = Math.max(MIN_DIALOG_H, Math.min(startH - dh, vh));
       }
       setDialogSize({ w, h: hh });
-      if (h === "w" || h === "sw" || h === "nw") setDialogPosition((prev) => ({ ...prev, x }));
-      if (h === "n" || h === "nw" || h === "ne") setDialogPosition((prev) => ({ ...prev, y }));
+      const posUpdate: { x?: number; y?: number } = {};
+      if (h === "w" || h === "sw" || h === "nw") posUpdate.x = startLeft + (startW - w);
+      if (h === "n" || h === "nw" || h === "ne") posUpdate.y = startTop + (startH - hh);
+      if (Object.keys(posUpdate).length) setDialogPosition((prev) => ({ ...prev, ...posUpdate }));
     };
     const onUp = () => {
       resizeRef.current = null;
@@ -381,10 +397,19 @@ export function AddVoucherDialog(props: any) {
     };
   }, [isOpen, voucher?.id, companyId]);
 
-  const effectiveVoucher = liveVoucher ?? voucher;
-  const hasBillWiseLinks = !!effectiveVoucher?.id && hasPaymentLinks(effectiveVoucher);
+  // Preserve clicked contra leg from table row even after live Firestore refresh replaces voucher object.
+  const effectiveVoucher = liveVoucher
+    ? { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg }
+    : voucher;
+  // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
+  const hasBillWiseLinks =
+    !!effectiveVoucher?.id &&
+    (hasPaymentLinks(effectiveVoucher) ||
+      ((effectiveVoucher.type === "sale" || effectiveVoucher.type === "purchase") &&
+        hasAllocationsToVoucherId(effectiveVoucher.id, vouchers || [])));
   const hasSpendWise = !!effectiveVoucher?.id && hasSpendWiseLinks(effectiveVoucher, vouchers || []);
-  const hasLinks = hasBillWiseLinks || hasSpendWise;
+  /** Use form-reported effective state when set (local unlink); else server-based hasLinks so banner/fields follow local changes. */
+  const hasLinks = effectiveHasLinksFromForm ?? (hasBillWiseLinks || hasSpendWise);
 
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
   useEffect(() => {
@@ -496,9 +521,10 @@ export function AddVoucherDialog(props: any) {
           </DialogClose>
         )}
       </div>
+      {/* Same info on PC and mobile: when bill-wise or spend-wise linked, show message and disable edit (except narration + link) */}
       {hasLinks && (
         <div className="w-fit max-w-full mx-auto mt-3 bg-gray-600 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
-          <p className="text-xl font-semibold text-center text-[#ff0000] m-0">
+          <p className="text-base md:text-xl font-semibold text-center text-[#ff0000] m-0">
             Voucher Edit disabled — To convert or edit, unlink linked transactions first.
           </p>
         </div>
@@ -522,6 +548,7 @@ export function AddVoucherDialog(props: any) {
         showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
         onApprove={handleApprove}
         isApproving={isApproving}
+        onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
       />
       <HistoryDialog
         voucher={historyVoucher}
@@ -608,7 +635,7 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       ) : (
-        <DialogContent className="flex flex-col p-0 w-[calc(100vw-4px)] md:w-[calc(100vw-40px)] max-w-7xl h-[calc(100vh-40px)] max-h-[90vh] rounded-lg md:rounded-lg">
+        <DialogContent className="flex flex-col p-0 w-[min(90vw,15in)] max-w-[15in] h-[min(80vh,12in)] max-h-[12in] rounded-lg md:rounded-lg">
           {headerBlock}
           {bodyBlock}
         </DialogContent>

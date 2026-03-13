@@ -15,7 +15,7 @@ import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
 import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
-import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
+import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
 
 // --- Report-only party IDs: show only in reports, never in voucher/entity dropdowns or lists ---
 export const REPORT_ONLY_PARTY_IDS = ["owners_capital", "opening_balance_ledger"] as const;
@@ -703,14 +703,19 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const { overdueTransactions, hasOverdueTransactions } = useMemo(() => {
     const allocatedBySale = getAllocatedByVoucherId(vouchersForDisplay);
     const allocatedByPurchase = getAllocatedByVoucherIdFromPaymentOuts(vouchersForDisplay);
+    const allocatedToSaleFromPurchase = getAllocatedByVoucherIdFromPurchase(vouchersForDisplay);
+    const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
     const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }> = [];
     for (const v of vouchersForDisplay) {
       if ((v.type !== "sale" && v.type !== "purchase") || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
-      const fromPayments = v.type === "sale" ? (allocatedBySale.get(v.id) ?? 0) : (allocatedByPurchase.get(v.id) ?? 0);
+      const fromPayments = v.type === "sale"
+        ? (allocatedBySale.get(v.id) ?? 0) + (allocatedToSaleFromPurchase.get(v.id) ?? 0)
+        : (allocatedByPurchase.get(v.id) ?? 0) + (allocatedToPurchaseFromSale.get(v.id) ?? 0);
       const fromOB = Number(v.openingBalanceAllocated) || 0;
-      const allocated = fromPayments + fromOB;
+      const outgoingToOpposite = getOutgoingAllocatedToOpposite(v);
+      const allocated = fromPayments + fromOB + outgoingToOpposite;
       const result = getPaymentStatusResult(total, allocated, v.dueDate);
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;

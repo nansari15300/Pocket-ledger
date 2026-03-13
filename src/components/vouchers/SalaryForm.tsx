@@ -59,7 +59,7 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks } from "@/lib/payment-allocation-utils";
+import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 
 import { firestore, storage } from "@/lib/firebase";
@@ -154,6 +154,29 @@ const formSchema = z.object({
 
 type SalaryFormValues = z.infer<typeof formSchema>;
 
+type SalaryLinkMap = Record<string, { taxAmount: number; netAmount: number }>;
+
+const normaliseSalaryLinkMap = (map: SalaryLinkMap): SalaryLinkMap => {
+  const entries = (Object.entries(map) as Array<[string, { taxAmount: number; netAmount: number }]>)
+    .map(([id, amounts]) => [id, { taxAmount: Number(amounts.taxAmount) || 0, netAmount: Number(amounts.netAmount) || 0 }] as [string, { taxAmount: number; netAmount: number }])
+    .filter(([, amounts]) => amounts.taxAmount > 0 || amounts.netAmount > 0)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return Object.fromEntries(entries);
+};
+
+const areSalaryLinkMapsEqual = (a: SalaryLinkMap, b: SalaryLinkMap): boolean => {
+  const normA = normaliseSalaryLinkMap(a);
+  const normB = normaliseSalaryLinkMap(b);
+  const aKeys = Object.keys(normA);
+  const bKeys = Object.keys(normB);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => {
+    const left = normA[key];
+    const right = normB[key];
+    return !!right && left.taxAmount === right.taxAmount && left.netAmount === right.netAmount;
+  });
+};
+
 const getVoucherPrefix = (
   prefixes?: Record<string, string[]>,
   isPayment?: boolean
@@ -245,6 +268,7 @@ export function SalaryForm({
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  onEffectiveLinksChange,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -258,6 +282,8 @@ export function SalaryForm({
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  /** Report effective has-links (bill-wise) so dialog locks fields as soon as user links in this session. */
+  onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
 }) {
   const isMounted = useRef(true);
 
@@ -296,9 +322,16 @@ export function SalaryForm({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkPaymentDialogOpen, setIsLinkPaymentDialogOpen] = useState(false);
   const [linkPaymentAmounts, setLinkPaymentAmounts] = useState<Record<string, number>>({});
+  const [linkPaymentResetOpen, setLinkPaymentResetOpen] = useState(false);
   const [linkPaymentSaving, setLinkPaymentSaving] = useState(false);
   const [autoLinkSaving, setAutoLinkSaving] = useState(false);
   const [linkBalanceKind, setLinkBalanceKind] = useState<"tax" | "net">("net");
+  /** Latest openingBalanceAllocated for this salary voucher, kept in state so edit-mode form save cannot overwrite DONE changes with stale props. */
+  const [latestOBAllocated, setLatestOBAllocated] = useState<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
+  /** Local-first bill-wise link draft; sync to server only on main Save like party bill-wise flow. */
+  const [localSalaryLinkMap, setLocalSalaryLinkMap] = useState<SalaryLinkMap>({});
+  const initialSalaryLinkMapRef = useRef<SalaryLinkMap>({});
+  const initialOBAllocatedRef = useRef<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
 
   const [activeLineIndex, setActiveLineIndex] = React.useState<number | null>(null);
 
@@ -388,17 +421,19 @@ export function SalaryForm({
                 const initialUrls = voucher.fileUrls || [];
                 setFiles(initialUrls);
                 initialFilesRef.current = initialUrls;
+                // Sync local OB allocation from the loaded voucher for edit mode.
+                setLatestOBAllocated(Number((voucher as any)?.openingBalanceAllocated) || 0);
             } else if (defaultVoucherData) {
                 const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
                 setFiles(urls);
                 initialFilesRef.current = urls.filter((f: any) => typeof f === 'string');
+                // Converted / default salary should also seed OB allocation locally.
+                setLatestOBAllocated(Number((defaultVoucherData as any)?.openingBalanceAllocated) || 0);
             }
         }
     }, [voucher, defaultVoucherData, form, processedStaff, processedTaxes]);
 
-  useEffect(() => {
-    if (!isLinkPaymentDialogOpen) setLinkPaymentAmounts({});
-  }, [isLinkPaymentDialogOpen]);
+  const prevLinkDialogOpenRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -447,23 +482,48 @@ export function SalaryForm({
     setIsCreateExpenseOpen(false);
   };
 
-  const handleLinkPayment = async () => {
-    if (!companyId || !voucher?.id) return;
+  /** Apply bill-wise link changes locally; actual server sync happens only when the main voucher is saved. */
+  const applyLocalBillWiseLinks = useCallback((nextAmounts: Record<string, number>) => {
+    setLocalSalaryLinkMap((prevMap) => {
+      const effectiveMap: SalaryLinkMap = { ...prevMap };
+      const allKnownIds = new Set<string>([
+        ...Object.keys(prevMap),
+        ...Object.keys(nextAmounts).filter((id) => id !== OPENING_BALANCE_VOUCHER_ID),
+      ]);
+      allKnownIds.forEach((paymentOutId) => {
+        const prev = effectiveMap[paymentOutId] ?? { taxAmount: 0, netAmount: 0 };
+        const newAmount = Number(nextAmounts[paymentOutId] ?? 0);
+        const nextTax = linkBalanceKind === "tax" ? newAmount : Number(prev.taxAmount) || 0;
+        const nextNet = linkBalanceKind === "net" ? newAmount : Number(prev.netAmount) || 0;
+        if (nextTax <= 0 && nextNet <= 0) {
+          delete effectiveMap[paymentOutId];
+        } else {
+          effectiveMap[paymentOutId] = { taxAmount: nextTax, netAmount: nextNet };
+        }
+      });
+      return normaliseSalaryLinkMap(effectiveMap);
+    });
+    setLatestOBAllocated(Number(nextAmounts[OPENING_BALANCE_VOUCHER_ID] ?? 0) || 0);
+  }, [linkBalanceKind]);
+
+  const handleLinkPayment = () => {
     const paymentOutIdsToUpdate = new Set<string>([
-      ...Object.keys(linkPaymentAmounts),
+      ...Object.keys(linkPaymentAmounts).filter((id) => id !== OPENING_BALANCE_VOUCHER_ID),
       ...linkedPayments.map((p) => p.id),
     ]);
-    if (paymentOutIdsToUpdate.size === 0) {
+    const hasOBToSave = obLinkState.showOBRow;
+    if (paymentOutIdsToUpdate.size === 0 && !hasOBToSave) {
       sonnerToast.info("Enter amount(s) to link or edit.");
       return;
     }
-    // Validate: no link amount > that payment's remaining (cannot save minus balance)
+    // Validate: no link amount > that source's remaining (payment out remaining or OB linkable)
     for (const row of paymentOutsForLinkDialog) {
       const amt = Number(linkPaymentAmounts[row.id] ?? 0);
       const remaining = row.remaining ?? 0;
       if (amt > remaining) {
+        const label = row.id === OPENING_BALANCE_VOUCHER_ID ? "Opening Balance" : (row.voucherNumber ?? "Payment");
         sonnerToast.error("Cannot save minus balance", {
-          description: `${row.voucherNumber ?? "Payment"} has remaining ${formatCurrency(remaining, { noSuffix: true, noAnimation: true })}. Link amount cannot exceed remaining.`,
+          description: `${label} has linkable ${formatCurrency(remaining, { noSuffix: true, noAnimation: true })}. Link amount cannot exceed linkable.`,
         });
         return;
       }
@@ -475,46 +535,12 @@ export function SalaryForm({
       });
       return;
     }
-    setLinkPaymentSaving(true);
-    try {
-      const voucherPath = `companies/${companyId}/vouchers`;
-      for (const paymentOutId of paymentOutIdsToUpdate) {
-        const newAmount = Number(linkPaymentAmounts[paymentOutId] ?? 0);
-        const poRef = doc(firestore, voucherPath, paymentOutId);
-        const snap = await getDoc(poRef);
-        if (!snap.exists()) continue;
-        const data = snap.data();
-        const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
-        const idx = allocations.findIndex((a) => a.voucherId === voucher.id);
-        const existing = idx >= 0 ? allocations[idx] : null;
-        const prevTax = existing ? getTaxFromAllocation(existing) : 0;
-        const prevNet = existing ? getNetFromAllocation(existing) : 0;
-        const newTax = linkBalanceKind === "tax" ? newAmount : prevTax;
-        const newNet = linkBalanceKind === "net" ? newAmount : prevNet;
-        if (newTax === 0 && newNet === 0) {
-          if (idx >= 0) {
-            allocations.splice(idx, 1);
-            await updateDoc(poRef, { allocations });
-          }
-        } else {
-          const newEntry: Allocation = { voucherId: voucher.id, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
-          if (idx >= 0) allocations[idx] = newEntry;
-          else allocations.push(newEntry);
-          await updateDoc(poRef, { allocations });
-        }
-      }
-      sonnerToast.success("Payment link updated.");
-      setIsLinkPaymentDialogOpen(false);
-    } catch (e) {
-      console.error(e);
-      sonnerToast.error("Failed to update payment link.");
-    } finally {
-      setLinkPaymentSaving(false);
-    }
+    applyLocalBillWiseLinks(linkPaymentAmounts);
+    sonnerToast.success("Bill-wise link updated locally. Save voucher to sync.");
+    setIsLinkPaymentDialogOpen(false);
   };
 
   const handleAutoLink = async () => {
-    if (!companyId || !voucher?.id) return;
     const outstanding = totalForView - totalLinked;
     if (outstanding <= 0) {
       sonnerToast.info(linkBalanceKind === "tax" ? "Tax balance is already fully linked." : "Net balance is already fully linked.");
@@ -526,30 +552,23 @@ export function SalaryForm({
     }
     setAutoLinkSaving(true);
     try {
-      const voucherPath = `companies/${companyId}/vouchers`;
+      const suggested: Record<string, number> = {};
+      linkedPayments.forEach((p) => { suggested[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
       let remainingToAllocate = outstanding;
+      if (obLinkState.showOBRow && remainingToAllocate > 0 && obLinkState.obLinkable > 0) {
+        const fromOB = Math.min(obLinkState.obLinkable, remainingToAllocate);
+        suggested[OPENING_BALANCE_VOUCHER_ID] = fromOB;
+        remainingToAllocate -= fromOB;
+      }
       for (const po of paymentOutsOldestFirst) {
         if (remainingToAllocate <= 0) break;
         const allocate = Math.min(po.remaining, remainingToAllocate);
         if (allocate <= 0) continue;
-        const poRef = doc(firestore, voucherPath, po.id);
-        const snap = await getDoc(poRef);
-        if (!snap.exists()) continue;
-        const data = snap.data();
-        const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
-        const idx = allocations.findIndex((a) => a.voucherId === voucher.id);
-        const existing = idx >= 0 ? allocations[idx] : null;
-        const prevTax = existing ? getTaxFromAllocation(existing) : 0;
-        const prevNet = existing ? getNetFromAllocation(existing) : 0;
-        const newTax = linkBalanceKind === "tax" ? prevTax + allocate : prevTax;
-        const newNet = linkBalanceKind === "net" ? prevNet + allocate : prevNet;
-        const newEntry: Allocation = { voucherId: voucher.id, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
-        if (idx >= 0) allocations[idx] = newEntry;
-        else allocations.push(newEntry);
-        await updateDoc(poRef, { allocations });
+        suggested[po.id] = (suggested[po.id] ?? 0) + allocate;
         remainingToAllocate -= allocate;
       }
-      sonnerToast.success("Auto link completed.");
+      applyLocalBillWiseLinks(suggested);
+      sonnerToast.success("Auto link applied locally. Save voucher to sync.");
     } catch (e) {
       console.error(e);
       sonnerToast.error("Failed to auto link.");
@@ -557,6 +576,46 @@ export function SalaryForm({
       setAutoLinkSaving(false);
     }
   };
+
+  /** Push the current local bill-wise draft to source vouchers only after the salary voucher itself is saved. */
+  const syncSalaryBillWiseLinks = useCallback(async (salaryVoucherId: string) => {
+    if (!companyId || !salaryVoucherId) return;
+    const voucherPath = `companies/${companyId}/vouchers`;
+    const desiredMap = normaliseSalaryLinkMap(localSalaryLinkMap);
+    const sourceVoucherIds = new Set<string>([
+      ...Object.keys(initialSalaryLinkMapRef.current),
+      ...Object.keys(desiredMap),
+    ]);
+    for (const paymentOutId of sourceVoucherIds) {
+      const poRef = doc(firestore, voucherPath, paymentOutId);
+      const snap = await getDoc(poRef);
+      if (!snap.exists()) continue;
+      const data = snap.data();
+      const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
+      const idx = allocations.findIndex((a) => a.voucherId === salaryVoucherId);
+      const desired = desiredMap[paymentOutId] ?? { taxAmount: 0, netAmount: 0 };
+      if (desired.taxAmount <= 0 && desired.netAmount <= 0) {
+        if (idx >= 0) {
+          allocations.splice(idx, 1);
+          await updateDoc(poRef, { allocations });
+        }
+        continue;
+      }
+      // Keep both tax/net parts on the source voucher in sync with the latest local draft.
+      const nextEntry: Allocation = {
+        voucherId: salaryVoucherId,
+        amount: desired.taxAmount + desired.netAmount,
+        taxAmount: desired.taxAmount,
+        netAmount: desired.netAmount,
+      };
+      if (idx >= 0) allocations[idx] = nextEntry;
+      else allocations.push(nextEntry);
+      await updateDoc(poRef, { allocations });
+    }
+    await updateDoc(doc(firestore, voucherPath, salaryVoucherId), { openingBalanceAllocated: Number(latestOBAllocated) || 0 });
+    initialSalaryLinkMapRef.current = desiredMap;
+    initialOBAllocatedRef.current = Number(latestOBAllocated) || 0;
+  }, [companyId, localSalaryLinkMap, latestOBAllocated]);
 
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems" });
   const staffIdsFromSalary = useMemo(
@@ -606,9 +665,9 @@ export function SalaryForm({
   }, [watchedLineItems]);
 
   type LinkedPaymentRow = { id: string; voucherNumber?: string; date: unknown; taxAmount: number; netAmount: number };
-  const { linkedPayments, totalLinkedTax, totalLinkedNet } = useMemo(() => {
+  const { linkedPayments: serverLinkedPayments } = useMemo(() => {
     if (isPaymentMode) return { linkedPayments: [] as LinkedPaymentRow[], totalLinkedTax: 0, totalLinkedNet: 0 };
-    const salaryVoucherId = voucher?.id;
+    const salaryVoucherId = voucher?.id ?? savedVoucherIdRef;
     if (!salaryVoucherId || !allVouchers?.length) return { linkedPayments: [] as LinkedPaymentRow[], totalLinkedTax: 0, totalLinkedNet: 0 };
     const paymentOutVouchers = allVouchers.filter((v: any) => v.type === "payment_out" || v.type === "direct_expense");
     const list: LinkedPaymentRow[] = [];
@@ -628,15 +687,55 @@ export function SalaryForm({
         });
       }
     }
-    const totalLinkedTax = list.reduce((s, p) => s + p.taxAmount, 0);
-    const totalLinkedNet = list.reduce((s, p) => s + p.netAmount, 0);
-    return { linkedPayments: list, totalLinkedTax, totalLinkedNet };
-  }, [voucher?.id, allVouchers, isPaymentMode]);
+    return { linkedPayments: list, totalLinkedTax: 0, totalLinkedNet: 0 };
+  }, [voucher?.id, savedVoucherIdRef, allVouchers, isPaymentMode]);
+  const billWiseLinkDirty = !areSalaryLinkMapsEqual(localSalaryLinkMap, initialSalaryLinkMapRef.current) || latestOBAllocated !== initialOBAllocatedRef.current;
+  useEffect(() => {
+    if (isPaymentMode || billWiseLinkDirty) return;
+    const nextMap = Object.fromEntries(
+      serverLinkedPayments.map((p) => [p.id, { taxAmount: Number(p.taxAmount) || 0, netAmount: Number(p.netAmount) || 0 }])
+    ) as SalaryLinkMap;
+    // After local Save we already know the intended bill-wise state. Do not let a stale server snapshot clear the card before Firestore catches up.
+    if (!areSalaryLinkMapsEqual(nextMap, initialSalaryLinkMapRef.current) && Object.keys(initialSalaryLinkMapRef.current).length > 0) {
+      return;
+    }
+    // Refresh local draft from server only when there are no unsaved bill-wise changes.
+    setLocalSalaryLinkMap(nextMap);
+    initialSalaryLinkMapRef.current = nextMap;
+    const serverOB = Number((voucher as any)?.openingBalanceAllocated) || 0;
+    setLatestOBAllocated(serverOB);
+    initialOBAllocatedRef.current = serverOB;
+  }, [isPaymentMode, billWiseLinkDirty, serverLinkedPayments, voucher]);
 
+  const linkedPayments = useMemo(() => {
+    return Object.entries(localSalaryLinkMap)
+      .map(([id, amounts]) => {
+        const target = allVouchers?.find((v: any) => v.id === id);
+        return {
+          id,
+          voucherNumber: target?.voucherNumber ?? target?.voucher_number ?? "—",
+          date: target?.date ?? null,
+          taxAmount: Number(amounts.taxAmount) || 0,
+          netAmount: Number(amounts.netAmount) || 0,
+        } as LinkedPaymentRow;
+      })
+      .filter((p) => p.taxAmount > 0 || p.netAmount > 0)
+      .sort((a, b) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dB - dA;
+      });
+  }, [localSalaryLinkMap, allVouchers]);
+  const totalLinkedTax = linkedPayments.reduce((s, p) => s + p.taxAmount, 0);
+  const totalLinkedNet = linkedPayments.reduce((s, p) => s + p.netAmount, 0);
   const totalLinked = linkBalanceKind === "tax" ? totalLinkedTax : totalLinkedNet;
   const totalForView = linkBalanceKind === "tax" ? totalTaxAmount : totalAfterTaxSalary;
+  // Bill-wise card totals should include Opening Balance when net balance mode is active.
+  const billWiseLinkedTotal = linkBalanceKind === "tax" ? totalLinkedTax : totalLinkedNet + (Number(latestOBAllocated) || 0);
+  const billWiseRemainingTotal = Math.max(0, totalForView - billWiseLinkedTotal);
+  const selectedLinkTotal = Object.values(linkPaymentAmounts).reduce((s, a) => s + Number(a || 0), 0);
+  const salaryRemainingToLink = Math.max(0, totalForView - selectedLinkTotal);
   const linkedPaymentsForView = useMemo(() => linkedPayments.map((p) => ({ ...p, amount: linkBalanceKind === "tax" ? p.taxAmount : p.netAmount })).filter((p) => p.amount > 0), [linkedPayments, linkBalanceKind]);
-
   const paymentOutsWithRemaining = useMemo(() => {
     if (!allVouchers?.length || staffIdsFromSalary.length === 0) return [];
     const staffSet = new Set(staffIdsFromSalary);
@@ -664,9 +763,82 @@ export function SalaryForm({
     });
   }, [paymentOutsWithRemaining]);
 
-  /** Payment outs shown in Link Payment dialog: with remaining OR already linked (same staff only). */
+  /** Opening balance (OB) for Add Salary: only debit-side staff OB can be linked here, and it is consumed by other credit-side vouchers. */
+  const obLinkState = useMemo(() => {
+    const salaryVoucherId = voucher?.id ?? savedVoucherIdRef ?? null;
+    const staffSet = new Set(staffIdsFromSalary);
+    const staffOBTotal = staffIdsFromSalary.reduce((sum, sid) => sum + Math.max(0, Number(processedStaff?.find((s: any) => s.id === sid)?.openingBalance) || 0), 0);
+    let totalAllocatedToOB = 0;
+    (allVouchers as any[] || []).forEach((v: any) => {
+      if ((v.type !== "payment_in" && v.type !== "direct_income") || !v.staffId || !staffSet.has(v.staffId)) return;
+      const allocs = (v.allocations as Allocation[] | undefined) || [];
+      allocs.forEach((a) => { if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) totalAllocatedToOB += getAllocationTotal(a); });
+    });
+    let totalSalaryOBAllocated = 0;
+    (allVouchers as any[] || []).forEach((v: any) => {
+      if (v.type !== "journal" || v.subType !== "add_salary" || v.id === salaryVoucherId) return;
+      if (!Array.isArray(v.entries)) return;
+      const hasStaff = v.entries.some((e: any) => e.accountId && staffSet.has(e.accountId));
+      if (hasStaff) totalSalaryOBAllocated += Number((v as any).openingBalanceAllocated) || 0;
+    });
+    const openingBalanceAllocated = Number(latestOBAllocated) || 0;
+    const obOutstanding = Math.max(0, staffOBTotal - totalAllocatedToOB - totalSalaryOBAllocated);
+    const obLinkable = obOutstanding + openingBalanceAllocated;
+    const showOBRow = staffOBTotal > 0 && (obOutstanding > 0 || openingBalanceAllocated > 0);
+    const obAllocatedToOthers = totalAllocatedToOB + totalSalaryOBAllocated - openingBalanceAllocated;
+    return { staffOBTotal, totalAllocatedToOB, totalSalaryOBAllocated, openingBalanceAllocated, obOutstanding, obLinkable, showOBRow, obAllocatedToOthers };
+  }, [staffIdsFromSalary, processedStaff, allVouchers, voucher?.id, savedVoucherIdRef, latestOBAllocated]);
+
+  /** Card rows should come from the local draft itself so newly added links show instantly in add/edit modes, including Opening Balance. */
+  const billWiseCardRows = useMemo(() => {
+    const salaryVoucherId = voucher?.id ?? savedVoucherIdRef ?? null;
+    const paymentRows = Object.entries(localSalaryLinkMap)
+      .map(([id, amounts]) => {
+        const target = allVouchers?.find((v: any) => v.id === id);
+        const allocations = (target?.allocations as Allocation[] | undefined) || [];
+        const currentLinked = linkBalanceKind === "tax" ? (Number(amounts.taxAmount) || 0) : (Number(amounts.netAmount) || 0);
+        const linkedOnOthers = salaryVoucherId
+          ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        return {
+          id,
+          voucherNumber: target?.voucherNumber ?? target?.voucher_number ?? "—",
+          date: target?.date ?? null,
+          totalAmount: Number(target?.amount ?? target?.total ?? 0) || 0,
+          linkedOnOthers,
+          currentLinked,
+        };
+      })
+      .filter((row) => row.currentLinked > 0);
+    const obRows = linkBalanceKind === "net" && latestOBAllocated > 0
+      ? [{
+          id: OPENING_BALANCE_VOUCHER_ID,
+          voucherNumber: "Opening Balance",
+          date: null,
+          totalAmount: Number(obLinkState.staffOBTotal) || 0,
+          linkedOnOthers: Math.max(0, Number(obLinkState.obAllocatedToOthers) || 0),
+          currentLinked: Number(latestOBAllocated) || 0,
+        }]
+      : [];
+    return [...obRows, ...paymentRows]
+      .sort((a, b) => {
+        const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
+        const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
+        return dB - dA;
+      });
+  }, [localSalaryLinkMap, allVouchers, linkBalanceKind, voucher?.id, savedVoucherIdRef, latestOBAllocated, obLinkState]);
+
+  /** Report effective has-links to dialog so fields lock as soon as user links (bill-wise) in this session. */
+  useEffect(() => {
+    if (!onEffectiveLinksChange) return;
+    onEffectiveLinksChange(billWiseCardRows.length > 0);
+  }, [onEffectiveLinksChange, billWiseCardRows.length]);
+
+  /** Payment outs shown in Link Payment dialog: with remaining OR already linked (same staff only). Prepend Opening Balance row when staff has OB so user can link from OB in both dialogs. */
   const paymentOutsForLinkDialog = useMemo(() => {
     const staffSet = new Set(staffIdsFromSalary);
+    const salaryVoucherId = voucher?.id ?? savedVoucherIdRef ?? null;
+    const currentKindLinkedById = new Map(linkedPayments.map((p) => [p.id, linkBalanceKind === "tax" ? p.taxAmount : p.netAmount]));
     const withRemainingIds = new Set(paymentOutsWithRemaining.map((p: { id: string }) => p.id));
     const linkedOnly = linkedPayments
       .filter((p) => {
@@ -674,21 +846,71 @@ export function SalaryForm({
         return v && v.staffId && staffSet.has(v.staffId);
       })
       .filter((p) => !withRemainingIds.has(p.id))
-      .map((p) => ({
-        id: p.id,
-        voucherNumber: p.voucherNumber,
-        date: p.date,
-        amount: 0,
-        remaining: 0,
-      }));
-    const combined = [...paymentOutsWithRemaining, ...linkedOnly];
-    combined.sort((a: { date: unknown }, b: { date: unknown }) => {
+      .map((p) => {
+        const v = allVouchers?.find((v: any) => v.id === p.id);
+        const allocations = (v?.allocations as Allocation[] | undefined) || [];
+        const allocatedToOthers = salaryVoucherId
+          ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+        return {
+          id: p.id,
+          voucherNumber: p.voucherNumber,
+          date: p.date,
+          amount: Number(v?.amount ?? v?.total ?? 0) || 0,
+          // Free the current salary's current-kind amount so edit-mode link changes are validated locally.
+          remaining: (currentKindLinkedById.get(p.id) ?? 0),
+          allocatedToOthers,
+        };
+      });
+    const withRemainingWithOthers = paymentOutsWithRemaining.map((p: { id: string; voucherNumber?: string; date?: unknown; amount: number; remaining: number }) => {
+      const v = allVouchers?.find((v: any) => v.id === p.id);
+      const allocations = (v?.allocations as Allocation[] | undefined) || [];
+      const allocatedToOthers = salaryVoucherId
+        ? allocations.filter((a) => a.voucherId !== salaryVoucherId).reduce((s, a) => s + getAllocationTotal(a), 0)
+        : allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+      return { ...p, remaining: p.remaining + (currentKindLinkedById.get(p.id) ?? 0), allocatedToOthers };
+    });
+    const combined = [...withRemainingWithOthers, ...linkedOnly];
+    combined.sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dB - dA;
     });
-    return combined;
-  }, [paymentOutsWithRemaining, linkedPayments, staffIdsFromSalary, allVouchers]);
+    const obRow = obLinkState.showOBRow
+      ? [{ id: OPENING_BALANCE_VOUCHER_ID, voucherNumber: "—", date: null, amount: obLinkState.staffOBTotal, remaining: obLinkState.obLinkable, allocatedToOthers: Math.max(0, obLinkState.obAllocatedToOthers) }]
+      : [];
+    return [...obRow, ...combined];
+  }, [paymentOutsWithRemaining, linkedPayments, linkBalanceKind, staffIdsFromSalary, allVouchers, voucher?.id, savedVoucherIdRef, obLinkState]);
+
+  /** Open bill-wise link dialog from Add Salary. Dialog edits only local draft; server sync happens on main Save. */
+  const handleOpenBillWiseDialog = useCallback(() => {
+    const initial: Record<string, number> = {};
+    linkedPayments.forEach((p) => { initial[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+    if (obLinkState.showOBRow || latestOBAllocated > 0) initial[OPENING_BALANCE_VOUCHER_ID] = latestOBAllocated;
+    setLinkPaymentAmounts(initial);
+    setIsLinkPaymentDialogOpen(true);
+  }, [linkedPayments, linkBalanceKind, obLinkState.showOBRow, latestOBAllocated]);
+
+  /** Auto-link button works locally in add/edit; actual sync happens only on main Save. */
+  const handleAutoLinkFromCard = useCallback(() => {
+    void handleAutoLink();
+  }, [handleAutoLink]);
+
+  useEffect(() => {
+    if (isLinkPaymentDialogOpen) {
+      if (!prevLinkDialogOpenRef.current) {
+        prevLinkDialogOpenRef.current = true;
+        const initial: Record<string, number> = {};
+        // Seed existing payment/OB links once when the dialog opens so edit state stays stable while open.
+        linkedPayments.forEach((p) => { initial[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+        if (obLinkState.showOBRow) initial[OPENING_BALANCE_VOUCHER_ID] = obLinkState.openingBalanceAllocated;
+        setLinkPaymentAmounts(initial);
+      }
+    } else {
+      prevLinkDialogOpenRef.current = false;
+      setLinkPaymentAmounts({});
+    }
+  }, [isLinkPaymentDialogOpen, linkedPayments, linkBalanceKind, obLinkState.showOBRow, obLinkState.openingBalanceAllocated]);
 
   const { isDirty: isFormDirty } = form.formState;
   const isFileDirty = (() => {
@@ -698,7 +920,7 @@ export function SalaryForm({
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
   })();
-  const isAnyDirty = isFormDirty || isFileDirty;
+  const isAnyDirty = isFormDirty || isFileDirty || billWiseLinkDirty;
   const debitAccountId = form.watch("debitAccountId");
   const debitAccountBalance = useMemo(() => {
     if (!debitAccountId) return null;
@@ -884,6 +1106,11 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         });
 
         submissionData.entries = entries;
+        // Preserve opening balance linked to this salary (from voucher or from Link payment dialog DONE so we don't overwrite before refetch)
+        if (voucher?.id || savedVoucherIdRef) {
+          // Always persist the latest local OB link so edit-mode Save cannot restore stale voucher props.
+          submissionData.openingBalanceAllocated = Number(latestOBAllocated) || 0;
+        }
       }
 
       let originalVoucherIdToDelete: string | null = null;
@@ -900,6 +1127,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
 
       if (savedDoc && savedDoc.id) {
           if (isMounted.current) setSavedVoucherIdRef(savedDoc.id);
+          // Bill-wise links are local-first; push them only after the salary voucher itself exists/saves successfully.
+          if (!isPaymentMode) {
+            await syncSalaryBillWiseLinks(savedDoc.id);
+          }
           if (originalVoucherIdToDelete) {
                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
                 isDeleted: true,
@@ -958,6 +1189,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavedVoucherIdRef(null);
+            setLocalSalaryLinkMap({});
+            initialSalaryLinkMapRef.current = {};
+            setLatestOBAllocated(0);
+            initialOBAllocatedRef.current = 0;
             fetchVoucherNumber();
         }
 
@@ -1611,7 +1846,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             const taxBalance = processedTaxes.find(t => t.id === taxAccountId)?.balance;
                             
                             return (
-                              <TableRow key={field.id}>
+                              <TableRow key={field.id} className="[&>td]:align-top">
+                                {/* Keep desktop salary cells top-aligned so balance helper text does not visually lift only the staff/tax fields. */}
                                 <TableCell>
                                   <FormField control={form.control} name={`lineItems.${index}.staffId`} render={({ field }: any) => (<FormItem>
                                         <Combobox
@@ -1692,7 +1928,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     </>
                   )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   <FormField
                     control={form.control}
                     name="narration"
@@ -1706,165 +1942,226 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       </FormItem>
                     )}
                   />
-                  {!isPaymentMode && (
-                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
-                      <div className="flex items-center gap-2 font-medium">
-                        <Link2 className="h-4 w-4 text-muted-foreground" />
-                        <span>Linked Payments</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">Only payment outs for the same staff (in this voucher) can be linked.</p>
-                      <div className="flex gap-2">
-                        <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                          <input
-                            type="radio"
-                            name="linkBalanceKind"
-                            checked={linkBalanceKind === "tax"}
-                            onChange={() => setLinkBalanceKind("tax")}
-                            className="rounded-full"
-                          />
-                          <span>Tax balance</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                          <input
-                            type="radio"
-                            name="linkBalanceKind"
-                            checked={linkBalanceKind === "net"}
-                            onChange={() => setLinkBalanceKind("net")}
-                            className="rounded-full"
-                          />
-                          <span>Net balance</span>
-                        </label>
-                      </div>
-                      {linkedPaymentsForView.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          {linkBalanceKind === "tax" ? "No tax-linked payment details." : "No payment outs linked to this voucher (net)."}
-                        </p>
-                      ) : (
-                        <div className="space-y-1.5 text-sm">
-                          {linkedPaymentsForView.map((p, idx) => (
-                            <div
-                              key={`${p.id}-${idx}`}
-                              role="button"
-                              tabIndex={0}
-                              className="flex justify-between items-center rounded-md px-2 py-1.5 -mx-2 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
-                              onClick={() => {
-                                const initial = linkedPayments.reduce(
-                                  (acc, x) => ({ ...acc, [x.id]: linkBalanceKind === "tax" ? x.taxAmount : x.netAmount }),
-                                  {} as Record<string, number>
-                                );
-                                setLinkPaymentAmounts(initial);
-                                setIsLinkPaymentDialogOpen(true);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  const initial = linkedPayments.reduce(
-                                    (acc, x) => ({ ...acc, [x.id]: linkBalanceKind === "tax" ? x.taxAmount : x.netAmount }),
-                                    {} as Record<string, number>
+                  {!isPaymentMode ? (
+                    <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
+                      <FormItem className="order-1 md:order-2">
+                        <FormLabel>Attach Files (Optional)</FormLabel>
+                        <RestrictedFileUploader>
+                          {/* Mobile: Attach Files appears above bill-wise. Desktop: it stays to the right of bill-wise. */}
+                          <div className="flex flex-wrap gap-4">
+                            {files.map((file, index) => (
+                              <FilePreview 
+                                key={index} 
+                                file={file} 
+                                onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                                className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                              />
+                            ))}
+                            {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                              <div 
+                                className={cn(
+                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                )}
+                                onClick={() => {
+                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                    fileInputRef.current?.click();
+                                  }
+                                }}
+                              >
+                                <PlusCircle className="h-6 w-6" />
+                                <span className="text-xs mt-1">Add File</span>
+                                <input 
+                                  type="file" 
+                                  className="hidden"
+                                  ref={fileInputRef}
+                                  onChange={handleFileChange}
+                                  accept={[
+                                    fileAttachmentLimits.allowImage ? "image/*" : "",
+                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                  multiple={fileAttachmentLimits.maxFileCount > 1}
+                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </RestrictedFileUploader>
+                      </FormItem>
+                      {/* Link for bill wise: always editable so user can unlink when voucher edit is disabled (banner). Never lock this section. */}
+                      <div className="order-2 md:order-1 space-y-2 rounded-lg border p-3 bg-muted/30">
+                        <div className="flex items-center gap-2 font-medium">
+                          <Link2 className="h-4 w-4 text-muted-foreground" />
+                          <span>Link for bill wise</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Only payment outs for the same staff in this salary voucher can be linked.</p>
+                        <div className="flex gap-2">
+                          <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                            <input
+                              type="radio"
+                              name="linkBalanceKind"
+                              checked={linkBalanceKind === "tax"}
+                              onChange={() => setLinkBalanceKind("tax")}
+                              className="rounded-full"
+                            />
+                            <span>Tax balance</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                            <input
+                              type="radio"
+                              name="linkBalanceKind"
+                              checked={linkBalanceKind === "net"}
+                              onChange={() => setLinkBalanceKind("net")}
+                              className="rounded-full"
+                            />
+                            <span>Net balance</span>
+                          </label>
+                        </div>
+                        {billWiseCardRows.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">
+                            {linkBalanceKind === "tax" ? "No tax-linked payment details." : "No payment outs linked to this voucher (net)."}
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
+                            <table className="w-full text-sm border-collapse min-w-[400px]">
+                              <thead>
+                                <tr className="border-b bg-muted/50">
+                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
+                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Amount</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on others</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on current</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {billWiseCardRows.map((p, idx) => {
+                                  const rowDate = p.date ? (typeof (p.date as any)?.toDate === "function" ? (p.date as any).toDate() : new Date(p.date as string | number)) : null;
+                                  return (
+                                    <tr
+                                      key={`${p.id}-${idx}`}
+                                      role="button"
+                                      tabIndex={0}
+                                      className="cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0"
+                                      onClick={handleOpenBillWiseDialog}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === " ") {
+                                          e.preventDefault();
+                                          handleOpenBillWiseDialog();
+                                        }
+                                      }}
+                                    >
+                                      <td className="p-2 text-muted-foreground whitespace-nowrap">{p.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (rowDate ? (dateSystem === "BS" ? formatDateBS(rowDate) : formatDate(rowDate)) : "—")}</td>
+                                      <td className="p-2 font-medium whitespace-nowrap">{p.voucherNumber ?? "—"}</td>
+                                      <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(p.totalAmount, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.linkedOnOthers, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.currentLinked, { noSuffix: true, noAnimation: true })}</td>
+                                    </tr>
                                   );
-                                  setLinkPaymentAmounts(initial);
-                                  setIsLinkPaymentDialogOpen(true);
-                                }
-                              }}
-                            >
-                              <span className="truncate">{p.voucherNumber ?? "—"}</span>
-                              <span>{formatCurrency(p.amount, { noSuffix: true, noAnimation: true })}</span>
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                        <div className="pt-2 border-t flex justify-end min-w-0">
+                          {/* Keep Linked/Balance in right-aligned boxes to match the other bill-wise cards. */}
+                          <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                              <span className="text-muted-foreground truncate leading-tight">Linked</span>
                             </div>
-                          ))}
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrency(billWiseLinkedTotal, { noSuffix: true, noAnimation: true })}</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate leading-tight">Balance</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                              {/* Keep zero balance visually consistent with other settled bill-wise summaries. */}
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", billWiseRemainingTotal === 0 ? "text-green-600 font-semibold" : "")}>
+                                {billWiseRemainingTotal === 0 ? "Settled" : formatCurrency(billWiseRemainingTotal, { noSuffix: true, noAnimation: true })}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                      )}
-                      <div className="pt-2 border-t space-y-1 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">{linkBalanceKind === "tax" ? "Total (Tax)" : "Total (Net)"}</span>
-                          <span>{formatCurrency(totalForView, { noSuffix: true, noAnimation: true })}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Linked</span>
-                          <span>{formatCurrency(totalLinked, { noSuffix: true, noAnimation: true })}</span>
-                        </div>
-                        <div className="flex justify-between font-medium">
-                          <span>Net Balance</span>
-                          <span>{formatCurrency(totalForView - totalLinked, { noSuffix: true, noAnimation: true })}</span>
-                        </div>
-                        {voucher?.id && (
+                        <div className="space-y-1 text-sm">
                           <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {/* When linked, keep Add Link enabled so user can open dialog and unlink (edit link). */}
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
                               className="w-fit"
-                              disabled={(totalForView - totalLinked) <= 0}
-                              onClick={() => {
-                                setLinkPaymentAmounts({});
-                                setIsLinkPaymentDialogOpen(true);
-                              }}
+                              disabled={!deleteDisabledWhenLinked && (voucher?.id ?? savedVoucherIdRef) && billWiseRemainingTotal <= 0}
+                              onClick={handleOpenBillWiseDialog}
                             >
                               <Link2 className="h-4 w-4 mr-2" />
-                              Link Payment
+                              Add Link
                             </Button>
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
                               className="w-fit"
-                              disabled={autoLinkSaving || (totalForView - totalLinked) <= 0 || paymentOutsOldestFirst.length === 0}
-                              onClick={handleAutoLink}
+                              disabled={autoLinkSaving || ((voucher?.id ?? savedVoucherIdRef) ? (billWiseRemainingTotal <= 0 || paymentOutsOldestFirst.length === 0) : false)}
+                              onClick={handleAutoLinkFromCard}
                             >
                               {autoLinkSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Zap className="h-4 w-4 mr-2" />}
                               Auto Link
                             </Button>
                           </div>
-                        )}
+                        </div>
                       </div>
                     </div>
+                  ) : (
+                    <FormItem>
+                      <FormLabel>Attach Files (Optional)</FormLabel>
+                      <RestrictedFileUploader>
+                        {/* Payment mode keeps file upload full width because bill-wise section is salary-only. */}
+                        <div className="flex flex-wrap gap-4">
+                          {files.map((file, index) => (
+                            <FilePreview 
+                              key={index} 
+                              file={file} 
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                            />
+                          ))}
+                          {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                            <div 
+                              className={cn(
+                                "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                  ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                  : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                              )}
+                              onClick={() => {
+                                if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                  fileInputRef.current?.click();
+                                }
+                              }}
+                            >
+                              <PlusCircle className="h-6 w-6" />
+                              <span className="text-xs mt-1">Add File</span>
+                              <input 
+                                type="file" 
+                                className="hidden"
+                                ref={fileInputRef}
+                                onChange={handleFileChange}
+                                accept={[
+                                  fileAttachmentLimits.allowImage ? "image/*" : "",
+                                  fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                                ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                multiple={fileAttachmentLimits.maxFileCount > 1}
+                                disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </RestrictedFileUploader>
+                    </FormItem>
                   )}
                 </div>
-                 <FormItem>
-                  <FormLabel>Attach Files (Optional)</FormLabel>
-                  <RestrictedFileUploader>
-                    {/* When linked: add/remove disabled; existing files stay clickable to open */}
-                    <div className="flex flex-wrap gap-4">
-                      {files.map((file, index) => (
-                        <FilePreview 
-                          key={index} 
-                          file={file} 
-                          onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                          className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                        />
-                      ))}
-                      {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                        <div 
-                          className={cn(
-                            "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                              ? "text-muted-foreground hover:border-primary cursor-pointer"
-                              : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                          )}
-                          onClick={() => {
-                            if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                              fileInputRef.current?.click();
-                            }
-                          }}
-                        >
-                           <PlusCircle className="h-6 w-6" />
-                          <span className="text-xs mt-1">Add File</span>
-                          <input 
-                            type="file" 
-                            className="hidden"
-                            ref={fileInputRef}
-                            onChange={handleFileChange}
-                            accept={[
-                              fileAttachmentLimits.allowImage ? "image/*" : "",
-                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                            multiple={fileAttachmentLimits.maxFileCount > 1}
-                            disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </RestrictedFileUploader>
-                </FormItem>
             </div>
           </ScrollArea>
 
@@ -1878,7 +2175,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                       Delete
                     </Button>
                   </AlertDialogTrigger>
@@ -1895,7 +2192,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
                 <Button type="button" className={cn("w-full", BTN_PRINT_CLASS)} disabled>
@@ -1915,12 +2212,12 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             ) : (
               <>
                 <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                      <Button type="button" variant="destructive" className="w-full md:w-auto shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
@@ -1966,177 +2263,185 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         </form>
       </Form>
       <Dialog open={isLinkPaymentDialogOpen} onOpenChange={setIsLinkPaymentDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col" hideCloseButton>
-          <DialogHeader className="flex-shrink-0">
-            <div className="flex items-center justify-between pr-8">
-              <DialogTitle className="text-xl flex items-center gap-2">
-                <Link2 className="h-5 w-5" />
-                Link Payment
-              </DialogTitle>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsLinkPaymentDialogOpen(false)}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+        <DialogContent
+          className={cn(
+            "max-w-4xl max-h-[85vh] flex flex-col rounded-lg pt-3 px-[3px]",
+            isMobile && "left-[2px] right-[2px] translate-x-0 w-auto max-w-none h-[85vh] max-h-[85vh] pt-2"
+          )}
+          hideCloseButton
+        >
+          <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
+            <p className="text-xs text-muted-foreground leading-tight">Link for salary</p>
+            {/* Keep salary link title consistent with the payment-out salary dialog. */}
+            <DialogTitle className="text-xl leading-tight">Link payment to salary</DialogTitle>
+            {totalForView > 0 && (
+              <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-sm pt-1 px-1">
+                <span className="text-muted-foreground">Required: <strong className="text-foreground">{formatCurrency(totalForView)}</strong></span>
+                <span className="text-muted-foreground">Selected: <strong className="text-foreground">{formatCurrency(selectedLinkTotal)}</strong></span>
+                <span className="text-muted-foreground">
+                  Balance: {salaryRemainingToLink === 0 ? <strong className="text-green-600">Settled</strong> : <strong className="text-foreground">{formatCurrency(salaryRemainingToLink)}</strong>}
+                </span>
+                {selectedLinkTotal < totalForView && selectedLinkTotal > 0 && (
+                  <span className="text-amber-600 font-medium">Choose more</span>
+                )}
+              </div>
+            )}
           </DialogHeader>
           <div className="space-y-4 flex-1 min-h-0 flex flex-col">
-            {/* Top card: same layout as Payment Out Link to Txns */}
-            <div className="rounded-md border flex-shrink-0 p-4 w-full">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full">
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-muted-foreground">Linking to</span>
-                  <span className="text-sm font-medium">{voucher?.voucherNumber ?? "—"}</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-muted-foreground">{linkBalanceKind === "tax" ? "Total (Tax)" : "Total (Net)"}</span>
-                  <span className="text-sm font-medium tabular-nums">{formatCurrency(totalForView, { noSuffix: true, noAnimation: true })}</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-muted-foreground">Total linked</span>
-                  <span className="text-sm tabular-nums">{formatCurrency(totalLinked, { noSuffix: true, noAnimation: true })}</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-sm font-medium text-muted-foreground">Balance</span>
-                  <span className="text-sm font-medium tabular-nums">{formatCurrency(Math.max(0, totalForView - totalLinked), { noSuffix: true, noAnimation: true })}</span>
-                </div>
-              </div>
+            {/* To Voucher: same layout as Link payment to this sale (pic 1) */}
+            <p className="text-sm font-medium text-muted-foreground shrink-0 text-center">To Voucher</p>
+            <div className="rounded-md border flex-shrink-0 overflow-x-auto">
+              <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[400px]">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                    <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                    <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
+                    <th className="text-right p-2 font-medium whitespace-nowrap">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b last:border-b-0">
+                    <td className="p-2 text-muted-foreground whitespace-nowrap">{voucher?.date ? (() => { const d = typeof (voucher.date as any)?.toDate === "function" ? (voucher.date as any).toDate() : voucher.date instanceof Date ? voucher.date : new Date(voucher.date as string | number); return d && !isNaN(d.getTime()) ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} (${formatDate(d)})`) : "—"; })() : "—"}</td>
+                    <td className="p-2 font-medium whitespace-nowrap">{voucher?.voucherNumber ?? "—"}</td>
+                    <td className="p-2 whitespace-nowrap">Staff</td>
+                    <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(totalForView, { noSuffix: true })}</td>
+                    <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(selectedLinkTotal, { noSuffix: true })}</td>
+                    <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(salaryRemainingToLink, { noSuffix: true })}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-            <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-              <Button
-                type="button"
-                size="sm"
-                disabled={(totalForView - totalLinked) <= 0 || paymentOutsOldestFirst.length === 0}
-                onClick={() => {
-                  const suggested: Record<string, number> = {};
-                  linkedPayments.forEach((p) => {
-                    suggested[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount;
-                  });
-                  let remainingToAllocate = totalForView - totalLinked;
-                  for (const po of paymentOutsOldestFirst) {
-                    if (remainingToAllocate <= 0) break;
-                    const allocate = Math.min(po.remaining, remainingToAllocate);
-                    if (allocate > 0) {
-                      suggested[po.id] = (suggested[po.id] ?? 0) + allocate;
-                      remainingToAllocate -= allocate;
-                    }
-                  }
-                  setLinkPaymentAmounts(suggested);
-                  sonnerToast.success("Auto link amounts filled. Review and DONE.");
-                }}
-              >
-                <Link2 className="h-4 w-4 mr-2" />
-                AUTO LINK
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setLinkPaymentAmounts({})}
-              >
-                <RotateCcw className="h-4 w-4 mr-2" />
-                RESET
-              </Button>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <HelpCircle className="h-3.5 w-3.5" />
-                Allocate balance to payment outs (same staff, oldest first).
-              </span>
-            </div>
-            <div className="flex-1 min-h-0 border rounded-md overflow-hidden">
-              <p className="text-sm font-medium mb-2">Payment outs (same staff)</p>
-              <ScrollArea className="h-full w-full">
-                <Table className="table-fixed w-full">
-                  <TableHeader>
-                    <TableRow className="bg-muted/50">
-                      <TableHead className={cn(dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>Date</TableHead>
-                      <TableHead className="w-[90px]">Type</TableHead>
-                      <TableHead className="min-w-0">Ref/Inv No.</TableHead>
-                      <TableHead className="text-right w-[110px]">Total</TableHead>
-                      <TableHead className="text-right w-[120px]">Linked Amount</TableHead>
-                      <TableHead className="text-right w-[110px]">Balance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paymentOutsForLinkDialog.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                          {staffIdsFromSalary.length === 0 ? "Add staff in Salary Details first." : "No payment outs for this staff to link or edit."}
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      paymentOutsForLinkDialog.map((row: { id: string; voucherNumber?: string; date?: unknown; amount?: number; remaining?: number }) => {
-                        const d = row.date
-                          ? typeof (row.date as any)?.toDate === "function"
-                            ? (row.date as any).toDate()
-                            : new Date(row.date as string | number)
-                          : null;
+            <p className="text-sm font-medium text-muted-foreground shrink-0 pt-1 text-center">From Voucher</p>
+            <p className="text-sm text-muted-foreground shrink-0 -mt-0.5 hidden md:block text-center">Payment outs (same staff) (only linkable or already selected)</p>
+            <div className="flex-1 min-h-0 border rounded-md overflow-auto scrollbar-slim-dim">
+              {paymentOutsForLinkDialog.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-8 text-center">{staffIdsFromSalary.length === 0 ? "Add staff in Salary Details first." : "No payment outs for this staff to link or edit."}</p>
+              ) : (
+                <div className="min-w-0 overflow-x-auto">
+                  <table className="table-row-stripe-7 w-full text-sm border-collapse min-w-[600px]">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="text-left p-2 w-10 whitespace-nowrap"></th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Other Linked</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Current Link</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Linkable</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentOutsForLinkDialog.map((row: { id: string; voucherNumber?: string; date?: unknown; amount?: number; remaining?: number; allocatedToOthers?: number }) => {
+                        const d = row.date ? (typeof (row.date as any)?.toDate === "function" ? (row.date as any).toDate() : new Date(row.date as string | number)) : null;
                         const dateStr = d && !isNaN(d.getTime()) ? (dateSystem === "AD" ? formatDate(d) : dateSystem === "BS" ? formatDateBS(d) : `${formatDateBS(d)} (${formatDate(d)})`) : "—";
-                        const linked = linkPaymentAmounts[row.id] ?? 0;
-                        const remaining = row.remaining ?? 0;
-                        const balanceAfterLink = Math.max(0, remaining - linked);
+                        // Normalize all row amounts before rendering so Opening Balance never shows object text in amount cells.
+                        const rowAmount = Number(row.amount ?? 0) || 0;
+                        const linked = Number(linkPaymentAmounts[row.id] ?? 0) || 0;
+                        const remaining = Number(row.remaining ?? 0) || 0;
+                        const otherLinked = Number(row.allocatedToOthers ?? 0) || 0;
+                        const remainingToLink = salaryRemainingToLink;
+                        const rowMax = remaining;
+                        const maxAllowed = Math.min(rowMax, remainingToLink + linked);
+                        const cannotAddMore = remainingToLink <= 0 && linked === 0;
                         return (
-                          <TableRow key={row.id}>
-                            <TableCell className={cn("align-middle", dateSystem === "Both" ? "w-[180px]" : "w-[100px]")}>{dateStr}</TableCell>
-                            <TableCell className="align-middle w-[90px]">payment out</TableCell>
-                            <TableCell className="align-middle min-w-0 truncate">{row.voucherNumber ?? "—"}</TableCell>
-                            <TableCell className="text-right align-middle w-[110px] tabular-nums">
-                              {formatCurrency(row.amount ?? 0, { noSuffix: true, noAnimation: true })}
-                            </TableCell>
-                            <TableCell className="text-right align-middle w-[120px] p-2">
-                              <div className="flex items-center gap-1 justify-end">
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  max={Math.max(remaining, linked)}
-                                  step={0.01}
-                                  placeholder="0"
-                                  value={linked > 0 ? linked : ""}
-                                  onChange={(e) => {
-                                    const v = e.target.value === "" ? 0 : Number(e.target.value);
-                                    setLinkPaymentAmounts((prev) => ({ ...prev, [row.id]: v }));
-                                  }}
-                                  className="h-8 w-full min-w-0 text-right tabular-nums"
-                                />
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
-                                  onClick={() => setLinkPaymentAmounts((prev) => ({ ...prev, [row.id]: 0 }))}
-                                  title="Reset this row"
-                                >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right align-middle w-[110px] font-medium tabular-nums">
-                              {formatCurrency(balanceAfterLink, { noSuffix: true, noAnimation: true })}
-                            </TableCell>
-                          </TableRow>
+                          <tr key={row.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                            <td className="p-2 w-10 whitespace-nowrap align-middle">
+                              <Checkbox
+                                checked={linked > 0}
+                                disabled={cannotAddMore}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    const cap = maxAllowed > 0 ? maxAllowed : rowMax;
+                                    const initial = cap > 0 ? (maxAllowed > 0 ? maxAllowed : Math.min(0.01, rowMax)) : 0;
+                                    if (initial > 0) setLinkPaymentAmounts((prev) => ({ ...prev, [row.id]: initial }));
+                                  } else {
+                                    setLinkPaymentAmounts((prev) => ({ ...prev, [row.id]: 0 }));
+                                  }
+                                }}
+                                title={cannotAddMore ? "Required amount already linked" : linked > 0 ? "Clear this row" : "Include this row"}
+                              />
+                            </td>
+                            <td className="p-2 text-muted-foreground whitespace-nowrap align-middle">{dateStr}</td>
+                            <td className="p-2 font-medium whitespace-nowrap align-middle">{row.voucherNumber ?? "—"}</td>
+                            <td className="p-2 whitespace-nowrap align-middle">{row.id === OPENING_BALANCE_VOUCHER_ID ? "Opening Balance" : "payment out"}</td>
+                            <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(rowAmount, { noSuffix: true })} Dr</td>
+                            <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(otherLinked, { noSuffix: true })} Dr</td>
+                            <td className="p-2 text-right text-muted-foreground whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(linked, { noSuffix: true })} Dr</td>
+                            <td className="p-2 text-right font-medium whitespace-nowrap align-middle tabular-nums">{formatCurrencyForPrint(Math.max(0, remaining - linked), { noSuffix: true })} Dr</td>
+                          </tr>
                         );
-                      })
-                    )}
-                  </TableBody>
-                </Table>
-                <ScrollBar orientation="horizontal" />
-              </ScrollArea>
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-            <div className="flex flex-shrink-0 items-center justify-end gap-4 pt-2 border-t">
-              <Button
-                type="button"
-                disabled={
-                  linkPaymentSaving ||
-                  paymentOutsForLinkDialog.length === 0 ||
-                  (Object.values(linkPaymentAmounts).every((a) => !a || a <= 0) &&
-                    !linkedPayments.some((p) => Number(linkPaymentAmounts[p.id]) === 0))
-                }
-                onClick={handleLinkPayment}
-              >
-                {linkPaymentSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                DONE
+            {selectedLinkTotal < totalForView && selectedLinkTotal > 0 && (
+              <p className="text-sm text-amber-600 font-medium px-1">Selected total is less than required. Choose more vouchers to cover the amount.</p>
+            )}
+            <div className="flex flex-shrink-0 items-center gap-2 pt-2 border-t flex-wrap justify-between">
+              <Button size="sm" onClick={() => setIsLinkPaymentDialogOpen(false)} className="h-9 rounded-full shrink-0 bg-orange-500 hover:bg-orange-600 text-white border-0">
+                Cancel
               </Button>
+              <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white border-0"
+                  disabled={totalForView <= 0 || paymentOutsForLinkDialog.length === 0}
+                  onClick={() => {
+                    const suggested: Record<string, number> = {};
+                    linkedPayments.forEach((p) => { suggested[p.id] = linkBalanceKind === "tax" ? p.taxAmount : p.netAmount; });
+                    let remainingToAllocate = totalForView - Object.values(suggested).reduce((s, a) => s + Number(a || 0), 0);
+                    if (obLinkState.showOBRow && remainingToAllocate > 0 && obLinkState.obLinkable > 0) {
+                      const fromOB = Math.min(obLinkState.obLinkable, remainingToAllocate);
+                      suggested[OPENING_BALANCE_VOUCHER_ID] = fromOB;
+                      remainingToAllocate -= fromOB;
+                    }
+                    for (const po of paymentOutsOldestFirst) {
+                      if (remainingToAllocate <= 0) break;
+                      const allocate = Math.min(po.remaining, remainingToAllocate);
+                      if (allocate > 0) { suggested[po.id] = (suggested[po.id] ?? 0) + allocate; remainingToAllocate -= allocate; }
+                    }
+                    setLinkPaymentAmounts(suggested);
+                    sonnerToast.success("Auto link amounts filled. Review and DONE.");
+                  }}
+                >
+                  <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                  Auto Link
+                </Button>
+                <Button type="button" size="sm" onClick={() => setLinkPaymentResetOpen(true)} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                  <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
+                  Reset
+                </Button>
+                <Button
+                  onClick={handleLinkPayment}
+                  disabled={linkPaymentSaving || paymentOutsForLinkDialog.length === 0 || (Object.values(linkPaymentAmounts).every((a) => !a || a <= 0) && !linkedPayments.some((p) => Number(linkPaymentAmounts[p.id]) === 0) && !(obLinkState.showOBRow && linkPaymentAmounts[OPENING_BALANCE_VOUCHER_ID] === 0))}
+                  className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0"
+                >
+                  {linkPaymentSaving ? "Saving..." : "DONE"}
+                </Button>
+              </div>
             </div>
           </div>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={linkPaymentResetOpen} onOpenChange={setLinkPaymentResetOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>Your allocations will be cleared. Nothing is saved to the server until you click save on voucher.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setLinkPaymentAmounts({}); setLinkPaymentResetOpen(false); }}>Reset</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <CreateStaffDialog
         onStaffCreated={handleStaffCreated}
         isOpen={isCreateStaffOpen}

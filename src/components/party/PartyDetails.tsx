@@ -81,7 +81,9 @@ import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesT
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -501,10 +503,18 @@ export function PartyDetails({
     [displayTransactions, statusFilter]
   );
 
+  // Sort state for footer dropdown (Statement / Bill wise); applied after status filter, before search/pagination
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+    [statusFilteredTransactions, sortBy, sortOrder]
+  );
+
   const searchFilteredTransactions = useMemo(() => {
-    if (!mobileSearchTerm.trim()) return statusFilteredTransactions;
+    if (!mobileSearchTerm.trim()) return sortedTransactions;
     const q = mobileSearchTerm.toLowerCase().trim();
-    return statusFilteredTransactions.filter((t) => {
+    return sortedTransactions.filter((t) => {
       const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
       const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
       const timeStr = d ? format(d, "h:mm a") : "";
@@ -524,7 +534,7 @@ export function PartyDetails({
         userStr.toLowerCase().includes(q)
       );
     });
-  }, [statusFilteredTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
+  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
 
   const totalPages = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
   const paginatedTransactions = rowsPerPage > 0 ? searchFilteredTransactions.slice(
@@ -808,6 +818,7 @@ export function PartyDetails({
             type="button"
             className={cn("flex-1 h-6 rounded-md text-xs font-medium shrink-0 min-w-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
             onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+            data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
           >
             {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
           </Button>
@@ -1019,7 +1030,7 @@ export function PartyDetails({
                     onPartyDeleted={() => onPartyDeleted(party.id)}
                     hasTransactions={processedTransactions.length > 0}
                   >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
                       <Edit className="h-4 w-4" />
                     </Button>
                   </EditPartyDialog>
@@ -1060,6 +1071,7 @@ export function PartyDetails({
                         id="date"
                         variant={"outline"}
                         className={cn("justify-start text-left font-normal h-10 px-2 w-auto", !dateRange && "text-muted-foreground")}
+                        data-theme-detail="date-range"
                       >
                         <CalendarIcon className="mr-2 h-4 w-4" />
                         {dateRange?.from ? (
@@ -1119,6 +1131,7 @@ export function PartyDetails({
                 size="sm"
                 className={cn("flex-shrink-0 h-10", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "")}
                 onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+                data-theme-btn={balanceMode === "bill_wise" ? "statement" : "bill-wise"}
               >
                 {balanceMode === "bill_wise" ? "Statement" : "Bill wise"}
               </Button>
@@ -1127,6 +1140,7 @@ export function PartyDetails({
                 size="sm"
                 onClick={() => setIsNoteOpen(true)}
                 className="flex-shrink-0 h-10"
+                data-theme-detail="add-note"
               >
                 <FilePlus className="mr-2 h-4 w-4" />
                 Add Note
@@ -1136,7 +1150,7 @@ export function PartyDetails({
                   All Vouchers
                 </Button>
               )}
-              <Button variant="outline" size="icon" className="h-10 w-10 flex-shrink-0" onClick={handlePrint}>
+              <Button variant="outline" size="icon" className="h-10 w-10 flex-shrink-0" onClick={handlePrint} data-theme-detail="print">
                 <Printer className="h-4 w-4" />
               </Button>
             </div>
@@ -1244,6 +1258,15 @@ export function PartyDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => {
+                  setSortBy(by);
+                  setSortOrder(order);
+                }}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

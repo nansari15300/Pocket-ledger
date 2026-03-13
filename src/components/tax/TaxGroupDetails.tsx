@@ -8,7 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -289,10 +291,17 @@ export function TaxGroupDetails({
     [processedTransactions, showNotes]
   );
 
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
+
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return displayTransactions.filter((t: any) => {
+    return sortedTransactions.filter((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -308,7 +317,7 @@ export function TaxGroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -341,8 +350,8 @@ export function TaxGroupDetails({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
-  const totalPages = Math.max(1, Math.ceil(displayTransactions.length / rowsPerPage));
-  const paginatedTransactions = displayTransactions.slice(
+  const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
+  const paginatedTransactions = sortedTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
   );
@@ -831,6 +840,12 @@ export function TaxGroupDetails({
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

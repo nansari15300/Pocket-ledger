@@ -8,9 +8,17 @@ export type BalanceMode = "statement" | "bill_wise";
 
 const STORAGE_KEY_PREFIX = "balanceMode_";
 
+/** Party/staff: one key per section so preference persists across list, details, group and after refresh. */
+function getStorageKey(pathname: string | null): string {
+  if (!pathname) return STORAGE_KEY_PREFIX + "default";
+  if (pathname.startsWith("/party")) return STORAGE_KEY_PREFIX + "party";
+  if (pathname.startsWith("/staff")) return STORAGE_KEY_PREFIX + "staff";
+  return STORAGE_KEY_PREFIX + pathname;
+}
+
 function getStored(key: string, defaultMode: BalanceMode): BalanceMode {
   if (typeof window === "undefined") return defaultMode;
-  const v = sessionStorage.getItem(key);
+  const v = localStorage.getItem(key);
   if (v === "bill_wise" || v === "statement") return v;
   return defaultMode;
 }
@@ -34,21 +42,23 @@ function getDefaultModeForPath(pathname: string | null): BalanceMode {
 export function BalanceModeProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const defaultMode = getDefaultModeForPath(pathname);
-  const storageKey = pathname ? `${STORAGE_KEY_PREFIX}${pathname}` : STORAGE_KEY_PREFIX + "default";
+  const storageKey = getStorageKey(pathname);
 
-  const [balanceMode, setBalanceModeState] = useState<BalanceMode>(() =>
-    typeof window !== "undefined" ? getStored(storageKey, defaultMode) : defaultMode
-  );
+  // Initial state fixed to avoid hydration mismatch (server has no localStorage / pathname can be null)
+  const [balanceMode, setBalanceModeState] = useState<BalanceMode>("statement");
 
+  // Client-only: sync from localStorage using actual URL so we get correct key even if pathname was null
   useEffect(() => {
-    setBalanceModeState(getStored(storageKey, defaultMode));
-  }, [storageKey, defaultMode]);
+    const path = typeof window !== "undefined" ? window.location.pathname : null;
+    const key = getStorageKey(path);
+    const defaultForPath = getDefaultModeForPath(path);
+    setBalanceModeState(getStored(key, defaultForPath));
+  }, [pathname]);
 
   const setBalanceMode = useCallback((mode: BalanceMode) => {
     setBalanceModeState(mode);
-    if (pathname) sessionStorage.setItem(`${STORAGE_KEY_PREFIX}${pathname}`, mode);
-    else sessionStorage.setItem(STORAGE_KEY_PREFIX + "default", mode);
-  }, [pathname]);
+    localStorage.setItem(storageKey, mode);
+  }, [storageKey]);
 
   const value: BalanceModeContextType = {
     balanceMode,

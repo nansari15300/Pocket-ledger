@@ -83,6 +83,40 @@ export function getAllocatedByVoucherIdFromPaymentOuts(vouchers: any[]): Map<str
   return map;
 }
 
+/** Allocations TO Sale from Purchase (purchase return). For bill-wise status: Sale receives from Purchase; used so Status shows Paid/Partial. */
+export function getAllocatedByVoucherIdFromPurchase(vouchers: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const v of vouchers) {
+    if (v.type !== "purchase" && v.type !== "purchase_service") continue;
+    const allocations = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      if (!a.voucherId) continue;
+      map.set(a.voucherId, (map.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+    }
+  }
+  return map;
+}
+
+/** Allocations TO Purchase from Sale (sale return). For bill-wise status: Purchase receives from Sale; used so Status shows Paid/Partial. */
+export function getAllocatedByVoucherIdFromSale(vouchers: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const v of vouchers) {
+    if (v.type !== "sale" && v.type !== "sale_service") continue;
+    const allocations = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      if (!a.voucherId) continue;
+      map.set(a.voucherId, (map.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+    }
+  }
+  return map;
+}
+
+/** Amount this Sale/Purchase has allocated OUT to opposite type (reduces own outstanding). E.g. Purchase linked to Sale from Sale form → Purchase allocated to Sale → Purchase status should update. */
+export function getOutgoingAllocatedToOpposite(voucher: any): number {
+  const allocations = (voucher.allocations as Allocation[] | undefined) || [];
+  return allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+}
+
 export type TaxNetAllocated = { tax: number; net: number };
 
 /**
@@ -120,6 +154,18 @@ export function getPaymentInRemaining(v: any): number {
  */
 export function getPaymentOutRemaining(v: any): number {
   const amount = Number(v.amount ?? v.total ?? 0);
+  const allocations = (v.allocations as Allocation[] | undefined) || [];
+  const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
+  return Math.max(0, amount - allocated);
+}
+
+/**
+ * For any voucher with amount and allocations: remaining = amount - total allocated.
+ * Used for purchase, sale, etc. when they act as bill-wise link sources.
+ * Sale/Purchase use total; prefer total for correct remaining.
+ */
+export function getVoucherRemaining(v: any): number {
+  const amount = Number(v.total ?? v.amount ?? 0);
   const allocations = (v.allocations as Allocation[] | undefined) || [];
   const allocated = allocations.reduce((s, a) => s + getAllocationTotal(a), 0);
   return Math.max(0, amount - allocated);
@@ -232,8 +278,8 @@ export function getLinkedAmountsToVoucher(
 
   const paymentTypes =
     type === "sale"
-      ? ["payment_in", "direct_income"]
-      : ["payment_out", "direct_expense"];
+      ? ["payment_in", "direct_income", "purchase", "purchase_service"]
+      : ["payment_out", "direct_expense", "sale", "sale_service"];
 
   const rows: LinkedAmountRow[] = [];
 
@@ -276,6 +322,73 @@ export function getLinkedAmountsToVoucher(
   return rows;
 }
 
+/**
+ * For a sale or purchase voucher, return rows when THIS voucher has allocated TO others (outgoing links).
+ * E.g. Purchase linked to Sale from Sale form → allocation on Purchase; Purchase form should show "linked to Sale".
+ */
+export function getOutgoingLinkedAmountRows(
+  vouchers: any[],
+  targetVoucherId: string | null | undefined,
+  type: "sale" | "purchase",
+  kind: LinkedAmountKind = "all"
+): LinkedAmountRow[] {
+  if (!targetVoucherId || !vouchers?.length) return [];
+  const targetVoucher = vouchers.find((v) => v.id === targetVoucherId);
+  if (!targetVoucher) return [];
+  const allocations = (targetVoucher.allocations as Allocation[] | undefined) || [];
+  const oppositeTypes = type === "sale" ? ["purchase", "purchase_service"] : ["sale", "sale_service"];
+  const rows: LinkedAmountRow[] = [];
+  for (const a of allocations) {
+    if (!a.voucherId) continue;
+    const toVoucher = vouchers.find((v) => v.id === a.voucherId);
+    if (!toVoucher || !oppositeTypes.includes(toVoucher.type)) continue;
+    const amt = kind === "tax" ? getTaxFromAllocation(a) : kind === "net" ? getNetFromAllocation(a) : getAllocationTotal(a);
+    if (amt <= 0) continue;
+    const date = safeToDate(toVoucher.date);
+    rows.push({
+      date,
+      voucherNumber: (toVoucher.voucherNumber ?? toVoucher.voucher_number ?? "") as string,
+      amount: amt,
+      paymentVoucherId: toVoucher.id,
+    });
+  }
+  rows.sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+  return rows;
+}
+
+/**
+ * Build linked-amount rows from pending allocations (e.g. after user clicks DONE in link dialog).
+ * Used so the voucher form shows updated link list before Save; same shape as getLinkedAmountsToVoucher.
+ */
+export function getLinkedAmountRowsFromPending(
+  pending: Record<string, number>,
+  vouchers: any[],
+  type: "sale" | "purchase"
+): LinkedAmountRow[] {
+  if (!pending || !vouchers?.length) return [];
+  const paymentTypes = type === "sale" ? ["payment_in", "direct_income", "purchase", "purchase_service"] : ["payment_out", "direct_expense", "sale", "sale_service"];
+  const rows: LinkedAmountRow[] = [];
+  const obAmt = Number(pending[OPENING_BALANCE_VOUCHER_ID]) || 0;
+  if (obAmt > 0) rows.push({ date: null, voucherNumber: "Opening Balance", amount: obAmt, paymentVoucherId: OPENING_BALANCE_VOUCHER_ID });
+  for (const [voucherId, amount] of Object.entries(pending)) {
+    const amt = Number(amount) || 0;
+    if (amt <= 0 || voucherId === OPENING_BALANCE_VOUCHER_ID) continue;
+    const v = vouchers.find((x: any) => x.id === voucherId);
+    if (!v || !paymentTypes.includes(v.type)) continue;
+    const date = safeToDate(v.date);
+    rows.push({ date, voucherNumber: (v.voucherNumber ?? v.voucher_number ?? "") as string, amount: amt, paymentVoucherId: voucherId });
+  }
+  rows.sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+  return rows;
+}
+
+/** Merge incoming and outgoing linked rows, sort by date. */
+export function mergeLinkedRows(incoming: LinkedAmountRow[], outgoing: LinkedAmountRow[]): LinkedAmountRow[] {
+  const result = [...incoming, ...outgoing];
+  result.sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+  return result;
+}
+
 /** Returns true if the voucher has payment links (allocations or linked voucher refs). Such vouchers should not be deleted until unlinked. */
 export function hasPaymentLinks(voucherData: any): boolean {
   if (!voucherData) return false;
@@ -283,6 +396,24 @@ export function hasPaymentLinks(voucherData: any): boolean {
   const to = (voucherData.linkedToVoucherNos as string[] | undefined) ?? [];
   const alloc = (voucherData.allocations as any[] | undefined) ?? [];
   return from.length > 0 || to.length > 0 || alloc.length > 0;
+}
+
+/**
+ * Returns true if any payment_in, direct_income, payment_out or direct_expense voucher in allVouchers
+ * has allocations targeting the given voucherId (bill-wise link to a sale/purchase).
+ * Used so sale/purchase edit is disabled when linked from "Link to Txns".
+ */
+export function hasAllocationsToVoucherId(voucherId: string, allVouchers: any[]): boolean {
+  if (!voucherId || !Array.isArray(allVouchers)) return false;
+  for (const v of allVouchers) {
+    if (v.isDeleted) continue;
+    const type = v.type;
+    const isBillWiseSource = ["payment_in", "direct_income", "payment_out", "direct_expense", "purchase", "purchase_service", "sale", "sale_service"].includes(type);
+    if (!isBillWiseSource) continue;
+    const allocations = (v.allocations as Allocation[] | undefined) ?? [];
+    if (allocations.some((a) => a.voucherId === voucherId)) return true;
+  }
+  return false;
 }
 
 /** Returns true if the voucher has spend-wise links (Link for spend wise). Used with bill-wise hasPaymentLinks to disable voucher edit until both are unlinked. */

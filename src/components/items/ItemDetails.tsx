@@ -4,7 +4,9 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -438,8 +440,14 @@ export default function ItemDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
-  const totalPages = Math.ceil(displayTransactions.length / rowsPerPage);
-  const paginatedTransactions = displayTransactions.slice(
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
+  const totalPages = Math.ceil(sortedTransactions.length / rowsPerPage);
+  const paginatedTransactions = sortedTransactions.slice(
     (currentPage - 1) * rowsPerPage,
     currentPage * rowsPerPage
   );
@@ -516,10 +524,10 @@ export default function ItemDetails({
   };
   
   const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return displayTransactions;
+    if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
     
-    return displayTransactions.filter((t: any) => {
+    return sortedTransactions.filter((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
@@ -535,7 +543,7 @@ export default function ItemDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [displayTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
 
   // Mobile: show last 10 when no date filter (like Party), all when date filter applied
   const mobileDisplayTransactions = useMemo(() => {
@@ -1037,6 +1045,12 @@ export default function ItemDetails({
                </div>
              </div>
              <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+               <TransactionTableSortDropdown
+                 sortBy={sortBy}
+                 sortOrder={sortOrder}
+                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                 viewMode="statement"
+               />
                <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
                <Select
                  value={`${rowsPerPage}`}

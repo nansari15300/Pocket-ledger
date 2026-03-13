@@ -28,6 +28,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { sortTransactions } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -192,12 +194,19 @@ export function OverdueAccountView({
     return list;
   }, [overdueTransactions, filters, userNames]);
 
-  const totalPages = rowsPerPage <= 0 ? 1 : Math.max(1, Math.ceil(filteredRows.length / rowsPerPage));
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedRows = useMemo(
+    () => sortTransactions(filteredRows, sortBy, sortOrder),
+    [filteredRows, sortBy, sortOrder]
+  );
+
+  const totalPages = rowsPerPage <= 0 ? 1 : Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
   const paginatedRows = useMemo(() => {
-    if (rowsPerPage <= 0) return filteredRows;
+    if (rowsPerPage <= 0) return sortedRows;
     const start = (currentPage - 1) * rowsPerPage;
-    return filteredRows.slice(start, start + rowsPerPage);
-  }, [filteredRows, currentPage, rowsPerPage]);
+    return sortedRows.slice(start, start + rowsPerPage);
+  }, [sortedRows, currentPage, rowsPerPage]);
 
   useEffect(() => {
     if (selectedId && !paginatedRows.some((t) => t.id === selectedId)) setSelectedId(null);
@@ -272,8 +281,8 @@ export function OverdueAccountView({
     );
   };
 
-  const totalDebit = filteredRows.reduce((s, t) => s + (t.debit || 0), 0);
-  const totalCredit = filteredRows.reduce((s, t) => s + (t.credit || 0), 0);
+  const totalDebit = sortedRows.reduce((s, t) => s + (t.debit || 0), 0);
+  const totalCredit = sortedRows.reduce((s, t) => s + (t.credit || 0), 0);
 
   const runPrintDirect = async () => {
     if (!company) {
@@ -297,9 +306,9 @@ export function OverdueAccountView({
           context: "overdue",
           dateSystem: dateSystem === "BS" ? "BS" : dateSystem === "AD" ? "AD" : "Both",
           dateRangeText: "All overdue vouchers across parties",
-          vouchersCount: filteredRows.length,
+          vouchersCount: sortedRows.length,
           openingBalance: 0,
-          transactions: filteredRows,
+          transactions: sortedRows,
           userNames,
           showNarration,
         },
@@ -544,7 +553,7 @@ export function OverdueAccountView({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{filteredRows.length} voucher(s).</span>
+              <span className="whitespace-nowrap flex-shrink-0">{sortedRows.length} voucher(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox
                   id="show-narration-overdue"
@@ -582,6 +591,12 @@ export function OverdueAccountView({
               </DropdownMenu>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
+              <TransactionTableSortDropdown
+                sortBy={sortBy}
+                sortOrder={sortOrder}
+                onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+                viewMode="statement"
+              />
               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
               <Select
                 value={`${rowsPerPage}`}

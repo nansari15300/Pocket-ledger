@@ -78,7 +78,9 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
+import { sortTransactions } from "@/lib/transactionSort";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -237,12 +239,19 @@ export function PayeeDetails({
     () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
     [processedTransactions, showNotes]
   );
+
+  const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const sortedTransactions = useMemo(
+    () => sortTransactions(displayTransactions, sortBy, sortOrder),
+    [displayTransactions, sortBy, sortOrder]
+  );
   
-  const totalPages = rowsPerPage > 0 ? Math.ceil(displayTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions = rowsPerPage > 0 ? displayTransactions.slice(
+  const totalPages = rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
+  const paginatedTransactions = rowsPerPage > 0 ? sortedTransactions.slice(
       (currentPage - 1) * rowsPerPage,
       currentPage * rowsPerPage
-  ) : displayTransactions;
+  ) : sortedTransactions;
 
   const buildDateRangeText = () => {
     if (!dateRange?.from) return "All Time";
@@ -496,6 +505,12 @@ export function PayeeDetails({
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            <TransactionTableSortDropdown
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
+              viewMode="statement"
+            />
             <p className="text-sm font-medium">Rows per page</p>
             <Select
               value={`${rowsPerPage}`}

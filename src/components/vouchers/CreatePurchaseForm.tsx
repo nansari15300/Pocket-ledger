@@ -55,9 +55,10 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/l
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
-import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
+import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
-import { getLinkedAmountsToVoucher, hasPaymentLinks } from "@/lib/payment-allocation-utils";
+import { useAdvancesLinkableCount } from "@/hooks/useAdvancesForVoucher";
+import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 
 import { firestore, storage } from "@/lib/firebase";
 import {
@@ -224,6 +225,7 @@ export function CreatePurchaseForm({
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  onEffectiveLinksChange,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -235,6 +237,8 @@ export function CreatePurchaseForm({
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  /** Report effective has-links so dialog can hide banner and enable fields when user unlinks locally. */
+  onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
 }) {
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
@@ -263,6 +267,7 @@ export function CreatePurchaseForm({
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkAdvancesOpen, setIsLinkAdvancesOpen] = useState(false);
+  const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher;
@@ -290,7 +295,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -308,8 +313,59 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const selectedTax = useMemo(() => processedTaxes.find((t) => t.id === lineItemTaxId), [lineItemTaxId, processedTaxes]);
 
   const voucherIdForLinks = voucher?.id ?? savedVoucherId;
-  const linkedAmountRows = useMemo(() => getLinkedAmountsToVoucher(vouchers, voucherIdForLinks, "purchase", "all"), [vouchers, voucherIdForLinks]);
+  // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
+  const effectiveLinkedRows = useMemo(() => {
+    const incoming = pendingLinkAllocations != null && vouchers?.length
+      ? getLinkedAmountRowsFromPending(pendingLinkAllocations, vouchers, "purchase")
+      : getLinkedAmountsToVoucher(vouchers, voucherIdForLinks, "purchase", "all");
+    let outgoing = getOutgoingLinkedAmountRows(vouchers, voucherIdForLinks, "purchase", "all");
+    if (pendingLinkAllocations != null) {
+      const pendingIds = new Set(Object.keys(pendingLinkAllocations));
+      outgoing = outgoing.filter((r) => r.paymentVoucherId && pendingIds.has(r.paymentVoucherId));
+    }
+    return mergeLinkedRows(incoming, outgoing);
+  }, [vouchers, voucherIdForLinks, pendingLinkAllocations]);
+  const linkedAmountRows = effectiveLinkedRows;
   const totalLinked = useMemo(() => linkedAmountRows.reduce((s, r) => s + r.amount, 0), [linkedAmountRows]);
+  // Report effective link state to dialog so banner/fields follow local unlink (pending = {} → no links → enable edit)
+  useEffect(() => {
+    if (!onEffectiveLinksChange) return;
+    if (pendingLinkAllocations === null) {
+      onEffectiveLinksChange(undefined);
+      return;
+    }
+    onEffectiveLinksChange(linkedAmountRows.length > 0);
+  }, [onEffectiveLinksChange, pendingLinkAllocations, linkedAmountRows.length]);
+  // Convert to Record for dialog initial state so edit link page shows correct tick (avoids stale vouchers)
+  const effectiveLinkedAmountsForDialog = useMemo(() => {
+    const r: Record<string, number> = {};
+    for (const row of linkedAmountRows) {
+      if (row.paymentVoucherId) r[row.paymentVoucherId] = row.amount;
+    }
+    return r;
+  }, [linkedAmountRows]);
+  /** Per payment_out: total voucher amount and total allocated (for Amount, Linked on others, Linked on current columns). */
+  const paymentVoucherDetails = useMemo(() => {
+    const m = new Map<string, { total: number; totalAllocated: number }>();
+    if (!vouchers?.length) return m;
+    for (const v of vouchers) {
+      if (v.type !== "payment_out" && v.type !== "direct_expense") continue;
+      const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+      const allocations = ((v as any).allocations as { amount?: number; voucherId?: string }[] | undefined) || [];
+      const totalAllocated = allocations.reduce((s, a) => s + getAllocationTotal(a as any), 0);
+      m.set(v.id, { total, totalAllocated });
+    }
+    return m;
+  }, [vouchers]);
+  /** Bill wise: count of Payment Out / Direct Expense vouchers for this party with unallocated amount (available to link to this purchase). Message uses "bcz" spelling. */
+  /** Bill wise: same count as Link to Dr popup (OB row + payment out/sale list). */
+  const billWiseLinkableCount = useAdvancesLinkableCount(
+    "purchase",
+    partyId,
+    voucher?.id ?? savedVoucherId ?? undefined,
+    vouchers ?? [],
+    processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0
+  );
   const hasItemEditLock = linkedAmountRows.length > 0;
 
   const transactionDates = useMemo(() => {
@@ -805,6 +861,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             throw new Error("Failed to save voucher and get ID.");
         }
 
+        // Apply pending bill-wise link allocations (from Link payment dialog DONE — local only until Save)
+        if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
+          const partyIdForLink = data.partyId ?? form.getValues("partyId");
+          if (partyIdForLink) {
+            const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
+            const showOBRow = (Number(partyForOb?.openingBalance ?? 0) > 0);
+            try {
+              await applyAdvancesAllocationsToServer({
+                companyId,
+                mode: "purchase",
+                targetVoucherId: docId,
+                targetPartyId: partyIdForLink,
+                balanceKind: "all",
+                linkedAmounts: pendingLinkAllocations,
+                vouchers,
+                showOBRow,
+              });
+              if (isMounted.current) setPendingLinkAllocations(null);
+            } catch (e) {
+              console.error(e);
+              sonnerToast.error("Purchase saved but linking advances failed.");
+            }
+          }
+        }
+
         if (approveAfterSave && savedDoc?.id) {
           if (!isEditForApprove) {
             await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
@@ -892,7 +973,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (isMounted.current) setIsLoading(false);
       }
     },
-    [companyId, user, files, onVoucherAction, triggerSync, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber]
+    // pendingLinkAllocations, vouchers, processedParties: required so link data is persisted to server on Save (avoids stale closure)
+    [companyId, user, files, onVoucherAction, triggerSync, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
   );
 
 
@@ -1421,16 +1503,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 "border rounded-lg overflow-hidden relative",
                 isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px]" : "px-[2px]"
               )}>
-                {(hasItemEditLock || deleteDisabledWhenLinked) && (
-                  <div className="absolute inset-0 z-10 flex flex-col rounded-lg bg-muted/25">
-                    <div className="flex-shrink-0 border-b border-amber-500/40 bg-amber-50 dark:bg-amber-950/40 px-4 py-2.5 rounded-t-lg">
-                      <p className="text-sm font-medium text-amber-800 dark:text-amber-200 text-center">
-                        Items locked — Unlink via &quot;Link to Txns&quot; to edit.
-                      </p>
-                    </div>
-                    <div className="flex-1 min-h-0" aria-hidden />
-                  </div>
-                )}
                 {isMobile ? (
                   // Mobile View: No scrollable container, broken rows
                   <div className="w-full">
@@ -1445,6 +1517,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           uc.fromUnit,
                           uc.toUnit,
                         ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
+                        const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 
                       return (
                         <div key={line.id} className="border-t px-[2px] py-2 space-y-2">
@@ -1458,6 +1531,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
+                                  disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
                                       setIsCreateItemOpen(true);
@@ -1500,7 +1574,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem>
                                   <FormLabel className="text-xs">Qty</FormLabel>
                                   <FormControl>
-                                    <Input type="number" {...field} className="h-9 text-xs text-right" />
+                                    <Input type="number" {...field} className="h-9 text-xs text-right" disabled={itemFieldsDisabled} />
                                   </FormControl>
                                 </FormItem>
                               )}
@@ -1519,8 +1593,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                             <Input
                                               type="number"
                                               {...field}
-                                              disabled={!isRateEditingAllowed}
-                                              className={cn("h-9 text-xs text-right", !isRateEditingAllowed && 'bg-muted cursor-not-allowed')}
+                                              disabled={itemFieldsDisabled || !isRateEditingAllowed}
+                                              className={cn("h-9 text-xs text-right", (itemFieldsDisabled || !isRateEditingAllowed) && 'bg-muted cursor-not-allowed')}
                                               title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
                                             />
                                           </div>
@@ -1555,6 +1629,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       }
                                     }}
                                     value={field.value}
+                                    disabled={itemFieldsDisabled}
                                   >
                                     <FormControl>
                                       <SelectTrigger className="h-9 text-xs">
@@ -1586,6 +1661,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           label: `${t.name} @ ${t.rate}%`,
                                         }))}
                                         value={field.value}
+                                        disabled={itemFieldsDisabled}
                                         onChange={(val, newName) => {
                                           if (val === "add-new") {
                                             setTaxRowIndex(index);
@@ -1619,7 +1695,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <FormLabel className="text-xs">Tax Inc.</FormLabel>
                                   <div className="flex items-center h-9">
                                     <FormControl>
-                                      <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                                      <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
                                     </FormControl>
                                   </div>
                                 </FormItem>
@@ -1673,6 +1749,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               type="button"
                               variant="ghost"
                               size="sm"
+                              disabled={itemFieldsDisabled}
                               onClick={() => remove(index)}
                               className="h-8 w-8 p-0"
                             >
@@ -1746,6 +1823,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             uc.fromUnit,
                             uc.toUnit,
                           ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
+                        const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 
                         return (
                           <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
@@ -1758,6 +1836,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
+                                  disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
                                       setIsCreateItemOpen(true);
@@ -1795,7 +1874,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.quantity`}
                             render={({ field }: any) => (
                               <FormControl>
-                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right")} />
+                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right")} disabled={itemFieldsDisabled} />
                               </FormControl>
                             )}
                           />
@@ -1817,6 +1896,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       }
                                   }}
                                   value={field.value}
+                                  disabled={itemFieldsDisabled}
                                 >
                                   <FormControl>
                                     <SelectTrigger className={FLAT_SELECT_TRIGGER}>
@@ -1849,8 +1929,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         <Input
                                           type="number"
                                           {...field}
-                                          disabled={!isRateEditingAllowed}
-                                          className={cn(FLAT_INPUT, !isRateEditingAllowed && 'bg-muted cursor-not-allowed', "text-right")}
+                                          disabled={itemFieldsDisabled || !isRateEditingAllowed}
+                                          className={cn(FLAT_INPUT, (itemFieldsDisabled || !isRateEditingAllowed) && 'bg-muted cursor-not-allowed', "text-right")}
                                           title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
                                         />
                                       </div>
@@ -1875,7 +1955,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem className="flex items-center">
                                 <FormControl>
-                                  <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                                  <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
                                 </FormControl>
                               </FormItem>
                             )}
@@ -1892,6 +1972,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     label: `${t.name} @ ${t.rate}%`,
                                   }))}
                                   value={field.value}
+                                  disabled={itemFieldsDisabled}
                                   onChange={(val, newName) => {
                                     if (val === "add-new") {
                                       setTaxRowIndex(index);
@@ -1954,6 +2035,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               type="button"
                               variant="ghost"
                               size="icon"
+                              disabled={itemFieldsDisabled}
                               onClick={() => remove(index)}
                               aria-label="Remove line"
                             >
@@ -2053,7 +2135,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   isRange={false}
                                   numberOfMonths={1}
                                   className="h-9 text-sm w-full"
-                                  disabled={deleteDisabledWhenLinked}
                                 />
                               </div>
                             )}
@@ -2066,7 +2147,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         variant="outline"
                                         size="sm"
                                         className={cn("w-full justify-start text-left font-normal text-sm", !field.value && "text-muted-foreground")}
-                                        disabled={deleteDisabledWhenLinked}
                                       >
                                         <CalendarIcon className="mr-2 h-4 w-4" />
                                         {field.value ? formatDate(field.value) : "Pick date"}
@@ -2146,85 +2226,125 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </FormItem>
                   </div>
                   
-                  {/* Mobile: Totals - 2 Columns Layout */}
-                  <div className="col-span-1 bg-muted/20 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs">Sub Total:</span>
-                      <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
-                    </div>
-                   
-                    <FormField
-                      control={form.control}
-                      name="discount"
-                      render={({ field }: any) => (
-                        <FormItem className="space-y-1">
-                          <FormLabel className="text-xs">Discount:</FormLabel>
-                          <FormControl>
-                            <Input type="number" className="w-full border rounded p-1 text-right text-xs h-7" {...field} disabled={deleteDisabledWhenLinked} />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                  
-                  <div className="col-span-1 bg-muted/20 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
-                    <div className="flex justify-between items-center">
+                  {/* Mobile: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap between */}
+                  <div className="col-span-2 flex flex-col gap-[15px] w-full">
+                    {/* Container 1: Sub total se total tak */}
+                    <div className="bg-muted/20 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs">Sub Total:</span>
+                        <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
+                      </div>
+                      <FormField
+                        control={form.control}
+                        name="discount"
+                        render={({ field }: any) => (
+                          <FormItem className="flex flex-row justify-between items-center gap-2 space-y-0">
+                            <FormLabel className="text-xs shrink-0">Discount:</FormLabel>
+                            <FormControl>
+                              <Input type="number" className="w-20 border rounded p-1 text-right text-xs h-7 shrink-0" {...field} disabled={deleteDisabledWhenLinked} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <div className="flex justify-between items-center pt-1 border-t">
                         <div className="flex items-center gap-1">
                           <FormLabel className="text-xs">Tax:</FormLabel>
-                           {selectedTax && (
-                              <FormLabel className={cn("text-[10px] font-semibold", selectedTax.balance < 0 ? 'text-red-600' : 'text-green-600')}>
-                                 {selectedTax.balance < 0 ? `Pay: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Rec: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
-                              </FormLabel>
+                          {selectedTax && (
+                            <FormLabel className={cn("text-[10px] font-semibold", selectedTax.balance < 0 ? "text-red-600" : "text-green-600")}>
+                              {selectedTax.balance < 0 ? `Pay: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Rec: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
+                            </FormLabel>
                           )}
                         </div>
                         <span className="text-xs font-medium">{(tax || 0).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center pt-1 border-t text-base font-bold">
+                        <span className="text-sm">Total:</span>
+                        <span className="text-red-600 text-sm">{(total || 0).toFixed(2)}</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between items-center pt-1 border-t text-base font-bold">
-                      <span className="text-sm">Total:</span>
-                      <span className="text-red-600 text-sm">{(total || 0).toFixed(2)}</span>
-                    </div>
-                    {isEditing && (
-                      <>
+                    {/* Container 2: Link for bill wise — same table/style as Payment Out. Shown for both new and edit so user can link before/after save. */}
+                    {(isEditing || partyId) && (
+                      <div className="bg-muted/30 rounded-lg border-2 border-border px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
+                        <div className="border-b border-border/60 pb-2">
+                          <span className="text-xs font-semibold">Link for bill wise</span>
+                          {company?.enableLinkPaymentToTxns && (
+                            <p className="text-xs text-blue-600 mt-1">
+                              {billWiseLinkableCount > 0
+                                ? `${billWiseLinkableCount} voucher${billWiseLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
+                                : "You can save this voucher without linking, bcz no voucher to link."}
+                            </p>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {billWiseLinkableCount} voucher(s) available to link.{linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
+                          </p>
+                        </div>
                         {linkedAmountRows.length > 0 && (
-                          <div className="pt-1.5 border-t space-y-1">
-                            <div className="grid grid-cols-[1fr_1fr_auto] gap-1 text-[10px] font-medium text-muted-foreground">
-                              <span>Date</span>
-                              <span>Linked voucher no.</span>
-                              <span className="text-right">Amount</span>
-                            </div>
-                            {linkedAmountRows.map((row, i) => (
-                              <div
-                                key={i}
-                                {...(can('edit_link')
-                                  ? { role: "button" as const, tabIndex: 0, className: "grid grid-cols-[1fr_1fr_auto] gap-1 text-[10px] rounded px-1 py-0.5 -mx-1 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 items-center", onClick: () => setIsLinkAdvancesOpen(true), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsLinkAdvancesOpen(true); } } }
-                                  : { className: "grid grid-cols-[1fr_1fr_auto] gap-1 text-[10px] rounded px-1 py-0.5 -mx-1 items-center" })}
-                              >
-                                <span className="text-muted-foreground truncate">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</span>
-                                <span className="text-muted-foreground truncate">{row.voucherNumber || "—"}</span>
-                                <span className="font-medium shrink-0 text-green-600 text-right">{formatCurrencyForPrint(row.amount, { noSuffix: true, noAnimation: true })}</span>
-                              </div>
-                            ))}
+                          <div className="overflow-x-auto min-w-0 rounded-md border">
+                            <table className="w-full text-[10px] border-collapse min-w-0">
+                              <thead>
+                                <tr className="border-b bg-muted/50">
+                                  <th className="text-left p-1.5 font-semibold text-black whitespace-nowrap">Date</th>
+                                  <th className="text-left p-1.5 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                                  <th className="text-right p-1.5 font-semibold text-black whitespace-nowrap">Amount</th>
+                                  <th className="text-right p-1.5 font-semibold text-black whitespace-nowrap">Linked on others</th>
+                                  <th className="text-right p-1.5 font-semibold text-black whitespace-nowrap">Linked on current</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {linkedAmountRows.map((row, i) => {
+                                  const isOB = row.paymentVoucherId === OPENING_BALANCE_VOUCHER_ID;
+                                  const details = isOB ? null : paymentVoucherDetails.get(row.paymentVoucherId ?? "");
+                                  const rowAmount = details?.total ?? row.amount;
+                                  const linkedOnOthers = isOB ? 0 : Math.max(0, (details?.totalAllocated ?? 0) - row.amount);
+                                  return (
+                                    <tr
+                                      key={i}
+                                      {...(can("edit_link")
+                                        ? { role: "button" as const, tabIndex: 0, className: "border-b border-border/30 last:border-b-0 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1", onClick: () => setIsLinkAdvancesOpen(true), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsLinkAdvancesOpen(true); } } }
+                                        : { className: "border-b border-border/30 last:border-b-0" })}
+                                    >
+                                      <td className="p-1.5 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                      <td className="p-1.5 font-medium whitespace-nowrap">{row.voucherNumber || "—"}</td>
+                                      <td className="p-1.5 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrencyForPrint(rowAmount, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-1.5 text-right text-muted-foreground whitespace-nowrap">{formatCurrencyForPrint(linkedOnOthers, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-1.5 text-right text-muted-foreground whitespace-nowrap">{formatCurrencyForPrint(row.amount, { noSuffix: true, noAnimation: true })}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         )}
-                        <div className="pt-1.5 border-t">
-                          <div className={cn("flex justify-between items-center text-[10px] font-medium", ((total || 0) - totalLinked) <= 0 ? "text-green-600" : "text-red-600")}>
-                            <span>{(total || 0) - totalLinked <= 0 ? "Balance: Settled" : "Due Balance:"}</span>
-                            <span>{(total || 0) - totalLinked <= 0 ? "" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}</span>
+                        <div className="pt-2 border-t flex justify-end min-w-0">
+                          <div className="grid grid-cols-2 gap-1.5 text-[10px] w-fit">
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                              <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrencyForPrint(totalLinked, { noSuffix: true, noAnimation: true })}</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate leading-tight">Balance</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", (total || 0) - totalLinked <= 0 ? "text-green-600 font-semibold" : "")}>
+                                {(total || 0) - totalLinked <= 0 ? "Settled" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        {partyId && company?.enableLinkPaymentToTxns !== false && can('add_link') && (
-                          <div className="mt-[5px] flex flex-wrap items-center gap-1.5">
+                        {partyId && can("add_link") && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
-                              <Link2 className="mr-2 h-4 w-4" /> Link to Txns
+                              <Link2 className="mr-2 h-4 w-4" /> Link to Dr
                             </Button>
-                            {/* Read me to the right of Link to Txns, inside the link section box */}
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                               <Info className="h-4 w-4 shrink-0" />
                               Read me
                             </Button>
                           </div>
                         )}
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2278,7 +2398,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     isRange={false}
                                     numberOfMonths={1}
                                     className="h-9 w-full"
-                                    disabled={deleteDisabledWhenLinked}
                                   />
                                 </div>
                               )}
@@ -2290,7 +2409,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         <Button
                                           variant="outline"
                                           className={cn("w-full justify-start text-left font-normal h-9", !field.value && "text-muted-foreground")}
-                                          disabled={deleteDisabledWhenLinked}
                                         >
                                           <CalendarIcon className="mr-2 h-4 w-4" />
                                           {field.value ? formatDate(field.value) : "Pick date"}
@@ -2364,84 +2482,126 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </FormItem>
                   </div>
 
-                  {/* Desktop: Right: Totals */}
-                  <div className="space-y-4 border rounded-lg px-[2px] py-4 bg-muted/20 w-full">
-                    <div className="flex justify-between items-center font-medium">
-                      <span>Sub Total:</span>
-                      <span>{(subTotal || 0).toFixed(2)}</span>
-                    </div>
-                     
-                    <FormField
-                      control={form.control}
-                      name="discount"
-                      render={({ field }: any) => (
-                        <FormItem className="flex justify-between items-center">
-                          <FormLabel>Discount:</FormLabel>
-                          <FormControl>
-                            <Input type="number" className="w-32 text-right" {...field} disabled={deleteDisabledWhenLinked} />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                    <div className="flex justify-between items-center">
+                  {/* Desktop: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap, same as mobile */}
+                  <div className="flex flex-col gap-[15px] w-full">
+                    {/* Container 1: Sub total se total tak */}
+                    <div className="space-y-4 border rounded-lg px-[2px] py-4 bg-muted/20 w-full">
+                      <div className="flex justify-between items-center font-medium">
+                        <span>Sub Total:</span>
+                        <span>{(subTotal || 0).toFixed(2)}</span>
+                      </div>
+                      <FormField
+                        control={form.control}
+                        name="discount"
+                        render={({ field }: any) => (
+                          <FormItem className="flex justify-between items-center">
+                            <FormLabel>Discount:</FormLabel>
+                            <FormControl>
+                              <Input type="number" className="w-32 text-right" {...field} disabled={deleteDisabledWhenLinked} />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <div className="flex justify-between items-center">
                         <div className="flex items-center gap-2">
                           <FormLabel>Tax:</FormLabel>
-                           {selectedTax && (
-                              <FormLabel className={cn("text-xs font-semibold", selectedTax.balance < 0 ? 'text-red-600' : 'text-green-600')}>
-                                 {selectedTax.balance < 0 ? `Payable: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Receivable: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
-                              </FormLabel>
+                          {selectedTax && (
+                            <FormLabel className={cn("text-xs font-semibold", selectedTax.balance < 0 ? 'text-red-600' : 'text-green-600')}>
+                              {selectedTax.balance < 0 ? `Payable: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Receivable: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
+                            </FormLabel>
                           )}
                         </div>
                         <span className="w-32 text-right">{(tax || 0).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-lg font-bold border-t pt-2 mt-2">
+                        <span>Total:</span>
+                        <span className="text-red-600">{(total || 0).toFixed(2)}</span>
+                      </div>
                     </div>
-                    <div className="flex justify-between items-center text-lg font-bold border-t pt-2 mt-2">
-                      <span>Total:</span>
-                      <span className="text-red-600">{(total || 0).toFixed(2)}</span>
-                    </div>
-                    {isEditing && (
-                      <>
+                    {/* Container 2: Link for bill wise — same table/style as Payment Out. Shown for both new and edit so user can link before/after save. */}
+                    {(isEditing || partyId) && (
+                      <div className="space-y-4 border-2 border-border rounded-lg px-[2px] py-4 pb-[45px] bg-muted/30 w-full">
+                        <div className="border-b border-border/60 pb-2">
+                          <span className="text-sm font-semibold">Link for bill wise</span>
+                          {company?.enableLinkPaymentToTxns && (
+                            <p className="text-sm text-blue-600 mt-1">
+                              {billWiseLinkableCount > 0
+                                ? `${billWiseLinkableCount} voucher${billWiseLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
+                                : "You can save this voucher without linking, bcz no voucher to link."}
+                            </p>
+                          )}
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {billWiseLinkableCount} voucher(s) available to link.{linkedAmountRows.length > 0 && ` ${linkedAmountRows.length} linked.`}
+                          </p>
+                        </div>
                         {linkedAmountRows.length > 0 && (
-                          <div className="border-t pt-2 mt-2 space-y-2">
-                            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-sm font-medium text-muted-foreground">
-                              <span>Date</span>
-                              <span>Linked voucher no.</span>
-                              <span className="text-right">Amount</span>
-                            </div>
-                            <div className="space-y-1">
-                              {linkedAmountRows.map((row, i) => (
-                                <div
-                                  key={i}
-                                  {...(can('edit_link')
-                                    ? { role: "button" as const, tabIndex: 0, className: "grid grid-cols-[1fr_1fr_auto] gap-2 text-sm rounded px-2 py-1.5 -mx-2 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 items-center", onClick: () => setIsLinkAdvancesOpen(true), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsLinkAdvancesOpen(true); } } }
-                                    : { className: "grid grid-cols-[1fr_1fr_auto] gap-2 text-sm rounded px-2 py-1.5 -mx-2 items-center" })}
-                                >
-                                  <span className="text-muted-foreground">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</span>
-                                  <span className="text-muted-foreground truncate">{row.voucherNumber || "—"}</span>
-                                  <span className="font-medium text-green-600 text-right">{formatCurrencyForPrint(row.amount, { noSuffix: true, noAnimation: true })}</span>
-                                </div>
-                              ))}
-                            </div>
+                          <div className="overflow-x-auto min-w-0 rounded-md border">
+                            <table className="w-full text-sm border-collapse min-w-0">
+                              <thead>
+                                <tr className="border-b bg-muted/50">
+                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
+                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Amount</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on others</th>
+                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on current</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {linkedAmountRows.map((row, i) => {
+                                  const isOB = row.paymentVoucherId === OPENING_BALANCE_VOUCHER_ID;
+                                  const details = isOB ? null : paymentVoucherDetails.get(row.paymentVoucherId ?? "");
+                                  const rowAmount = details?.total ?? row.amount;
+                                  const linkedOnOthers = isOB ? 0 : Math.max(0, (details?.totalAllocated ?? 0) - row.amount);
+                                  return (
+                                    <tr
+                                      key={i}
+                                      {...(can('edit_link')
+                                        ? { role: "button" as const, tabIndex: 0, className: "border-b border-border/30 last:border-b-0 cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1", onClick: () => setIsLinkAdvancesOpen(true), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsLinkAdvancesOpen(true); } } }
+                                        : { className: "border-b border-border/30 last:border-b-0" })}
+                                    >
+                                      <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
+                                      <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber || "—"}</td>
+                                      <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrencyForPrint(rowAmount, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrencyForPrint(linkedOnOthers, { noSuffix: true, noAnimation: true })}</td>
+                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrencyForPrint(row.amount, { noSuffix: true, noAnimation: true })}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         )}
-                        <div className="border-t pt-2 mt-2">
-                          <div className={cn("flex justify-between items-center text-sm font-medium", ((total || 0) - totalLinked) <= 0 ? "text-green-600" : "text-red-600")}>
-                            <span>{(total || 0) - totalLinked <= 0 ? "Balance: Settled" : "Due Balance:"}</span>
-                            <span>{(total || 0) - totalLinked <= 0 ? "" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}</span>
+                        <div className="pt-2 border-t flex justify-end min-w-0">
+                          <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                              <span className="text-muted-foreground truncate leading-tight">Total linked</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrencyForPrint(totalLinked, { noSuffix: true, noAnimation: true })}</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className="truncate leading-tight">Balance</span>
+                            </div>
+                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", (total || 0) - totalLinked <= 0 ? "text-green-600 font-semibold" : "")}>
+                                {(total || 0) - totalLinked <= 0 ? "Settled" : formatCurrencyForPrint(Math.max(0, (total || 0) - totalLinked), { noSuffix: true, noAnimation: true })}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        {partyId && company?.enableLinkPaymentToTxns !== false && can('add_link') && (
+                        {partyId && can('add_link') && (
                           <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <Button type="button" className="w-auto bg-green-600 hover:bg-green-700 text-white" onClick={() => setIsLinkAdvancesOpen(true)}>
-                              <Link2 className="mr-2 h-4 w-4" /> Link to Txns
+                              <Link2 className="mr-2 h-4 w-4" /> Link to Dr
                             </Button>
-                            {/* Read me to the right of Link to Txns, inside the link section box */}
+                            {/* Read me to the right of Link to Dr, inside the link section box */}
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                               <Info className="h-4 w-4 shrink-0" />
                               Read me
                             </Button>
                           </div>
                         )}
-                      </>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2459,7 +2619,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 {/* Row 0: Delete (left) | History (middle) | Save & Print (right) */}
                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                   <AlertDialogTrigger asChild>
-                    <Button type="button" variant="destructive" className="w-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                    <Button type="button" variant="destructive" className="w-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                       Delete
                     </Button>
                   </AlertDialogTrigger>
@@ -2476,14 +2636,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!isEditing || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
+                <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("w-full", BTN_HISTORY_CLASS)}>
                   History
                 </Button>
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
                 {/* Row 1: Cancel (left) | Approve (middle) | Save (right) */}
-                <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
+                <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
                 <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -2496,12 +2656,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             ) : (
               <>
                 <div className={cn("flex justify-center md:justify-start gap-2 flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!isEditing || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
+                  <Button type="button" onClick={onOpenHistory ?? (() => {})} disabled={!voucher?.id || !showHistoryButton || !onOpenHistory} className={cn("shrink-0 rounded-full", BTN_HISTORY_CLASS)}>
                     <History className="mr-2 h-4 w-4" /> History
                   </Button>
                   <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                     <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!isEditing || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
+                      <Button type="button" variant="destructive" className="shrink-0 rounded-full" disabled={!voucher?.id || editingDisabled || deleteDisabledWhenLinked || (!!voucher && !canDeleteVoucher(voucher))}>
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </Button>
                     </AlertDialogTrigger>
@@ -2520,7 +2680,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </AlertDialog>
                 </div>
                 <div className={cn("flex gap-2 justify-end flex-wrap", VOUCHER_BUTTONS_CLASS)}>
-                  <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
+                  <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>
                     Cancel
                   </Button>
                   <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={!!isEditing || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>
@@ -2572,19 +2732,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         isOpen={isCreateTaxOpen}
         onOpenChange={setIsCreateTaxOpen}
       />
-      {partyId && (voucher?.id ?? savedVoucherId) && (
+      {partyId && (
         <LinkAdvancesToVoucherDialog
           isOpen={isLinkAdvancesOpen}
           onOpenChange={setIsLinkAdvancesOpen}
           mode="purchase"
+          vouchersOverride={vouchers}
           targetVoucherId={voucher?.id ?? savedVoucherId ?? ""}
           targetPartyId={partyId}
           targetPartyName={processedParties.find((p) => p.id === partyId)?.name ?? "Party"}
           targetLabel={`Purchase #${form.watch("voucherNumber") || ""}`}
           balanceKind="all"
           targetOutstandingOverride={Math.max(0, (total || 0) - totalLinked)}
+          targetTotalAmount={total ?? 0}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
-          onDone={() => triggerSync()}
+          onConfirm={(payload) => {
+            setPendingLinkAllocations(payload.linkedAmounts && Object.keys(payload.linkedAmounts).length > 0 ? { ...payload.linkedAmounts } : {});
+            setIsLinkAdvancesOpen(false);
+          }}
+          initialLinkedAmounts={pendingLinkAllocations ?? effectiveLinkedAmountsForDialog}
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
