@@ -57,7 +57,7 @@ import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -315,8 +315,12 @@ export function TaxDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
-    [statusFilteredTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -411,6 +415,8 @@ export function TaxDetails({
 
   const handlePrintStatement = (billWise: boolean = false) => {
     if (!company || !tax) return Promise.resolve();
+    // Keep print headers aligned with currently selected table columns.
+    const printVisibleColumns = billWise ? { ...visibleColumns, status: true } : visibleColumns;
     return openPrintDirect({
       company: {
         name: company.name,
@@ -431,6 +437,8 @@ export function TaxDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
       billWise: billWise,
     }, true);
   };

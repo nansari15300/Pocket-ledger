@@ -37,7 +37,7 @@ import {
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -274,7 +274,8 @@ export function GroupDetails({
 
   const partiesInGroup = useMemo(() => {
     if (group.id === "ungrouped")
-      return allParties.filter((p) => !p.groupId);
+      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
+      return allParties.filter((p) => !p.groupId || p.groupId === "ungrouped_party");
     // Only filter parties if this is a party group
     if (groupType === 'party') {
       return allParties.filter((p) => p.groupId === group.id);
@@ -687,8 +688,12 @@ export function GroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
-    [statusFilteredTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
 
   const totalPages = Math.max(
@@ -736,6 +741,8 @@ export function GroupDetails({
   const printTransactions = (transactionsToPrint: any[], variant: "statement" | "bill_wise") => {
     if (!company) return Promise.resolve();
     const dateRangeText = buildDateRangeText();
+    // Match printed columns and note visibility with current table controls.
+    const printVisibleColumns = variant === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
     return openPrintDirect({
       company: {
         name: company.name,
@@ -756,6 +763,8 @@ export function GroupDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: transactionsToPrint,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
       userNames: userNames,
       billWise: variant === "bill_wise",
       ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),

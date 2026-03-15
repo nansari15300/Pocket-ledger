@@ -241,6 +241,8 @@ export function AccountDetails({
 
   const handlePrintStatement = () => {
     if (!company) return;
+    // Keep print columns aligned with visible table columns.
+    const printVisibleColumns = visibleColumns;
     openPrintDirect({
       company: {
         name: company.name,
@@ -261,12 +263,16 @@ export function AccountDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
+      visibleColumns: printVisibleColumns,
+      userNames: userNames,
       billWise: false,
     }, true);
   };
 
   const handlePrintBillWise = () => {
     if (!company) return;
+    // Bill-wise print keeps Status column visible by design.
+    const printVisibleColumns = { ...visibleColumns, status: true };
     openPrintDirect({
       company: {
         name: company.name,
@@ -287,6 +293,8 @@ export function AccountDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
+      visibleColumns: printVisibleColumns,
+      userNames: userNames,
       billWise: true,
     }, true);
   };

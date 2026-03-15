@@ -6,7 +6,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -173,6 +173,11 @@ export default function ItemDetails({
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [isDateSearchMode, setIsDateSearchMode] = useState(false);
   const [isDateChange, setIsDateChange] = useState(false);
+  // Item page: persist Party column visibility for Columns dropdown show/hide.
+  const [showPartyColumn, setShowPartyColumn] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return sessionStorage.getItem("itemPartyColumnVisible") !== "false";
+  });
   const [selectedPartyIds, setSelectedPartyIds] = useState<string[]>(['all']);
 
   useEffect(() => {
@@ -443,8 +448,12 @@ export default function ItemDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   const totalPages = Math.ceil(sortedTransactions.length / rowsPerPage);
   const paginatedTransactions = sortedTransactions.slice(
@@ -454,6 +463,8 @@ export default function ItemDetails({
 
   const handlePrint = () => {
     if (!company || !currentItem) return;
+    // Keep item print headers aligned with the selected column visibility in table.
+    const printVisibleColumns = { ...visibleColumns, status: false };
     
     const printItemPayload = {
         ...currentItem,
@@ -477,11 +488,18 @@ export default function ItemDetails({
         openingBalance: openingBalanceForPeriod,
         transactions: processedTransactions,
         showNarration: showNarration,
+        includeNotes: showNotes,
+        visibleColumns: printVisibleColumns,
         stockView: stockView,
         displayUnit: displayUnit,
         itemsData: [printItemPayload] 
     }, true);
 };
+  const handlePartyColumnToggle = (checked: boolean) => {
+    // Keep Party column preference sticky within the current browser session.
+    setShowPartyColumn(checked);
+    if (typeof window !== "undefined") sessionStorage.setItem("itemPartyColumnVisible", checked ? "true" : "false");
+  };
   
   const balanceText = useMemo(() => {
     if (closingBalance === 0) return "No Stock";
@@ -969,6 +987,7 @@ export default function ItemDetails({
                     transactions={paginatedTransactions}
                     context="item"
                     contextId={currentItem.id}
+                    showItemPartyColumn={showPartyColumn}
                     stockView={stockView}
                     item={currentItem}
                     displayUnit={displayUnit}
@@ -1013,9 +1032,27 @@ export default function ItemDetails({
                    </Button>
                  </DropdownMenuTrigger>
                  <DropdownMenuContent align="start" className="w-52 p-2">
-                  {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                  {(["date", "type", "voucherNo", "party", "user", "file", "dr", "cr", "runningBalance", "status"] as Array<TransactionColumnKey | "party">)
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
                     .map((key) => {
+                    if (key === "party") {
+                      return (
+                        <DropdownMenuItem
+                          key="party"
+                          onSelect={(e) => e.preventDefault()}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Checkbox
+                            id="col-party-item"
+                            checked={showPartyColumn}
+                            onCheckedChange={(c) => handlePartyColumnToggle(Boolean(c))}
+                          />
+                          <label htmlFor="col-party-item" className="text-sm font-medium flex-1 cursor-pointer">
+                            Party
+                          </label>
+                        </DropdownMenuItem>
+                      );
+                    }
                     const isStatusInStatement = key === "status" && balanceMode === "statement";
                     const isStatusInBillWise = key === "status" && balanceMode === "bill_wise";
                     const isStatusLocked = isStatusInStatement || isStatusInBillWise;

@@ -79,7 +79,7 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -98,10 +98,12 @@ import usePermissions from "@/hooks/usePermissions";
 import { useAuth } from "@/hooks/useAuth";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 interface AccountDetailsProps {
   account: Account;
@@ -145,7 +147,7 @@ export function AccountDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { spendWiseBlinkMode, setSpendWiseBlinkMode } = useSpendWiseBlinkMode();
+  const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { showNotes, setShowNotes } = useShowNotes();
   const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -275,8 +277,19 @@ export function AccountDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
+    // Resolve synthetic spend-wise row ids back to real voucher id before opening edit.
+    const rawId = typeof voucher?.id === "string" ? voucher.id : "";
+    const resolvedId =
+      voucher?._baseVoucherId ??
+      (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
+      rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
+      rawId);
+    if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
+      // Opening group header is synthetic; it should not open voucher edit dialog.
+      return;
+    }
     openingModalRef.current = true;
-    setSelectedVoucher(voucher);
+    setSelectedVoucher({ ...voucher, id: resolvedId });
     openModalInUrl();
     setIsVoucherDialogOpen(true);
   };
@@ -318,9 +331,28 @@ export function AccountDetails({
         (v.type === "contra" && v.fromAccountId === accountId);
       return hasAccount && Array.isArray(v.linkedPaymentInIds) && v.linkedPaymentInIds.includes(inId);
     };
+    // Keep opening-linked inflows near Opening Balance by rendering them in a dedicated group.
+    const openingLinkedInIds = new Set(
+      vouchers
+        .filter((v: any) =>
+          !v.isDeleted &&
+          isInVoucher(v) &&
+          (v.linkedOpeningBalanceAccountId ?? "") === accountId &&
+          (Number(v.linkedOpeningBalanceAmount) || 0) > 0 &&
+          inRangeIds.has(v.id)
+        )
+        .map((v: any) => v.id)
+    );
+    const openingLinkedOutIds = new Set(
+      vouchers
+        .filter((v: any) => !v.isDeleted && linkedOutFilter(v, SPEND_WISE_OPENING_BALANCE_ID) && inRangeIds.has(v.id))
+        .map((v: any) => v.id)
+    );
     const inVouchers = vouchers
       .filter((v: any) => {
         if (!isInVoucher(v) || v.isDeleted) return false;
+        // Opening-linked inflow rows are shown beside Opening Balance group instead of normal stream.
+        if (openingLinkedInIds.has(v.id)) return false;
         if (inRangeIds.has(v.id)) return true;
         return vouchers.some((o: any) => linkedOutFilter(o, v.id) && inRangeIds.has(o.id));
       })
@@ -354,6 +386,8 @@ export function AccountDetails({
     const nextRowKey = () => `r-${rowKeySeed++}`;
     /** Per payment-out id: total amount already shown in linked groups (so we can show remainder as separate row). */
     const linkedAmountByOutId = new Map<string, number>();
+    // Track inflow amount already shown under Opening group so remainder can still appear as separate row.
+    const linkedAmountByInId = new Map<string, number>();
 
     inVouchers.forEach((pi: any) => {
       const t = voucherToInRow(pi);
@@ -404,11 +438,83 @@ export function AccountDetails({
       });
       if (hasLinkedGroup) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-in-${pi.id}`, _rowKey: nextRowKey() });
     });
+    // Build Opening Balance group and place linked inflows right under it.
+    const openingSide = openingBalanceForPeriod >= 0 ? "dr" : "cr";
+    const openingBase = getOpeningBalanceBaseAmount(openingBalanceForPeriod, openingSide);
+    if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
+      const colorIdx = nextColor();
+      const openingIsCr = openingSide === "cr";
+      let openingRunning = openingIsCr ? -openingBase : openingBase;
+      rows.push({
+        id: "__opening_balance_group__",
+        _rowKey: nextRowKey(),
+        type: "opening_balance",
+        voucherNumber: getOpeningBalanceVoucherLabel(openingSide),
+        date: undefined,
+        debit: openingIsCr ? 0 : openingBase,
+        credit: openingIsCr ? openingBase : 0,
+        narration: "",
+        _spendWiseGroupFirst: true,
+        _spendWiseGroupLast: false,
+        _spendWiseRunningBalance: openingRunning,
+        _spendWiseGroupColorIndex: colorIdx,
+      });
+      const openingLinkedRows = vouchers
+        .filter((v: any) => (openingIsCr ? openingLinkedInIds.has(v.id) : openingLinkedOutIds.has(v.id)))
+        .sort((a: any, b: any) => {
+          const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+          const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+          return da.getTime() - db.getTime();
+        });
+      openingLinkedRows.forEach((v: any, idx: number) => {
+        const rowSource = openingIsCr ? voucherToInRow(v) : voucherToOutRow(v);
+        const baseAmount = Math.abs((rowSource.debit || 0) - (rowSource.credit || 0));
+        const linkedAmount = openingIsCr
+          ? Math.max(0, Math.min(baseAmount, Number(v.linkedOpeningBalanceAmount) || 0))
+          : Math.max(0, Math.min(baseAmount, Number((v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object")
+              ? v.linkedPaymentInAmounts[SPEND_WISE_OPENING_BALANCE_ID]
+              : 0) || (baseAmount / (v.linkedPaymentInIds?.length || 1))));
+        if (openingIsCr) linkedAmountByInId.set(v.id, linkedAmount);
+        else linkedAmountByOutId.set(v.id, (linkedAmountByOutId.get(v.id) ?? 0) + linkedAmount);
+        openingRunning = openingIsCr ? (openingRunning + linkedAmount) : (openingRunning - linkedAmount);
+        rows.push({
+          ...rowSource,
+          // Keep linked fragment separate; remainder of same voucher can still render below.
+          id: `${v.id}-ob-link`,
+          debit: openingIsCr ? linkedAmount : 0,
+          credit: openingIsCr ? 0 : linkedAmount,
+          _rowKey: nextRowKey(),
+          _spendWiseChild: true,
+          _spendWiseGroupFirst: false,
+          _spendWiseGroupLast: idx === openingLinkedRows.length - 1,
+          _spendWiseRunningBalance: openingRunning,
+          _spendWiseGroupColorIndex: colorIdx,
+          _spendWiseLinkedAmount: linkedAmount,
+        });
+      });
+      rows.push({ _spendWiseSpacer: true, id: "spend-wise-spacer-opening", _rowKey: nextRowKey() });
+    }
+    // Keep opening-balance group visually anchored at the top of spend-wise table.
+    const openingStart = rows.findIndex((r: any) => r.id === "__opening_balance_group__");
+    if (openingStart > 0) {
+      let openingEnd = openingStart + 1;
+      while (openingEnd < rows.length) {
+        const cur = rows[openingEnd] as any;
+        if (cur?._spendWiseGroupLast === true) {
+          openingEnd++;
+          if (openingEnd < rows.length && (rows[openingEnd] as any)?._spendWiseSpacer) openingEnd++;
+          break;
+        }
+        openingEnd++;
+      }
+      const openingChunk = rows.splice(openingStart, openingEnd - openingStart);
+      rows.unshift(...openingChunk);
+    }
     const addedIds = new Set(rows.filter((r: any) => r.id && !(r as any)._spendWiseSpacer).map((r: any) => r.id));
     const unlinked = baseTransactions.filter((t: any) => !addedIds.has(t.id));
     unlinked.forEach((t: any, idx: number) => {
       const fullAmount = Math.abs((t.debit || 0) - (t.credit || 0));
-      const alreadyShown = linkedAmountByOutId.get(t.id) ?? 0;
+      const alreadyShown = (linkedAmountByOutId.get(t.id) ?? 0) + (linkedAmountByInId.get(t.id) ?? 0);
       const remainder = fullAmount - alreadyShown;
       if (remainder <= 0) return;
       const colorIdx = nextColor();
@@ -428,15 +534,18 @@ export function AccountDetails({
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: nextRowKey() });
     });
     return rows.length ? rows : baseTransactions;
-  }, [spendWiseView, baseTransactions, vouchers, account.id]);
+  }, [spendWiseView, baseTransactions, vouchers, account.id, openingBalanceForPeriod]);
 
   // Sort only in statement view; spend-wise keeps group order
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(() => {
     if (spendWiseView) return displayTransactions;
-    return sortTransactions(displayTransactions, sortBy, sortOrder);
-  }, [displayTransactions, spendWiseView, sortBy, sortOrder]);
+    return recomputeRunningBalanceTopToBottom(
+      sortTransactions(displayTransactions, sortBy, sortOrder),
+      openingBalanceForPeriod
+    );
+  }, [displayTransactions, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod]);
 
   const displayTransactionCount = useMemo(
     () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
@@ -539,6 +648,9 @@ export function AccountDetails({
   const handlePrintStatement = async () => {
     if (!company) return;
     const toastId = toast.loading("Preparing print...");
+    // Keep print synced with current view (statement/spend-wise), shown columns, and notes toggle.
+    const printVisibleColumns = visibleColumns;
+    const printTransactions = sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer);
     try {
       await openPrintDirect({
         company: {
@@ -551,15 +663,22 @@ export function AccountDetails({
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
         },
-        title: `Account Statement: ${account.accountName}`,
+        title: spendWiseView
+          ? `Spend Wise Account Statement: ${account.accountName}`
+          : `Account Statement: ${account.accountName}`,
         context: "account",
         contextId: account.id,
         dateSystem: dateSystem,
         dateRangeText: buildDateRangeText(),
-        vouchersCount: processedTransactions.length,
+        vouchersCount: printTransactions.length,
         openingBalance: openingBalanceForPeriod,
-        transactions: processedTransactions,
+        transactions: printTransactions,
         showNarration: showNarration,
+        includeNotes: showNotes,
+        visibleColumns: printVisibleColumns,
+        userNames: userNames,
+        preserveOrder: spendWiseView,
+        spendWise: Boolean(spendWiseView),
         billWise: false,
       }, true);
       toast.dismiss(toastId);
@@ -573,6 +692,9 @@ export function AccountDetails({
   const handlePrintBillWise = async () => {
     if (!company) return;
     const toastId = toast.loading("Preparing print...");
+    // Bill-wise print keeps Status column visible by design.
+    const printVisibleColumns = { ...visibleColumns, status: true };
+    const printTransactions = sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer);
     try {
       await openPrintDirect({
         company: {
@@ -590,10 +712,14 @@ export function AccountDetails({
         contextId: account.id,
         dateSystem: dateSystem,
         dateRangeText: buildDateRangeText(),
-        vouchersCount: processedTransactions.length,
+        vouchersCount: printTransactions.length,
         openingBalance: openingBalanceForPeriod,
-        transactions: processedTransactions,
+        transactions: printTransactions,
         showNarration: showNarration,
+        includeNotes: showNotes,
+        visibleColumns: printVisibleColumns,
+        userNames: userNames,
+        preserveOrder: spendWiseView,
         billWise: true,
         openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
         openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
@@ -1185,20 +1311,51 @@ export function AccountDetails({
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0 min-w-0">
-                      <span className="truncate">{spendWiseBlinkMode === "all" ? "Blink all" : spendWiseBlinkMode === "group" ? "Blink group" : "Off"}</span>
+                      {/* Keep trigger text concise while supporting multi-select blink modes. */}
+                      <span className="truncate">
+                        {spendWiseBlinkMode.length === 0
+                          ? "Off"
+                          : spendWiseBlinkMode.length === 1
+                            ? spendWiseBlinkMode[0] === "all"
+                              ? "Blink all"
+                              : spendWiseBlinkMode[0] === "group"
+                                ? "Blink group"
+                                : "Blink row"
+                            : `${spendWiseBlinkMode.length} selected`}
+                      </span>
                       <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44 p-2">
-                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("all")} className={spendWiseBlinkMode === "all" ? "bg-accent" : ""}>
+                    {/* Prevent menu close on each toggle so user can multi-select quickly. */}
+                    <DropdownMenuCheckboxItem
+                      checked={spendWiseBlinkMode.includes("all")}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => toggleSpendWiseBlinkMode("all", checked === true)}
+                    >
                       Blink all
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("group")} className={spendWiseBlinkMode === "group" ? "bg-accent" : ""}>
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={spendWiseBlinkMode.includes("group")}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => toggleSpendWiseBlinkMode("group", checked === true)}
+                    >
                       Blink group
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setSpendWiseBlinkMode("off")} className={spendWiseBlinkMode === "off" ? "bg-accent" : ""}>
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={spendWiseBlinkMode.includes("row")}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => toggleSpendWiseBlinkMode("row", checked === true)}
+                    >
+                      Blink row
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={spendWiseBlinkMode.length === 0}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => { if (checked === true) setSpendWiseBlinkMode([]); }}
+                    >
                       Off
-                    </DropdownMenuItem>
+                    </DropdownMenuCheckboxItem>
                     <DropdownMenuItem onSelect={() => setBlinkInfoOpen(true)} className="flex items-center gap-2">
                       <Info className="h-4 w-4 shrink-0" />
                       About
@@ -1310,6 +1467,8 @@ export function AccountDetails({
               }}
               initialContext="Bank/Cash"
               initialEntityId={account.id}
+              // Role-wise: only users with approve permission get Save & Approve in account-linked note modal.
+              showSaveAndApproveOnCreate={can("approve_transactions")}
               compactFooter
             />
           </div>

@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
 import { isSystemGroupName } from "@/lib/system-group-names";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -94,12 +95,27 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
         return;
       }
       
-      const nameLower = nameTrimmed.toLowerCase();
-      const isDuplicate = (groups || []).some(
-        (g) => !(g as any).isDeleted && (g.name?.trim().toLowerCase() ?? "") === nameLower
-      );
-      if (isDuplicate) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "tax_groups",
+        name: nameTrimmed,
+        entityLabel: "Tax Group",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Group Name", { id: toastId, description: "A group with this name already exists." });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Group Restored!", {
+          id: toastId,
+          description: `"${nameTrimmed}" was restored from Recycle Bin.`,
+        });
+        onGroupCreated(duplicateDecision.restoredId);
+        if (saveAndNew) {
+          form.reset({ name: "", parentId: "duties_taxes" });
+        }
         setIsLoading(false);
         return;
       }

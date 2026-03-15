@@ -8,7 +8,6 @@ import React, { createContext, useContext, useEffect, useRef, useState } from "r
 import { auth, firestore } from "@/lib/firebase";
 import { slugify } from "@/lib/slugify";
 import { getCountryByIP } from "@/lib/getCountryByIP";
-import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc, collection, query, where, getDocs, writeBatch, getDoc } from "firebase/firestore";
 import { logFirestorePermissionDenied } from "@/lib/firestoreRuleDebug";
 import type { Role } from "@/utils/rbac";
@@ -310,7 +309,8 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
   return (
     <AuthContext.Provider value={{ user, customUser, loading }}>
-      {loading ? <LoadingSpinner /> : children}
+      {/* Keep tree mounted during auth hydration to avoid full-app remount flicker that looks like double refresh. */}
+      {children}
     </AuthContext.Provider>
   );
 };

@@ -23,6 +23,7 @@ import type { Tax } from "@/components/tax/types";
 import type { ExpenseAccount } from "@/components/expenses/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
+import { isSystemParentGroup } from "@/lib/system-groups";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
@@ -77,6 +78,7 @@ type UnifiedGroup = {
   credit: number;
   groupType: 'party' | 'staff' | 'tax' | 'expense' | 'bank';
   parentId?: string;
+  isSystemGroup?: boolean;
   entity?: Group | AccountGroup | any;
 };
 
@@ -350,12 +352,30 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
   // Combine all groups into unified format
   const allUnifiedGroups = useMemo(() => {
     const groups: UnifiedGroup[] = [];
+    // Keep system-group detection strict so user-created groups are never hidden as system rows.
+    const detectSystemGroup = (raw: any, groupType: UnifiedGroup["groupType"]): boolean => {
+      const id = String(raw?.id || "");
+      const hasParent = Boolean(raw?.parentId);
+      const reserved = Boolean(raw?.isSystemReserved || raw?.isSystemGroup || raw?.isReserved);
+      const isKnownSystemParent =
+        (groupType === "party" && isSystemParentGroup("groups", id)) ||
+        (groupType === "staff" && isSystemParentGroup("staff_groups", id)) ||
+        (groupType === "tax" && isSystemParentGroup("tax_groups", id)) ||
+        (groupType === "bank" && isSystemParentGroup("account_groups", id)) ||
+        (groupType === "expense" && isSystemParentGroup("expense_groups", id));
+      // Guard: treat child groups as user groups even if old data accidentally has reserved=true.
+      if (hasParent) return isKnownSystemParent;
+      // Root groups can still use legacy reserved flag when system-parent ids are not listed.
+      if (reserved) return true;
+      if (isKnownSystemParent) return true;
+      return false;
+    };
     
-    // Party groups (only sub-groups, not main groups)
+    // Party groups (include both system and user groups for hierarchical sidebar rendering).
     processedGroups.forEach(g => {
-      const hasParentId = (g as any).parentId;
       const isReportOnly = (g as any).isReportOnly;
-      if (hasParentId && !isReportOnly) {
+      const isAutoUngrouped = (g as any).isAutoUngrouped === true;
+      if (!isReportOnly && !isAutoUngrouped) {
         groups.push({
           id: g.id,
           name: g.name,
@@ -364,6 +384,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           credit: g.credit || 0,
           groupType: 'party',
           parentId: (g as any).parentId,
+          isSystemGroup: detectSystemGroup(g, "party"),
           entity: g,
         });
       }
@@ -371,6 +392,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     
     // Staff groups
     processedStaffGroups.forEach(sg => {
+      if ((sg as any).isAutoUngrouped === true) return;
       groups.push({
         id: sg.id,
         name: sg.name,
@@ -379,12 +401,14 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
         credit: sg.credit || 0,
         groupType: 'staff',
         parentId: (sg as any).parentId,
+        isSystemGroup: detectSystemGroup(sg, "staff"),
         entity: sg,
       });
     });
     
     // Tax groups
     processedTaxGroups.forEach(tg => {
+      if ((tg as any).isAutoUngrouped === true) return;
       groups.push({
         id: tg.id,
         name: tg.name,
@@ -393,12 +417,14 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
         credit: tg.credit || 0,
         groupType: 'tax',
         parentId: (tg as any).parentId,
+        isSystemGroup: detectSystemGroup(tg, "tax"),
         entity: tg,
       });
     });
     
     // Expense groups
     processedExpenseGroups.forEach(eg => {
+      if ((eg as any).isAutoUngrouped === true) return;
       groups.push({
         id: eg.id,
         name: eg.name,
@@ -407,6 +433,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
         credit: eg.credit || 0,
         groupType: 'expense',
         parentId: (eg as any).parentId,
+        isSystemGroup: detectSystemGroup(eg, "expense"),
         entity: eg,
       });
     });
@@ -414,7 +441,8 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     // Bank account groups
     processedAccountGroups.forEach(ag => {
       const isReportOnly = (ag as any).isReportOnly;
-      if (!isReportOnly) {
+      const isAutoUngrouped = (ag as any).isAutoUngrouped === true;
+      if (!isReportOnly && !isAutoUngrouped) {
         groups.push({
           id: ag.id,
           name: ag.name,
@@ -423,6 +451,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           credit: ag.credit || 0,
           groupType: 'bank',
           parentId: (ag as any).parentId,
+          isSystemGroup: detectSystemGroup(ag, "bank"),
           entity: ag,
         });
       }
@@ -436,11 +465,11 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     const tree: AccountTreeItem[] = [];
     const entityMap = new Map<string, AccountTreeItem>();
     
-    // Entity types: Party, Staff, Bank, Tax, Income & Expense
+    // Keep entity naming/order aligned with left sidebar navigation labels.
     const entityTypes: Array<{ id: string; name: string; accountType: UnifiedAccount['accountType'] }> = [
-      { id: 'entity-party', name: 'Party', accountType: 'party' },
+      { id: 'entity-party', name: 'Parties', accountType: 'party' },
+      { id: 'entity-bank', name: 'Bank/Cash', accountType: 'bank' },
       { id: 'entity-staff', name: 'Staff', accountType: 'staff' },
-      { id: 'entity-bank', name: 'Bank', accountType: 'bank' },
       { id: 'entity-tax', name: 'Tax', accountType: 'tax' },
       { id: 'entity-expense', name: 'Income & Expense', accountType: 'expense' },
     ];
@@ -554,12 +583,13 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
 
   // Group tree for desktop when mode is group (entity types -> groups)
   const groupTree = useMemo(() => {
+    // Keep group-summary entity naming/order aligned with left sidebar navigation labels.
     const entityTypes: Array<{ id: string; name: string; groupType: UnifiedGroup['groupType'] }> = [
-      { id: 'entity-party', name: 'Party', groupType: 'party' },
+      { id: 'entity-party', name: 'Parties', groupType: 'party' },
+      { id: 'entity-bank', name: 'Bank/Cash', groupType: 'bank' },
       { id: 'entity-staff', name: 'Staff', groupType: 'staff' },
       { id: 'entity-tax', name: 'Tax', groupType: 'tax' },
       { id: 'entity-expense', name: 'Income & Expense', groupType: 'expense' },
-      { id: 'entity-bank', name: 'Bank', groupType: 'bank' },
     ];
     const tree: AccountTreeItem[] = entityTypes.map(e => ({
       id: e.id,
@@ -572,53 +602,259 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
       children: [] as AccountTreeItem[],
       group: { id: e.id, name: e.name, balance: 0, debit: 0, credit: 0, groupType: e.groupType },
     }));
-    allUnifiedGroups.forEach(g => {
-      const groupType = (g as any).groupType;
-      const entityItem = tree.find(t => (t.group as any)?.groupType === groupType);
-      if (entityItem) {
-        const child: AccountTreeItem = {
-          id: g.id,
-          name: g.name,
-          balance: g.balance || 0,
-          debit: g.debit || 0,
-          credit: g.credit || 0,
-          type: 'group',
-          parentId: undefined,
-          level: 1,
-          group: g,
-        };
-        entityItem.children!.push(child);
-        entityItem.balance += g.balance || 0;
-        entityItem.debit += g.debit || 0;
-        entityItem.credit += g.credit || 0;
-      }
+    // Build entity-wise hierarchy: system groups as parent, user groups under them.
+    const groupsByType = new Map<UnifiedGroup["groupType"], UnifiedGroup[]>();
+    allUnifiedGroups.forEach((g) => {
+      const arr = groupsByType.get(g.groupType) || [];
+      arr.push(g);
+      groupsByType.set(g.groupType, arr);
     });
-    if (processedParties.some((p: any) => !p.groupId)) {
-      const partyEntity = tree.find(t => (t.group as any)?.groupType === 'party');
-      if (partyEntity) {
-        const ungroupedBalance = processedParties.filter((p: any) => !p.groupId).reduce((s, p) => s + (p.balance || 0), 0);
-        partyEntity.children!.unshift({
-          id: 'ungrouped',
-          name: 'Ungrouped',
-          balance: ungroupedBalance,
+    tree.forEach((entityItem) => {
+      const groupType = (entityItem.group as any)?.groupType as UnifiedGroup["groupType"];
+      const entityGroups = groupsByType.get(groupType) || [];
+      const groupMap = new Map(entityGroups.map((g) => [g.id, g]));
+      const systemNodes = new Map<string, AccountTreeItem>();
+      entityItem.children = [];
+      // Expense entity may have legacy data where Direct/Indirect groups are not flagged system; treat them as pseudo-system parents for hierarchy.
+      const isExpensePseudoSystem = (g?: UnifiedGroup): boolean => {
+        if (!g || groupType !== "expense") return false;
+        const id = String(g.id || "").toLowerCase();
+        const name = String(g.name || "").toLowerCase();
+        const parentId = String(g.parentId || "").toLowerCase();
+        return (
+          g.isSystemGroup === true ||
+          parentId === "income" ||
+          parentId === "expenses" ||
+          id === "income" ||
+          id === "expenses" ||
+          id === "direct_income" ||
+          id === "indirect_income" ||
+          id === "direct_expense" ||
+          id === "indirect_expense" ||
+          name === "income" ||
+          name === "expenses" ||
+          name === "direct income" ||
+          name === "indirect income" ||
+          name === "direct expenses" ||
+          name === "indirect expenses" ||
+          name === "direct expense" ||
+          name === "indirect expense"
+        );
+      };
+
+      // System groups become level-1 parent nodes.
+      entityGroups
+        .filter((g) => (groupType === "expense" ? isExpensePseudoSystem(g) : g.isSystemGroup))
+        .forEach((g) => {
+          systemNodes.set(g.id, {
+            id: g.id,
+            name: g.name,
+            balance: g.balance || 0,
+            debit: g.debit || 0,
+            credit: g.credit || 0,
+            type: "group",
+            parentId: undefined,
+            level: 1,
+            children: [],
+            group: g,
+          });
+        });
+
+      // Attach non-system groups under nearest system ancestor, otherwise keep top-level.
+      entityGroups
+        .filter((g) => !(groupType === "expense" ? isExpensePseudoSystem(g) : g.isSystemGroup))
+        .forEach((g) => {
+          let parentId = g.parentId;
+          let systemAncestorId: string | undefined;
+          while (parentId) {
+            const parentGroup = groupMap.get(parentId);
+            if (!parentGroup) break;
+            if (groupType === "expense" ? isExpensePseudoSystem(parentGroup) : parentGroup.isSystemGroup) {
+              systemAncestorId = parentGroup.id;
+              break;
+            }
+            parentId = parentGroup.parentId;
+          }
+          // Fallback: in tax-like single-system trees, pin orphan user groups under that single system group.
+          if (!systemAncestorId) {
+            const systemIds = Array.from(systemNodes.keys());
+            if ((groupType === "tax" || groupType === "staff") && systemIds.length === 1) {
+              systemAncestorId = systemIds[0];
+            }
+          }
+          const childNode: AccountTreeItem = {
+            id: g.id,
+            name: g.name,
+            balance: g.balance || 0,
+            debit: g.debit || 0,
+            credit: g.credit || 0,
+            type: "group",
+            parentId: systemAncestorId,
+            level: systemAncestorId ? 2 : 1,
+            group: g,
+          };
+          if (systemAncestorId && systemNodes.has(systemAncestorId)) {
+            systemNodes.get(systemAncestorId)!.children!.push(childNode);
+          } else {
+            entityItem.children!.push(childNode);
+          }
+        });
+
+      // Recompute system-group balances from user-group children for collapsed aggregate display.
+      systemNodes.forEach((systemNode) => {
+        const children = systemNode.children || [];
+        if (children.length > 0) {
+          systemNode.balance = children.reduce((sum, child) => sum + (child.balance || 0), 0);
+          systemNode.debit = children.reduce((sum, child) => sum + (child.debit || 0), 0);
+          systemNode.credit = children.reduce((sum, child) => sum + (child.credit || 0), 0);
+        }
+      });
+
+      // Income & Expense requires one extra parent level: Income/Expense -> system groups -> user groups.
+      if (groupType === "expense") {
+        // Only expense parent-like rows should sit under virtual Income/Expense parents.
+        const expenseSystemNodes = Array.from(systemNodes.values())
+          .filter((n) => isExpensePseudoSystem(n.group as UnifiedGroup))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        const incomeParentNode: AccountTreeItem = {
+          id: "expense-parent-income",
+          name: "Income",
+          balance: 0,
           debit: 0,
           credit: 0,
-          type: 'group',
+          type: "group",
           level: 1,
-          group: {
-            id: 'ungrouped',
-            name: 'Ungrouped',
-            balance: ungroupedBalance,
-            debit: 0,
-            credit: 0,
-            groupType: 'party',
-            entity: { id: 'ungrouped', name: 'Ungrouped', balance: ungroupedBalance } as any,
-          },
+          children: [],
+        };
+        const expenseParentNode: AccountTreeItem = {
+          id: "expense-parent-expense",
+          name: "Expense",
+          balance: 0,
+          debit: 0,
+          credit: 0,
+          type: "group",
+          level: 1,
+          children: [],
+        };
+
+        expenseSystemNodes.forEach((systemNode) => {
+          // Classify by parentId first, then id/name fallback so old data still renders correctly.
+          const rawParentId = String(systemNode.group?.parentId || "").toLowerCase();
+          const rawId = String(systemNode.id || "").toLowerCase();
+          const rawName = String(systemNode.name || "").toLowerCase();
+          const isIncomeNode =
+            rawParentId === "income" ||
+            rawId.includes("income") ||
+            (rawName.includes("income") && !rawName.includes("expense"));
+          const isExpenseNode =
+            rawParentId === "expenses" ||
+            rawId.includes("expense") ||
+            rawName.includes("expense");
+
+          if (isIncomeNode) {
+            systemNode.level = 2;
+            incomeParentNode.children!.push(systemNode);
+            return;
+          }
+          if (isExpenseNode) {
+            systemNode.level = 2;
+            expenseParentNode.children!.push(systemNode);
+            return;
+          }
+          // Safety: keep unclassified system groups visible under entity.
+          entityItem.children!.push(systemNode);
+        });
+
+        if ((incomeParentNode.children || []).length > 0) {
+          incomeParentNode.balance = incomeParentNode.children!.reduce((sum, child) => sum + (child.balance || 0), 0);
+          incomeParentNode.debit = incomeParentNode.children!.reduce((sum, child) => sum + (child.debit || 0), 0);
+          incomeParentNode.credit = incomeParentNode.children!.reduce((sum, child) => sum + (child.credit || 0), 0);
+          entityItem.children!.push(incomeParentNode);
+        }
+        if ((expenseParentNode.children || []).length > 0) {
+          expenseParentNode.balance = expenseParentNode.children!.reduce((sum, child) => sum + (child.balance || 0), 0);
+          expenseParentNode.debit = expenseParentNode.children!.reduce((sum, child) => sum + (child.debit || 0), 0);
+          expenseParentNode.credit = expenseParentNode.children!.reduce((sum, child) => sum + (child.credit || 0), 0);
+          entityItem.children!.push(expenseParentNode);
+        }
+      } else {
+        systemNodes.forEach((systemNode) => {
+          entityItem.children!.push(systemNode);
         });
       }
-    }
+
+      // Keep ordering deterministic: system groups first, then standalone user groups, by name.
+      entityItem.children = (entityItem.children || [])
+        .map((child) => ({
+          ...child,
+          children: child.children?.sort((a, b) => a.name.localeCompare(b.name)),
+        }))
+        .sort((a, b) => {
+          const aIsSystem = Boolean(a.group?.isSystemGroup);
+          const bIsSystem = Boolean(b.group?.isSystemGroup);
+          if (aIsSystem !== bIsSystem) return aIsSystem ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+
+      entityItem.balance = (entityItem.children || []).reduce((sum, child) => sum + (child.balance || 0), 0);
+      entityItem.debit = (entityItem.children || []).reduce((sum, child) => sum + (child.debit || 0), 0);
+      entityItem.credit = (entityItem.children || []).reduce((sum, child) => sum + (child.credit || 0), 0);
+    });
+    const addUngroupedRow = (
+      groupType: UnifiedGroup["groupType"],
+      rows: any[],
+      id: string,
+      storageGroupId: string
+    ) => {
+      if (!rows.some((r: any) => !r.groupId || r.groupId === storageGroupId)) return;
+      const entityRow = tree.find((t) => (t.group as any)?.groupType === groupType);
+      if (!entityRow) return;
+      const ungroupedRows = rows.filter((r: any) => !r.groupId || r.groupId === storageGroupId);
+      const balance = ungroupedRows.reduce((sum, r) => sum + (r.balance || 0), 0);
+      const debit = ungroupedRows.reduce((sum, r) => sum + (r.debit || 0), 0);
+      const credit = ungroupedRows.reduce((sum, r) => sum + (r.credit || 0), 0);
+      // Show Ungrouped only when at least one ledger/account is saved without group.
+      const ungroupedNode: AccountTreeItem = {
+        id,
+        name: "Ungrouped",
+        balance,
+        debit,
+        credit,
+        type: "group",
+        // Keep as child category when a system group exists.
+        level: 1,
+        group: {
+          id,
+          name: "Ungrouped",
+          balance,
+          debit,
+          credit,
+          groupType,
+          isSystemGroup: false,
+          entity: { id, name: "Ungrouped", balance } as any,
+        },
+      };
+      const firstSystemChild = (entityRow.children || []).find((c) => c.group?.isSystemGroup);
+      if (firstSystemChild) {
+        firstSystemChild.children = firstSystemChild.children || [];
+        ungroupedNode.parentId = firstSystemChild.id;
+        ungroupedNode.level = 2;
+        // Place ungrouped as first child for quick access.
+        firstSystemChild.children.unshift(ungroupedNode);
+        firstSystemChild.balance = (firstSystemChild.children || []).reduce((sum, child) => sum + (child.balance || 0), 0);
+        firstSystemChild.debit = (firstSystemChild.children || []).reduce((sum, child) => sum + (child.debit || 0), 0);
+        firstSystemChild.credit = (firstSystemChild.children || []).reduce((sum, child) => sum + (child.credit || 0), 0);
+      } else {
+        entityRow.children!.unshift(ungroupedNode);
+      }
+    };
+    addUngroupedRow("party", processedParties, "ungrouped-party", "ungrouped_party");
+    addUngroupedRow("bank", processedAccounts, "ungrouped-bank", "ungrouped_account");
+    addUngroupedRow("staff", processedStaff, "ungrouped-staff", "ungrouped_staff");
+    addUngroupedRow("tax", processedTaxes, "ungrouped-tax", "ungrouped_tax");
+    addUngroupedRow("expense", processedExpenseAccounts, "ungrouped-expense", "ungrouped_expense");
     return tree.filter(e => e.children && e.children.length > 0);
-  }, [allUnifiedGroups, processedParties]);
+  }, [allUnifiedGroups, processedParties, processedAccounts, processedStaff, processedTaxes, processedExpenseAccounts]);
 
   const flattenedGroupItems = useMemo(() => {
     const flatten = (items: AccountTreeItem[], result: AccountTreeItem[] = []): AccountTreeItem[] => {
@@ -668,6 +904,46 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     return selectedAccount.accountType;
   }, [mode, selectedAccount, selectedGroup, entityDropdownOptions]);
 
+  const buildUngroupedVirtualGroup = useCallback((groupType: UnifiedGroup["groupType"]): UnifiedGroup | null => {
+    if (groupType === "party") {
+      const rows = processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
+      if (rows.length === 0) return null;
+      const balance = rows.reduce((s: number, p: any) => s + (p.balance || 0), 0);
+      return {
+        id: "ungrouped-party",
+        name: "Ungrouped",
+        balance,
+        debit: rows.reduce((s: number, p: any) => s + (p.debit || 0), 0),
+        credit: rows.reduce((s: number, p: any) => s + (p.credit || 0), 0),
+        groupType: "party",
+        isSystemGroup: false,
+        entity: { id: "ungrouped-party", name: "Ungrouped", balance } as any,
+      };
+    }
+    if (groupType === "staff") {
+      const rows = processedStaff.filter((s: any) => !s.groupId || s.groupId === "ungrouped_staff");
+      if (rows.length === 0) return null;
+      const balance = rows.reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+      return { id: "ungrouped-staff", name: "Ungrouped", balance, debit: rows.reduce((sum: number, r: any) => sum + (r.debit || 0), 0), credit: rows.reduce((sum: number, r: any) => sum + (r.credit || 0), 0), groupType: "staff", isSystemGroup: false, entity: { id: "ungrouped-staff", name: "Ungrouped", balance } as any };
+    }
+    if (groupType === "tax") {
+      const rows = processedTaxes.filter((t: any) => !t.groupId || t.groupId === "ungrouped_tax");
+      if (rows.length === 0) return null;
+      const balance = rows.reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+      return { id: "ungrouped-tax", name: "Ungrouped", balance, debit: rows.reduce((sum: number, r: any) => sum + (r.debit || 0), 0), credit: rows.reduce((sum: number, r: any) => sum + (r.credit || 0), 0), groupType: "tax", isSystemGroup: false, entity: { id: "ungrouped-tax", name: "Ungrouped", balance } as any };
+    }
+    if (groupType === "bank") {
+      const rows = processedAccounts.filter((a: any) => !a.groupId || a.groupId === "ungrouped_account");
+      if (rows.length === 0) return null;
+      const balance = rows.reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+      return { id: "ungrouped-bank", name: "Ungrouped", balance, debit: rows.reduce((sum: number, r: any) => sum + (r.debit || 0), 0), credit: rows.reduce((sum: number, r: any) => sum + (r.credit || 0), 0), groupType: "bank", isSystemGroup: false, entity: { id: "ungrouped-bank", name: "Ungrouped", balance } as any };
+    }
+    const rows = processedExpenseAccounts.filter((e: any) => !e.groupId || e.groupId === "ungrouped_expense");
+    if (rows.length === 0) return null;
+    const balance = rows.reduce((sum: number, r: any) => sum + (r.balance || 0), 0);
+    return { id: "ungrouped-expense", name: "Ungrouped", balance, debit: rows.reduce((sum: number, r: any) => sum + (r.debit || 0), 0), credit: rows.reduce((sum: number, r: any) => sum + (r.credit || 0), 0), groupType: "expense", isSystemGroup: false, entity: { id: "ungrouped-expense", name: "Ungrouped", balance } as any };
+  }, [processedParties, processedStaff, processedTaxes, processedAccounts, processedExpenseAccounts]);
+
   // Mobile: account dropdown options (accounts under selected entity)
   const accountDropdownOptions = useMemo(() => {
     const entityItem = accountTree.find((e) => e.id.startsWith("entity-") && (e.group as any)?.groupType === selectedEntityType);
@@ -683,14 +959,45 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     const base = allUnifiedGroups
       .filter((g) => (g as any).groupType === selectedEntityType)
       .map((g) => ({ value: g.id, label: g.name }));
-    if (selectedEntityType === "party") {
-      const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-      if (ungroupedParties.length > 0) {
-        base.unshift({ value: "ungrouped", label: "Ungrouped" });
-      }
+    const ungrouped = buildUngroupedVirtualGroup(selectedEntityType as UnifiedGroup["groupType"]);
+    if (ungrouped) {
+      base.unshift({ value: ungrouped.id, label: ungrouped.name });
     }
     return base;
-  }, [mode, selectedEntityType, allUnifiedGroups, processedParties]);
+  }, [mode, selectedEntityType, allUnifiedGroups, buildUngroupedVirtualGroup]);
+
+  // Resolve selected scope: collapsed system group => include all nested user groups.
+  const selectedGroupScopeIds = useMemo(() => {
+    if (mode !== "group" || !selectedGroup) return new Set<string>();
+    // Any virtual ungrouped group behaves like a single concrete scope.
+    if (selectedGroup.id.startsWith("ungrouped-")) return new Set<string>([selectedGroup.id]);
+    const selectedIsSystem = Boolean(selectedGroup.isSystemGroup);
+    const selectedExpanded = expandedGroups.has(selectedGroup.id);
+    if (!selectedIsSystem || selectedExpanded) {
+      return new Set<string>([selectedGroup.id]);
+    }
+
+    const byId = new Map(allUnifiedGroups.map((g) => [g.id, g]));
+    const descendants = new Set<string>();
+    const queue = [selectedGroup.id];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      allUnifiedGroups.forEach((g) => {
+        if (g.parentId === current) {
+          queue.push(g.id);
+          if (!g.isSystemGroup && byId.has(g.id)) {
+            descendants.add(g.id);
+          }
+        }
+      });
+    }
+
+    // Fallback to selected group itself when no child user groups exist.
+    if (descendants.size === 0) {
+      return new Set<string>([selectedGroup.id]);
+    }
+    return descendants;
+  }, [mode, selectedGroup, expandedGroups, allUnifiedGroups]);
 
   const toggleGroup = useCallback((groupId: string) => {
     setExpandedGroups(prev => {
@@ -721,30 +1028,26 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           const treeToUse = mode === "group" ? groupTree : accountTree;
           const entityItem = findEntityInTree(treeToUse);
           if (entityItem && entityItem.children && entityItem.children.length > 0) {
-            if (mode === "group") {
-              const firstGroup = entityItem.children.find(child => child.group);
-              if (firstGroup?.group) {
-                const grp = firstGroup.group as UnifiedGroup;
-                if (grp.id === "ungrouped") {
-                  const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-                  setTimeout(() => {
-                    setSelectedGroup({
-                      id: "ungrouped",
-                      name: "Ungrouped",
-                      balance: ungroupedParties.reduce((s: number, p: any) => s + (p.balance || 0), 0),
-                      debit: ungroupedParties.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-                      credit: ungroupedParties.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-                      groupType: "party",
-                      entity: { id: "ungrouped", name: "Ungrouped" } as any,
-                    });
-                    setSelectedAccount(null);
-                  }, 0);
-                } else {
-                  setTimeout(() => {
-                    setSelectedGroup(grp);
-                    setSelectedAccount(null);
-                  }, 0);
+            // Skip virtual parent rows while auto-selecting the first real group.
+            const findFirstSelectableGroup = (items: AccountTreeItem[]): UnifiedGroup | null => {
+              for (const row of items) {
+                if (row.group && !row.id.startsWith("entity-") && !row.id.startsWith("expense-parent-")) {
+                  return row.group as UnifiedGroup;
                 }
+                if (row.children?.length) {
+                  const nested = findFirstSelectableGroup(row.children);
+                  if (nested) return nested;
+                }
+              }
+              return null;
+            };
+            if (mode === "group") {
+              const firstGroup = findFirstSelectableGroup(entityItem.children);
+              if (firstGroup) {
+                setTimeout(() => {
+                  setSelectedGroup(firstGroup);
+                  setSelectedAccount(null);
+                }, 0);
               }
             } else {
               const firstAccount = entityItem.children.find(child => child.type === 'account' && child.account);
@@ -757,18 +1060,40 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
             }
           }
         } else {
-          // For non-entity groups, just toggle
+          // For non-entity groups, toggle and prefer first user group when expanding a system group.
           next.add(groupId);
+          if (mode === "group") {
+            const findNode = (items: AccountTreeItem[]): AccountTreeItem | null => {
+              for (const item of items) {
+                if (item.id === groupId) return item;
+                if (item.children) {
+                  const child = findNode(item.children);
+                  if (child) return child;
+                }
+              }
+              return null;
+            };
+            const node = findNode(groupTree);
+            if (node?.group?.isSystemGroup && node.children && node.children.length > 0 && selectedGroup?.id === groupId) {
+              const firstUserGroup = node.children.find((child) => Boolean(child.group));
+              if (firstUserGroup?.group) {
+                setTimeout(() => {
+                  setSelectedGroup(firstUserGroup.group as UnifiedGroup);
+                  setSelectedAccount(null);
+                }, 0);
+              }
+            }
+          }
         }
       }
       
       return next;
     });
-  }, [accountTree, groupTree, mode, processedParties]);
+  }, [accountTree, groupTree, mode, processedParties, selectedGroup]);
 
   const handleSelectItem = useCallback((item: AccountTreeItem) => {
-    // Entity types (like Party, Staff, Bank, etc.) should only expand/collapse, not show details
-    if (item.id.startsWith('entity-')) {
+    // Entity rows and virtual Income/Expense parent rows should only expand/collapse, not open details.
+    if (item.id.startsWith('entity-') || item.id.startsWith("expense-parent-")) {
       // Just toggle expand/collapse, don't select for details
       toggleGroup(item.id);
       return;
@@ -777,27 +1102,14 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     if (mode === "group") {
       if (item.group && !item.id.startsWith("entity-")) {
         const grp = item.group as UnifiedGroup;
-        if (grp.id === "ungrouped") {
-          const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-          setSelectedGroup({
-            id: "ungrouped",
-            name: "Ungrouped",
-            balance: ungroupedParties.reduce((s: number, p: any) => s + (p.balance || 0), 0),
-            debit: ungroupedParties.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-            credit: ungroupedParties.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-            groupType: "party",
-            entity: { id: "ungrouped", name: "Ungrouped" } as any,
-          });
-        } else {
-          setSelectedGroup(grp);
-        }
+        setSelectedGroup(grp);
         setSelectedAccount(null);
       }
     } else if (item.type === 'account' && item.account) {
       setSelectedAccount(item.account);
       setSelectedGroup(null);
     }
-  }, [toggleGroup, mode, processedParties]);
+  }, [toggleGroup, mode]);
 
   const REPORT_MEMORY_KEY = mode === "group" ? "reportGroupStatementState" : "reportAccountsStatementState";
 
@@ -805,31 +1117,26 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
   useEffect(() => {
     if (hasAutoSelected.current) return;
     if (mode === "group") {
-      if (allUnifiedGroups.length === 0 && processedParties.filter((p: any) => !p.groupId).length === 0) return;
+      if (
+        allUnifiedGroups.length === 0 &&
+        !buildUngroupedVirtualGroup("party") &&
+        !buildUngroupedVirtualGroup("bank") &&
+        !buildUngroupedVirtualGroup("staff") &&
+        !buildUngroupedVirtualGroup("tax") &&
+        !buildUngroupedVirtualGroup("expense")
+      ) return;
       hasAutoSelected.current = true;
       try {
         const raw = typeof window !== "undefined" ? localStorage.getItem(REPORT_MEMORY_KEY) : null;
         const saved = raw ? (JSON.parse(raw) as { groupId?: string }) : null;
         const savedGroupId = saved?.groupId;
         if (savedGroupId) {
-          const found = savedGroupId === "ungrouped"
-            ? processedParties.some((p: any) => !p.groupId)
+          const savedIsUngrouped = savedGroupId.startsWith("ungrouped-");
+          const found = savedIsUngrouped
+            ? buildUngroupedVirtualGroup((savedGroupId.replace("ungrouped-", "") as UnifiedGroup["groupType"]))
             : allUnifiedGroups.find((g) => g.id === savedGroupId);
           if (found) {
-            if (savedGroupId === "ungrouped") {
-              const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-              setSelectedGroup({
-                id: "ungrouped",
-                name: "Ungrouped",
-                balance: ungroupedParties.reduce((s: number, p: any) => s + (p.balance || 0), 0),
-                debit: ungroupedParties.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-                credit: ungroupedParties.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-                groupType: "party",
-                entity: { id: "ungrouped", name: "Ungrouped" } as any,
-              });
-            } else {
-              setSelectedGroup(found as UnifiedGroup);
-            }
+            setSelectedGroup(found as UnifiedGroup);
             setSelectedAccount(null);
             setExpandedGroups((prev) => {
               const next = new Set(prev);
@@ -841,9 +1148,13 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           }
         }
       } catch (_) {}
-      const firstGroup = allUnifiedGroups[0] || (processedParties.some((p: any) => !p.groupId)
-        ? { id: "ungrouped", name: "Ungrouped", groupType: "party" as const }
-        : null);
+      const firstGroup =
+        allUnifiedGroups[0] ||
+        buildUngroupedVirtualGroup("party") ||
+        buildUngroupedVirtualGroup("bank") ||
+        buildUngroupedVirtualGroup("staff") ||
+        buildUngroupedVirtualGroup("tax") ||
+        buildUngroupedVirtualGroup("expense");
       if (firstGroup) {
         setExpandedGroups((prev) => {
           const next = new Set(prev);
@@ -852,20 +1163,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
           return next;
         });
         setTimeout(() => {
-          if ((firstGroup as any).id === "ungrouped") {
-            const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-            setSelectedGroup({
-              id: "ungrouped",
-              name: "Ungrouped",
-              balance: ungroupedParties.reduce((s: number, p: any) => s + (p.balance || 0), 0),
-              debit: ungroupedParties.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-              credit: ungroupedParties.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-              groupType: "party",
-              entity: { id: "ungrouped", name: "Ungrouped" } as any,
-            });
-          } else {
-            setSelectedGroup(firstGroup as UnifiedGroup);
-          }
+          setSelectedGroup(firstGroup as UnifiedGroup);
           setSelectedAccount(null);
         }, 50);
       }
@@ -915,7 +1213,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
         }
       }
     }
-  }, [accountTree, allUnifiedGroups, mode, processedParties]);
+  }, [accountTree, allUnifiedGroups, mode, buildUngroupedVirtualGroup]);
 
   useEffect(() => {
     if (mode === "group" && selectedGroup && typeof window !== "undefined") {
@@ -970,41 +1268,67 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     if (mode !== "group" || !selectedGroup?.entity) return null;
     const group = selectedGroup.entity as any;
     const groupType = (selectedGroup as any).groupType;
+    // For collapsed system groups we aggregate all nested user groups by scope IDs.
+    const inScope = (groupId?: string) => selectedGroupScopeIds.has(groupId || "");
     if (groupType === "expense") {
-      const accounts = processedExpenseAccounts.filter((e: any) => e.groupId === selectedGroup.id);
-      return { ...group, items: accounts, expenseGroupIds: [selectedGroup.id] };
+      const accounts = selectedGroup.id === "ungrouped-expense"
+        ? processedExpenseAccounts.filter((e: any) => !e.groupId || e.groupId === "ungrouped_expense")
+        : processedExpenseAccounts.filter((e: any) => inScope(e.groupId));
+      return { ...group, items: accounts, expenseGroupIds: Array.from(selectedGroupScopeIds) };
     }
     if (groupType === "party") {
-      const parties = selectedGroup.id === "ungrouped"
-        ? processedParties.filter((p: any) => !p.groupId)
-        : processedParties.filter((p: any) => p.groupId === selectedGroup.id);
+      const parties = selectedGroup.id === "ungrouped-party"
+        ? processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party")
+        : processedParties.filter((p: any) => inScope(p.groupId));
       return { ...group, items: parties };
     }
     if (groupType === "staff") {
-      const staff = processedStaff.filter((s: any) => s.groupId === selectedGroup.id);
+      const staff = selectedGroup.id === "ungrouped-staff"
+        ? processedStaff.filter((s: any) => !s.groupId || s.groupId === "ungrouped_staff")
+        : processedStaff.filter((s: any) => inScope(s.groupId));
       return { ...group, items: staff };
     }
     if (groupType === "tax") {
-      const taxes = processedTaxes.filter((t: any) => t.groupId === selectedGroup.id);
+      const taxes = selectedGroup.id === "ungrouped-tax"
+        ? processedTaxes.filter((t: any) => !t.groupId || t.groupId === "ungrouped_tax")
+        : processedTaxes.filter((t: any) => inScope(t.groupId));
       return { ...group, items: taxes };
     }
     if (groupType === "bank" || groupType === "account") {
-      const accounts = processedAccounts.filter((a: any) => a.groupId === selectedGroup.id);
+      const accounts = selectedGroup.id === "ungrouped-bank"
+        ? processedAccounts.filter((a: any) => !a.groupId || a.groupId === "ungrouped_account")
+        : processedAccounts.filter((a: any) => inScope(a.groupId));
       return { ...group, items: accounts };
     }
     return { ...group, items: [] };
-  }, [mode, selectedGroup, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, processedAccounts]);
+  }, [mode, selectedGroup, selectedGroupScopeIds, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, processedAccounts]);
 
   const groupEntityList = useMemo(() => {
     if (mode !== "group" || !selectedGroup) return undefined;
     const groupType = (selectedGroup as any).groupType;
-    if (groupType === "expense") return processedExpenseAccounts;
-    if (groupType === "party") return processedParties;
-    if (groupType === "staff") return processedStaff;
-    if (groupType === "tax") return processedTaxes;
-    if (groupType === "bank" || groupType === "account") return processedAccounts;
+    // Keep entity-list aligned with selected group scope so detail helpers stay consistent.
+    if (groupType === "expense") {
+      if (selectedGroup.id === "ungrouped-expense") return processedExpenseAccounts.filter((e: any) => !e.groupId || e.groupId === "ungrouped_expense");
+      return processedExpenseAccounts.filter((e: any) => selectedGroupScopeIds.has(e.groupId || ""));
+    }
+    if (groupType === "party") {
+      if (selectedGroup.id === "ungrouped-party") return processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
+      return processedParties.filter((p: any) => selectedGroupScopeIds.has(p.groupId || ""));
+    }
+    if (groupType === "staff") {
+      if (selectedGroup.id === "ungrouped-staff") return processedStaff.filter((s: any) => !s.groupId || s.groupId === "ungrouped_staff");
+      return processedStaff.filter((s: any) => selectedGroupScopeIds.has(s.groupId || ""));
+    }
+    if (groupType === "tax") {
+      if (selectedGroup.id === "ungrouped-tax") return processedTaxes.filter((t: any) => !t.groupId || t.groupId === "ungrouped_tax");
+      return processedTaxes.filter((t: any) => selectedGroupScopeIds.has(t.groupId || ""));
+    }
+    if (groupType === "bank" || groupType === "account") {
+      if (selectedGroup.id === "ungrouped-bank") return processedAccounts.filter((a: any) => !a.groupId || a.groupId === "ungrouped_account");
+      return processedAccounts.filter((a: any) => selectedGroupScopeIds.has(a.groupId || ""));
+    }
     return undefined;
-  }, [mode, selectedGroup, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, processedAccounts]);
+  }, [mode, selectedGroup, selectedGroupScopeIds, processedParties, processedStaff, processedTaxes, processedExpenseAccounts, processedAccounts]);
 
   const activeEntity = mode === "group" ? groupEntityForTransactions : selectedAccount?.entity ?? null;
   const activeContext = mode === "group" ? "group" : (accountContext as any);
@@ -1262,7 +1586,14 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
   const renderTreeItem = (item: AccountTreeItem, level: number = 0): React.ReactNode => {
     const isExpanded = expandedGroups.has(item.id);
     const hasChildren = item.children && item.children.length > 0;
-    const isSelectableGroup = mode === "group" && item.group && !item.id.startsWith("entity-");
+    // Virtual Income/Expense parent rows are for hierarchy only (no details view binding).
+    const isVirtualExpenseParent = mode === "group" && item.id.startsWith("expense-parent-");
+    const isSystemGroupItem = mode === "group" && Boolean(item.group?.isSystemGroup);
+    // Collapsed system group shows aggregate child balance; expanded state hides system balance.
+    const displayBalance = isSystemGroupItem && hasChildren
+      ? (isExpanded ? null : (item.children || []).reduce((sum, child) => sum + (child.balance || 0), 0))
+      : item.balance;
+    const isSelectableGroup = mode === "group" && item.group && !item.id.startsWith("entity-") && !isVirtualExpenseParent;
     const isSelectableAccount = mode === "account" && item.type === "account" && item.account;
     const isSelected = (
       (isSelectableAccount && selectedAccount?.id === item.id) || 
@@ -1282,13 +1613,15 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
       >
         <Card
           className={cn(
-            "p-1.5 border rounded-lg transition-colors duration-200 ml-4",
-            item.id.startsWith('entity-') 
+            "p-1.5 border rounded-lg transition-colors duration-200",
+            item.id.startsWith('entity-') || isVirtualExpenseParent
               ? "cursor-default bg-muted/50" 
               : isSelected
               ? "cursor-pointer border-primary bg-secondary shadow-sm"
               : "cursor-pointer border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
           )}
+          // Apply fixed visual tree indent: entity (0), system (+25px), user (+50px).
+          style={{ marginLeft: `${level * 25}px` }}
           onClick={() => handleSelectItem(item)}
         >
           <div className="flex items-center justify-between w-full gap-2 min-w-0">
@@ -1352,17 +1685,25 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
-                <p
-                  className={cn(
-                    "font-bold text-xs whitespace-nowrap flex-shrink-0 ml-1 px-1 rounded cursor-default",
-                    item.balance >= 0 ? "text-green-600" : "text-red-600"
-                  )}
-                >
-                  {formatCurrency(item.balance, { showDrCr: true })}
-                </p>
+                {displayBalance === null ? (
+                  <p className="font-bold text-xs whitespace-nowrap flex-shrink-0 ml-1 px-1 rounded text-muted-foreground/60 cursor-default">
+                    -
+                  </p>
+                ) : (
+                  <p
+                    className={cn(
+                      "font-bold text-xs whitespace-nowrap flex-shrink-0 ml-1 px-1 rounded cursor-default",
+                      displayBalance >= 0 ? "text-green-600" : "text-red-600"
+                    )}
+                  >
+                    {formatCurrency(displayBalance, { showDrCr: true })}
+                  </p>
+                )}
               </TooltipTrigger>
               <TooltipContent side="left">
-                <p className="font-medium">{formatCurrency(item.balance, { showDrCr: true })}</p>
+                <p className="font-medium">
+                  {displayBalance === null ? "Expand to view user-group balances" : formatCurrency(displayBalance, { showDrCr: true })}
+                </p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -1433,15 +1774,30 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
     } else if (selectedGroup && selectedGroup.entity) {
       const group = selectedGroup;
       const groupEntity = group.entity;
+      const inScope = (groupId?: string) => selectedGroupScopeIds.has(groupId || "");
+      // When a system group is collapsed, details should show aggregate child-group data.
+      const isCollapsedSystemSelection = Boolean(group.isSystemGroup) && !expandedGroups.has(group.id);
       
       // Render appropriate group details component based on group type
       switch (group.groupType) {
-        case 'party':
+        case 'party': {
+          const scopedParties = group.id === "ungrouped-party"
+            ? processedParties.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party")
+            : processedParties.filter((p) => inScope(p.groupId));
+          const needsSyntheticGrouping = isCollapsedSystemSelection || group.id === "ungrouped-party";
+          const effectivePartyGroupId = needsSyntheticGrouping ? `${group.id}-aggregate` : group.id;
+          // Rebind scoped parties to synthetic group id so GroupDetails can render scoped rows reliably.
+          const effectiveParties = needsSyntheticGrouping
+            ? scopedParties.map((p) => ({ ...p, groupId: effectivePartyGroupId }))
+            : scopedParties;
+          const effectiveGroupEntity = needsSyntheticGrouping
+            ? { ...(groupEntity as any), id: effectivePartyGroupId, groupType: "party", name: group.name }
+            : groupEntity;
           return (
             <GroupDetails
-              group={groupEntity as Group}
+              group={effectiveGroupEntity as Group}
               allGroups={processedGroups}
-              allParties={processedParties.filter(p => p.groupId === group.id)}
+              allParties={effectiveParties}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onPartyUpdated={() => {}}
@@ -1450,12 +1806,15 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
               userNames={mergedUserNames}
             />
           );
+        }
         case 'staff':
           return (
             <StaffGroupDetails
               group={groupEntity as any}
               allGroups={processedStaffGroups}
-              staff={processedStaff.filter(s => s.groupId === group.id)}
+              staff={group.id === "ungrouped-staff"
+                ? processedStaff.filter((s: any) => !s.groupId || s.groupId === "ungrouped_staff")
+                : processedStaff.filter((s) => inScope((s as any).groupId))}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onStaffUpdated={() => {}}
@@ -1469,7 +1828,9 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
             <TaxGroupDetails
               group={groupEntity as any}
               allGroups={processedTaxGroups}
-              taxes={processedTaxes.filter(t => t.groupId === group.id)}
+              taxes={group.id === "ungrouped-tax"
+                ? processedTaxes.filter((t: any) => !t.groupId || t.groupId === "ungrouped_tax")
+                : processedTaxes.filter((t) => inScope((t as any).groupId))}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onTaxUpdated={() => {}}
@@ -1483,7 +1844,9 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
             <ExpenseGroupDetails
               group={groupEntity as any}
               allGroups={processedExpenseGroups}
-              accounts={processedExpenseAccounts.filter(e => e.groupId === group.id)}
+              accounts={group.id === "ungrouped-expense"
+                ? processedExpenseAccounts.filter((e: any) => !e.groupId || e.groupId === "ungrouped_expense")
+                : processedExpenseAccounts.filter((e) => inScope((e as any).groupId))}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onAccountUpdated={() => {}}
@@ -1497,7 +1860,9 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
             <AccountGroupDetails
               group={groupEntity as AccountGroup}
               allGroups={processedAccountGroups}
-              accounts={processedAccounts.filter(a => a.groupId === group.id)}
+              accounts={group.id === "ungrouped-bank"
+                ? processedAccounts.filter((a: any) => !a.groupId || a.groupId === "ungrouped_account")
+                : processedAccounts.filter((a) => inScope((a as any).groupId))}
               onGroupUpdated={() => {}}
               onGroupDeleted={() => setSelectedGroup(null)}
               onAccountUpdated={() => {}}
@@ -1613,18 +1978,11 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                   options={groupDropdownOptions}
                   value={selectedGroup?.id || ""}
                   onChange={(value) => {
-                    if (value === "ungrouped") {
-                      const ungroupedParties = processedParties.filter((p: any) => !p.groupId);
-                      const ungroupedBalance = ungroupedParties.reduce((s: number, p: any) => s + (p.balance || 0), 0);
-                      setSelectedGroup({
-                        id: "ungrouped",
-                        name: "Ungrouped",
-                        balance: ungroupedBalance,
-                        debit: ungroupedParties.reduce((s: number, p: any) => s + (p.debit || 0), 0),
-                        credit: ungroupedParties.reduce((s: number, p: any) => s + (p.credit || 0), 0),
-                        groupType: "party",
-                        entity: { id: "ungrouped", name: "Ungrouped", balance: ungroupedBalance } as any,
-                      });
+                    if (value.startsWith("ungrouped-")) {
+                      const ungroupedGroup = buildUngroupedVirtualGroup((value.replace("ungrouped-", "") as UnifiedGroup["groupType"]));
+                      if (ungroupedGroup) {
+                        setSelectedGroup(ungroupedGroup);
+                      }
                       setSelectedAccount(null);
                       return;
                     }
@@ -1649,7 +2007,7 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
                   }}
                   placeholder="Account"
                 />
-              )}
+                )}
             </div>
           </div>
         </header>

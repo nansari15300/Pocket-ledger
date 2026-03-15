@@ -108,9 +108,11 @@ export default function IncomeExpensePage() {
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
   const accountsTabEnabled = incomesListEnabled && featureConfig.incomes_accounts_tab !== false;
-  const groupsTabEnabled = incomesListEnabled && featureConfig.incomes_groups_tab !== false;
+  // Keep Groups tab permanently enabled on Income & Expense page.
+  const groupsTabEnabled = true;
   const accountDetailsEnabled = accountsTabEnabled && featureConfig.incomes_account_details !== false;
-  const groupDetailsEnabled = groupsTabEnabled && featureConfig.incomes_group_details !== false;
+  // Keep Groups detail view accessible whenever this page is accessible.
+  const groupDetailsEnabled = true;
   const isActiveTabEnabled = activeView === "accounts" ? accountsTabEnabled : groupsTabEnabled;
   const listDisabled = !incomesListEnabled || !isActiveTabEnabled;
   const detailsDisabled = activeView === "accounts" ? !accountDetailsEnabled : !groupDetailsEnabled;
@@ -122,8 +124,10 @@ export default function IncomeExpensePage() {
       }
       return g;
     };
-    const normalized = (initialProcessedExpenseGroups || []).map(normalizeGroup);
-    const ungrouped = processedExpenseAccounts.filter(p => !p.groupId);
+    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
+    const normalized = (initialProcessedExpenseGroups || []).map(normalizeGroup).filter((g: any) => g.isAutoUngrouped !== true);
+    // Show Ungrouped row only when at least one account is in the Ungrouped bucket.
+    const ungrouped = processedExpenseAccounts.filter((p: any) => !p.groupId || p.groupId === "ungrouped_expense");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: ExpenseGroup = {
@@ -302,7 +306,7 @@ export default function IncomeExpensePage() {
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-        return processedExpenseAccounts.filter(p => !p.groupId);
+      return processedExpenseAccounts.filter((p: any) => !p.groupId || p.groupId === "ungrouped_expense");
     }
     let groupAccounts = processedExpenseAccounts.filter(p => p.groupId === selectedGroup.id);
     
@@ -372,13 +376,13 @@ export default function IncomeExpensePage() {
         </div>
         {activeView === 'accounts' && (
           <div className={cn("p-2 border-b flex gap-2 flex-shrink-0", listDisabled && "pointer-events-none opacity-60")}>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1" onClick={() => openVoucherDialog("direct_income")}>
-              Add Direct Income
+            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("direct_income")}>
+              Direct Income
             </PermissionButton>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1" onClick={() => openVoucherDialog("direct_expense")}>
-              Add Direct Expense
+            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("direct_expense")}>
+              Direct Expense
             </PermissionButton>
-            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1" onClick={() => openVoucherDialog("add_salary")}>
+            <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("add_salary")}>
               Add Salary
             </PermissionButton>
           </div>

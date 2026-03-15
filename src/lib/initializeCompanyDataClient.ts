@@ -28,23 +28,6 @@ const DEFAULT_VOUCHER_SETTINGS = {
   enableLinkPaymentToTxns: true,
 };
 
-const DEFAULT_INCOME_EXPENSE_ACCOUNTS = [
-  // Direct Income
-  { id: "sales_account", name: "Sales Account", groupId: "direct_income", type: "Income", defaultVoucherTypes: ["sale", "payment_in"] },
-
-  // Indirect Income
-  { id: "salary_account_incom", name: "Salary Account Incom", groupId: "indirect_income", type: "Income", defaultVoucherTypes: ["payment_in"] },
-  { id: "interest_received", name: "Interest Received", groupId: "indirect_income", type: "Income", defaultVoucherTypes: ["payment_in"] },
-
-  // Direct Expenses
-  { id: "purchase_account", name: "Purchase Account", groupId: "direct_expense", type: "Expense", defaultVoucherTypes: ["purchase", "payment_out"] },
-  { id: "wages_factory_expenses", name: "Wages & Factory Expenses", groupId: "direct_expense", type: "Expense", defaultVoucherTypes: ["payment_out"] },
-
-  // Indirect Expenses
-  { id: "salary_account", name: "Salary Account Exp", groupId: "indirect_expense", type: "Expense", defaultVoucherTypes: ["payment_out", "journal"] },
-  { id: "other_account", name: "Other Account", groupId: "indirect_expense", type: "Expense", defaultVoucherTypes: ["payment_out"] },
-] as const;
-
 /**
  * Client-only: Creates default groups, accounts, and company settings for a new company.
  * Must run in browser so Firestore uses the signed-in user's auth (server action has no auth).
@@ -64,11 +47,14 @@ export async function initializeCompanyDataClient(companyId: string, userId: str
     { col: "tax_groups", id: "duties_taxes", name: "Duties & Taxes", type: "Tax", parentId: "liabilities", isSystemReserved: true, isReportOnly: false },
     { col: "account_groups", id: "bank_accounts_group", name: "Bank Accounts", type: "Bank", parentId: "assets", isSystemReserved: true, isReportOnly: false },
     { col: "account_groups", id: "cash_in_hand_group", name: "Cash-in-Hand", type: "Cash", parentId: "assets", isSystemReserved: true, isReportOnly: false },
-    { col: "expense_groups", id: "direct_income", name: "Direct Income", type: "Income", parentId: "income", isSystemReserved: false, isReportOnly: false },
-    { col: "expense_groups", id: "indirect_income", name: "Indirect Income", type: "Income", parentId: "income", isSystemReserved: false, isReportOnly: false },
-    { col: "expense_groups", id: "direct_expense", name: "Direct Expenses", type: "Expense", parentId: "expenses", isSystemReserved: false, isReportOnly: false },
-    { col: "expense_groups", id: "indirect_expense", name: "Indirect Expenses", type: "Expense", parentId: "expenses", isSystemReserved: false, isReportOnly: false },
+    // Intentionally do NOT auto-create Income & Expense groups; they must be user-created.
     { col: "staff_groups", id: "loans_liabilities", name: "Loans & Liabilities", type: "Liability", parentId: "liabilities", isSystemReserved: true, isReportOnly: false },
+    // Auto-created Ungrouped buckets (kept hidden in UI lists unless real ungrouped records exist).
+    { col: "groups", id: "ungrouped_party", name: "Ungrouped", type: "General", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "staff_groups", id: "ungrouped_staff", name: "Ungrouped", type: "General", parentId: "loans_liabilities", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "tax_groups", id: "ungrouped_tax", name: "Ungrouped", type: "General", parentId: "duties_taxes", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "account_groups", id: "ungrouped_account", name: "Ungrouped", type: "General", parentId: "bank_accounts_group", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    // Intentionally skip auto-created ungrouped expense group since Income/Expense groups are manual now.
   ];
 
   groupsToCreate.forEach((g) => {
@@ -82,6 +68,8 @@ export async function initializeCompanyDataClient(companyId: string, userId: str
       isDeleted: false,
       isSystemReserved: g.isSystemReserved ?? false,
       isReportOnly: (g as { isReportOnly?: boolean }).isReportOnly ?? false,
+      // Flag auto-created Ungrouped docs so UI can hide base row until needed.
+      isAutoUngrouped: (g as { isAutoUngrouped?: boolean }).isAutoUngrouped ?? false,
       createdAt: serverTimestamp(),
     });
   });
@@ -90,7 +78,7 @@ export async function initializeCompanyDataClient(companyId: string, userId: str
     { col: "parties", id: "owners_capital", name: "Owner's Capital", groupId: "equity", isSystemReserved: true },
     { col: "parties", id: "opening_balance_ledger", name: "Opening Balance", groupId: "equity", isSystemReserved: true, isSystemAccount: true },
     { col: "taxes", id: "vat_sales_tax", name: "VAT / Sales Tax", groupId: "duties_taxes", rate: 13, isSystemReserved: true },
-    ...DEFAULT_INCOME_EXPENSE_ACCOUNTS.map((acc) => ({ col: "expense_accounts", ...acc, isSystemReserved: true })),
+    // Intentionally do NOT auto-create Income & Expense accounts; they must be user-created.
   ];
 
   accountsToCreate.forEach((acc) => {
@@ -116,6 +104,7 @@ export async function initializeCompanyDataClient(companyId: string, userId: str
   const itemGroupsToCreate = [
     { id: "stock_items", name: "Stock Items" },
     { id: "services", name: "Services" },
+    { id: "ungrouped_item", name: "Ungrouped", isAutoUngrouped: true },
   ];
 
   itemGroupsToCreate.forEach((ig) => {
@@ -125,7 +114,8 @@ export async function initializeCompanyDataClient(companyId: string, userId: str
       companyId,
       ownerId: userId,
       isDeleted: false,
-      isSystemReserved: true,
+      isSystemReserved: (ig as { isAutoUngrouped?: boolean }).isAutoUngrouped ? false : true,
+      isAutoUngrouped: (ig as { isAutoUngrouped?: boolean }).isAutoUngrouped ?? false,
       debit: 0,
       credit: 0,
       balance: 0,

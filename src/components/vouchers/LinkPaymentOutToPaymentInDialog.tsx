@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
+import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -45,6 +46,8 @@ export interface LinkPaymentOutToPaymentInDialogProps {
   currentVoucherLinkedAmounts?: Record<string, number>;
   /** When provided, show "From Voucher (current voucher)" section with only this voucher — the one we're working on. */
   currentVoucherSummary?: { voucherNumber: string; date: Date | null; from: string; amount: number; linkedTotal: number };
+  /** Account opening balance used to include Opening Balance as spend-wise row. */
+  accountOpeningBalance?: number;
 }
 
 /** Out-flow vouchers for this account: Payment Out, Direct Expense, Contra (from this account). */
@@ -69,14 +72,29 @@ export function LinkPaymentOutToPaymentInDialog({
   accountName,
   currentVoucherLinkedAmounts = {},
   currentVoucherSummary,
+  accountOpeningBalance = 0,
 }: LinkPaymentOutToPaymentInDialogProps) {
-  const { formatDate, formatCurrency } = useDate();
+  const { formatDate, formatCurrency, formatCurrencyForPrint } = useDate();
   const [checked, setChecked] = React.useState<Set<string>>(new Set(selectedIds));
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
 
+  const openingBalanceLinkedByOthers = React.useMemo(() => {
+    return vouchers
+      .filter((v: any) => {
+        const isInVoucherForAccount =
+          ((v.type === "payment_in" || v.type === "direct_income") && (v.accountId ?? v.toAccountId ?? v.bankAccountId) === accountId) ||
+          (v.type === "contra" && (v.toAccountId ?? v.accountId) === accountId);
+        return isInVoucherForAccount && v.id !== currentPaymentInId && !v.isDeleted;
+      })
+      .reduce((sum: number, v: any) => {
+        if ((v.linkedOpeningBalanceAccountId ?? "") !== accountId) return sum;
+        return sum + (Number(v.linkedOpeningBalanceAmount) || 0);
+      }, 0);
+  }, [vouchers, accountId, currentPaymentInId]);
+
   /** List of outflow vouchers for this account with linkable amount. Edit mode: free current voucher's amount so it can be re-allocated. */
   const paymentOutList = React.useMemo(() => {
-    return vouchers
+    const rows = vouchers
       .filter((v) => isOutVoucherForAccount(v, accountId) && !v.isDeleted)
       .map((v) => {
         const date = safeToDate(v.date);
@@ -90,9 +108,26 @@ export function LinkPaymentOutToPaymentInDialog({
             ? (names[v.toAccountId] ?? "—")
             : names[v.partyId] ?? names[v.staffId] ?? names[v.expenseAccountId] ?? names[v.toAccountId] ?? v.payeeName ?? "—";
         return { id: v.id, voucherNumber: v.voucherNumber ?? "—", date, amount, alreadyLinked, linkable, to, currentLinked };
-      })
-      .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [vouchers, accountId, names, currentVoucherLinkedAmounts]);
+      });
+    const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "cr");
+    if (openingBase > 0) {
+      const currentLinked = Number(currentVoucherLinkedAmounts[SPEND_WISE_OPENING_BALANCE_ID]) || 0;
+      const alreadyLinked = openingBalanceLinkedByOthers + currentLinked;
+      const linkable = Math.max(0, openingBase - alreadyLinked + currentLinked);
+      // Treat opening balance like a normal spend-wise target row for Cr side linking.
+      rows.push({
+        id: SPEND_WISE_OPENING_BALANCE_ID,
+        voucherNumber: getOpeningBalanceVoucherLabel("cr"),
+        date: null,
+        amount: openingBase,
+        alreadyLinked,
+        linkable,
+        to: "Opening Balance",
+        currentLinked,
+      });
+    }
+    return rows.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+  }, [vouchers, accountId, names, currentVoucherLinkedAmounts, accountOpeningBalance, openingBalanceLinkedByOthers]);
 
   const prevOpenRef = React.useRef(false);
   React.useEffect(() => {
@@ -304,22 +339,28 @@ export function LinkPaymentOutToPaymentInDialog({
                       <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
                       <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                       <td className="p-2 whitespace-nowrap">{row.to}</td>
-                      <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount)}</td>
-                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">
+                      <td className="p-2 text-right font-medium text-red-600 whitespace-nowrap">
+                        {/* Outflow voucher amounts are credit-side in this popup. */}
+                        {formatCurrencyForPrint(row.amount, { noSuffix: true })} Cr
+                      </td>
+                      <td className="p-2 text-right text-red-600 whitespace-nowrap">
                         {/* Linked: effective total after this dialog (other receipts + this receipt's tentative). Avoid double-counting current voucher. */}
                         {(() => {
                           const otherLinked = Number(row.alreadyLinked ?? 0) - Number(row.currentLinked ?? 0);
                           const tentative = tentativeLinkedByRowId[row.id] ?? 0;
                           const effectiveTotalLinked = otherLinked + tentative;
-                          if (effectiveTotalLinked <= row.amount) return formatCurrency(effectiveTotalLinked);
+                          if (effectiveTotalLinked <= row.amount) return `${formatCurrencyForPrint(effectiveTotalLinked, { noSuffix: true })} Cr`;
                           return (
-                            <span title={`Total linked: ${formatCurrency(effectiveTotalLinked)} (exceeds voucher amount ${formatCurrency(row.amount)})`}>
-                              {formatCurrency(row.amount)} <span className="text-amber-600 text-xs">(+{formatCurrency(effectiveTotalLinked - row.amount)} over)</span>
+                            <span title={`Total linked: ${formatCurrencyForPrint(effectiveTotalLinked, { noSuffix: true })} Cr (exceeds voucher amount ${formatCurrencyForPrint(row.amount, { noSuffix: true })} Cr)`}>
+                              {formatCurrencyForPrint(row.amount, { noSuffix: true })} Cr <span className="text-amber-600 text-xs">(+{formatCurrencyForPrint(effectiveTotalLinked - row.amount, { noSuffix: true })} Cr over)</span>
                             </span>
                           );
                         })()}
                       </td>
-                      <td className="p-2 text-right font-medium whitespace-nowrap">{formatCurrency(Math.max(0, row.linkable - (tentativeLinkedByRowId[row.id] ?? 0)))}</td>
+                      <td className="p-2 text-right font-medium text-red-600 whitespace-nowrap">
+                        {/* Linkable balance here is remaining credit-side amount on outflow rows. */}
+                        {formatCurrencyForPrint(Math.max(0, row.linkable - (tentativeLinkedByRowId[row.id] ?? 0)), { noSuffix: true })} Cr
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -8,22 +8,13 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { Link2, RotateCcw } from "lucide-react";
+import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -70,6 +61,8 @@ export interface LinkPaymentInToPaymentOutDialogProps {
   currentVoucherSummary?: { voucherNumber: string; date: Date | null; from: string; amount: number; linkedTotal: number };
   /** When true, show all account vouchers in table (even if linkable is 0) for visibility/debug clarity. */
   showAllRows?: boolean;
+  /** Account opening balance used to include Opening Balance as spend-wise row. */
+  accountOpeningBalance?: number;
 }
 
 export function LinkPaymentInToPaymentOutDialog({
@@ -89,12 +82,12 @@ export function LinkPaymentInToPaymentOutDialog({
   displayOnlyVariant = 'in',
   currentVoucherSummary,
   showAllRows = false,
+  accountOpeningBalance = 0,
 }: LinkPaymentInToPaymentOutDialogProps) {
   const { formatDate, formatCurrency } = useDate();
   const [checked, setChecked] = React.useState<Set<string>>(new Set(selectedIds));
   /** Order in which user ticked rows: first-ticked gets allocation first. */
   const [selectedOrder, setSelectedOrder] = React.useState<string[]>(selectedIds?.length ? [...selectedIds] : []);
-  const [resetConfirmOpen, setResetConfirmOpen] = React.useState(false);
   // Selection is local until user clicks Done; nothing is saved to server until then (parent saves on onConfirm).
 
   const prevOpenRef = React.useRef(false);
@@ -165,7 +158,7 @@ export function LinkPaymentInToPaymentOutDialog({
   };
 
   const paymentInList = React.useMemo(() => {
-    return vouchers
+    const rows = vouchers
       .filter((v) => isInVoucherForAccount(v) && !v.isDeleted)
       .map((v) => {
         const date = safeToDate(v.date);
@@ -186,9 +179,26 @@ export function LinkPaymentInToPaymentOutDialog({
               v.payeeName ||
               "—";
         return { id: v.id, voucherNumber, date, amount, alreadyLinked, linkable, from };
-      })
-      .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [vouchers, accountId, names, linkedAmountByPaymentInId, currentVoucherLinkedAmounts]);
+      });
+    const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
+    if (openingBase > 0) {
+      const fromOthers = linkedAmountByPaymentInId.get(SPEND_WISE_OPENING_BALANCE_ID) ?? 0;
+      const fromCurrent = Number(currentVoucherLinkedAmounts[SPEND_WISE_OPENING_BALANCE_ID]) || 0;
+      const alreadyLinked = fromOthers + fromCurrent;
+      const linkable = Math.max(0, openingBase - alreadyLinked);
+      // Treat opening balance like a normal spend-wise source row for Dr side linking.
+      rows.push({
+        id: SPEND_WISE_OPENING_BALANCE_ID,
+        voucherNumber: getOpeningBalanceVoucherLabel("dr"),
+        date: null,
+        amount: openingBase,
+        alreadyLinked,
+        linkable,
+        from: "Opening Balance",
+      });
+    }
+    return rows.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+  }, [vouchers, accountId, names, linkedAmountByPaymentInId, currentVoucherLinkedAmounts, accountOpeningBalance]);
 
   /** When filterToVoucherId is set, show only that voucher (e.g. current voucher only). */
   const paymentInListFiltered = React.useMemo(() => {
@@ -281,9 +291,9 @@ export function LinkPaymentInToPaymentOutDialog({
   };
 
   const handleReset = () => {
+    // Reset is immediate by request; keep local selection clear without extra confirmation.
     setChecked(new Set());
     setSelectedOrder([]);
-    setResetConfirmOpen(false);
   };
 
   const isMobile = useIsMobile();
@@ -437,7 +447,7 @@ export function LinkPaymentInToPaymentOutDialog({
                   Auto Link
                 </Button>
               )}
-              <Button type="button" size="sm" onClick={() => setResetConfirmOpen(true)} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
                 <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Reset
               </Button>
@@ -446,20 +456,6 @@ export function LinkPaymentInToPaymentOutDialog({
           )}
         </DialogFooter>
       </DialogContent>
-      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your selection will be cleared. Nothing is saved to the server until you click save on voucher.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleReset}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Dialog>
   );
 }

@@ -814,8 +814,13 @@ export function DesktopAppHeader() {
     let ownedCompaniesCache: Company[] = [];
     let sharedCompaniesCache: Company[] = [];
     let ownedByEmailCache: Company[] = [];
+    // Keep first paint stable: wait for all initial listeners before publishing header data.
+    let ownedReady = false;
+    let sharedReady = false;
+    let ownedByEmailReady = !ownedByEmailQuery;
 
     const combineAndSet = () => {
+      if (!ownedReady || !sharedReady || !ownedByEmailReady) return;
       const companyMap = new Map<string, Company>();
 
       // Add owned by uid first
@@ -833,7 +838,13 @@ export function DesktopAppHeader() {
           companyMap.set(c.id, { ...c, isOwned: false });
       });
 
-      setCompanies(Array.from(companyMap.values()));
+      const next = Array.from(companyMap.values());
+      // Avoid no-op state writes to reduce extra header renders.
+      setCompanies((prev) => {
+        const sameLength = prev.length === next.length;
+        const sameOrderAndIds = sameLength && prev.every((p, i) => p.id === next[i]?.id && p.isOwned === next[i]?.isOwned);
+        return sameOrderAndIds ? prev : next;
+      });
       setLoading(false);
     };
 
@@ -843,6 +854,7 @@ export function DesktopAppHeader() {
         ownedCompaniesCache = snap.docs
           .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
           .filter((c) => !c.isDeleted);
+        ownedReady = true;
         combineAndSet();
       },
       (error) => {
@@ -857,6 +869,7 @@ export function DesktopAppHeader() {
         sharedCompaniesCache = snap.docs
           .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
           .filter((c) => !c.isDeleted);
+        sharedReady = true;
         combineAndSet();
       },
       (error) => {
@@ -872,6 +885,7 @@ export function DesktopAppHeader() {
             ownedByEmailCache = snap.docs
               .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
               .filter((c) => !c.isDeleted);
+            ownedByEmailReady = true;
             combineAndSet();
           },
           (error) => {

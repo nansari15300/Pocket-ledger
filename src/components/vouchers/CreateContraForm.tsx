@@ -24,6 +24,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { format, startOfDay } from "date-fns";
 import { ScrollArea } from "../ui/scroll-area";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Account } from "@/components/bank-cash/types";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
 import { useDate } from "@/hooks/useDate";
@@ -49,6 +50,7 @@ import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPayme
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
 import { updateVoucherSpendWiseLinks } from "@/lib/voucherActionsClient";
+import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 const fileSchema = z.object({
   file: z.custom<File | null>().optional(),
@@ -124,6 +126,10 @@ export function CreateContraForm({
   /** Pending Link Pay Out selection (applied to server only on Save, not on Done). */
   const [pendingLinkedPaymentOut, setPendingLinkedPaymentOut] = useState<{ ids: string[]; amountsByVoucherId: Record<string, number> } | null>(null);
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
+  // Block overspending from selected from-account for all roles (including owner).
+  const [isAmountMoreThanAccountOpen, setIsAmountMoreThanAccountOpen] = useState(false);
+  // Track last valid amount so invalid keystroke can be reverted immediately.
+  const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
 
   const transactionDates = useMemo(() => {
@@ -190,6 +196,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Rule: Out leg links same-account inflows; In leg links same-account outflows.
   const spendWiseInAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
   const spendWiseOutAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
+  const spendWiseInAccountOpeningBalance = Number(allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.openingBalance ?? 0) || 0;
+  const spendWiseOutAccountOpeningBalance = Number(allProcessedAccounts?.find((a: any) => a.id === spendWiseOutAccountId)?.openingBalance ?? 0) || 0;
   const linkedAmountByPaymentInId = useMemo(() => {
     const map = new Map<string, number>();
     // Compute already-linked amounts using the same opposite account used by Link Pay In.
@@ -225,6 +233,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const linkedPaymentInTotal = useMemo(() => {
     if (!allVouchers?.length || !linkedPaymentInIds?.length || !spendWiseInAccountId) return 0;
     return linkedPaymentInIds.reduce((sum, id) => {
+      if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+        // Opening balance behaves like spend-wise source row on Dr side for Contra Out linking.
+        const base = getOpeningBalanceBaseAmount(spendWiseInAccountOpeningBalance, "dr");
+        const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+        return sum + Math.max(0, base - alreadyLinked);
+      }
       // Keep amount-matching check aligned with dialog filter (including legacy account fields).
       const v = allVouchers.find((x: any) =>
         x.id === id &&
@@ -237,7 +251,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       return sum + Math.max(0, amt - alreadyLinked);
     }, 0);
-  }, [allVouchers, linkedPaymentInIds, spendWiseInAccountId, linkedAmountByPaymentInId]);
+  }, [allVouchers, linkedPaymentInIds, spendWiseInAccountId, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance]);
   const amountMatched = amount > 0 && linkedPaymentInTotal >= amount;
   const showLinkPayMode = !!fromAccountId && amount > 0;
 
@@ -261,8 +275,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!showSpendWiseSection || !allVouchers?.length || !linkedPaymentInIds?.length || !spendWiseInAccountId) return [];
     const uniqueIds = [...new Set(linkedPaymentInIds)];
     // Allocate using opposite-account inflows to keep Link Pay In behavior consistent.
-    const allocated = allocatePaymentInAmounts(amount, linkedPaymentInIds, allVouchers, spendWiseInAccountId, linkedAmountByPaymentInId);
+    const allocated = allocatePaymentInAmounts(amount, linkedPaymentInIds, allVouchers, spendWiseInAccountId, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance);
     return uniqueIds.map((id) => {
+      if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+        const amt = getOpeningBalanceBaseAmount(spendWiseInAccountOpeningBalance, "dr");
+        const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+        return {
+          id,
+          voucherNumber: "Opening Balance (Dr)",
+          date: null as Date | null,
+          amount: amt,
+          linked: allocated[id] ?? 0,
+          linkedOnOthers: alreadyLinked,
+          linkable: Math.max(0, amt - alreadyLinked),
+          from: "Opening Balance",
+        };
+      }
       const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccountContra(x, spendWiseInAccountId));
       if (!v) return null;
       const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
@@ -285,18 +313,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         from,
       };
     }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkedOnOthers: number; linkable: number; from: string }[];
-  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, spendWiseInAccountId, amount, linkedAmountByPaymentInId, paymentInDialogNames]);
+  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, spendWiseInAccountId, amount, linkedAmountByPaymentInId, paymentInDialogNames, spendWiseInAccountOpeningBalance]);
 
   /** Spend wise: count of Payment In / Direct Income / Contra for fromAccountId with linkable amount. Message uses "bcz" spelling. */
   const spendWiseLinkableCount = useMemo(() => {
     if (!spendWiseInAccountId || !allVouchers?.length) return 0;
-    return allVouchers.filter((v: any) => {
+    const voucherCount = allVouchers.filter((v: any) => {
       if (!isInVoucherForAccountContra(v, spendWiseInAccountId)) return false;
       const amt = Number(v.total ?? v.amount ?? 0) || 0;
       const alreadyLinked = linkedAmountByPaymentInId.get(v.id) ?? 0;
       return amt - alreadyLinked > 0;
     }).length;
-  }, [spendWiseInAccountId, allVouchers, linkedAmountByPaymentInId]);
+    const obBase = getOpeningBalanceBaseAmount(spendWiseInAccountOpeningBalance, "dr");
+    const obAlreadyLinked = linkedAmountByPaymentInId.get(SPEND_WISE_OPENING_BALANCE_ID) ?? 0;
+    const obCount = obBase - obAlreadyLinked > 0 ? 1 : 0;
+    return voucherCount + obCount;
+  }, [spendWiseInAccountId, allVouchers, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance]);
 
   /** Top-left card (From Voucher): live Total linked and Balance so they update as soon as user links in dialog (add new or edit). */
   const spendWiseFromCardTotalLinked = useMemo(() => spendWiseDisplayRows.reduce((s, r) => s + r.linked, 0), [spendWiseDisplayRows]);
@@ -307,6 +339,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   /** Show lower row (Contra voucher in To Other out) in both add new and edit — so user sees spend wise link cards. */
   const showSpendWiseOppositeSection = !!spendWiseOutAccountId;
+  const openingBalanceLinkedByOthers = useMemo(() => {
+    if (!spendWiseOutAccountId) return 0;
+    return (allVouchers ?? [])
+      .filter((v: any) => {
+        const isInVoucherForAccount =
+          ((v.type === "payment_in" || v.type === "direct_income") && (v.accountId ?? v.toAccountId ?? v.bankAccountId) === spendWiseOutAccountId) ||
+          (v.type === "contra" && (v.toAccountId ?? v.accountId) === spendWiseOutAccountId);
+        return isInVoucherForAccount && v.id !== currentContraVoucherId && !v.isDeleted;
+      })
+      .reduce((sum: number, v: any) => {
+        if ((v.linkedOpeningBalanceAccountId ?? "") !== spendWiseOutAccountId) return sum;
+        return sum + (Number(v.linkedOpeningBalanceAmount) || 0);
+      }, 0);
+  }, [allVouchers, spendWiseOutAccountId, currentContraVoucherId]);
   const spendWiseLinkedToMeRows = useMemo(() => {
     if (!showSpendWiseOppositeSection || !allVouchers?.length || !currentContraVoucherId || !spendWiseOutAccountId) return [];
     const accId = spendWiseOutAccountId;
@@ -319,7 +365,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           (v.type === "direct_expense" && v.accountId === accId) ||
           (v.type === "contra" && v.fromAccountId === accId))
     );
-    return outflows.map((v: any) => {
+    const rows = outflows.map((v: any) => {
       const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
       const amt = Number(v.total ?? v.amount ?? 0) || 0;
       const amounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? v.linkedPaymentInAmounts : {};
@@ -344,8 +390,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         typeLabel,
         from,
       };
-    }).sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, spendWiseOutAccountId, processedParties, processedStaff, allProcessedAccounts, processedExpenseAccounts]);
+    });
+    const openingBase = getOpeningBalanceBaseAmount(spendWiseOutAccountOpeningBalance, "cr");
+    const currentLinkedOB = Number((voucher as any)?.linkedOpeningBalanceAccountId === spendWiseOutAccountId ? (voucher as any)?.linkedOpeningBalanceAmount : 0) || 0;
+    if (openingBase > 0 && currentLinkedOB > 0) {
+      rows.push({
+        id: SPEND_WISE_OPENING_BALANCE_ID,
+        voucherNumber: "Opening Balance (Cr)",
+        date: null,
+        amount: openingBase,
+        linked: currentLinkedOB,
+        typeLabel: "Opening Balance",
+        from: "Opening Balance",
+      });
+    }
+    return rows.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+  }, [showSpendWiseOppositeSection, allVouchers, currentContraVoucherId, spendWiseOutAccountId, processedParties, processedStaff, allProcessedAccounts, processedExpenseAccounts, spendWiseOutAccountOpeningBalance, voucher]);
 
   /** Card display: when Done is clicked (pending set), show pending links live; otherwise server data. */
   const displayLinkedToMeRows = useMemo(() => {
@@ -353,6 +413,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const accId = spendWiseOutAccountId;
     const rows = pendingLinkedPaymentOut.ids
       .map((id) => {
+        if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+          const openingBase = getOpeningBalanceBaseAmount(spendWiseOutAccountOpeningBalance, "cr");
+          const linked = pendingLinkedPaymentOut.amountsByVoucherId[id] ?? 0;
+          return {
+            id,
+            voucherNumber: "Opening Balance (Cr)",
+            date: null as Date | null,
+            amount: openingBase,
+            linked,
+            typeLabel: "Opening Balance",
+            from: "Opening Balance",
+          };
+        }
         const v = allVouchers.find((x: any) => x.id === id);
         if (!v || v.isDeleted) return null;
         const ok = (v.type === "payment_out" && v.accountId === accId) || (v.type === "direct_expense" && v.accountId === accId) || (v.type === "contra" && v.fromAccountId === accId);
@@ -375,7 +448,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       .filter(Boolean);
     const typed = rows as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; typeLabel: string; from: string }[];
     return typed.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, spendWiseOutAccountId, allProcessedAccounts, processedParties, processedStaff, processedExpenseAccounts]);
+  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, spendWiseOutAccountId, allProcessedAccounts, processedParties, processedStaff, processedExpenseAccounts, spendWiseOutAccountOpeningBalance]);
 
   /** Count must match Link Pay Out dialog's To Voucher rows (linkable + already selected rows). */
   const spendWiseOutDialogRowCount = useMemo(() => {
@@ -401,14 +474,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const linkable = Math.max(0, amount - alreadyLinked + currentLinked);
         return { id: v.id, linkable };
       })
+      .concat((() => {
+        const openingBase = getOpeningBalanceBaseAmount(spendWiseOutAccountOpeningBalance, "cr");
+        if (openingBase <= 0) return [] as { id: string; linkable: number }[];
+        const currentLinkedOB = Number((currentLinkedAmounts as Record<string, number>)[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+        const obLinkable = Math.max(0, openingBase - openingBalanceLinkedByOthers + currentLinkedOB);
+        return [{ id: SPEND_WISE_OPENING_BALANCE_ID, linkable: obLinkable }];
+      })())
       .filter((r) => r.linkable > 0 || selectedSet.has(r.id)).length;
-  }, [spendWiseOutAccountId, allVouchers, pendingLinkedPaymentOut, spendWiseLinkedToMeRows]);
+  }, [spendWiseOutAccountId, allVouchers, pendingLinkedPaymentOut, spendWiseLinkedToMeRows, spendWiseOutAccountOpeningBalance, openingBalanceLinkedByOthers]);
 
   // Card count: Contra In follows Pay Out popup count; Contra Out keeps inflow-link count.
   const spendWiseCardAvailableCount = selectedContraLeg === 'in' ? spendWiseOutDialogRowCount : spendWiseLinkableCount;
 
   /** Total linked from this contra to Payment Out (used by Link Pay Out dialog summary). */
   const lowerCardTotalLinked = useMemo(() => displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0), [displayLinkedToMeRows]);
+  // Keep left "From Voucher" card synced with active contra leg.
+  const fromCardLinkedTotal = selectedContraLeg === 'in' ? lowerCardTotalLinked : spendWiseFromCardTotalLinked;
+  const fromCardBalance = Math.max(0, amount - fromCardLinkedTotal);
+  const fromCardSettled = amount > 0 && fromCardLinkedTotal >= amount;
+  const fromCardLinkedCount = selectedContraLeg === 'in' ? displayLinkedToMeRows.length : spendWiseDisplayRows.length;
 
   /** Block Save when link spend wise is ON and upper card (Payment In link) not settled. */
   const saveDisabledByLink =
@@ -439,9 +524,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       },
     ];
   }, [showSpendWiseSection, currentContraAccountId, formDate, formVoucherNumber, voucher?.voucherNumber, amount, spendWiseDisplayRows, allProcessedAccounts]);
+  // Compute after opposite-row memo so we never read it before initialization.
+  const rightCardLinkedTotal = selectedContraLeg === 'in' ? lowerCardTotalLinked : (currentVoucherAsOnOppositeRows[0]?.linked ?? 0);
 
   const { displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
   const { displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
+  const isAmountExceedingSelectedFromAccount = useCallback((enteredAmount: number) => {
+    if (!fromAccountId) return false;
+    const selectedBalance = Number(fromAccountBalance) || 0;
+    return enteredAmount > selectedBalance;
+  }, [fromAccountId, fromAccountBalance]);
 
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.contra ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.contra ?? false;
@@ -526,6 +618,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
     e?.preventDefault?.();
+    const enteredAmount = Number(form.getValues("amount")) || 0;
+    if (isAmountExceedingSelectedFromAccount(enteredAmount)) {
+      // Stop save when typed amount is higher than selected from-account balance.
+      setIsAmountMoreThanAccountOpen(true);
+      return;
+    }
     const isValid = await form.trigger();
     if (!isValid) {
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
@@ -533,7 +631,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     onVoucherAction?.('saved', options.saveAndNew);
     await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
-  }, [form, onVoucherAction]);
+  }, [form, onVoucherAction, isAmountExceedingSelectedFromAccount]);
   
   async function processAndSave(data: ContraFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -602,6 +700,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Save-time validation must match the same pay-from account used in Link Pay In dialog.
         const spendWiseAccountForSave = (data as any).fromAccountId;
         const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
+          if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+            // Include Opening Balance row in save-time spend-wise validation.
+            const base = getOpeningBalanceBaseAmount(spendWiseInAccountOpeningBalance, "dr");
+            const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+            return sum + Math.max(0, base - alreadyLinked);
+          }
           // Use same compatibility matcher as dialog so save-validation doesn't hide valid legacy vouchers.
           const v = allVouchers?.find((x: any) =>
             x.id === id &&
@@ -663,7 +767,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       submissionData.linkedPaymentInAmounts =
         linkIds.length > 0
           // Persist spend-wise allocations against the same pay-from account used in Link Pay In dialog.
-          ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], (data as any).fromAccountId, linkedAmountByPaymentInId)
+          ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], (data as any).fromAccountId, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance)
           : {};
       
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
@@ -716,6 +820,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             const previouslyLinkedIds = new Set(spendWiseLinkedToMeRows.map((r) => r.id));
             const allToUpdate = new Set([...previouslyLinkedIds, ...pendingLinkedPaymentOut.ids]);
             for (const poId of allToUpdate) {
+              if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
               const v = allVouchers?.find((x: any) => x.id === poId);
               if (!v) continue;
               const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
@@ -731,6 +836,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               }
               await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
             }
+            const openingLinked = Number(pendingLinkedPaymentOut.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+            // Persist Opening Balance spend-wise link on current contra (In leg) so it remains visible after save/reopen.
+            await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, contraId), {
+              linkedOpeningBalanceAmount: openingLinked,
+              linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
+            });
             setPendingLinkedPaymentOut(null);
           }
       } else {
@@ -979,11 +1090,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     () =>
       availableFromAccounts.map((a: any) => ({
         value: a.id,
-        label: `${a.accountName} (${a.accountType}) — Balance: ${formatCurrency(Number(a.balance) || 0)}`,
+        // Keep selected field clean (without balance); show balance only in dropdown list rows.
+        triggerLabel: `${a.accountName} (${a.accountType})`,
+        // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
+        label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
         isSpecial: a.isSpecial,
         disabled: (Number(a.balance) || 0) <= 0,
       })),
-    [availableFromAccounts, formatCurrency]
+    [availableFromAccounts, formatCurrencyForPrint]
   );
 
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.contra || [getVoucherPrefix()], [company]);
@@ -1078,8 +1192,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); 
                                 else field.onChange(value); 
                               }} 
-                              placeholder="Pay-from account (kun bata deiyeko)" 
+                              // Keep placeholder short and consistent across voucher forms.
+                              placeholder="Select account" 
                               addNewLabel="+ Add New Account" 
+                              // Emphasize balance text in green inside dropdown options.
+                              highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
                           </div>
@@ -1201,7 +1318,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FormLabel>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", fromAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(fromAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        <Combobox options={fromBankCashAccountOptions} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account (kun bata deiyeko)" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
+                        {/* Keep desktop placeholder text aligned with mobile to avoid mixed wording. */}
+                        <Combobox options={fromBankCashAccountOptions} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account" addNewLabel="+ Add New Account" highlightBalanceInOptions disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
                     <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem>
                          <div className="flex justify-between items-baseline">
                             <FormLabel>To Account (Debit)</FormLabel>
@@ -1211,7 +1329,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </>
               )}
-              <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
+              <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
+                const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                // If entered amount exceeds selected from-account balance, keep previous valid value.
+                if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                  field.onChange(lastValidAmountRef.current);
+                  setIsAmountMoreThanAccountOpen(true);
+                  return;
+                }
+                field.onChange(nextAmount);
+                // Persist last valid value so next invalid keystroke can rollback cleanly.
+                lastValidAmountRef.current = nextAmount;
+                if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                  // Show immediate popup feedback while typing if amount crosses selected account balance.
+                  setIsAmountMoreThanAccountOpen(true);
+                }
+              }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
               {showSpendWiseSection && (
                 <div className="space-y-4 min-w-0 w-full">
                   {/* Upper row: single main container for To Voucher + To Voucher (current) */}
@@ -1240,33 +1373,39 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </p>
                     )}
                     <p className="text-sm text-muted-foreground">
-                      {spendWiseCardAvailableCount} voucher(s) available to link.{spendWiseDisplayRows.length > 0 && ` ${spendWiseDisplayRows.length} linked.`}
+                      {spendWiseCardAvailableCount} voucher(s) available to link.{fromCardLinkedCount > 0 && ` ${fromCardLinkedCount} linked.`}
                     </p>
                     <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
                     {!showSpendWiseSection ? (
                       <p className="text-sm text-muted-foreground">Select From account to link Payment In / Direct Income / Contra.</p>
-                    ) : spendWiseDisplayRows.length === 0 ? null : (
+                    ) : (selectedContraLeg === 'in' ? displayLinkedToMeRows.length === 0 : spendWiseDisplayRows.length === 0) ? null : (
                       <div className="overflow-x-auto -mx-1 min-w-0">
                         <table className="w-full text-sm border-collapse min-w-[400px]">
                           <thead>
                             <tr className="border-b bg-muted/50">
                               <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
                               <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                              <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
+                              <th className="text-left p-2 font-medium whitespace-nowrap">{selectedContraLeg === 'in' ? 'To' : 'From'}</th>
                               <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                              <th className="text-right p-2 font-medium whitespace-nowrap">Linked on others</th>
+                              {selectedContraLeg !== 'in' && <th className="text-right p-2 font-medium whitespace-nowrap">Linked on others</th>}
                               <th className="text-right p-2 font-medium whitespace-nowrap">Linked on current</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {spendWiseDisplayRows.map((row) => (
+                            {(selectedContraLeg === 'in' ? displayLinkedToMeRows : spendWiseDisplayRows).map((row: any) => (
                               <tr key={row.id} className="border-b last:border-b-0">
                                 <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
                                 <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
                                 <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
-                                <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linkedOnOthers ?? 0, { noSuffix: true, noAnimation: true })} Dr</td>
-                                <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
+                                <td className={cn("p-2 text-right font-medium whitespace-nowrap", selectedContraLeg === 'in' ? "text-red-600" : "text-green-600")}>
+                                  {formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} {selectedContraLeg === 'in' ? 'Cr' : 'Dr'}
+                                </td>
+                                {selectedContraLeg !== 'in' && (
+                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linkedOnOthers ?? 0, { noSuffix: true, noAnimation: true })} Dr</td>
+                                )}
+                                <td className={cn("p-2 text-right whitespace-nowrap", selectedContraLeg === 'in' ? "text-red-600" : "text-muted-foreground")}>
+                                  {formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} {selectedContraLeg === 'in' ? 'Cr' : 'Dr'}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -1283,15 +1422,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </div>
                               <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
                                 <span className="truncate text-right whitespace-nowrap leading-tight">
-                                  {formatCurrency(spendWiseFromCardTotalLinked, { noSuffix: true, noAnimation: true })} Dr
+                                  {formatCurrency(fromCardLinkedTotal, { noSuffix: true, noAnimation: true })} {selectedContraLeg === 'in' ? 'Cr' : 'Dr'}
                                 </span>
                               </div>
                               <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
                                 <span className="truncate leading-tight">Balance</span>
                               </div>
                               <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", spendWiseFromCardSettled ? "text-green-600 font-semibold" : "")}>
-                                  {spendWiseFromCardSettled ? "Settled" : `${formatCurrency(spendWiseFromCardBalance, { noSuffix: true, noAnimation: true })} Dr`}
+                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", fromCardSettled ? "text-green-600 font-semibold" : "")}>
+                                  {fromCardSettled ? "Settled" : `${formatCurrency(fromCardBalance, { noSuffix: true, noAnimation: true })} ${selectedContraLeg === 'in' ? 'Cr' : 'Dr'}`}
                                 </span>
                               </div>
                             </div>
@@ -1361,18 +1500,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <span className="text-muted-foreground truncate leading-tight">Total linked</span>
                             </div>
                             <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                              <span className="truncate text-right whitespace-nowrap leading-tight">
-                                {formatCurrency(currentVoucherAsOnOppositeRows[0].linked, { noSuffix: true, noAnimation: true })} Dr
+                                <span className="truncate text-right whitespace-nowrap leading-tight">
+                                  {formatCurrency(rightCardLinkedTotal, { noSuffix: true, noAnimation: true })} Dr
                               </span>
                             </div>
                             <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
                               <span className="truncate leading-tight">Balance</span>
                             </div>
                             <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0 ? "text-green-600 font-semibold" : "")}>
-                                {currentVoucherAsOnOppositeRows[0].linked >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0
+                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", rightCardLinkedTotal >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0 ? "text-green-600 font-semibold" : "")}>
+                                {rightCardLinkedTotal >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0
                                   ? "Settled"
-                                  : `${formatCurrency(Math.max(0, currentVoucherAsOnOppositeRows[0].amount - currentVoucherAsOnOppositeRows[0].linked), { noSuffix: true, noAnimation: true })} Dr`}
+                                  : `${formatCurrency(Math.max(0, currentVoucherAsOnOppositeRows[0].amount - rightCardLinkedTotal), { noSuffix: true, noAnimation: true })} Dr`}
                               </span>
                             </div>
                           </div>
@@ -1595,6 +1734,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             linkedTotal: spendWiseFromCardTotalLinked,
           }}
           accountName={allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.accountName ?? undefined}
+          accountOpeningBalance={spendWiseInAccountOpeningBalance}
         />
       )}
       {/* Bottom-right: Link Pay Out — always show same-account out vouchers of current contra leg. */}
@@ -1610,6 +1750,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           names={paymentInDialogNames}
           requiredAmount={amount}
           accountName={allProcessedAccounts?.find((a: any) => a.id === spendWiseOutAccountId)?.accountName ?? undefined}
+          accountOpeningBalance={spendWiseOutAccountOpeningBalance}
           currentVoucherLinkedAmounts={pendingLinkedPaymentOut ? pendingLinkedPaymentOut.amountsByVoucherId : Object.fromEntries(spendWiseLinkedToMeRows.map((r) => [r.id, r.linked]))}
           currentVoucherSummary={{ voucherNumber: formVoucherNumber, date: formDate ? (formDate instanceof Date ? formDate : new Date(formDate)) : null, from: allProcessedAccounts?.find((a: any) => a.id === currentContraAccountId)?.accountName ?? "—", amount, linkedTotal: lowerCardTotalLinked }}
           onConfirm={(selectedIds, amountsByVoucherId) => {
@@ -1619,6 +1760,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
+      <Dialog open={isAmountMoreThanAccountOpen} onOpenChange={setIsAmountMoreThanAccountOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cannot save voucher</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Amount is more than selected account balance.
+          </p>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

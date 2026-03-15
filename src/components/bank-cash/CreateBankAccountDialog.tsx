@@ -6,7 +6,7 @@ import { Loader2, PlusCircle, CalendarIcon, Upload, Trash2, FileText, Crown } fr
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, onSnapshot, where, getDocs } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp, query, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 import { Button } from "@/components/ui/button";
@@ -60,6 +60,8 @@ import { toast as sonnerToast } from "sonner";
 import { ScrollArea } from "../ui/scroll-area";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -174,6 +176,21 @@ export function CreateBankAccountDialog({
   }, [companyId, isOpen]);
 
   useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!companyId || !user?.uid || !isOpen) return;
+      // Keep Bank/Cash create default on canonical Ungrouped bucket.
+      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "bank");
+      if (!alive) return;
+      const current = form.getValues("groupId");
+      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [companyId, user?.uid, isOpen, form]);
+
+  useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
       form.setValue('accountName', event.detail || '');
     };
@@ -267,36 +284,31 @@ export function CreateBankAccountDialog({
     setIsLoading(true);
 
     try {
-      const q = query(
-        collection(firestore, `companies/${companyId}/bank_accounts`),
-        where("accountName", "==", values.accountName.trim())
-      );
-      const querySnapshot = await getDocs(q);
-
-      if (!querySnapshot.empty) {
-        const docs = querySnapshot.docs;
-        const hasActive = docs.some((d) => (d.data() as any)?.isDeleted !== true);
-        const hasOnlyDeleted = !hasActive && docs.length > 0;
-
-        if (hasActive) {
-          // Same name exists in active accounts
-          sonnerToast.error("Duplicate Account Name", {
-            id: toastId,
-            description: "An account with this name already exists. Please choose a different name.",
-          });
-          setIsLoading(false);
-          return;
-        }
-
-        if (hasOnlyDeleted) {
-          // Same name exists only in recycle bin
-          sonnerToast.error("Account Exists in Recycle Bin", {
-            id: toastId,
-            description: "An account with this name is already in the recycle bin. Please go to Recycle Bin and restore it instead of creating a new one.",
-          });
-          setIsLoading(false);
-          return;
-        }
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "bank_accounts",
+        fieldName: "accountName",
+        name: values.accountName.trim(),
+        entityLabel: "Bank/Cash Account",
+      });
+      if (duplicateDecision.decision === "active_exists") {
+        sonnerToast.error("Duplicate Account Name", {
+          id: toastId,
+          description: "An account with this name already exists. Please choose a different name.",
+        });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Account Restored!", {
+          id: toastId,
+          description: `"${values.accountName.trim()}" was restored from Recycle Bin.`,
+        });
+        onAccountCreated(duplicateDecision.restoredId);
+        setIsOpen(false);
+        setIsLoading(false);
+        return;
       }
       
       let fileUrl: string | null = null;
@@ -306,9 +318,12 @@ export function CreateBankAccountDialog({
           fileUrl = await getDownloadURL(snapshot.ref);
       }
       
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/bank_accounts`), {
         ...values,
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("bank"),
         openingBalanceDate: values.openingBalanceDate || null,
         fileUrl,
         ownerId: user.uid,
@@ -328,7 +343,8 @@ export function CreateBankAccountDialog({
       onAccountCreated(docRef.id);
 
       if (saveAndNew) {
-        form.reset();
+        // Keep default selection on Ungrouped for next quick entry.
+        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("bank"), isSpecial: false });
         removeFile();
       } else {
         setIsOpen(false);
@@ -425,8 +441,9 @@ export function CreateBankAccountDialog({
                             <div className="flex-1">
                             <Combobox
                                 options={[
+                                    { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
                                     ...groups
-                                      .filter((group) => !(group as any).isSystemReserved)
+                                      .filter((group) => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
                                       .map((group) => ({
                                         value: group.id,
                                         label: group.name,

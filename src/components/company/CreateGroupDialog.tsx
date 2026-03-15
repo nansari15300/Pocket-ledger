@@ -18,6 +18,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { Group } from "@/components/party/types";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -70,16 +71,35 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
     }
     setIsLoading(true);
     try {
-      const nameLower = values.name.trim().toLowerCase();
-      const isDuplicate = (groups || []).some(
-        (g) => !(g as any).isDeleted && (g.name?.trim().toLowerCase() ?? "") === nameLower
-      );
-      if (isDuplicate) {
+      const trimmedName = values.name.trim();
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "groups",
+        name: trimmedName,
+        entityLabel: "Group",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         toast({
           variant: "destructive",
           title: "Duplicate Group Name",
           description: "A group with this name already exists. Please choose a different name.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        toast({
+          title: "Group Restored!",
+          description: `"${trimmedName}" was restored from Recycle Bin.`,
+        });
+        onGroupCreated(duplicateDecision.restoredId);
+        if (saveAndNew) {
+          form.reset({ name: "", parentId: "main" });
+        } else {
+          form.reset({ name: "", parentId: "main" });
+          if (parentOnOpenChange) parentOnOpenChange(false);
+        }
         setIsLoading(false);
         return;
       }

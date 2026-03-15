@@ -83,7 +83,7 @@ import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxns
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -507,8 +507,12 @@ export function PartyDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
-    [statusFilteredTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -612,6 +616,8 @@ export function PartyDetails({
   const printTransactions = (transactionsToPrint: any[], variant: "statement" | "bill_wise") => {
     if (!company) return Promise.resolve();
     const dateRangeText = buildDateRangeText();
+    // Match printed columns and note visibility with current table controls.
+    const printVisibleColumns = variant === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
     return openPrintDirect({
       company: {
         name: company.name,
@@ -632,6 +638,9 @@ export function PartyDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: transactionsToPrint.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      userNames: mergedUserNames,
       journalAccountNames: journalAccountNames,
       billWise: variant === "bill_wise",
       ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),

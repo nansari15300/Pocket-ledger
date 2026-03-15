@@ -93,8 +93,8 @@ export default function BankCashPage() {
   
    const processedAccountGroups = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');
-    const accountsForUngrouped = processedAccounts.filter(acc => {
-        if (!acc.groupId) {
+    const accountsForUngrouped = processedAccounts.filter((acc: any) => {
+        if (!acc.groupId || acc.groupId === "ungrouped_account") {
             return !acc.isSpecial || canViewSpecialBalance;
         }
         return false;
@@ -109,7 +109,7 @@ export default function BankCashPage() {
             ? accountsInGroup.reduce((sum, acc) => sum + acc.balance, 0)
             : '*****';
         return { ...group, hasSpecial, balance };
-    });
+    }).filter((group: any) => group.isAutoUngrouped !== true); // Hide auto-created Ungrouped base doc until needed.
 
     if (accountsForUngrouped.length > 0) {
         const ungroupedGroup: any = {
@@ -198,7 +198,7 @@ export default function BankCashPage() {
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-        return processedAccounts.filter(acc => !acc.groupId);
+        return processedAccounts.filter((acc: any) => !acc.groupId || acc.groupId === "ungrouped_account");
     }
     return processedAccounts.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedAccounts]);

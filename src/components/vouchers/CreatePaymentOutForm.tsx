@@ -60,8 +60,9 @@ import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentO
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { getAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { getAllocatedByVoucherIdFromPaymentOuts, getAllocationTotal, getTaxNetAllocatedByVoucherIdFromPaymentOuts, getPaymentInRemaining, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
+import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
 import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
 import { Zap } from "lucide-react";
@@ -229,6 +230,10 @@ export function CreatePaymentOutForm({
   const [linkedPaymentInIds, setLinkedPaymentInIds] = useState<string[]>([]);
   const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
+  // Block overspending from selected bank/cash account for all roles (including owner).
+  const [isAmountMoreThanAccountOpen, setIsAmountMoreThanAccountOpen] = useState(false);
+  // Track last valid amount so invalid keystroke can be reverted immediately.
+  const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
   const initialAllocationsRef = useRef<{ voucherId: string; amount: number }[]>([]);
 
@@ -273,6 +278,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const taxAccountId = form.watch("taxAccountId");
   const accountId = form.watch("accountId");
   const { displayBalance: accountBalance } = useAccountBalance(accountId);
+  const accountOpeningBalance = Number(processedAccounts.find((a: any) => a.id === accountId)?.openingBalance ?? 0) || 0;
+  const isAmountExceedingSelectedAccount = useCallback((enteredAmount: number) => {
+    if (!accountId) return false;
+    const selectedBalance = Number(accountBalance) || 0;
+    return enteredAmount > selectedBalance;
+  }, [accountId, accountBalance]);
+
   const expenseAccountId = form.watch("expenseAccountId");
   const toAccountId = form.watch("toAccountId");
   
@@ -352,8 +364,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     allVouchers
       .filter(
         (v: any) =>
-          (v.type === "payment_out" || v.type === "direct_expense") &&
-          v.accountId === accountId &&
+          // Match spend-wise popup logic: include all out-flow owners for this account (payment out, direct expense, contra out).
+          (((v.type === "payment_out" || v.type === "direct_expense") && v.accountId === accountId) ||
+            (v.type === "contra" && v.fromAccountId === accountId)) &&
           Array.isArray(v.linkedPaymentInIds) &&
           v.linkedPaymentInIds.length > 0 &&
           v.id !== currentId &&
@@ -377,20 +390,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const linkedPaymentInTotal = useMemo(() => {
     if (!allVouchers?.length || !linkedPaymentInIds?.length || !accountId) return 0;
     return linkedPaymentInIds.reduce((sum, id) => {
+      if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+        // Opening balance behaves like spend-wise source row on Dr side for Payment Out/Direct Expense.
+        const base = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
+        const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+        const linkable = Math.max(0, base - alreadyLinked);
+        return sum + linkable;
+      }
       const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccount(x, accountId));
       const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
       const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
       const linkable = Math.max(0, amount - alreadyLinked);
       return sum + linkable;
     }, 0);
-  }, [allVouchers, linkedPaymentInIds, accountId, linkedAmountByPaymentInId]);
+  }, [allVouchers, linkedPaymentInIds, accountId, linkedAmountByPaymentInId, accountOpeningBalance]);
   const amountMatched = amountPaid > 0 && linkedPaymentInTotal >= amountPaid;
   const showLinkPayMode = !!accountId && (voucherType === "payment_out" || voucherType === "direct_expense") && amountPaid > 0;
   const showLinkPayButton = showLinkPayMode && !amountMatched;
   const showSaveAfterLink = showLinkPayMode && amountMatched;
   const isEditPaymentOut = !!(voucher?.id || savedVoucherId) && voucherType === "payment_out";
 
-  /** Bill wise: same count as Link to Cr popup (purchases + payment ins + OB with linkable amount). Party only; staff/tax use 0 for display. */
+  /** Bill wise: same count as Link to Cr popup (purchases + payment ins + OB with linkable amount). */
   const billWiseLinkableCountFromPopup = useLinkPaymentToTxnsLinkableCount(
     "payment_out",
     payeeType === "party" ? partyId : null,
@@ -401,18 +421,113 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       partyOpeningBalance: processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0,
     }
   );
-  const billWiseLinkableCount = payeeType === "party" ? billWiseLinkableCountFromPopup : 0;
+  const staffBillWiseLinkableCount = useMemo(() => {
+    if (payeeType !== "staff" || !staffId || !allVouchers?.length) return 0;
+    const currentId = voucher?.id ?? savedVoucherId ?? null;
+    const otherPaymentOuts = (allVouchers as any[]).filter(
+      (v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.id !== currentId
+    );
+    const allocatedMap = getTaxNetAllocatedByVoucherIdFromPaymentOuts(otherPaymentOuts);
+    const addSalaryCount = (allVouchers as any[])
+      .filter((v: any) => v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries))
+      .filter((v: any) =>
+        v.entries.some((e: any) => e.accountId === staffId && (Number(e.credit) || 0) > 0)
+      )
+      .filter((v: any) => {
+        const netTotal = v.entries
+          .filter((e: any) => (Number(e.credit) || 0) > 0 && !String(e.narration || "").includes("(Staff ID:"))
+          .reduce((s: number, e: any) => s + (Number(e.credit) || 0), 0);
+        const allocated = allocatedMap.get(v.id)?.net ?? 0;
+        const outstanding = Math.max(0, netTotal - allocated);
+        const alreadyLinked = allocations.some((a) => a.voucherId === v.id && getAllocationTotal(a) > 0);
+        return outstanding > 0 || alreadyLinked;
+      }).length;
+    const paymentInCount = (allVouchers as any[])
+      .filter((v: any) => (v.type === "payment_in" || v.type === "direct_income") && v.staffId === staffId)
+      .filter((v: any) => {
+        const allAllocs = (v.allocations as Allocation[] | undefined) || [];
+        const allocatedToOthers = currentId
+          ? allAllocs.filter((a) => a.voucherId !== currentId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : allAllocs.reduce((s, a) => s + getAllocationTotal(a), 0);
+        const currentAllocated = currentId
+          ? allAllocs.filter((a) => a.voucherId === currentId).reduce((s, a) => s + getAllocationTotal(a), 0)
+          : 0;
+        const outstanding = getPaymentInRemaining(v) + currentAllocated;
+        const alreadyLinked = allocations.some((a) => a.voucherId === v.id && getAllocationTotal(a) > 0);
+        return outstanding > 0 || alreadyLinked;
+      }).length;
+    // Include staff opening balance row when credit-side OB has pending linkable amount (or already linked in edit).
+    const staffOB = Number(processedStaff.find((s: any) => s.id === staffId)?.openingBalance ?? 0) || 0;
+    let obCount = 0;
+    if (staffOB < 0) {
+      const obAmount = Math.abs(staffOB);
+      const consumedByOthers = (allVouchers as any[])
+        .filter((v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.staffId === staffId)
+        .reduce((sum: number, v: any) => {
+          const allocs = (v.allocations as Allocation[] | undefined) || [];
+          return sum + allocs.reduce((s: number, a: Allocation) => s + (a.voucherId === OPENING_BALANCE_VOUCHER_ID ? getAllocationTotal(a) : 0), 0);
+        }, 0);
+      const outstandingOB = Math.max(0, obAmount - consumedByOthers);
+      const alreadyLinkedOB = allocations.some((a) => a.voucherId === OPENING_BALANCE_VOUCHER_ID && getAllocationTotal(a) > 0);
+      if (outstandingOB > 0 || alreadyLinkedOB) obCount = 1;
+    }
+    return addSalaryCount + paymentInCount + obCount;
+  }, [payeeType, staffId, allVouchers, voucher?.id, savedVoucherId, allocations, processedStaff]);
+  const taxBillWiseLinkableCount = useMemo(() => {
+    if (payeeType !== "tax" || !taxAccountId || !allVouchers?.length) return 0;
+    const currentId = voucher?.id ?? savedVoucherId ?? null;
+    const otherPaymentOuts = (allVouchers as any[]).filter(
+      (v: any) => (v.type === "payment_out" || v.type === "direct_expense") && v.id !== currentId
+    );
+    const allocatedByPaymentOuts = getAllocatedByVoucherIdFromPaymentOuts(otherPaymentOuts);
+    const allocatedTaxMap = getTaxNetAllocatedByVoucherIdFromPaymentOuts(otherPaymentOuts);
+    const salePurchaseCount = (allVouchers as any[])
+      .filter((v: any) => (v.type === "sale" || v.type === "sale_service" || v.type === "purchase" || v.type === "purchase_service"))
+      .filter((v: any) => String((v as any).taxAccountId ?? "") === String(taxAccountId))
+      .filter((v: any) => {
+        const taxAmount = Number((v as any).taxAmount ?? 0) || 0;
+        const linked = allocatedByPaymentOuts.get(v.id) ?? 0;
+        const outstanding = Math.max(0, taxAmount - linked);
+        const alreadyLinked = allocations.some((a) => a.voucherId === v.id && getAllocationTotal(a) > 0);
+        return outstanding > 0 || alreadyLinked;
+      }).length;
+    const salaryTaxCount = (allVouchers as any[])
+      .filter((v: any) => v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries))
+      .filter((v: any) => {
+        const taxTotal = v.entries
+          .filter((e: any) => e.accountId === taxAccountId && (Number(e.credit) || 0) > 0)
+          .reduce((s: number, e: any) => s + (Number(e.credit) || 0), 0);
+        const linkedTax = allocatedTaxMap.get(v.id)?.tax ?? 0;
+        const outstanding = Math.max(0, taxTotal - linkedTax);
+        const alreadyLinked = allocations.some((a) => a.voucherId === v.id && getAllocationTotal(a) > 0);
+        return outstanding > 0 || alreadyLinked;
+      }).length;
+    return salePurchaseCount + salaryTaxCount;
+  }, [payeeType, taxAccountId, allVouchers, voucher?.id, savedVoucherId, allocations]);
+  const billWiseLinkableCount =
+    payeeType === "party"
+      ? billWiseLinkableCountFromPopup
+      : payeeType === "staff"
+        ? staffBillWiseLinkableCount
+        : payeeType === "tax"
+          ? taxBillWiseLinkableCount
+          : 0;
 
   /** Spend wise: count of Payment In / Direct Income / Contra for this account with linkable amount > 0. */
   const spendWiseLinkableCount = useMemo(() => {
     if (!accountId || !allVouchers?.length) return 0;
-    return allVouchers.filter((v: any) => {
+    const voucherCount = allVouchers.filter((v: any) => {
       if (!isInVoucherForAccount(v, accountId)) return false;
       const amount = Number(v.total ?? v.amount ?? 0) || 0;
       const alreadyLinked = linkedAmountByPaymentInId.get(v.id) ?? 0;
       return amount - alreadyLinked > 0;
     }).length;
-  }, [accountId, allVouchers, linkedAmountByPaymentInId]);
+    const obBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
+    const obAlreadyLinked = linkedAmountByPaymentInId.get(SPEND_WISE_OPENING_BALANCE_ID) ?? 0;
+    const obCount = obBase - obAlreadyLinked > 0 ? 1 : 0;
+    // Include Opening Balance row in spend-wise available count when Dr opening has pending linkable amount.
+    return voucherCount + obCount;
+  }, [accountId, allVouchers, linkedAmountByPaymentInId, accountOpeningBalance]);
 
   /** Show Link for bill wise card whenever payee is selected; when Link for Bill Wise setting is OFF, linking is optional (card visible, message hidden). */
   const showLinkedSection = (voucherType === "payment_out" || voucherType === "direct_expense") &&
@@ -468,10 +583,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setFiles(voucher.fileUrls || []);
         initialFilesRef.current = voucher.fileUrls || [];
         const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
+        // Hydrate allocation state only when opening a voucher id; avoid re-overwriting local link edits on every parent re-render.
         setAllocations(allocs);
         initialAllocationsRef.current = allocs.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
     }
-}, [voucher, form, isEditingAndConverting]);
+}, [voucher?.id, form, isEditingAndConverting]);
 
   
   useEffect(() => {
@@ -490,6 +606,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
+    const enteredAmount = Number(form.getValues("amount")) || 0;
+    if (isAmountExceedingSelectedAccount(enteredAmount)) {
+      // Stop save when typed amount is higher than currently selected account balance.
+      setIsAmountMoreThanAccountOpen(true);
+      return;
+    }
     const isValid = await form.trigger();
     if (!isValid) {
       const errors = form.formState.errors;
@@ -540,8 +662,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         allVouchers
           ?.filter(
             (v: any) =>
-              (v.type === "payment_out" || v.type === "direct_expense") &&
-              v.accountId === data.accountId &&
+              // Save-time validation must include contra out links too, same as popup + count logic.
+              (((v.type === "payment_out" || v.type === "direct_expense") && v.accountId === data.accountId) ||
+                (v.type === "contra" && v.fromAccountId === data.accountId)) &&
               Array.isArray(v.linkedPaymentInIds) &&
               v.linkedPaymentInIds.length > 0 &&
               v.id !== currentId &&
@@ -562,6 +685,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           (x.type === "direct_income" && x.accountId === accId) ||
           (x.type === "contra" && x.toAccountId === accId);
         const linkedTotal = linkedPaymentInIds.reduce((sum, id) => {
+          if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+            // Save-time validation must include Opening Balance row when user selected it in spend-wise.
+            const base = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
+            const alreadyLinked = linkedByPi.get(id) ?? 0;
+            return sum + Math.max(0, base - alreadyLinked);
+          }
           const v = allVouchers?.find((x: any) => x.id === id && isInForAccount(x));
           const amount = Number(v?.total ?? v?.amount ?? 0) || 0;
           const alreadyLinked = linkedByPi.get(id) ?? 0;
@@ -679,7 +808,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         submissionData.linkedPaymentInIds = linkIds;
         submissionData.linkedPaymentInAmounts =
           linkIds.length > 0
-            ? allocatePaymentInAmounts(cleanAmount, linkIds, allVouchers ?? [], data.accountId, linkedAmountByPaymentInId)
+            ? allocatePaymentInAmounts(cleanAmount, linkIds, allVouchers ?? [], data.accountId, linkedAmountByPaymentInId, accountOpeningBalance)
             : {};
       }
       if (voucherType === 'direct_expense') {
@@ -696,7 +825,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         submissionData.linkedPaymentInIds = linkIds;
         submissionData.linkedPaymentInAmounts =
           linkIds.length > 0
-            ? allocatePaymentInAmounts(cleanAmount, linkIds, allVouchers ?? [], data.accountId, linkedAmountByPaymentInId)
+            ? allocatePaymentInAmounts(cleanAmount, linkIds, allVouchers ?? [], data.accountId, linkedAmountByPaymentInId, accountOpeningBalance)
             : {};
       }
   
@@ -727,6 +856,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
+      // Keep a stable "before save" snapshot so target voucher unlink/remove sync works even when props are stale.
+      const previousAllocationsForSync: Allocation[] = initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: Number(a.amount) || 0 }));
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
@@ -739,9 +870,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setSavedVoucherId(savedDoc.id);
           const savedLinkIds = Array.isArray(sanitizedData.linkedPaymentInIds) ? [...sanitizedData.linkedPaymentInIds] : [];
           initialLinkedPaymentInIdsRef.current = savedLinkIds;
-          if (voucherType === "payment_out" && Array.isArray(sanitizedData.allocations)) {
-            initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
-          }
           if (originalVoucherIdToDelete) {
                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
                 isDeleted: true,
@@ -757,12 +885,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Bill-wise bilateral: sync allocations to target vouchers (Purchase/Sale/Payment In) so link shows on target too
         if (voucherType === "payment_out" && companyId && savedDoc?.id && Array.isArray(sanitizedData.allocations)) {
           try {
-            const previousAllocations = Array.isArray(voucher?.allocations) ? voucher.allocations : [];
-            await syncBillWiseAllocationsToTargetVouchers(companyId, savedDoc.id, sanitizedData.allocations, previousAllocations);
+            await syncBillWiseAllocationsToTargetVouchers(companyId, savedDoc.id, sanitizedData.allocations, previousAllocationsForSync);
           } catch (e) {
             console.error(e);
             sonnerToast.error("Payment saved but bill-wise link sync to target vouchers failed.");
           }
+        }
+        if (voucherType === "payment_out" && Array.isArray(sanitizedData.allocations)) {
+          // Refresh baseline after a successful save/sync so next edit can diff/add/remove correctly.
+          initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
         }
 
         if (approveAfterSave && savedDoc?.id) {
@@ -1005,11 +1136,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     () =>
       availableAccounts.map((a: any) => ({
         value: a.id,
-        label: `${a.accountName} (${a.accountType}) — Balance: ${formatCurrency(Number(a.balance) || 0)}`,
+        // Keep selected field clean (without balance); show balance only in dropdown list rows.
+        triggerLabel: `${a.accountName} (${a.accountType})`,
+        // Keep list balance short as requested: "2,000.00 Dr" (no "Balance:" / no currency prefix).
+        label: `${a.accountName} (${a.accountType}) — ${formatCurrencyForPrint(Number(a.balance) || 0, { showDrCr: true, noSuffix: true, noAnimation: true })}`,
         isSpecial: a.isSpecial,
         disabled: (Number(a.balance) || 0) <= 0,
       })),
-    [availableAccounts, formatCurrency]
+    [availableAccounts, formatCurrencyForPrint]
   );
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.[voucherType] || [getVoucherPrefix()], [company, voucherType]);
 
@@ -1026,8 +1160,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const spendWiseDisplayRows = useMemo(() => {
     if (!showSpendWiseSection || !allVouchers?.length || !linkedPaymentInIds?.length || !accountId) return [];
     const uniqueIds = [...new Set(linkedPaymentInIds)];
-    const allocated = allocatePaymentInAmounts(amountPaid, linkedPaymentInIds, allVouchers, accountId, linkedAmountByPaymentInId);
+    const allocated = allocatePaymentInAmounts(amountPaid, linkedPaymentInIds, allVouchers, accountId, linkedAmountByPaymentInId, accountOpeningBalance);
     return uniqueIds.map((id) => {
+      if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+        const amount = getOpeningBalanceBaseAmount(accountOpeningBalance, "dr");
+        const alreadyLinked = linkedAmountByPaymentInId.get(id) ?? 0;
+        const linkable = Math.max(0, amount - alreadyLinked);
+        return {
+          id,
+          voucherNumber: "Opening Balance (Dr)",
+          date: null as Date | null,
+          amount,
+          linked: allocated[id] ?? 0,
+          linkedOnOthers: alreadyLinked,
+          linkable,
+          from: "Opening Balance",
+        };
+      }
       const v = allVouchers.find((x: any) => x.id === id && isInVoucherForAccount(x, accountId));
       if (!v) return null;
       const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
@@ -1050,7 +1199,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         from,
       };
     }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkedOnOthers: number; linkable: number; from: string }[];
-  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, accountId, amountPaid, linkedAmountByPaymentInId, paymentInDialogNames]);
+  }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, accountId, amountPaid, linkedAmountByPaymentInId, paymentInDialogNames, accountOpeningBalance]);
 
   const formDate = form.watch("date");
   const formVoucherNumber = form.watch("voucherNumber");
@@ -1325,6 +1474,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               }}
                               placeholder="Select account"
                               addNewLabel="+ Add New Account"
+                              // Match contra UX: keep balance segment highlighted in dropdown rows.
+                              highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
                           </div>
@@ -1546,6 +1697,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 }}
                                 placeholder="Select an account"
                                 addNewLabel="+ Add New Account"
+                                // Match contra UX: keep balance segment highlighted in dropdown rows.
+                                highlightBalanceInOptions
                                 disabled={deleteDisabledWhenLinked}
                             />
                           <FormMessage />
@@ -1756,7 +1909,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         value={field.value ?? ''} 
                         onChange={(e) => {
                           if (amountDisabled) return;
-                          field.onChange(e.target.value === '' ? 0 : Number(e.target.value));
+                          const nextAmount = e.target.value === '' ? 0 : Number(e.target.value);
+                          // If entered amount exceeds selected account balance, keep previous valid value.
+                          if (isAmountExceedingSelectedAccount(nextAmount)) {
+                            field.onChange(lastValidAmountRef.current);
+                            setIsAmountMoreThanAccountOpen(true);
+                            return;
+                          }
+                          field.onChange(nextAmount);
+                          // Persist last valid value so next invalid keystroke can rollback cleanly.
+                          lastValidAmountRef.current = nextAmount;
+                          if (isAmountExceedingSelectedAccount(nextAmount)) {
+                            // Show immediate popup feedback while typing if entered amount exceeds selected account balance.
+                            setIsAmountMoreThanAccountOpen(true);
+                          }
                         }}
                         disabled={amountDisabled}
                         className={amountDisabled ? "bg-muted" : ""}
@@ -1792,7 +1958,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </p>
                       )}
                       <p className="text-sm text-muted-foreground">
-                        {payeeType === "party" ? `${billWiseLinkableCount} voucher(s) available to link.` : payeeType === "staff" ? "Link to salary vouchers." : "Link to tax vouchers."}
+                        {/* Keep party/staff/tax bill-wise cards consistent with "x voucher(s) available to link" text. */}
+                        {`${billWiseLinkableCount} voucher(s) available to link.`}
                         {linkedToRows.length > 0 && ` ${linkedToRows.length} linked.`}
                       </p>
                       {linkedToRows.length === 0 ? null : (
@@ -1812,7 +1979,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 const targetVoucher = allVouchers?.find((v: any) => v.id === r.voucherId) as any;
                                 const billTotal = targetVoucher != null ? Number(targetVoucher?.total ?? targetVoucher?.amount ?? 0) || 0 : 0;
                                 const linkedOnOthers = linkedOnOthersByVoucherId.get(r.voucherId) ?? 0;
-                                const rowProps = can('edit_link') ? { role: "button" as const, tabIndex: 0, className: "cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0", onClick: () => (payeeType === "staff" ? setIsLinkToSalaryOpen(true) : setIsLinkDialogOpen(true)), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); payeeType === "staff" ? setIsLinkToSalaryOpen(true) : setIsLinkDialogOpen(true); } } } : { className: "border-b border-border/30 last:border-b-0" };
+                                const rowProps = can('edit_link') ? { role: "button" as const, tabIndex: 0, className: "cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0", onClick: () => (payeeType === "staff" ? setIsLinkToSalaryOpen(true) : payeeType === "tax" ? setIsLinkToTaxDialogOpen(true) : setIsLinkDialogOpen(true)), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); payeeType === "staff" ? setIsLinkToSalaryOpen(true) : payeeType === "tax" ? setIsLinkToTaxDialogOpen(true) : setIsLinkDialogOpen(true); } } } : { className: "border-b border-border/30 last:border-b-0" };
                                 return (
                                   <tr key={r.voucherId} {...rowProps}>
                                     <td className="p-2 text-muted-foreground whitespace-nowrap">{r.voucherNumber === "Opening Balance" ? "—" : (r.date ? (dateSystem === "BS" ? formatDateBS(r.date) : formatDate(r.date)) : "—")}</td>
@@ -2122,7 +2289,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </p>
                       )}
                       <p className="text-sm text-muted-foreground">
-                        {payeeType === "party" ? `${billWiseLinkableCount} voucher(s) available to link.` : payeeType === "staff" ? "Link to salary vouchers." : "Link to tax vouchers."}
+                        {/* Keep party/staff/tax bill-wise cards consistent with "x voucher(s) available to link" text. */}
+                        {`${billWiseLinkableCount} voucher(s) available to link.`}
                         {linkedToRows.length > 0 && ` ${linkedToRows.length} linked.`}
                       </p>
                       {linkedToRows.length === 0 ? null : (
@@ -2142,7 +2310,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 const targetVoucher = allVouchers?.find((v: any) => v.id === r.voucherId) as any;
                                 const billTotal = targetVoucher != null ? Number(targetVoucher?.total ?? targetVoucher?.amount ?? 0) || 0 : 0;
                                 const linkedOnOthers = linkedOnOthersByVoucherId.get(r.voucherId) ?? 0;
-                                const rowProps = can('edit_link') ? { role: "button" as const, tabIndex: 0, className: "cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0", onClick: () => (payeeType === "staff" ? setIsLinkToSalaryOpen(true) : setIsLinkDialogOpen(true)), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); payeeType === "staff" ? setIsLinkToSalaryOpen(true) : setIsLinkDialogOpen(true); } } } : { className: "border-b border-border/30 last:border-b-0" };
+                                const rowProps = can('edit_link') ? { role: "button" as const, tabIndex: 0, className: "cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0", onClick: () => (payeeType === "staff" ? setIsLinkToSalaryOpen(true) : payeeType === "tax" ? setIsLinkToTaxDialogOpen(true) : setIsLinkDialogOpen(true)), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); payeeType === "staff" ? setIsLinkToSalaryOpen(true) : payeeType === "tax" ? setIsLinkToTaxDialogOpen(true) : setIsLinkDialogOpen(true); } } } : { className: "border-b border-border/30 last:border-b-0" };
                                 return (
                                   <tr key={r.voucherId} {...rowProps}>
                                     <td className="p-2 text-muted-foreground whitespace-nowrap">{r.voucherNumber === "Opening Balance" ? "—" : (r.date ? (dateSystem === "BS" ? formatDateBS(r.date) : formatDate(r.date)) : "—")}</td>
@@ -2571,10 +2739,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               : {}
           }
           accountName={processedAccounts?.find((a: any) => a.id === accountId)?.accountName ?? undefined}
+          accountOpeningBalance={accountOpeningBalance}
           currentVoucherSummary={paymentOutCurrentVoucherSummary}
         />
       )}
       <LinkSectionInfoDialog open={linkSectionInfoOpen} onOpenChange={setLinkSectionInfoOpen} />
+      <Dialog open={isAmountMoreThanAccountOpen} onOpenChange={setIsAmountMoreThanAccountOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cannot save voucher</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Amount is more than selected account balance.
+          </p>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

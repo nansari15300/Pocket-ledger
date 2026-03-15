@@ -2,14 +2,13 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Search, X } from "lucide-react";
+import { Search, X, ChevronDown, ChevronRight } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Combobox } from "@/components/ui/combobox";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { GroupDetails } from "@/components/party/GroupDetails";
-import { PartyGroupList } from "@/components/party/PartyGroupList";
 import { PayeeDetails } from "@/components/payee/PayeeDetails";
 import { TaxDetails } from "@/components/tax/TaxDetails";
 import { TaxGroupDetails } from "@/components/tax/TaxGroupDetails";
@@ -18,6 +17,7 @@ import { AccountDetails } from "@/components/bank-cash/AccountDetails";
 import { AccountGroupDetails } from "@/components/bank-cash/AccountGroupDetails";
 import { ExpenseAccountDetails } from "@/components/expenses/ExpenseAccountDetails";
 import { ExpenseGroupDetails } from "@/components/expenses/ExpenseGroupDetails";
+import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
 import type { Group, Party } from "@/components/party/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
@@ -32,11 +32,21 @@ type GroupStatementPageProps = {
   onPartySelectionChange?: (isParty: boolean) => void;
 };
 
+type ReportGroup = (Group & {
+  groupType?: "party" | "tax" | "staff" | "account" | "expense" | "item";
+  parentId?: string;
+  isSystemGroup?: boolean;
+});
+
 export default function GroupStatementPage({ onPartySelectionChange }: GroupStatementPageProps) {
   const { formatCurrency, formatDateBS, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedGroups: initialProcessedGroups, processedParties, processedStaff, processedTaxes, processedAccounts, processedExpenseAccounts, processedItems, processedTaxGroups, processedStaffGroups, processedAccountGroups, processedExpenseGroups, processedItemGroups, journalAccountNames, userNames: vouchersUserNames } = useVouchers();
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<ReportGroup | null>(null);
   const [selectedMember, setSelectedMember] = useState<any>(null);
+  // System groups are expandable in report sidebar.
+  const [expandedSystemGroupIds, setExpandedSystemGroupIds] = useState<Set<string>>(new Set());
+  // Income & Expense entity only: expand state for parent "Income" / "Expense" rows.
+  const [expandedExpenseParentIds, setExpandedExpenseParentIds] = useState<Set<"income" | "expense">>(new Set());
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState("");
@@ -131,243 +141,176 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
     });
   }, [allVouchers, vouchersUserNames, fetchUserName]);
 
-  // Process groups - show only user-created groups (not system groups or parent groups)
-  // Filter out: isSystemReserved: true, isReportOnly: true, or no parentId
-  const processedGroups = useMemo(() => {
-    const allSubGroups: (Group | any)[] = [];
-
-    // Helper function to check if a group should be shown (user-created only)
-    const systemGroupNames = getAllSystemGroupNames();
-    const systemGroupIds = [
-      'sundry_debtors', 'sundry_creditors', 'duties_taxes', 
-      'loans_liabilities', 'bank_accounts_group', 'cash_in_hand_group',
-      'direct_income', 'indirect_income', 'direct_expense', 'indirect_expense',
-      'assets', 'liabilities', 'income', 'expenses', 'equity',
-      'stock_items', 'services'
-    ];
-    
-    const isUserCreatedGroup = (g: any): boolean => {
-      if (!g) return false;
-      
-      const groupName = String((g as any).name || '').trim();
-      const groupId = String((g as any).id || '').trim();
-      const parentId = String((g as any).parentId || '').trim();
-      
-      // FIRST: Check by exact name match (case-insensitive) - these should NEVER appear
-      const exactSystemNames = [
-        'Party', 
-        'Staff', 
-        'Tax', 
-        'Bank', 
-        'Income & Expense', 
-        'Income & Expenses', 
-        'Bank & Cash',
-        'Sundry Debtors', 
-        'Sundry Creditors',
-        'Assets',
-        'Liabilities',
-        'Income',
-        'Expenses',
-        'Equity',
-        'Duties & Taxes',
-        'Loans & Liabilities',
-        'Bank Accounts',
-        'Cash-in-Hand',
-        'Direct Income',
-        'Indirect Income',
-        'Direct Expenses',
-        'Indirect Expenses',
-        'Stock Items',
-        'Services',
-        'Item'
-      ];
-      const isExactSystemName = exactSystemNames.some(
-        sysName => sysName.toLowerCase() === groupName.toLowerCase()
-      );
-      if (isExactSystemName) return false;
-      
-      // SECOND: Check if group name matches any system group name (case-insensitive)
-      const isSystemGroupName = systemGroupNames.some(
-        sysName => sysName.toLowerCase() === groupName.toLowerCase()
-      );
-      if (isSystemGroupName) return false;
-      
-      // THIRD: Check if group ID is a known system group ID
-      const isSystemGroupId = systemGroupIds.some(
-        sysId => sysId.toLowerCase() === groupId.toLowerCase()
-      );
-      if (isSystemGroupId) return false;
-      
-      // FOURTH: Check if parentId is a system group ID (hide children of system groups)
-      const isChildOfSystemGroup = systemGroupIds.some(
-        sysId => sysId.toLowerCase() === parentId.toLowerCase()
-      );
-      if (isChildOfSystemGroup) return false;
-      
-      // FIFTH: Check flags
-      const isSystemReserved = (g as any).isSystemReserved === true;
-      const isReportOnly = (g as any).isReportOnly === true;
-      if (isSystemReserved || isReportOnly) return false;
-      
-      // SIXTH: Check if it has parentId (top-level groups without parentId should be excluded)
-      const hasParentId = !!(g as any).parentId;
-      if (!hasParentId) return false;
-      
-      return true;
+  // Build a unified group list that includes both system groups and user groups.
+  const processedGroups = useMemo<ReportGroup[]>(() => {
+    const rows: ReportGroup[] = [];
+    const systemGroupNames = getAllSystemGroupNames().map((n) => n.toLowerCase());
+    const systemGroupIds = new Set([
+      "party",
+      "staff",
+      "tax",
+      "bank",
+      "bank_cash",
+      "income_expense",
+      "item",
+      "sundry_debtors",
+      "sundry_creditors",
+      "duties_taxes",
+      "loans_liabilities",
+      "bank_accounts_group",
+      "cash_in_hand_group",
+      "direct_income",
+      "indirect_income",
+      "direct_expense",
+      "indirect_expense",
+      "assets",
+      "liabilities",
+      "income",
+      "expenses",
+      "equity",
+      "stock_items",
+      "services",
+    ]);
+    const mapRow = (g: any, groupType: ReportGroup["groupType"]): ReportGroup => {
+      const groupId = String(g?.id || "");
+      const groupName = String(g?.name || "");
+      const parentId = g?.parentId ? String(g.parentId) : undefined;
+      const isSystemByFlag = g?.isSystemReserved === true;
+      const isSystemById = systemGroupIds.has(groupId.toLowerCase());
+      const isSystemByName = systemGroupNames.includes(groupName.toLowerCase());
+      const isSystemByRoot = !parentId;
+      return {
+        ...g,
+        id: groupId,
+        name: groupName,
+        parentId,
+        groupType,
+        // System-group detection drives expandable report behavior.
+        isSystemGroup: isSystemByFlag || isSystemById || isSystemByName || isSystemByRoot,
+      } as ReportGroup;
     };
-
-    // 1. Party groups - only user-created sub-groups (not system groups like "Party", "Liabilities", etc.)
-    // Filter out ALL system groups including "Sundry Debtors" and "Sundry Creditors"
-    const partySubGroups = initialProcessedGroups.filter(g => isUserCreatedGroup(g));
-    allSubGroups.push(...partySubGroups);
-
-    // 2. Tax groups - filter out system groups
-    const userTaxGroups = processedTaxGroups.filter(tg => isUserCreatedGroup(tg));
-    allSubGroups.push(...userTaxGroups.map(tg => ({
-      ...tg,
-      id: tg.id,
-      name: tg.name,
-      balance: tg.balance || 0,
-      debit: tg.debit || 0,
-      credit: tg.credit || 0,
-      openingBalance: tg.openingBalance || 0,
-      companyId: tg.companyId || '',
-      type: 'Tax',
-      groupType: 'tax' as const,
-    })));
-
-    // 3. Staff groups - filter out system groups
-    const userStaffGroups = processedStaffGroups.filter(sg => isUserCreatedGroup(sg));
-    allSubGroups.push(...userStaffGroups.map(sg => ({
-      ...sg,
-      id: sg.id,
-      name: sg.name,
-      balance: sg.balance || 0,
-      debit: sg.debit || 0,
-      credit: sg.credit || 0,
-      openingBalance: sg.openingBalance || 0,
-      companyId: sg.companyId || '',
-      type: 'Liability',
-      groupType: 'staff' as const,
-    })));
-
-    // 4. Account groups - filter out system groups
-    const userAccountGroups = processedAccountGroups.filter(ag => isUserCreatedGroup(ag));
-    allSubGroups.push(...userAccountGroups.map(ag => ({
-      ...ag,
-      id: ag.id,
-      name: ag.name,
-      balance: ag.balance || 0,
-      debit: ag.debit || 0,
-      credit: ag.credit || 0,
-      openingBalance: ag.openingBalance || 0,
-      companyId: ag.companyId || '',
-      type: (ag as any).type || 'Bank',
-      groupType: 'account' as const,
-    })));
-
-    // 5. Expense groups - filter out system groups
-    const userExpenseGroups = processedExpenseGroups.filter(eg => isUserCreatedGroup(eg));
-    allSubGroups.push(...userExpenseGroups.map(eg => ({
-      ...eg,
-      id: eg.id,
-      name: eg.name,
-      balance: eg.balance || 0,
-      debit: eg.debit || 0,
-      credit: eg.credit || 0,
-      openingBalance: eg.openingBalance || 0,
-      companyId: eg.companyId || '',
-      type: (eg as any).type || 'Income',
-      groupType: 'expense' as const,
-    })));
-
-    // 6. Item groups - filter out system groups
-    const userItemGroups = processedItemGroups.filter(ig => isUserCreatedGroup(ig));
-    allSubGroups.push(...userItemGroups.map(ig => ({
-      ...ig,
-      id: ig.id,
-      name: ig.name,
-      balance: ig.balance || 0,
-      debit: ig.debit || 0,
-      credit: ig.credit || 0,
-      openingBalance: ig.openingBalance || 0,
-      companyId: ig.companyId || '',
-      type: 'Item',
-      groupType: 'item' as const,
-    })));
-
-    // 7. Add ungrouped parties if any
-    const ungrouped = processedParties.filter(p => !p.groupId);
-    if (ungrouped.length > 0) {
-      const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
-      const ungroupedGroup: Group = {
-        id: 'ungrouped',
-        name: 'Ungrouped',
-        balance: ungroupedBalance,
-        companyId: '',
-        debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
-        credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
-      };
-      allSubGroups.push(ungroupedGroup);
-    }
-
-    return allSubGroups;
-  }, [processedParties, initialProcessedGroups, processedTaxGroups, processedStaffGroups, processedAccountGroups, processedExpenseGroups, processedItemGroups]);
+    rows.push(...(initialProcessedGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "party")));
+    rows.push(...(processedTaxGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "tax")));
+    rows.push(...(processedStaffGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "staff")));
+    rows.push(...(processedAccountGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "account")));
+    rows.push(...(processedExpenseGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "expense")));
+    rows.push(...(processedItemGroups || []).filter((g: any) => !g?.isReportOnly).map((g: any) => mapRow(g, "item")));
+    // Remove accidental duplicate ids across lists while keeping first occurrence.
+    const seen = new Set<string>();
+    return rows.filter((g) => {
+      if (!g.id || seen.has(g.id)) return false;
+      seen.add(g.id);
+      return true;
+    });
+  }, [initialProcessedGroups, processedTaxGroups, processedStaffGroups, processedAccountGroups, processedExpenseGroups, processedItemGroups]);
 
   const totalBalance = useMemo(
     () => processedGroups.reduce((sum, g) => sum + (g.balance || 0), 0),
     [processedGroups]
   );
 
-  const partiesForSelectedGroup = useMemo(() => {
-    if (!selectedGroup) return [];
-    if (selectedGroup.id === 'ungrouped') {
-      return processedParties.filter(p => !p.groupId);
-    }
-    // For staff groups, return empty array (staff groups don't have parties)
-    const groupType = (selectedGroup as any).groupType;
-    if (groupType === 'staff' || groupType === 'tax' || groupType === 'account' || groupType === 'expense' || groupType === 'item') {
-      return [];
-    }
-    return processedParties.filter(p => p.groupId === selectedGroup.id);
-  }, [selectedGroup, processedParties]);
+  // Group relationships for system-group expand/collapse and aggregate detail selection.
+  const groupById = useMemo(() => {
+    const map = new Map<string, ReportGroup>();
+    processedGroups.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [processedGroups]);
+
+  const systemGroups = useMemo(
+    () => processedGroups.filter((g) => g.isSystemGroup === true),
+    [processedGroups]
+  );
+
+  const userGroups = useMemo(
+    () => processedGroups.filter((g) => g.isSystemGroup !== true),
+    [processedGroups]
+  );
+
+  const getTopSystemAncestorId = useCallback(
+    (group: ReportGroup): string | null => {
+      let cursor: ReportGroup | undefined = group;
+      while (cursor?.parentId) {
+        const parent = groupById.get(cursor.parentId);
+        if (!parent) break;
+        if (parent.isSystemGroup) return parent.id;
+        cursor = parent;
+      }
+      return null;
+    },
+    [groupById]
+  );
+
+  const systemChildrenMap = useMemo(() => {
+    const map = new Map<string, ReportGroup[]>();
+    systemGroups.forEach((sys) => map.set(sys.id, []));
+    userGroups.forEach((ug) => {
+      const topSystemId = getTopSystemAncestorId(ug);
+      if (topSystemId && map.has(topSystemId)) {
+        map.get(topSystemId)!.push(ug);
+      }
+    });
+    return map;
+  }, [systemGroups, userGroups, getTopSystemAncestorId]);
+
+  // Income & Expense entity: split system groups into Income (parentId "income" / Direct–Indirect Income) vs Expense (parentId "expenses" / Direct–Indirect Expense) for sidebar parent row.
+  const expenseIncomeSystemGroups = useMemo(() => {
+    const incomeIds = new Set(["direct_income", "indirect_income", "income"]);
+    return systemGroups.filter((g) => {
+      if ((g as ReportGroup).groupType !== "expense") return false;
+      const parentId = String((g as ReportGroup).parentId || "").toLowerCase();
+      if (parentId === "income") return true;
+      const id = String(g.id).toLowerCase();
+      const name = String(g.name || "").toLowerCase();
+      if (incomeIds.has(id)) return true;
+      return /income/i.test(name) && !/expense/i.test(name);
+    });
+  }, [systemGroups]);
+  const expenseExpenseSystemGroups = useMemo(() => {
+    const expenseIds = new Set(["direct_expense", "indirect_expense", "expenses"]);
+    return systemGroups.filter((g) => {
+      if ((g as ReportGroup).groupType !== "expense") return false;
+      const parentId = String((g as ReportGroup).parentId || "").toLowerCase();
+      if (parentId === "expenses") return true;
+      const id = String(g.id).toLowerCase();
+      const name = String(g.name || "").toLowerCase();
+      if (expenseIds.has(id)) return true;
+      return /expense/i.test(name);
+    });
+  }, [systemGroups]);
+  const otherSystemGroups = useMemo(
+    () => systemGroups.filter((g) => (g as ReportGroup).groupType !== "expense"),
+    [systemGroups]
+  );
+
+  const toggleExpenseParent = useCallback((key: "income" | "expense") => {
+    setExpandedExpenseParentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // Mobile: group dropdown options (entity)
   const groupDropdownOptions = useMemo(() => {
     return processedGroups.map((g) => ({ value: g.id, label: g.name }));
   }, [processedGroups]);
 
-  // Mobile: account dropdown options (members of selected group)
-  const accountDropdownOptions = useMemo(() => {
-    if (!selectedGroup) return [];
-    const groupType = (selectedGroup as any).groupType;
-    if (groupType === 'tax') {
-      return processedTaxes.filter((t: any) => t.groupId === selectedGroup.id).map((t: any) => ({ value: t.id, label: t.name }));
-    }
-    if (groupType === 'staff') {
-      return processedStaff.filter((s: any) => s.groupId === selectedGroup.id).map((s: any) => ({ value: s.id, label: s.name }));
-    }
-    if (groupType === 'account') {
-      return processedAccounts.filter((a: any) => a.groupId === selectedGroup.id).map((a: any) => ({ value: a.id, label: a.name }));
-    }
-    if (groupType === 'expense') {
-      return processedExpenseAccounts.filter((e: any) => e.groupId === selectedGroup.id).map((e: any) => ({ value: e.id, label: e.name }));
-    }
-    if (groupType === 'item') {
-      return processedItems.filter((i: any) => (i as any).groupId === selectedGroup.id).map((i: any) => ({ value: i.id, label: i.name }));
-    }
-    // Party groups
-    if (selectedGroup.id === 'ungrouped') {
-      return processedParties.filter((p: any) => !p.groupId).map((p: any) => ({ value: p.id, label: p.name }));
-    }
-    return processedParties.filter((p: any) => p.groupId === selectedGroup.id).map((p: any) => ({ value: p.id, label: p.name }));
-  }, [selectedGroup, processedParties, processedStaff, processedTaxes, processedAccounts, processedExpenseAccounts, processedItems]);
-
   const filteredGroups = useMemo(() => {
-    return processedGroups.filter((g) =>
-      g.name.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [processedGroups, searchTerm]);
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return processedGroups;
+    return processedGroups.filter((g) => {
+      const selfMatch = g.name.toLowerCase().includes(q);
+      if (selfMatch) return true;
+      const children = systemChildrenMap.get(g.id) || [];
+      return children.some((c) => c.name.toLowerCase().includes(q));
+    });
+  }, [processedGroups, searchTerm, systemChildrenMap]);
+
+  const filteredGroupIds = useMemo(
+    () => new Set(filteredGroups.map((g) => g.id)),
+    [filteredGroups]
+  );
 
   const REPORT_MEMORY_KEY = "reportGroupStatementState";
 
@@ -382,20 +325,42 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
       if (groupId) {
         const found = processedGroups.find((g) => g.id === groupId);
         if (found) {
-          setSelectedGroup(found as Group);
+          setSelectedGroup(found);
           return;
         }
       }
     } catch (_) {}
-    setSelectedGroup(processedGroups[0] as Group);
+    setSelectedGroup(processedGroups[0]);
   }, [processedGroups]);
 
-  const handleSelectGroup = useCallback((group: Group) => {
+  const handleSelectGroup = useCallback((group: ReportGroup) => {
+    setSelectedMember(null);
     setSelectedGroup(group);
     try {
       localStorage.setItem(REPORT_MEMORY_KEY, JSON.stringify({ groupId: group.id }));
     } catch (_) {}
   }, []);
+
+  const toggleSystemGroup = useCallback((group: ReportGroup) => {
+    if (!group.isSystemGroup) return;
+    setExpandedSystemGroupIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(group.id)) {
+        next.delete(group.id);
+      } else {
+        next.add(group.id);
+        // When expanding a system group, switch details to first user group by default.
+        if (selectedGroup?.id === group.id) {
+          const firstChild = (systemChildrenMap.get(group.id) || [])[0];
+          if (firstChild) {
+            setSelectedMember(null);
+            setSelectedGroup(firstChild);
+          }
+        }
+      }
+      return next;
+    });
+  }, [selectedGroup, systemChildrenMap]);
 
   useEffect(() => {
     // Party groups don't have groupType; non-party groups have groupType: 'tax' | 'staff' | 'account' | 'expense' | 'item'
@@ -408,6 +373,78 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
   const mergedUserNames = useMemo(() => {
     return { ...vouchersUserNames, ...userNames };
   }, [vouchersUserNames, userNames]);
+
+  const selectedGroupIdsForDetails = useMemo(() => {
+    if (!selectedGroup) return new Set<string>();
+    if (!selectedGroup.isSystemGroup) return new Set([selectedGroup.id]);
+    const children = systemChildrenMap.get(selectedGroup.id) || [];
+    // System group (collapsed) should show all child-group transactions together.
+    if (children.length > 0) return new Set(children.map((c) => c.id));
+    return new Set([selectedGroup.id]);
+  }, [selectedGroup, systemChildrenMap]);
+
+  const selectedPartiesForDetails = useMemo(() => {
+    if (!selectedGroup) return [];
+    if (selectedGroup.id === "ungrouped") return processedParties.filter((p) => !p.groupId);
+    return processedParties.filter((p: any) => selectedGroupIdsForDetails.has(String(p.groupId || "")));
+  }, [selectedGroup, processedParties, selectedGroupIdsForDetails]);
+
+  const selectedStaffForDetails = useMemo(
+    () => processedStaff.filter((s: any) => selectedGroupIdsForDetails.has(String(s.groupId || ""))),
+    [processedStaff, selectedGroupIdsForDetails]
+  );
+  const selectedTaxesForDetails = useMemo(
+    () => processedTaxes.filter((t: any) => selectedGroupIdsForDetails.has(String(t.groupId || ""))),
+    [processedTaxes, selectedGroupIdsForDetails]
+  );
+  const selectedAccountsForDetails = useMemo(
+    () => processedAccounts.filter((a: any) => selectedGroupIdsForDetails.has(String(a.groupId || ""))),
+    [processedAccounts, selectedGroupIdsForDetails]
+  );
+  const selectedExpenseAccountsForDetails = useMemo(
+    () => processedExpenseAccounts.filter((a: any) => selectedGroupIdsForDetails.has(String(a.groupId || ""))),
+    [processedExpenseAccounts, selectedGroupIdsForDetails]
+  );
+  const selectedItemsForDetails = useMemo(
+    () => processedItems.filter((i: any) => selectedGroupIdsForDetails.has(String(i.groupId || ""))),
+    [processedItems, selectedGroupIdsForDetails]
+  );
+
+  const partiesForSelectedGroup = useMemo(() => {
+    if (!selectedGroup) return [];
+    const groupType = (selectedGroup as any).groupType;
+    // Non-party group details should not hydrate party members.
+    if (groupType === "staff" || groupType === "tax" || groupType === "account" || groupType === "expense" || groupType === "item") {
+      return [];
+    }
+    return selectedPartiesForDetails;
+  }, [selectedGroup, selectedPartiesForDetails]);
+
+  // Mobile: account dropdown options (members of selected group)
+  const accountDropdownOptions = useMemo(() => {
+    if (!selectedGroup) return [];
+    const groupType = (selectedGroup as any).groupType;
+    if (groupType === 'tax') {
+      return processedTaxes.filter((t: any) => selectedGroupIdsForDetails.has(String(t.groupId || ""))).map((t: any) => ({ value: t.id, label: t.name }));
+    }
+    if (groupType === 'staff') {
+      return processedStaff.filter((s: any) => selectedGroupIdsForDetails.has(String(s.groupId || ""))).map((s: any) => ({ value: s.id, label: s.name }));
+    }
+    if (groupType === 'account') {
+      return processedAccounts.filter((a: any) => selectedGroupIdsForDetails.has(String(a.groupId || ""))).map((a: any) => ({ value: a.id, label: a.name }));
+    }
+    if (groupType === 'expense') {
+      return processedExpenseAccounts.filter((e: any) => selectedGroupIdsForDetails.has(String(e.groupId || ""))).map((e: any) => ({ value: e.id, label: e.name }));
+    }
+    if (groupType === 'item') {
+      return processedItems.filter((i: any) => selectedGroupIdsForDetails.has(String((i as any).groupId || ""))).map((i: any) => ({ value: i.id, label: i.name }));
+    }
+    // Party groups
+    if (selectedGroup.id === 'ungrouped') {
+      return processedParties.filter((p: any) => !p.groupId).map((p: any) => ({ value: p.id, label: p.name }));
+    }
+    return processedParties.filter((p: any) => selectedGroupIdsForDetails.has(String(p.groupId || ""))).map((p: any) => ({ value: p.id, label: p.name }));
+  }, [selectedGroup, selectedGroupIdsForDetails, processedParties, processedStaff, processedTaxes, processedAccounts, processedExpenseAccounts, processedItems]);
 
   if (vouchersLoading) {
     return (
@@ -516,7 +553,8 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
         return (
           <GroupDetails
             group={groupEntity as Group}
-            allGroups={processedGroups}
+            // Party details should receive party-group list only.
+            allGroups={initialProcessedGroups}
             allParties={partiesForSelectedGroup}
             onGroupUpdated={() => {}}
             onGroupDeleted={() => setSelectedGroup(null)}
@@ -532,7 +570,8 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           <StaffGroupDetails
             group={groupEntity as any}
             allGroups={processedStaffGroups}
-            staff={processedStaff.filter((s: any) => s.groupId === selectedGroup.id)}
+            // System-group selection should include combined child-group members.
+            staff={selectedStaffForDetails}
             onGroupUpdated={() => {}}
             onGroupDeleted={() => setSelectedGroup(null)}
             onStaffUpdated={() => {}}
@@ -547,7 +586,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           <TaxGroupDetails
             group={groupEntity as any}
             allGroups={processedTaxGroups}
-            taxes={processedTaxes.filter((t: any) => t.groupId === selectedGroup.id)}
+            taxes={selectedTaxesForDetails}
             onGroupUpdated={() => {}}
             onGroupDeleted={() => setSelectedGroup(null)}
             onTaxUpdated={() => {}}
@@ -562,7 +601,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           <ExpenseGroupDetails
             group={groupEntity as any}
             allGroups={processedExpenseGroups}
-            accounts={processedExpenseAccounts.filter((e: any) => e.groupId === selectedGroup.id)}
+            accounts={selectedExpenseAccountsForDetails}
             onGroupUpdated={() => {}}
             onGroupDeleted={() => setSelectedGroup(null)}
             onAccountUpdated={() => {}}
@@ -577,13 +616,32 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           <AccountGroupDetails
             group={groupEntity as any}
             allGroups={processedAccountGroups}
-            accounts={processedAccounts.filter((a: any) => a.groupId === selectedGroup.id)}
+            accounts={selectedAccountsForDetails}
             onGroupUpdated={() => {}}
             onGroupDeleted={() => setSelectedGroup(null)}
             onAccountUpdated={() => {}}
             dateRange={dateRange}
             onDateRangeChange={setDateRange}
             userNames={mergedUserNames}
+          />
+        );
+      }
+      if (groupType === "item") {
+        return (
+          <ItemGroupDetails
+            group={groupEntity as any}
+            allGroups={processedItemGroups as any}
+            items={selectedItemsForDetails as any}
+            allItems={processedItems as any}
+            onGroupUpdated={() => {}}
+            onGroupDeleted={() => setSelectedGroup(null)}
+            onItemUpdated={() => {}}
+            stockView={"amount"}
+            dateRange={dateRange}
+            onDateRangeChange={setDateRange}
+            userNames={mergedUserNames}
+            // ItemGroupDetails requires transactions for report-side ledger rendering.
+            transactions={allVouchers}
           />
         );
       }
@@ -620,7 +678,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                 onChange={(value) => {
                   const grp = processedGroups.find((g) => g.id === value);
                   if (grp) {
-                    setSelectedGroup(grp as Group);
+                    setSelectedGroup(grp);
                     setSelectedMember(null);
                   }
                 }}
@@ -639,7 +697,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
                   else if (groupType === 'account') member = processedAccounts.find((a: any) => a.id === value);
                   else if (groupType === 'expense') member = processedExpenseAccounts.find((e: any) => e.id === value);
                   else if (groupType === 'item') member = processedItems.find((i: any) => i.id === value);
-                  else member = processedParties.find((p: any) => p.id === value) || (selectedGroup?.id === 'ungrouped' ? processedParties.find((p: any) => !p.groupId && p.id === value) : processedParties.find((p: any) => p.groupId === selectedGroup?.id && p.id === value));
+                  else member = selectedPartiesForDetails.find((p: any) => p.id === value) || null;
                   setSelectedMember(member || null);
                 }}
                 placeholder="Account"
@@ -682,13 +740,197 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
           <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
             <h3 className="text-sm font-semibold">Groups ({filteredGroups.length})</h3>
           </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <PartyGroupList
-              groups={filteredGroups}
-              onSelectGroup={handleSelectGroup}
-              selectedGroup={selectedGroup}
-              searchTerm={searchTerm}
-            />
+          <div className="flex-1 min-h-0 overflow-auto p-2 space-y-1">
+            {/* Non–Income & Expense system groups (Parties, Bank/Cash, Staff, Tax, Items): system group → user groups. */}
+            {otherSystemGroups
+              .filter((sys) => {
+                if (filteredGroupIds.has(sys.id)) return true;
+                const children = systemChildrenMap.get(sys.id) || [];
+                return children.some((c) => filteredGroupIds.has(c.id));
+              })
+              .map((sys) => {
+                const children = (systemChildrenMap.get(sys.id) || []).filter((c) => filteredGroupIds.has(c.id));
+                const isExpanded = expandedSystemGroupIds.has(sys.id);
+                const systemBalance = children.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
+                return (
+                  <div key={sys.id} className="space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => handleSelectGroup(sys)}
+                      className={cn(
+                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
+                        selectedGroup?.id === sys.id && "border-orange-400 bg-orange-50"
+                      )}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {children.length > 0 ? (
+                          <span
+                            className="cursor-pointer text-muted-foreground"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              toggleSystemGroup(sys);
+                            }}
+                          >
+                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                          </span>
+                        ) : (
+                          <span className="w-3.5" />
+                        )}
+                        <span className="truncate text-sm font-medium">{sys.name}</span>
+                      </div>
+                      {!isExpanded && (
+                        <span className={cn("text-xs font-semibold", systemBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                          {formatCurrency(systemBalance, { showDrCr: true, noSuffix: true })}
+                        </span>
+                      )}
+                    </button>
+                    {isExpanded && children.length > 0 && (
+                      <div className="ml-5 space-y-1">
+                        {children.map((child) => (
+                          <button
+                            key={child.id}
+                            type="button"
+                            onClick={() => handleSelectGroup(child)}
+                            className={cn(
+                              "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
+                              selectedGroup?.id === child.id && "border-orange-400 bg-orange-50"
+                            )}
+                          >
+                            <span className="truncate text-sm">{child.name}</span>
+                            <span className={cn("text-xs font-semibold", (Number(child.balance) || 0) >= 0 ? "text-green-600" : "text-red-600")}>
+                              {formatCurrency(Number(child.balance) || 0, { showDrCr: true, noSuffix: true })}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            {/* Income & Expense entity only: parent "Income" / "Expense" and under them system groups → user groups. */}
+            {(expenseIncomeSystemGroups.some((s) => filteredGroupIds.has(s.id) || (systemChildrenMap.get(s.id) || []).some((c) => filteredGroupIds.has(c.id))) ||
+              expenseExpenseSystemGroups.some((s) => filteredGroupIds.has(s.id) || (systemChildrenMap.get(s.id) || []).some((c) => filteredGroupIds.has(c.id)))) && (
+              <>
+                <div className="pt-1 border-t mt-1" />
+                {[
+                  { key: "income" as const, label: "Income", systemGroups: expenseIncomeSystemGroups },
+                  { key: "expense" as const, label: "Expense", systemGroups: expenseExpenseSystemGroups },
+                ].map(({ key, label, systemGroups: sysList }) => {
+                  const visibleSys = sysList.filter((s) => filteredGroupIds.has(s.id) || (systemChildrenMap.get(s.id) || []).some((c) => filteredGroupIds.has(c.id)));
+                  if (visibleSys.length === 0) return null;
+                  const isParentExpanded = expandedExpenseParentIds.has(key);
+                  const parentBalance = visibleSys.reduce((sum, s) => {
+                    const children = (systemChildrenMap.get(s.id) || []).filter((c) => filteredGroupIds.has(c.id));
+                    const bal = children.length > 0 ? children.reduce((a, c) => a + (Number(c.balance) || 0), 0) : Number(s.balance) || 0;
+                    return sum + bal;
+                  }, 0);
+                  return (
+                    <div key={key} className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpenseParent(key)}
+                        className={cn(
+                          "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent font-medium",
+                          "bg-muted/50"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-muted-foreground">
+                            {isParentExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                          </span>
+                          <span className="truncate text-sm">{label}</span>
+                        </div>
+                        {!isParentExpanded && (
+                          <span className={cn("text-xs font-semibold", parentBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                            {formatCurrency(parentBalance, { showDrCr: true, noSuffix: true })}
+                          </span>
+                        )}
+                      </button>
+                      {isParentExpanded &&
+                        visibleSys.map((sys) => {
+                          const children = (systemChildrenMap.get(sys.id) || []).filter((c) => filteredGroupIds.has(c.id));
+                          const isExpanded = expandedSystemGroupIds.has(sys.id);
+                          const systemBalance = children.reduce((sum, c) => sum + (Number(c.balance) || 0), 0);
+                          return (
+                            <div key={sys.id} className="ml-4 space-y-1">
+                              <button
+                                type="button"
+                                onClick={() => handleSelectGroup(sys)}
+                                className={cn(
+                                  "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
+                                  selectedGroup?.id === sys.id && "border-orange-400 bg-orange-50"
+                                )}
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {children.length > 0 ? (
+                                    <span
+                                      className="cursor-pointer text-muted-foreground"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        toggleSystemGroup(sys);
+                                      }}
+                                    >
+                                      {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                    </span>
+                                  ) : (
+                                    <span className="w-3.5" />
+                                  )}
+                                  <span className="truncate text-sm font-medium">{sys.name}</span>
+                                </div>
+                                {!isExpanded && (
+                                  <span className={cn("text-xs font-semibold", systemBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                                    {formatCurrency(systemBalance, { showDrCr: true, noSuffix: true })}
+                                  </span>
+                                )}
+                              </button>
+                              {isExpanded && children.length > 0 && (
+                                <div className="ml-5 space-y-1">
+                                  {children.map((child) => (
+                                    <button
+                                      key={child.id}
+                                      type="button"
+                                      onClick={() => handleSelectGroup(child)}
+                                      className={cn(
+                                        "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
+                                        selectedGroup?.id === child.id && "border-orange-400 bg-orange-50"
+                                      )}
+                                    >
+                                      <span className="truncate text-sm">{child.name}</span>
+                                      <span className={cn("text-xs font-semibold", (Number(child.balance) || 0) >= 0 ? "text-green-600" : "text-red-600")}>
+                                        {formatCurrency(Number(child.balance) || 0, { showDrCr: true, noSuffix: true })}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+            {userGroups
+              .filter((g) => filteredGroupIds.has(g.id) && !getTopSystemAncestorId(g))
+              .map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => handleSelectGroup(g)}
+                  className={cn(
+                    "w-full flex items-center justify-between rounded-md border px-2 py-1.5 text-left hover:bg-accent",
+                    selectedGroup?.id === g.id && "border-orange-400 bg-orange-50"
+                  )}
+                >
+                  <span className="truncate text-sm">{g.name}</span>
+                  <span className={cn("text-xs font-semibold", (Number(g.balance) || 0) >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(Number(g.balance) || 0, { showDrCr: true, noSuffix: true })}
+                  </span>
+                </button>
+              ))}
           </div>
         </div>
 
@@ -704,17 +946,7 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
             </div>
           )}
           {selectedGroup ? (
-            <GroupDetails
-              group={selectedGroup}
-              allGroups={processedGroups}
-              allParties={partiesForSelectedGroup}
-              onGroupUpdated={() => {}}
-              onGroupDeleted={() => setSelectedGroup(null)}
-              onPartyUpdated={() => {}}
-              dateRange={dateRange}
-              onDateRangeChange={setDateRange}
-              userNames={mergedUserNames}
-            />
+            renderGroupDetailsContent()
           ) : (
             <div className="flex flex-1 items-center justify-center p-8">
               <Card className="w-full max-w-md text-center">

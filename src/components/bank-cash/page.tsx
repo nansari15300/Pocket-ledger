@@ -67,7 +67,8 @@ export default function BankCashPage() {
 
 
    const processedAccountGroups = useMemo(() => {
-    const ungroupedAccounts = processedAccounts.filter(acc => !acc.groupId);
+    // Treat both blank groupId and storage ungrouped id as Ungrouped bucket.
+    const ungroupedAccounts = processedAccounts.filter(acc => !acc.groupId || acc.groupId === "ungrouped_account");
     if (ungroupedAccounts.length > 0) {
         const ungroupedBalance = ungroupedAccounts.reduce((sum, acc) => sum + acc.balance, 0);
         const ungroupedGroup: AccountGroup = {
@@ -165,7 +166,8 @@ export default function BankCashPage() {
   const accountsForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-        return processedAccounts.filter(acc => !acc.groupId);
+        // Keep Ungrouped group selection aligned with stored ungrouped ids.
+        return processedAccounts.filter(acc => !acc.groupId || acc.groupId === "ungrouped_account");
     }
     return processedAccounts.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedAccounts]);

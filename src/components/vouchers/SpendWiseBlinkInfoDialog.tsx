@@ -17,14 +17,20 @@ const BLINK_INFO = {
   en: {
     title: "About Blink",
     body: "This Blink option helps you quickly spot inflow transactions (money received) and track which ones still have an unsettled balance. When a group's running balance is not zero, that balance blinks so you can easily see which inflow has not been fully used or linked.",
+    rowBody:
+      "Blink row works differently: only the selected row blinks, and only when it belongs to a multi-row split/group. When you click another row, blink moves to that row only.",
   },
   hi: {
     title: "ब्लिंक के बारे में",
     body: "यह Blink विकल्प आपको Inflow Transaction (जो रकम मिली है) जल्दी ढूंढने और किस Transaction का पूरा खर्च नहीं हुआ है उसे Track करने में मदद करता है। जब किसी Group का Running Balance शून्य नहीं होता, तो वह Balance Blink करता है ताकि आप आसानी से देख सकें कि कौन सा Inflow पूरी तरह इस्तेमाल या लिंक नहीं हुआ है।",
+    rowBody:
+      "Blink row अलग तरीके से काम करता है: इसमें सिर्फ चुनी हुई row blink करती है, और वही तब जब वह multi-row split/group का हिस्सा हो। आप किसी दूसरी row पर click करेंगे तो blink सिर्फ उसी नई row पर जाएगा।",
   },
   ne: {
     title: "ब्लिंकको बारेमा",
     body: "यो Blink विकल्पले तपाईंलाई Inflow Transaction (पैसा प्राप्त भएको) छिटो फेला पार्न र कुन Transaction को पूरा खर्च भएको छैन त्यो Track गर्न मद्दत गर्छ। जब कुनै Group को Running Balance शून्य हुँदैन, त्यो Balance Blink हुन्छ ताकि तपाईंले सजिलै देख्न सक्नुहुन्छ कुन Inflow पूर्ण रूपमा प्रयोग वा लिंक भएको छैन।",
+    rowBody:
+      "Blink row ले फरक तरिकाले काम गर्छ: यसमा केवल छानिएको row मात्र blink हुन्छ, र त्यो पनि multi-row split/group को भाग हुँदा मात्र। तपाईंले अर्को row मा click गर्दा blink पनि त्यही नयाँ row मा मात्र जान्छ।",
   },
 } as const;
 
@@ -79,13 +85,25 @@ export function SpendWiseBlinkInfoDialog({
             <TabsTrigger value="ne">नेपाली</TabsTrigger>
           </TabsList>
           <TabsContent value="en" className="mt-3 text-sm text-muted-foreground leading-relaxed">
-            {BLINK_INFO.en.body}
+            {/* Keep row-mode introduction as a separate paragraph for clarity. */}
+            <div className="space-y-3">
+              <p>{BLINK_INFO.en.body}</p>
+              <p>{BLINK_INFO.en.rowBody}</p>
+            </div>
           </TabsContent>
           <TabsContent value="hi" className="mt-3 text-sm text-muted-foreground leading-relaxed">
-            {BLINK_INFO.hi.body}
+            {/* Keep row-mode introduction as a separate paragraph for clarity. */}
+            <div className="space-y-3">
+              <p>{BLINK_INFO.hi.body}</p>
+              <p>{BLINK_INFO.hi.rowBody}</p>
+            </div>
           </TabsContent>
           <TabsContent value="ne" className="mt-3 text-sm text-muted-foreground leading-relaxed">
-            {BLINK_INFO.ne.body}
+            {/* Keep row-mode introduction as a separate paragraph for clarity. */}
+            <div className="space-y-3">
+              <p>{BLINK_INFO.ne.body}</p>
+              <p>{BLINK_INFO.ne.rowBody}</p>
+            </div>
           </TabsContent>
         </Tabs>
       </DialogContent>

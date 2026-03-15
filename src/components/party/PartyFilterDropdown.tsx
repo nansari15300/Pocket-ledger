@@ -63,7 +63,8 @@ export function PartyFilterDropdown({
   const selectedCount = isAllSelected ? parties.length : selectedPartyIds.length;
 
   const displayValue = () => {
-    if (selectedCount === 0) return "Select parties...";
+    // Use neutral wording so item/entity pages are not tied to "Party" label.
+    if (selectedCount === 0) return "Select entities...";
     if (isAllSelected) return `All (${parties.length}) selected`;
     if (selectedCount === 1) {
       const selectedParty = parties.find(p => p.id === selectedPartyIds[0]);
@@ -89,9 +90,9 @@ export function PartyFilterDropdown({
       </PopoverTrigger>
       <PopoverContent className="w-[250px] p-0">
         <Command>
-          <CommandInput placeholder="Search parties..." />
+          <CommandInput placeholder="Search entities..." />
           <CommandList>
-            <CommandEmpty>No parties found.</CommandEmpty>
+            <CommandEmpty>No entities found.</CommandEmpty>
             <CommandGroup>
               <CommandItem onSelect={() => handleSelect("all")}>
                 <Check

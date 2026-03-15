@@ -80,7 +80,7 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -285,8 +285,12 @@ export function ExpenseAccountDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   const totalPages =
     rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
@@ -316,6 +320,8 @@ export function ExpenseAccountDetails({
       else
         dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
+    // Keep print headers aligned with currently selected table columns.
+    const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
     openPrintDirect({
       company: {
         name: company.name,
@@ -336,6 +342,9 @@ export function ExpenseAccountDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      billWise: balanceMode === "bill_wise",
     }, true);
   };
   

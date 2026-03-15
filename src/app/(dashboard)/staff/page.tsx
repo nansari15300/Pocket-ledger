@@ -93,7 +93,10 @@ export default function StaffPage() {
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
 
   const processedStaffGroups = useMemo(() => {
-    const ungrouped = processedStaff.filter(p => !p.groupId);
+    // Show Ungrouped row only when at least one staff is in the Ungrouped bucket.
+    const ungrouped = processedStaff.filter((p: any) => !p.groupId || p.groupId === "ungrouped_staff");
+    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
+    const baseGroups = initialProcessedStaffGroups.filter((g) => (g as any).isAutoUngrouped !== true);
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: StaffGroup = {
@@ -104,9 +107,9 @@ export default function StaffPage() {
         debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
         credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
       };
-      return [...initialProcessedStaffGroups, ungroupedGroup];
+      return [...baseGroups, ungroupedGroup];
     }
-    return initialProcessedStaffGroups;
+    return baseGroups;
   }, [processedStaff, initialProcessedStaffGroups, companyId]);
 
   // ========== MEMORY LOGIC ==========
@@ -195,7 +198,7 @@ export default function StaffPage() {
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-      return processedStaff.filter(p => !p.groupId);
+      return processedStaff.filter((p: any) => !p.groupId || p.groupId === "ungrouped_staff");
     }
     return processedStaff.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedStaff]);

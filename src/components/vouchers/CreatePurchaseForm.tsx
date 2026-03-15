@@ -243,7 +243,7 @@ export function CreatePurchaseForm({
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
   type ProcessedItem = Item & { stockInQty?: number; stockOutQty?: number; stockQty?: number; displayStockQty?: number; };
-  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts } = useVouchers();
+  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
   const { company, companyId, triggerSync } = useCompany();
@@ -259,6 +259,8 @@ export function CreatePurchaseForm({
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
+  // Purchase Account combobox: allow creating a new expense/income account inline.
+  const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
@@ -311,6 +313,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [partyId, processedParties]);
   
   const selectedTax = useMemo(() => processedTaxes.find((t) => t.id === lineItemTaxId), [lineItemTaxId, processedTaxes]);
+  const expenseGroupIds = useMemo(() => {
+    // Use group hierarchy (not account.type) so Purchase Account list always maps to Expense groups.
+    return new Set(
+      (processedExpenseGroups || [])
+        .filter((g: any) => {
+          const id = String(g.id || "").toLowerCase();
+          const parentId = String(g.parentId || "").toLowerCase();
+          const type = String(g.type || "").toLowerCase();
+          return parentId === "expenses" || type === "expense" || id === "direct_expense" || id === "indirect_expense";
+        })
+        .map((g: any) => g.id)
+    );
+  }, [processedExpenseGroups]);
+  const purchaseAccountOptions = useMemo(
+    () =>
+      expenseAccounts
+        .filter((a: any) => expenseGroupIds.has(a.groupId))
+        .map((p: any) => ({ value: p.id, label: p.name })),
+    [expenseAccounts, expenseGroupIds]
+  );
 
   const voucherIdForLinks = voucher?.id ?? savedVoucherId;
   // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
@@ -1320,20 +1342,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           </div>
                           <div className="flex gap-1">
                             <Combobox
-                              options={expenseAccounts
-                                .filter(a => {
-                                  const type = (a.type || '').toLowerCase();
-                                  const name = (a.name || '').toLowerCase();
-                                  return (
-                                    (type === 'expense' || type === 'purchase' || name.includes('purchase')) && 
-                                    !name.includes('sales') && 
-                                    type !== 'income'
-                                  );
-                                })
-                                .map((p) => ({ value: p.id, label: p.name }))}
+                              // Purchase account should show only Expense-group accounts.
+                              options={purchaseAccountOptions}
                               value={field.value}
-                              onChange={(val) => { field.onChange(val) }}
+                              onChange={(val, newName) => {
+                                // Support inline account creation from Purchase Account selector.
+                                if (val === "add-new") {
+                                  setIsCreateExpenseAccountOpen(true);
+                                  setTimeout(() => {
+                                    document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: newName }));
+                                  }, 100);
+                                } else {
+                                  field.onChange(val);
+                                }
+                              }}
                               placeholder="Select account"
+                              addNewLabel="+ Add New Account"
                               disabled={deleteDisabledWhenLinked}
                             />
                           </div>
@@ -1392,10 +1416,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormLabel className="truncate">Purchase Account (Dr.)</FormLabel>
                               <Combobox
                                 triggerClassName="h-10 w-full min-w-0"
-                                options={expenseAccounts.filter(a => { const t = (a.type || '').toLowerCase(); const n = (a.name || '').toLowerCase(); return (t === 'expense' || t === 'purchase' || n.includes('purchase')) && !n.includes('sales') && t !== 'income'; }).map((p) => ({ value: p.id, label: p.name }))}
+                                // Purchase account should show only Expense-group accounts.
+                                options={purchaseAccountOptions}
                                 value={field.value}
-                                onChange={(val) => field.onChange(val)}
+                                onChange={(val, newName) => {
+                                  // Support inline account creation from Purchase Account selector.
+                                  if (val === "add-new") {
+                                    setIsCreateExpenseAccountOpen(true);
+                                    setTimeout(() => {
+                                      document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: newName }));
+                                    }, 100);
+                                  } else {
+                                    field.onChange(val);
+                                  }
+                                }}
                                 placeholder="Select purchase account"
+                                addNewLabel="+ Add New Account"
                                 disabled={deleteDisabledWhenLinked}
                               />
                               <FormMessage />
@@ -2731,6 +2767,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onTaxCreated={handleTaxCreated}
         isOpen={isCreateTaxOpen}
         onOpenChange={setIsCreateTaxOpen}
+      />
+      <CreateExpenseAccountDialog
+        // On create, immediately select newly created account in Purchase Account field.
+        onExpenseAccountCreated={(id) => form.setValue("purchaseAccountId", id)}
+        isOpen={isCreateExpenseAccountOpen}
+        onOpenChange={setIsCreateExpenseAccountOpen}
       />
       {partyId && (
         <LinkAdvancesToVoucherDialog

@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { ItemGroup } from "@/components/items/types";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { isSystemGroupName } from "@/lib/system-group-names";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -76,16 +77,30 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
         return;
       }
       
-      const nameLower = nameTrimmed.toLowerCase();
-      const isDuplicate = (groups || []).some(
-        (g) => !(g as any).isDeleted && (g.name?.trim().toLowerCase() ?? "") === nameLower
-      );
-      if (isDuplicate) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "item_groups",
+        name: nameTrimmed,
+        entityLabel: "Item Group",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         toast({
           variant: "destructive",
           title: "Duplicate Group Name",
           description: "A group with this name already exists. Please choose a different name.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        toast({
+          title: "Group Restored!",
+          description: `"${nameTrimmed}" was restored from Recycle Bin.`,
+        });
+        onGroupCreated(duplicateDecision.restoredId);
+        if (saveAndNew) form.reset({ name: "", parentId: "stock_items" });
+        else if (onOpenChange) onOpenChange(false);
         setIsLoading(false);
         return;
       }

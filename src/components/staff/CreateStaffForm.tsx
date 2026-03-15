@@ -37,6 +37,8 @@ import { useDate } from "@/hooks/useDate";
 
 import type { StaffGroup } from "@/components/staff/types";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
@@ -127,17 +129,35 @@ export function CreateStaffForm({
     return () => unsubscribe();
   }, [companyId]);
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!companyId || !user?.uid) return;
+      // Keep Staff create default on canonical Ungrouped bucket.
+      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "staff");
+      if (!alive) return;
+      const current = form.getValues("groupId");
+      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [companyId, user?.uid, form]);
+
   // ---------------------------
   // ✅ Build combobox options (duplicate-safe)
   // ---------------------------
   const groupOptions = useMemo(() => {
     // Only user-defined staff groups; hide system parent groups
-    const userGroups = (groups || []).filter(g => !(g as any).isSystemReserved);
+    const userGroups = (groups || []).filter(g => !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true);
     return uniqueByValue(
-      userGroups.map((g) => ({
+      [
+        { value: getUngroupedGroupId("staff"), label: "Ungrouped" },
+        ...userGroups.map((g) => ({
         value: g.id,
         label: g.name,
-      }))
+        })),
+      ]
     );
   }, [groups, uniqueByValue]);
 
@@ -261,6 +281,32 @@ export function CreateStaffForm({
     setIsLoading(true);
 
     try {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "staff",
+        name: values.name.trim(),
+        entityLabel: "Staff",
+      });
+      if (duplicateDecision.decision === "active_exists") {
+        sonnerToast.error("Duplicate Staff Name", {
+          id: toastId,
+          description: "A staff member with this name already exists.",
+        });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Staff Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        triggerSync();
+        onStaffCreated?.(saveAndNew, duplicateDecision.restoredId);
+        setIsLoading(false);
+        return;
+      }
+
       let fileUrl: string | null = null;
 
       if (fileToUpload && companyId && canAddAvatar) {
@@ -286,13 +332,16 @@ export function CreateStaffForm({
         }
       }
 
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "staff"));
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/staff`), {
         ...values,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
         ownerId: user.uid,
         companyId,
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("staff"),
         balance: values.openingBalance || 0,
         isDeleted: false,
         createdAt: serverTimestamp(),
@@ -321,7 +370,8 @@ export function CreateStaffForm({
           salary: 0,
           openingBalance: 0,
           salaryPeriod: "Monthly",
-          groupId: groupOptions[0]?.value || "loans_liabilities",
+          // After save&new keep default on Ungrouped.
+          groupId: getUngroupedGroupId("staff"),
         });
         removeFile();
       }

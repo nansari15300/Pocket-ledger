@@ -7,7 +7,7 @@ import { Edit, Printer, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, Che
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -90,7 +90,13 @@ export function StaffGroupDetails({
   const { company } = useCompany();
   const { processedStaff, processedParties, processedAccounts, processedTaxes, processedExpenseAccounts, journalAccountNames } = useVouchers();
   const { balanceMode, setBalanceMode } = useBalanceMode();
-  const staffInGroup = useMemo(() => staff.filter((s) => s.groupId === group.id), [staff, group.id]);
+  const staffInGroup = useMemo(() => {
+    if (group.id === "ungrouped") {
+      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
+      return staff.filter((s) => !s.groupId || s.groupId === "ungrouped_staff");
+    }
+    return staff.filter((s) => s.groupId === group.id);
+  }, [staff, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => g.parentId === group.id), [allGroups, group.id]);
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
@@ -330,8 +336,12 @@ export function StaffGroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
   const paginatedTransactions = sortedTransactions.slice(
@@ -364,6 +374,8 @@ export function StaffGroupDetails({
       else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
     try {
+      // Keep print columns and note visibility aligned with current table controls.
+      const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
       await openPrintDirect(
         {
           company: {
@@ -381,11 +393,16 @@ export function StaffGroupDetails({
           contextId: group.id,
           dateSystem: dateSystem,
           dateRangeText: dateRangeText,
-          vouchersCount: processedTransactions.length,
+          vouchersCount: sortedTransactions.length,
           openingBalance: openingBalanceForPeriod,
-          transactions: processedTransactions,
+          transactions: sortedTransactions,
           showNarration: showNarration,
+          includeNotes: showNotes,
+          visibleColumns: printVisibleColumns,
           userNames: userNames,
+          billWise: balanceMode === "bill_wise",
+          // Pass opening-balance bill-wise status inputs so print matches table badge/detail.
+          ...(balanceMode === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),
         },
         true
       );

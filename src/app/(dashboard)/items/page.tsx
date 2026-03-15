@@ -104,7 +104,10 @@ export default function ItemsPage() {
   const selectedItemGroup = activeView === "groups" ? (selected as ItemGroup) : null;
 
   const processedItemGroups = useMemo(() => {
-    const ungrouped = processedItems.filter((p) => !p.groupId);
+    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
+    const baseGroups = initialProcessedItemGroups.filter((g) => (g as any).isAutoUngrouped !== true);
+    // Show Ungrouped row only when at least one item is in the Ungrouped bucket.
+    const ungrouped = processedItems.filter((p: any) => !p.groupId || p.groupId === "ungrouped_item");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: ItemGroup = {
@@ -115,9 +118,9 @@ export default function ItemsPage() {
         debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
         credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
       };
-      return [...initialProcessedItemGroups, ungroupedGroup];
+      return [...baseGroups, ungroupedGroup];
     }
-    return initialProcessedItemGroups;
+    return baseGroups;
   }, [processedItems, initialProcessedItemGroups, companyId]);
 
   const allItems = useMemo(
@@ -247,7 +250,7 @@ export default function ItemsPage() {
   const selectedGroupItems = useMemo(() => {
     if (!selectedItemGroup) return [];
     if (selectedItemGroup.id === "ungrouped") {
-      return processedItems.filter((p) => !p.groupId);
+      return processedItems.filter((p: any) => !p.groupId || p.groupId === "ungrouped_item");
     }
     return processedItems.filter((p) => p.groupId === selectedItemGroup.id);
   }, [selectedItemGroup, processedItems]);

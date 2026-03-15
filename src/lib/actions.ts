@@ -112,6 +112,12 @@ export async function initializeCompanyData(companyId: string, userId: string) {
     
     // For Staff Menu
     { col: "staff_groups", id: "loans_liabilities", name: "Loans & Liabilities", type: "Liability", parentId: "liabilities", isSystemReserved: true, isReportOnly: false },
+    // Auto-created Ungrouped buckets (kept hidden in UI lists unless real ungrouped records exist).
+    { col: "groups", id: "ungrouped_party", name: "Ungrouped", type: "General", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "staff_groups", id: "ungrouped_staff", name: "Ungrouped", type: "General", parentId: "loans_liabilities", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "tax_groups", id: "ungrouped_tax", name: "Ungrouped", type: "General", parentId: "duties_taxes", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "account_groups", id: "ungrouped_account", name: "Ungrouped", type: "General", parentId: "bank_accounts_group", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
+    { col: "expense_groups", id: "ungrouped_expense", name: "Ungrouped", type: "General", isSystemReserved: false, isReportOnly: false, isAutoUngrouped: true },
   ];
 
   groupsToCreate.forEach((g) => {
@@ -125,6 +131,8 @@ export async function initializeCompanyData(companyId: string, userId: string) {
       isDeleted: false,
       isSystemReserved: g.isSystemReserved || false,
       isReportOnly: (g as any).isReportOnly || false,
+      // Flag auto-created Ungrouped docs so UI can hide base row until needed.
+      isAutoUngrouped: (g as any).isAutoUngrouped || false,
       createdAt: serverTimestamp(),
     });
   });
@@ -165,6 +173,7 @@ export async function initializeCompanyData(companyId: string, userId: string) {
   const itemGroupsToCreate = [
     { id: "stock_items", name: "Stock Items" },
     { id: "services", name: "Services" },
+    { id: "ungrouped_item", name: "Ungrouped", isAutoUngrouped: true },
   ];
 
   itemGroupsToCreate.forEach((ig) => {
@@ -174,7 +183,8 @@ export async function initializeCompanyData(companyId: string, userId: string) {
       companyId,
       ownerId: userId,
       isDeleted: false,
-      isSystemReserved: true,
+      isSystemReserved: (ig as any).isAutoUngrouped ? false : true,
+      isAutoUngrouped: (ig as any).isAutoUngrouped || false,
       debit: 0,
       credit: 0,
       balance: 0,

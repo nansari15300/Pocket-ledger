@@ -229,15 +229,15 @@ export const getTransactionAmounts = (
                 credit += amount;
             }
             
-            // Handle Sale and Purchase transactions for Sales Account and Purchase Account
-            if (entity && entity.id === 'sales_account') {
-                if (transaction.type === 'sale') {
-                    // Sales Account: Sale transactions increase income (Credit)
+            // Map Sale/Purchase to the account selected on voucher (with legacy fallback ids).
+            if (transaction.type === 'sale') {
+                const selectedSalesAccountId = transaction.salesAccountId || transaction.incomeAccountId || 'sales_account';
+                if (selectedSalesAccountId === entity.id) {
                     credit += taxableAmount;
                 }
-            } else if (entity && entity.id === 'purchase_account') {
-                if (transaction.type === 'purchase') {
-                    // Purchase Account: Purchase transactions increase expenses (Debit)
+            } else if (transaction.type === 'purchase') {
+                const selectedPurchaseAccountId = transaction.purchaseAccountId || transaction.expenseAccountId || 'purchase_account';
+                if (selectedPurchaseAccountId === entity.id) {
                     debit += taxableAmount;
                 }
             }
@@ -267,6 +267,8 @@ export const getTransactionAmounts = (
             const expenseGroupId = String(entity.id || "").toLowerCase();
             const isAllowedExpenseGroupVoucher = (type: string, subType?: string) => {
                 if (!isExpenseGroupContext) return true;
+                // Income & Expense page: always allow Sale/Purchase family vouchers in group details.
+                if (["sale", "purchase", "sale_service", "purchase_service"].includes(type)) return true;
                 if (expenseGroupId === "direct_expense") return ["payment_out", "direct_expense", "purchase"].includes(type);
                 if (expenseGroupId === "indirect_expense") return type === "payment_out" || type === "journal";
                 if (expenseGroupId === "direct_income") return ["sale", "payment_in", "direct_income"].includes(type);
@@ -286,6 +288,8 @@ export const getTransactionAmounts = (
                 memberIdsInGroup.has(transaction.taxAccountId) ||
                 memberIdsInGroup.has(transaction.incomeAccountId) ||
                 memberIdsInGroup.has(transaction.expenseAccountId) ||
+                memberIdsInGroup.has(transaction.salesAccountId) ||
+                memberIdsInGroup.has(transaction.purchaseAccountId) ||
                 memberIdsInGroup.has(transaction.fromAccountId) ||
                 memberIdsInGroup.has(transaction.toAccountId) ||
                 (transaction.type === "note" && memberIdsInGroup.has(transaction.entityId));
@@ -697,6 +701,8 @@ export function useTransactions(
                 const expenseGroupId = String(entity.id || "").toLowerCase();
                 const isAllowedExpenseGroupVoucher = (type: string, subType?: string) => {
                     if (!isExpenseGroupContext) return true;
+                    // Income & Expense page: always allow Sale/Purchase family vouchers in group details.
+                    if (["sale", "purchase", "sale_service", "purchase_service"].includes(type)) return true;
                     if (expenseGroupId === "direct_expense") return ["payment_out", "direct_expense", "purchase"].includes(type);
                     if (expenseGroupId === "indirect_expense") return type === "payment_out" || type === "journal";
                     if (expenseGroupId === "direct_income") return ["sale", "payment_in", "direct_income"].includes(type);
@@ -724,6 +730,8 @@ export function useTransactions(
                         memberIds.has(v.taxAccountId) ||
                         memberIds.has(v.incomeAccountId) ||
                         memberIds.has(v.expenseAccountId) ||
+                        memberIds.has(v.salesAccountId) ||
+                        memberIds.has(v.purchaseAccountId) ||
                         memberIds.has(v.fromAccountId) ||
                         memberIds.has(v.toAccountId) ||
                         (v.type === "note" && memberIds.has(v.entityId));
@@ -758,6 +766,8 @@ export function useTransactions(
                 v.taxAccountId === entity.id ||
                 v.expenseAccountId === entity.id ||
                 v.incomeAccountId === entity.id ||
+                v.salesAccountId === entity.id ||
+                v.purchaseAccountId === entity.id ||
                 v.lineItems?.some((li: any) => li.itemId === entity.id || li.taxAccountId === entity.id) || 
                 v.items?.some((li: any) => li.itemId === entity.id) || 
                 v.entries?.some((e: any) => e.accountId === entity.id) ||

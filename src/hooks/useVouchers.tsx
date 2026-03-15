@@ -527,11 +527,13 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             }
         }
 
-        // --- System Accounts (Sales/Purchase) Double Entry ---
+        // --- Sale/Purchase accounts (respect selected account on voucher; keep legacy fallback ids) ---
         if (v.type === "sale") {
-            addVal(expenseMap, 'sales_account', 'credit', subTotal); // Sales Account Credit
+            const selectedSalesAccountId = v.salesAccountId || v.incomeAccountId || "sales_account";
+            addVal(expenseMap, selectedSalesAccountId, 'credit', subTotal);
         } else if (v.type === "purchase") {
-            addVal(expenseMap, 'purchase_account', 'debit', subTotal); // Purchase Account Debit
+            const selectedPurchaseAccountId = v.purchaseAccountId || v.expenseAccountId || "purchase_account";
+            addVal(expenseMap, selectedPurchaseAccountId, 'debit', subTotal);
         }
 
         // --- Account Logic ---

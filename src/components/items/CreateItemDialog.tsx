@@ -67,8 +67,6 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import {
   collection,
   query,
-  where,
-  getDocs,
   addDoc,
   serverTimestamp,
   doc,
@@ -87,6 +85,7 @@ import { compressFile } from "@/lib/compression";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import {
   Tooltip,
   TooltipContent,
@@ -410,16 +409,28 @@ export function CreateItemDialog({
     setIsLoading(true);
 
     try {
-      const q = query(
-        collection(firestore, `companies/${companyId}/items`),
-        where("name", "==", values.name.trim())
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "items",
+        name: values.name.trim(),
+        entityLabel: "Item",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Item Name", {
           id: toastId,
           description: "An item with this name already exists.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Item Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        onItemCreated(duplicateDecision.restoredId);
+        setIsOpen(false);
         setIsLoading(false);
         return;
       }

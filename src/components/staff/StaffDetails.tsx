@@ -70,7 +70,7 @@ import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import {
   DropdownMenu,
@@ -367,8 +367,12 @@ export function StaffDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   
   const totalPages = useMemo(() => {
@@ -403,6 +407,8 @@ export function StaffDetails({
 
   const handlePrintStatement = () => {
     if (!company) return;
+    // Match print with current table columns and note visibility.
+    const printVisibleColumns = visibleColumns;
     openPrintDirect({
       company: {
         name: company.name,
@@ -421,14 +427,19 @@ export function StaffDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
+      transactions: displayTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      userNames: userNames,
       billWise: false,
     }, true);
   };
 
   const handlePrintBillWise = () => {
     if (!company) return;
+    // Bill-wise print keeps Status column visible by design.
+    const printVisibleColumns = { ...visibleColumns, status: true };
     openPrintDirect({
       company: {
         name: company.name,
@@ -447,8 +458,11 @@ export function StaffDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
-      transactions: processedTransactions,
+      transactions: displayTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      userNames: userNames,
       billWise: true,
       openingBalanceOutstanding,
       openingBalanceLinkedVoucherNos,
@@ -924,7 +938,13 @@ export function StaffDetails({
                 All Vouchers
               </Button>
             )}
-            <Button variant="outline" size="icon" onClick={handlePrintStatement} className="flex-shrink-0 h-10 w-10" data-theme-detail="print">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement}
+              className="flex-shrink-0 h-10 w-10"
+              data-theme-detail="print"
+            >
               <Printer className="h-4 w-4" />
             </Button>
           </div>

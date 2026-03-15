@@ -213,16 +213,19 @@ export default function PartyPage() {
   const partiesForList = processedPartiesForSelection;
   
    const processedGroups = useMemo(() => {
-    const ungrouped = processedPartiesForSelection.filter(p => !p.groupId);
+    // Show Ungrouped row only when at least one party is in the Ungrouped bucket.
+    const ungrouped = processedPartiesForSelection.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
     
     // Filter out report-only groups (isReportOnly: true) and system parent groups
     const userDefinedGroups = initialProcessedGroups.filter(g => {
         const anyG = g as any;
         const isReportOnly = anyG.isReportOnly === true;
+        // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
+        const isAutoUngrouped = anyG.isAutoUngrouped === true;
         const isSystemParent =
           anyG.isSystemReserved === true ||
           isSystemParentGroup("groups", anyG.id);
-        return !isReportOnly && !isSystemParent;
+        return !isReportOnly && !isSystemParent && !isAutoUngrouped;
     });
 
     if (ungrouped.length > 0) {
@@ -374,7 +377,7 @@ export default function PartyPage() {
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-        return processedPartiesForSelection.filter(p => !p.groupId);
+      return processedPartiesForSelection.filter((p: any) => !p.groupId || p.groupId === "ungrouped_party");
     }
     return processedPartiesForSelection.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedPartiesForSelection]);

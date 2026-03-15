@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp, onSnapshot, query } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 
 const formSchema = z.object({
@@ -63,7 +65,7 @@ export function CreateExpenseAccountDialog({
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
-    defaultValues: { name: "", openingBalance: 0, groupId: "direct_expense" },
+    defaultValues: { name: "", openingBalance: 0, groupId: "" },
   });
   
   useEffect(() => {
@@ -74,6 +76,21 @@ export function CreateExpenseAccountDialog({
     });
     return () => unsubscribe();
   }, [companyId, open]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!companyId || !user?.uid || !open) return;
+      // Keep Income/Expense account create default on canonical Ungrouped bucket.
+      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "expense");
+      if (!alive) return;
+      const current = form.getValues("groupId");
+      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [companyId, user?.uid, open, form]);
 
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
@@ -115,12 +132,14 @@ export function CreateExpenseAccountDialog({
     const toastId = sonnerToast.loading("Creating expense account...");
     setIsLoading(true);
     try {
-       const q = query(
-        collection(firestore, `companies/${companyId}/expense_accounts`),
-        where("name", "==", values.name.trim())
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: allow restore or explicit create-new.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "expense_accounts",
+        name: values.name.trim(),
+        entityLabel: "Expense Account",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Account Name", {
           id: toastId,
           description: "An account with this name already exists.",
@@ -128,13 +147,27 @@ export function CreateExpenseAccountDialog({
         setIsLoading(false);
         return;
       }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Expense Account Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        onExpenseAccountCreated(duplicateDecision.restoredId);
+        triggerSync();
+        setOpen(false);
+        setIsLoading(false);
+        return;
+      }
       
-      const selectedGroup = groups.find(g => g.id === values.groupId);
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "expense"));
+      const selectedGroup = groups.find(g => g.id === resolvedGroupId);
       const accountType = (selectedGroup as any)?.type || 'Expense'; // Default to Expense if not found
 
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_accounts`), {
         name: values.name.trim(),
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("expense"),
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
         type: accountType,
@@ -157,7 +190,8 @@ export function CreateExpenseAccountDialog({
       triggerSync();
 
       if (saveAndNew) {
-        form.reset();
+        // Keep default selection on Ungrouped for next quick entry.
+        form.reset({ name: "", openingBalance: 0, groupId: getUngroupedGroupId("expense"), openingBalanceDate: undefined });
       } else {
         setOpen(false);
       }
@@ -174,9 +208,22 @@ export function CreateExpenseAccountDialog({
   
   // Show all groups (including 4 default: Direct/Indirect Income/Expenses) - only exclude report-only parents
   const allGroupOptions = useMemo(() => {
-    return groups
-      .filter((g) => (g as any).isReportOnly !== true)
-      .map(g => ({ value: g.id, label: g.name }));
+    const getParentLabel = (parentId?: string) => {
+      // Show two logical parent buckets in picker labels so users can classify account clearly.
+      if (parentId === "income" || parentId === "direct_income" || parentId === "indirect_income") return "Income";
+      if (parentId === "expenses" || parentId === "direct_expense" || parentId === "indirect_expense") return "Expenses";
+      return "";
+    };
+    return [
+      { value: getUngroupedGroupId("expense"), label: "Ungrouped" },
+      ...groups
+        .filter((g) => (g as any).isReportOnly !== true)
+        .filter((g) => (g as any).isAutoUngrouped !== true)
+        .map((g: any) => {
+          const parent = getParentLabel(g.parentId);
+          return { value: g.id, label: parent ? `${parent} / ${g.name}` : g.name };
+        }),
+    ];
   }, [groups]);
 
   useEffect(() => {

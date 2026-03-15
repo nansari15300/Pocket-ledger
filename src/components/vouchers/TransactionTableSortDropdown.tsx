@@ -75,9 +75,15 @@ export function TransactionTableSortDropdown({
           <DropdownMenuItem
             key={opt.value}
             onSelect={(e) => e.preventDefault()}
+            onClick={() => {
+              // By Date is the global default action: oldest on top, newest at bottom.
+              if (opt.value === "date") onSortChange("date", "asc");
+            }}
             className="flex items-center justify-between gap-2 py-1.5"
           >
-            <span className="flex-1 text-left">{opt.label}</span>
+            <span className="flex flex-1 items-center gap-2 text-left">
+              <span>{opt.label}</span>
+            </span>
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
@@ -86,11 +92,15 @@ export function TransactionTableSortDropdown({
                   onSortChange(opt.value, "asc");
                 }}
                 className={cn(
-                  "p-1 rounded hover:bg-muted",
+                  // Keep arrow icons readable even when parent item hover/focus changes text color.
+                  "p-1 rounded hover:bg-muted text-foreground hover:text-foreground",
+                  // Merge "Default" and ascending action into one box for By Date.
+                  opt.value === "date" && "flex items-center gap-1 border border-green-300 bg-green-50 px-1.5 py-0 text-[10px] font-semibold text-green-700 hover:bg-green-100 hover:text-green-700",
                   sortBy === opt.value && sortOrder === "asc" && "bg-muted"
                 )}
                 aria-label={`${opt.label} ascending`}
               >
+                {opt.value === "date" ? <span>Default</span> : null}
                 <ArrowUp className="h-4 w-4" />
               </button>
               <button
@@ -100,7 +110,8 @@ export function TransactionTableSortDropdown({
                   onSortChange(opt.value, "desc");
                 }}
                 className={cn(
-                  "p-1 rounded hover:bg-muted",
+                  // Keep arrow icons readable even when parent item hover/focus changes text color.
+                  "p-1 rounded hover:bg-muted text-foreground hover:text-foreground",
                   sortBy === opt.value && sortOrder === "desc" && "bg-muted"
                 )}
                 aria-label={`${opt.label} descending`}

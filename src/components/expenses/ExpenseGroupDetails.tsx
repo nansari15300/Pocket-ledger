@@ -10,7 +10,7 @@ import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLe
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -106,6 +106,12 @@ export function ExpenseGroupDetails({
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
   const accountsInGroup = useMemo(() => {
+    if (group.id === "ungrouped") {
+      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
+      const ungroupedRows = processedExpenseAccounts.filter((a) => !a.groupId || a.groupId === "ungrouped_expense");
+      if (ungroupedRows.length > 0) return ungroupedRows as ExpenseAccount[];
+      return accounts.filter((a) => !a.groupId || a.groupId === "ungrouped_expense");
+    }
     const fromProcessed = processedExpenseAccounts.filter((a) => a.groupId === group.id);
     if (fromProcessed.length > 0) return fromProcessed as ExpenseAccount[];
     return accounts.filter((a) => a.groupId === group.id);
@@ -333,8 +339,12 @@ export function ExpenseGroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
   const paginatedTransactions = sortedTransactions.slice(
@@ -367,6 +377,8 @@ export function ExpenseGroupDetails({
       else
         dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
+    // Keep print headers aligned with currently selected table columns.
+    const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
     openPrintDirect({
       company: {
         name: company.name,
@@ -387,6 +399,9 @@ export function ExpenseGroupDetails({
       openingBalance: openingBalanceForPeriod, 
       transactions: processedTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      billWise: balanceMode === "bill_wise",
       userNames: userNames,
     }, true);
   };

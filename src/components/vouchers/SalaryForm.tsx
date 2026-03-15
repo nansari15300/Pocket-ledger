@@ -322,7 +322,6 @@ export function SalaryForm({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkPaymentDialogOpen, setIsLinkPaymentDialogOpen] = useState(false);
   const [linkPaymentAmounts, setLinkPaymentAmounts] = useState<Record<string, number>>({});
-  const [linkPaymentResetOpen, setLinkPaymentResetOpen] = useState(false);
   const [linkPaymentSaving, setLinkPaymentSaving] = useState(false);
   const [autoLinkSaving, setAutoLinkSaving] = useState(false);
   const [linkBalanceKind, setLinkBalanceKind] = useState<"tax" | "net">("net");
@@ -330,6 +329,8 @@ export function SalaryForm({
   const [latestOBAllocated, setLatestOBAllocated] = useState<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
   /** Local-first bill-wise link draft; sync to server only on main Save like party bill-wise flow. */
   const [localSalaryLinkMap, setLocalSalaryLinkMap] = useState<SalaryLinkMap>({});
+  /** Prevent stale Firestore snapshots from wiping unsaved local bill-wise DONE changes. */
+  const [hasLocalBillWiseDraftEdits, setHasLocalBillWiseDraftEdits] = useState(false);
   const initialSalaryLinkMapRef = useRef<SalaryLinkMap>({});
   const initialOBAllocatedRef = useRef<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
 
@@ -423,15 +424,20 @@ export function SalaryForm({
                 initialFilesRef.current = initialUrls;
                 // Sync local OB allocation from the loaded voucher for edit mode.
                 setLatestOBAllocated(Number((voucher as any)?.openingBalanceAllocated) || 0);
+                // Fresh voucher load should start without pending local draft overrides.
+                setHasLocalBillWiseDraftEdits(false);
             } else if (defaultVoucherData) {
                 const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
                 setFiles(urls);
                 initialFilesRef.current = urls.filter((f: any) => typeof f === 'string');
                 // Converted / default salary should also seed OB allocation locally.
                 setLatestOBAllocated(Number((defaultVoucherData as any)?.openingBalanceAllocated) || 0);
+                // Fresh voucher load should start without pending local draft overrides.
+                setHasLocalBillWiseDraftEdits(false);
             }
         }
-    }, [voucher, defaultVoucherData, form, processedStaff, processedTaxes]);
+    // Rehydrate only when editing source voucher changes; avoid resetting local link draft on background list refresh.
+    }, [voucher?.id, defaultVoucherData?.id, form]);
 
   const prevLinkDialogOpenRef = useRef(false);
 
@@ -452,7 +458,8 @@ export function SalaryForm({
         append({
           staffId: staff.id,
           salary,
-          narration: `Salary for ${staff.name}`,
+          // Auto-fill row narration from selected staff for faster salary entry.
+          narration: `Add salary for ${staff.name}`,
           type: "credit",
           taxAccountId: "",
           taxAmount: 0,
@@ -472,7 +479,13 @@ export function SalaryForm({
 
   const handleStaffCreated = (newStaffId: string) => {
     if (activeLineIndex !== null) {
-      update(activeLineIndex, { ...fields[activeLineIndex], staffId: newStaffId });
+      const createdStaff = processedStaff.find((s) => s.id === newStaffId);
+      // Keep narration aligned with the selected/created staff account name.
+      update(activeLineIndex, {
+        ...fields[activeLineIndex],
+        staffId: newStaffId,
+        narration: createdStaff ? `Add salary for ${createdStaff.name}` : fields[activeLineIndex]?.narration || "",
+      });
     }
     setIsCreateStaffOpen(false);
   };
@@ -536,6 +549,8 @@ export function SalaryForm({
       return;
     }
     applyLocalBillWiseLinks(linkPaymentAmounts);
+    // Mark unsaved local bill-wise draft so server re-hydration cannot clear it before main Save.
+    setHasLocalBillWiseDraftEdits(true);
     sonnerToast.success("Bill-wise link updated locally. Save voucher to sync.");
     setIsLinkPaymentDialogOpen(false);
   };
@@ -568,6 +583,8 @@ export function SalaryForm({
         remainingToAllocate -= allocate;
       }
       applyLocalBillWiseLinks(suggested);
+      // Mark unsaved local bill-wise draft so server re-hydration cannot clear it before main Save.
+      setHasLocalBillWiseDraftEdits(true);
       sonnerToast.success("Auto link applied locally. Save voucher to sync.");
     } catch (e) {
       console.error(e);
@@ -615,6 +632,8 @@ export function SalaryForm({
     await updateDoc(doc(firestore, voucherPath, salaryVoucherId), { openingBalanceAllocated: Number(latestOBAllocated) || 0 });
     initialSalaryLinkMapRef.current = desiredMap;
     initialOBAllocatedRef.current = Number(latestOBAllocated) || 0;
+    // Local draft is now synced to server after main Save.
+    setHasLocalBillWiseDraftEdits(false);
   }, [companyId, localSalaryLinkMap, latestOBAllocated]);
 
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems" });
@@ -691,7 +710,8 @@ export function SalaryForm({
   }, [voucher?.id, savedVoucherIdRef, allVouchers, isPaymentMode]);
   const billWiseLinkDirty = !areSalaryLinkMapsEqual(localSalaryLinkMap, initialSalaryLinkMapRef.current) || latestOBAllocated !== initialOBAllocatedRef.current;
   useEffect(() => {
-    if (isPaymentMode || billWiseLinkDirty) return;
+    // While local draft has unsaved DONE changes, ignore stale server snapshots.
+    if (isPaymentMode || billWiseLinkDirty || hasLocalBillWiseDraftEdits) return;
     const nextMap = Object.fromEntries(
       serverLinkedPayments.map((p) => [p.id, { taxAmount: Number(p.taxAmount) || 0, netAmount: Number(p.netAmount) || 0 }])
     ) as SalaryLinkMap;
@@ -705,7 +725,7 @@ export function SalaryForm({
     const serverOB = Number((voucher as any)?.openingBalanceAllocated) || 0;
     setLatestOBAllocated(serverOB);
     initialOBAllocatedRef.current = serverOB;
-  }, [isPaymentMode, billWiseLinkDirty, serverLinkedPayments, voucher]);
+  }, [isPaymentMode, billWiseLinkDirty, hasLocalBillWiseDraftEdits, serverLinkedPayments, voucher]);
 
   const linkedPayments = useMemo(() => {
     return Object.entries(localSalaryLinkMap)
@@ -881,6 +901,11 @@ export function SalaryForm({
       : [];
     return [...obRow, ...combined];
   }, [paymentOutsWithRemaining, linkedPayments, linkBalanceKind, staffIdsFromSalary, allVouchers, voucher?.id, savedVoucherIdRef, obLinkState]);
+  // Show the same "x voucher(s) available to link" helper count in Add Salary bill-wise card.
+  const billWiseLinkableVoucherCount = useMemo(
+    () => paymentOutsForLinkDialog.filter((row: any) => (Number(row?.remaining ?? 0) || 0) > 0).length,
+    [paymentOutsForLinkDialog]
+  );
 
   /** Open bill-wise link dialog from Add Salary. Dialog edits only local draft; server sync happens on main Save. */
   const handleOpenBillWiseDialog = useCallback(() => {
@@ -1193,6 +1218,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             initialSalaryLinkMapRef.current = {};
             setLatestOBAllocated(0);
             initialOBAllocatedRef.current = 0;
+            // Save & New clears any local draft bill-wise state.
+            setHasLocalBillWiseDraftEdits(false);
             fetchVoucherNumber();
         }
 
@@ -1350,7 +1377,11 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
 
     if (newName) {
        setTimeout(() => {
-        const eventName = `prefill-create-${type}-name`;
+        // Keep prefill event names aligned with each create dialog listener.
+        const eventName =
+          type === "expense"
+            ? "prefill-create-expense-account-name"
+            : `prefill-create-${type}-name`;
         document.dispatchEvent(new CustomEvent(eventName, { detail: newName }));
       }, 100);
     }
@@ -1634,12 +1665,17 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                               const selectedStaff = processedStaff.find(s => s.id === value);
                                               if (selectedStaff) {
                                                 form.setValue(`lineItems.${index}.salary`, Number(selectedStaff.salary) || 0);
-                                                form.setValue(`lineItems.${index}.narration`, `Salary for ${selectedStaff.name}`);
+                                                // Auto-fill narration using selected staff/account name.
+                                                form.setValue(`lineItems.${index}.narration`, `Add salary for ${selectedStaff.name}`);
                                               }
                                             }
                                           }}
                                           placeholder="Select Staff"
                                           addNewLabel="+ Add New Staff"
+                                          // Desktop: single row full text + wider popup; Mobile: normal wrapping.
+                                          noWrapOptions={!isMobile}
+                                          showFullOptionText={!isMobile}
+                                          contentWidthMode={isMobile ? "trigger" : "auto"}
                                           disabled={deleteDisabledWhenLinked}
                                         />
                                       </div>
@@ -1685,33 +1721,34 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                   render={({ field }: any) => (
                                     <FormItem>
                                       <FormLabel className="text-xs">Tax</FormLabel>
-                                      <Select 
-                                        onValueChange={(value) => {
-                                          if (value === "add-new") { 
-                                            setActiveLineIndex(index); 
-                                            setIsCreateTaxOpen(true); 
-                                          } else { 
-                                            field.onChange(value === 'none' ? '' : value); 
-                                          }
-                                        }} 
-                                        value={field.value}
-                                        disabled={deleteDisabledWhenLinked}
-                                      >
-                                        <FormControl>
-                                          <SelectTrigger className="h-9 text-xs">
-                                            <SelectValue placeholder="Select Tax" />
-                                          </SelectTrigger>
-                                        </FormControl>
-                                        <SelectContent>
-                                          <SelectItem value="none">None</SelectItem>
-                                          {processedTaxes.map((tax) => (
-                                            <SelectItem key={tax.id} value={tax.id}>
-                                              {tax.name} @ {tax.rate}%
-                                            </SelectItem>
-                                          ))}
-                                          <SelectItem value="add-new" className="text-primary">+ Add New Tax</SelectItem>
-                                        </SelectContent>
-                                      </Select>
+                                      <div className="[&_button]:h-9 [&_button]:text-xs">
+                                        <Combobox
+                                          // Searchable tax picker so user can type and quickly find tax.
+                                          options={[
+                                            { value: "none", label: "None" },
+                                            ...processedTaxes.map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
+                                          ]}
+                                          value={field.value || "none"}
+                                          onChange={(value, newName) => {
+                                            if (value === "add-new") {
+                                              setActiveLineIndex(index);
+                                              setIsCreateTaxOpen(true);
+                                              setTimeout(() => {
+                                                document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: newName }));
+                                              }, 100);
+                                            } else {
+                                              field.onChange(value === "none" ? "" : value);
+                                            }
+                                          }}
+                                          placeholder="Search tax"
+                                          addNewLabel="+ Add New Tax"
+                                          // Desktop: single row full text + wider popup; Mobile: normal wrapping.
+                                          noWrapOptions={!isMobile}
+                                          showFullOptionText={!isMobile}
+                                          contentWidthMode={isMobile ? "trigger" : "auto"}
+                                          disabled={deleteDisabledWhenLinked}
+                                        />
+                                      </div>
                                       {taxBalance !== undefined && (
                                         <div className={cn("text-[10px] font-semibold mt-1", taxBalance < 0 ? "text-red-600" : "text-green-600")}>
                                           Bal: {formatCurrency(taxBalance, { noSuffix: true, noAnimation: true })} {taxBalance < 0 ? 'Dr' : 'Cr'}
@@ -1861,12 +1898,17 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                               const selectedStaff = processedStaff.find(s => s.id === value);
                                               if (selectedStaff) {
                                                   form.setValue(`lineItems.${index}.salary`, Number(selectedStaff.salary) || 0);
-                                                  form.setValue(`lineItems.${index}.narration`, `Salary for ${selectedStaff.name}`);
+                                                  // Auto-fill narration using selected staff/account name.
+                                                  form.setValue(`lineItems.${index}.narration`, `Add salary for ${selectedStaff.name}`);
                                               }
                                             }
                                           }}
                                           placeholder="Select Staff"
                                           addNewLabel="+ Add New Staff"
+                                          // Desktop: single row full text + wider popup; Mobile: normal wrapping.
+                                          noWrapOptions={!isMobile}
+                                          showFullOptionText={!isMobile}
+                                          contentWidthMode={isMobile ? "trigger" : "auto"}
                                           disabled={deleteDisabledWhenLinked}
                                         />
                                          {balance !== undefined && (
@@ -1880,17 +1922,32 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                  <TableCell>
                                     <FormField control={form.control} name={`lineItems.${index}.taxAccountId`} render={({ field }: any) => (
                                         <FormItem>
-                                            <Select onValueChange={(value) => {
-                                                if (value === "add-new") { setActiveLineIndex(index); setIsCreateTaxOpen(true); }
-                                                else { field.onChange(value === 'none' ? '' : value); }
-                                            }} value={field.value} disabled={deleteDisabledWhenLinked}>
-                                                <FormControl><SelectTrigger><SelectValue placeholder="Select Tax" /></SelectTrigger></FormControl>
-                                                <SelectContent>
-                                                    <SelectItem value="none">None</SelectItem>
-                                                    {processedTaxes.map((tax) => (<SelectItem key={tax.id} value={tax.id}>{tax.name} @ {tax.rate}%</SelectItem>))}
-                                                    <SelectItem value="add-new" className="text-primary">+ Add New Tax</SelectItem>
-                                                </SelectContent>
-                                            </Select>
+                                            <Combobox
+                                              // Searchable tax picker on desktop salary rows.
+                                              options={[
+                                                { value: "none", label: "None" },
+                                                ...processedTaxes.map((tax) => ({ value: tax.id, label: `${tax.name} @ ${tax.rate}%` })),
+                                              ]}
+                                              value={field.value || "none"}
+                                              onChange={(value, newName) => {
+                                                if (value === "add-new") {
+                                                  setActiveLineIndex(index);
+                                                  setIsCreateTaxOpen(true);
+                                                  setTimeout(() => {
+                                                    document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: newName }));
+                                                  }, 100);
+                                                } else {
+                                                  field.onChange(value === "none" ? "" : value);
+                                                }
+                                              }}
+                                              placeholder="Search tax"
+                                              addNewLabel="+ Add New Tax"
+                                              // Desktop: single row full text + wider popup; Mobile: normal wrapping.
+                                              noWrapOptions={!isMobile}
+                                              showFullOptionText={!isMobile}
+                                              contentWidthMode={isMobile ? "trigger" : "auto"}
+                                              disabled={deleteDisabledWhenLinked}
+                                            />
                                             {taxBalance !== undefined && (
                                                 <div className={cn("text-xs font-semibold mt-1", taxBalance < 0 ? "text-red-600" : "text-green-600")}>
                                                     Bal: {formatCurrency(taxBalance, { showDrCr: true, noAnimation: true })}
@@ -1996,7 +2053,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                           <Link2 className="h-4 w-4 text-muted-foreground" />
                           <span>Link for bill wise</span>
                         </div>
-                        <p className="text-xs text-muted-foreground">Only payment outs for the same staff in this salary voucher can be linked.</p>
+                        {/* Keep linkable voucher count visible in the card, same style as other bill-wise forms. */}
+                        <p className="text-sm text-muted-foreground">
+                          {billWiseLinkableVoucherCount} voucher(s) available to link.
+                        </p>
                         <div className="flex gap-2">
                           <label className="flex items-center gap-1.5 cursor-pointer text-sm">
                             <input
@@ -2414,13 +2474,15 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                   Auto Link
                 </Button>
-                <Button type="button" size="sm" onClick={() => setLinkPaymentResetOpen(true)} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+                {/* Reset should apply immediately without confirmation popup. */}
+                <Button type="button" size="sm" onClick={() => setLinkPaymentAmounts({})} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
                   <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                   Reset
                 </Button>
+                {/* Keep DONE available after Reset so user can confirm unlink-all in one click. */}
                 <Button
                   onClick={handleLinkPayment}
-                  disabled={linkPaymentSaving || paymentOutsForLinkDialog.length === 0 || (Object.values(linkPaymentAmounts).every((a) => !a || a <= 0) && !linkedPayments.some((p) => Number(linkPaymentAmounts[p.id]) === 0) && !(obLinkState.showOBRow && linkPaymentAmounts[OPENING_BALANCE_VOUCHER_ID] === 0))}
+                  disabled={linkPaymentSaving || paymentOutsForLinkDialog.length === 0}
                   className="h-9 rounded-full bg-green-600 hover:bg-green-700 text-white border-0"
                 >
                   {linkPaymentSaving ? "Saving..." : "DONE"}
@@ -2430,18 +2492,6 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           </div>
         </DialogContent>
       </Dialog>
-      <AlertDialog open={linkPaymentResetOpen} onOpenChange={setLinkPaymentResetOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>Your allocations will be cleared. Nothing is saved to the server until you click save on voucher.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setLinkPaymentAmounts({}); setLinkPaymentResetOpen(false); }}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
       <CreateStaffDialog
         onStaffCreated={handleStaffCreated}
         isOpen={isCreateStaffOpen}

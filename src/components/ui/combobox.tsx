@@ -23,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 
 type ComboboxProps = {
   // Option-level disabled is used by voucher account dropdowns to block non-selectable accounts.
-  options: { value: string; label: string; isSpecial?: boolean; disabled?: boolean }[];
+  options: { value: string; label: string; triggerLabel?: string; isSpecial?: boolean; disabled?: boolean }[];
   value?: string | string[];
   onChange?: (value: string, newName?: string) => void;
   onMultiChange?: (values: string[]) => void;
@@ -33,6 +33,14 @@ type ComboboxProps = {
   disabled?: boolean;
   isMultiSelect?: boolean;
   triggerClassName?: string;
+  // Optional UI flag: highlight trailing "Balance: ..." text in option rows.
+  highlightBalanceInOptions?: boolean;
+  // Optional UI flag: force option labels to stay in a single row.
+  noWrapOptions?: boolean;
+  // Optional UI flag: when single-row is enabled, show full text (no ellipsis truncation).
+  showFullOptionText?: boolean;
+  // Optional popover sizing mode: "auto" allows dropdown to grow wider than trigger.
+  contentWidthMode?: "trigger" | "auto";
 };
 
 export function Combobox({
@@ -46,6 +54,10 @@ export function Combobox({
   disabled = false,
   isMultiSelect = false,
   triggerClassName,
+  highlightBalanceInOptions = false,
+  noWrapOptions = false,
+  showFullOptionText = false,
+  contentWidthMode = "trigger",
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -94,13 +106,35 @@ export function Combobox({
       return `${value.length} selected`;
     }
     const selectedOption = options.find((option) => option.value === value);
-    return selectedOption?.label || placeholder;
+    // Allow caller to show a cleaner selected value than dropdown list row text.
+    return selectedOption?.triggerLabel || selectedOption?.label || placeholder;
   };
 
   const addNewItems = addNewLabels || (addNewLabel ? [{value: "add-new", label: addNewLabel}] : []);
   const filteredOptions = options.filter(opt => opt.label.toLowerCase().includes(search.toLowerCase()));
   const hasNoResults = filteredOptions.length === 0;
   const showAddNew = addNewItems.length > 0 && (search.trim().length > 0 || hasNoResults);
+
+  const renderOptionLabel = (label: string) => {
+    // Keep list row text single-line when caller requests no-wrap options.
+    const labelClassName = cn(
+      "flex-1 min-w-0",
+      noWrapOptions && "whitespace-nowrap",
+      noWrapOptions && !showFullOptionText && "truncate"
+    );
+    if (!highlightBalanceInOptions) return <span className={labelClassName}>{label}</span>;
+    const balanceIdx = label.indexOf("Balance:");
+    if (balanceIdx < 0) return <span className={labelClassName}>{label}</span>;
+    const prefix = label.slice(0, balanceIdx);
+    const balanceText = label.slice(balanceIdx);
+    // Keep account name neutral; emphasize the balance segment in green for quick scan.
+    return (
+      <span className={labelClassName}>
+        <span>{prefix}</span>
+        <span className="text-green-600 font-medium">{balanceText}</span>
+      </span>
+    );
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen} modal={true}>
@@ -121,8 +155,16 @@ export function Combobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        style={{ width: `var(--radix-popover-trigger-width)` }}
-        className="p-0 z-[9999]"
+        // Allow desktop dropdowns to expand while keeping minimum trigger width.
+        style={
+          contentWidthMode === "auto"
+            ? { minWidth: `var(--radix-popover-trigger-width)` }
+            : { width: `var(--radix-popover-trigger-width)` }
+        }
+        className={cn(
+          "p-0 z-[9999]",
+          contentWidthMode === "auto" && "w-auto max-w-[calc(100vw-2rem)]"
+        )}
         sideOffset={4}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
@@ -167,7 +209,7 @@ export function Combobox({
                     )}
                   />
                   {option.isSpecial && <Crown className="mr-2 h-4 w-4 text-amber-500" />}
-                  <span className="flex-1">{option.label}</span>
+                  {renderOptionLabel(option.label)}
                 </CommandItem>
               ))}
             </CommandGroup>

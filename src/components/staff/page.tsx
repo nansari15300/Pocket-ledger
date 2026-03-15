@@ -54,7 +54,8 @@ export default function StaffPage() {
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
   
   const processedStaffGroups = useMemo(() => {
-    const ungrouped = processedStaff.filter(p => !p.groupId);
+    // Treat both blank groupId and storage ungrouped id as Ungrouped bucket.
+    const ungrouped = processedStaff.filter(p => !p.groupId || p.groupId === "ungrouped_staff");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: StaffGroup = {
@@ -176,7 +177,8 @@ export default function StaffPage() {
   const staffForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-      return processedStaff.filter(p => !p.groupId);
+      // Keep Ungrouped group selection aligned with stored ungrouped ids.
+      return processedStaff.filter(p => !p.groupId || p.groupId === "ungrouped_staff");
     }
     return processedStaff.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedStaff]);

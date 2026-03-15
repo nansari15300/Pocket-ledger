@@ -7,7 +7,7 @@ import { Loader2, PlusCircle, Upload, Trash2, FileText, CalendarIcon, Eye, EyeOf
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp, onSnapshot, query } from "firebase/firestore";
 import { uploadFile } from "@/lib/storage";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
@@ -46,6 +46,8 @@ import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import type { Party, Group } from "./types";
 import { format } from "date-fns";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 
 const formSchema = z
@@ -208,6 +210,21 @@ export function CreatePartyForm({
   }, [companyId]);
 
   useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!companyId || !user?.uid) return;
+      // Keep Party create default on canonical Ungrouped bucket.
+      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "party");
+      if (!alive) return;
+      const current = form.getValues("groupId");
+      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [companyId, user?.uid, form]);
+
+  useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
       form.setValue('name', event.detail || '');
     };
@@ -243,16 +260,28 @@ export function CreatePartyForm({
     setIsLoading(true);
 
     try {
-      const q = query(
-        collection(firestore, `companies/${companyId}/parties`),
-        where("name", "==", values.name.trim())
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId: companyId!,
+        collectionName: "parties",
+        name: values.name.trim(),
+        entityLabel: "Party",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Party Name", {
           id: toastId,
           description: "A party with this name already exists.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Party Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        triggerSync();
+        onPartyCreated?.(saveAndNew, duplicateDecision.restoredId);
         setIsLoading(false);
         return;
       }
@@ -281,6 +310,9 @@ export function CreatePartyForm({
         }
       }
 
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "party"));
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/parties`), {
         name: values.name,
         address: values.address,
@@ -291,7 +323,7 @@ export function CreatePartyForm({
         openingBalanceDate: values.openingBalanceDate || null,
         ownerId: user.uid,
         companyId,
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("party"),
         balance: values.openingBalance,
         isDeleted: false,
         createdAt: serverTimestamp(),
@@ -311,7 +343,8 @@ export function CreatePartyForm({
       triggerSync();
 
       if (saveAndNew) {
-        form.reset();
+        // Keep default selection on Ungrouped for next quick entry.
+        form.reset({ name: "", address: "", phone: "", email: "", pan: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
         removeFile();
       }
 
@@ -330,9 +363,12 @@ export function CreatePartyForm({
 
   const partyGroupOptions = React.useMemo(() => {
     // Only user-defined party groups; system parent groups are hidden from selection
-    return processedGroups
-      .filter(group => !(group as any).isSystemReserved)
-      .map(group => ({ value: group.id, label: group.name }));
+    return [
+      { value: getUngroupedGroupId("party"), label: "Ungrouped" },
+      ...processedGroups
+      .filter(group => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
+      .map(group => ({ value: group.id, label: group.name })),
+    ];
   }, [processedGroups]);
 
   return (

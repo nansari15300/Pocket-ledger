@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
@@ -39,23 +39,30 @@ export function EditExpenseGroupDialog({ group, allGroups, onGroupUpdated, onGro
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { companyId } = useCompany();
+  // Use the latest group snapshot by id so parent selection doesn't reopen with stale value.
+  const liveGroup = useMemo(
+    () => allGroups.find((g) => g.id === group.id) || group,
+    [allGroups, group]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      name: group.name,
-      parentId: group.parentId || "",
+      // Initialize with live group values to avoid parent mismatch after save.
+      name: liveGroup.name,
+      parentId: liveGroup.parentId || "",
     },
   });
 
   useEffect(() => {
     if (isOpen) {
       form.reset({
-        name: group.name,
-        parentId: group.parentId || "",
+        // Reset with latest fetched values each time dialog opens.
+        name: liveGroup.name,
+        parentId: liveGroup.parentId || "",
       });
     }
-  }, [isOpen, group, form]);
+  }, [isOpen, liveGroup, form]);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     if (!companyId) {
@@ -125,8 +132,8 @@ export function EditExpenseGroupDialog({ group, allGroups, onGroupUpdated, onGro
         <DialogTrigger asChild>{children}</DialogTrigger>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Edit Expense Group</DialogTitle>
-            <DialogDescription>Update the details for {group.name}.</DialogDescription>
+            <DialogTitle>Edit Income / Expense Group</DialogTitle>
+            <DialogDescription>Update the details for {liveGroup.name}.</DialogDescription>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">

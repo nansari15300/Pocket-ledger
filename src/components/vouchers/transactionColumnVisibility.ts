@@ -82,22 +82,41 @@ export function useShowNotes() {
   return { showNotes, setShowNotes };
 }
 
-/** Spend-wise balance blink: 'all' | 'group' | 'off'. Persisted in localStorage. */
+/** Spend-wise balance blink modes. Multi-select persisted in localStorage as JSON array. */
 export const SPEND_WISE_BLINK_MODE_KEY = "spendWiseBlinkMode";
-export type SpendWiseBlinkMode = "all" | "group" | "off";
+export type SpendWiseBlinkMode = "all" | "group" | "row";
 
 export function useSpendWiseBlinkMode() {
-  const [blinkMode, setBlinkModeState] = useState<SpendWiseBlinkMode>(() => {
-    if (typeof window === "undefined") return "all";
+  const [blinkMode, setBlinkModeState] = useState<SpendWiseBlinkMode[]>(() => {
+    if (typeof window === "undefined") return ["all"];
     const saved = localStorage.getItem(SPEND_WISE_BLINK_MODE_KEY);
-    if (saved === "group" || saved === "off") return saved;
-    return "all";
+    if (!saved) return ["all"];
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter((m): m is SpendWiseBlinkMode => m === "all" || m === "group" || m === "row");
+        return Array.from(new Set(filtered));
+      }
+    } catch {}
+    // Backward-compat with old single-mode storage values.
+    if (saved === "all" || saved === "group" || saved === "row") return [saved];
+    return [];
   });
 
-  const setBlinkMode = useCallback((mode: SpendWiseBlinkMode) => {
-    setBlinkModeState(mode);
-    if (typeof window !== "undefined") localStorage.setItem(SPEND_WISE_BLINK_MODE_KEY, mode);
+  const setBlinkMode = useCallback((mode: SpendWiseBlinkMode[]) => {
+    const next = Array.from(new Set(mode.filter((m): m is SpendWiseBlinkMode => m === "all" || m === "group" || m === "row")));
+    setBlinkModeState(next);
+    if (typeof window !== "undefined") localStorage.setItem(SPEND_WISE_BLINK_MODE_KEY, JSON.stringify(next));
   }, []);
 
-  return { spendWiseBlinkMode: blinkMode, setSpendWiseBlinkMode: setBlinkMode };
+  const toggleBlinkMode = useCallback((mode: SpendWiseBlinkMode, checked: boolean) => {
+    if (typeof window === "undefined") return;
+    setBlinkModeState((prev) => {
+      const next = checked ? Array.from(new Set([...prev, mode])) : prev.filter((m) => m !== mode);
+      localStorage.setItem(SPEND_WISE_BLINK_MODE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  return { spendWiseBlinkMode: blinkMode, setSpendWiseBlinkMode: setBlinkMode, toggleSpendWiseBlinkMode: toggleBlinkMode };
 }

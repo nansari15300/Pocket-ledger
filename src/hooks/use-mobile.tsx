@@ -186,12 +186,13 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
 
   const value = React.useMemo(() => ({
     isMobile,
-    isRealMobile: isRealMobilePhone(),
+    // Keep SSR and first client render consistent; compute UA-dependent flags only after mount.
+    isRealMobile: isClient ? isRealMobilePhone() : false,
     isPortrait,
-    hidePcIcon: isRealMobileDevice(), // hide PC/Mobile toggle on real mobile (never show in portrait or landscape)
+    hidePcIcon: isClient ? isRealMobileDevice() : false, // hide PC/Mobile toggle on real mobile (never show in portrait or landscape)
     forcedViewMode,
     setForcedMode
-  }), [isMobile, isPortrait, forcedViewMode, setForcedMode]);
+  }), [isMobile, isPortrait, forcedViewMode, setForcedMode, isClient]);
 
   return (
     <MobileViewContext.Provider value={value}>

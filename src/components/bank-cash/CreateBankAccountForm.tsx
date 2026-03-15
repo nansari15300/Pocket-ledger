@@ -18,6 +18,7 @@ import { firestore } from "@/lib/firebase";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
 const formSchema = z.object({
   accountName: z.string().min(2, "Account name must be at least 2 characters."),
@@ -47,7 +48,8 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
       bankName: "",
       accountNumber: "",
       ifscCode: "",
-      groupId: "",
+      // Default to canonical Ungrouped; ensured again at save-time.
+      groupId: getUngroupedGroupId("bank"),
     },
   });
 
@@ -65,11 +67,14 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
 
     setIsLoading(true);
     try {
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/bank_accounts`), {
         ...values,
         ownerId: user.uid,
         companyId,
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("bank"),
         balance: values.openingBalance,
         createdAt: serverTimestamp(),
       });
@@ -79,7 +84,8 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
         description: `"${values.accountName}" has been successfully created.`,
       });
       
-      form.reset();
+      // Keep default selection on Ungrouped for next quick entry.
+      form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getUngroupedGroupId("bank") });
       if (onAccountCreated) {
         onAccountCreated();
       }
@@ -153,9 +159,9 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
                       <div className="flex-1">
                         <Combobox
                           options={[
-                            { value: "", label: "None" },
+                            { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
                             ...groups
-                              .filter((group) => !(group as any).isSystemReserved)
+                              .filter((group) => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
                               .map((group) => ({
                                 value: group.id,
                                 label: group.name,

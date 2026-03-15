@@ -401,20 +401,25 @@ export function BillwiseTransactionTable({
                     {displayOpeningBalanceCr > 0 ? formatFooterAmount(displayOpeningBalanceCr) : "-"}
                   </TableCell>
                 )}
+                {/* Keep opening-balance status vertically centered with amount columns. */}
                 {showCol("status") && (
-                  <TableCell className={cn("text-center align-baseline", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                  <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
                     {obStatusLabel != null ? (
                       <div className="flex flex-col items-center gap-[1px] leading-tight">
                         <Badge
                           variant="outline"
                           className={cn(
-                            "inline-flex h-[22px] font-semibold shrink-0",
+                            // Match Type/Status badge dimensions for consistent row alignment.
+                            "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
                             obStatusLabel === "Paid" ? "text-green-600 border-green-600/50" : "text-red-600 border-red-600/50"
                           )}
                         >
                           {obStatusLabel}
                         </Badge>
-                        {obStatusDetail && <span className="text-[10px] text-muted-foreground">{obStatusDetail}</span>}
+                        {obStatusDetail && (
+                          // Keep opening-balance voucher-detail text pure black.
+                          <span className="text-[10px] text-black">{obStatusDetail}</span>
+                        )}
                       </div>
                     ) : (
                       <span className="font-semibold">-</span>

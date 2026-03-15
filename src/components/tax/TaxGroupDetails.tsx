@@ -10,7 +10,7 @@ import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLe
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -99,7 +99,13 @@ export function TaxGroupDetails({
   const { company } = useCompany();
   const { processedTaxes, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
-  const taxesInGroup = useMemo(() => taxes.filter((t) => t.groupId === group.id), [taxes, group.id]);
+  const taxesInGroup = useMemo(() => {
+    if (group.id === "ungrouped") {
+      // Ungrouped should include both empty groupId and persisted ungrouped id rows.
+      return taxes.filter((t) => !t.groupId || t.groupId === "ungrouped_tax");
+    }
+    return taxes.filter((t) => t.groupId === group.id);
+  }, [taxes, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -294,8 +300,12 @@ export function TaxGroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -381,6 +391,8 @@ export function TaxGroupDetails({
       else
         dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
+    // Keep print headers aligned with currently selected table columns.
+    const printVisibleColumns = balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns;
     openPrintDirect({
       company: {
         name: company.name,
@@ -401,6 +413,9 @@ export function TaxGroupDetails({
       openingBalance: openingBalanceForPeriod, 
       transactions: processedTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
+      billWise: balanceMode === "bill_wise",
       userNames: userNames,
     }, true);
   };

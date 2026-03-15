@@ -8,16 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useAdvancesForSale, useAdvancesForPurchase } from "@/hooks/useAdvancesForVoucher";
@@ -231,7 +221,6 @@ export function LinkAdvancesToVoucherDialog({
 
   const [linkedAmounts, setLinkedAmounts] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
-  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   // When onConfirm is set: DONE keeps data local (no server write); parent saves on voucher Save. Otherwise DONE runs handleSave.
   useEffect(() => {
@@ -299,8 +288,8 @@ export function LinkAdvancesToVoucherDialog({
   };
 
   const handleReset = () => {
+    // Reset is immediate by request; clear local draft allocations directly.
     setLinkedAmounts({});
-    setResetConfirmOpen(false);
     toast.info("Allocations cleared.");
   };
 
@@ -541,7 +530,7 @@ export function LinkAdvancesToVoucherDialog({
                 <Link2 className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Auto Link
               </Button>
-              <Button type="button" size="sm" onClick={() => setResetConfirmOpen(true)} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
+              <Button type="button" size="sm" onClick={handleReset} className="h-9 rounded-full bg-violet-600 hover:bg-violet-700 text-white border-0">
                 <RotateCcw className="h-4 w-4 hidden md:inline-block md:mr-1.5" />
                 Reset
               </Button>
@@ -552,20 +541,6 @@ export function LinkAdvancesToVoucherDialog({
           </div>
         </div>
       </DialogContent>
-      <AlertDialog open={resetConfirmOpen} onOpenChange={setResetConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your allocations will be cleared. Nothing is saved to the server until you click save on voucher.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleReset}>Reset</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Dialog>
   );
 }

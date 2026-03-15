@@ -10,6 +10,7 @@ import type { ADFormatKey, BSFormatKey } from "@/lib/dateFormatOptions";
 // @ts-ignore - pdfmake types may not be available
 import type { TDocumentDefinitions, Content, TableCell } from "pdfmake/interfaces";
 import type { Item } from "@/components/items/types";
+import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -108,6 +109,14 @@ export type PrintPayload = {
   openingBalanceOutstanding?: number;
   /** Bill-wise: Voucher numbers linked to Opening Balance (e.g. ["Sale Inv1"]) */
   openingBalanceLinkedVoucherNos?: string[];
+  /** Match print columns with table column visibility toggles. */
+  visibleColumns?: Partial<Record<"date" | "type" | "voucherNo" | "user" | "file" | "dr" | "cr" | "status" | "runningBalance", boolean>>;
+  /** Include note vouchers in print only when UI toggle is enabled. */
+  includeNotes?: boolean;
+  /** Keep incoming transaction order (used for spend-wise grouped order). */
+  preserveOrder?: boolean;
+  /** Print using spend-wise row values/order (account/bank spend-wise view). */
+  spendWise?: boolean;
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -251,6 +260,17 @@ export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
 // ------------ HELPERS ------------
 const isIdMatch = (id1: any, id2: any) => String(id1) === String(id2);
 const findItem = (items: any[], id: any) => items?.find((i: any) => isIdMatch(i.id, id));
+const isColVisible = (
+  p: PrintPayload,
+  key: "date" | "type" | "voucherNo" | "user" | "file" | "dr" | "cr" | "status" | "runningBalance"
+) => {
+  if (p.visibleColumns) return p.visibleColumns[key] !== false;
+  // Preserve legacy print layout unless caller explicitly sends user/file visibility.
+  if (key === "user" || key === "file") return false;
+  return true;
+};
+const isBillWiseContext = (p: PrintPayload) =>
+  Boolean(p.billWise && (p.context === "party" || p.context === "group" || p.context === "staff" || p.context === "account"));
 
 // --- UPDATED: Dynamic Font Size Calculator ---
 // यो फङ्सनले अब धेरै लामो टेक्स्ट नभएसम्म फन्ट साइज घटाउँदैन।
@@ -337,8 +357,9 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
 
  const reportTitleContent: Content = {
     columns: [
-        { text: p.title, style: 'subheader', alignment: 'left', width: '*' },
-        { text: `Total Vouchers: ${rows.length}`, style: 'subheader', alignment: 'right', width: 'auto' }
+        // Keep report labels compact as requested (about 50% smaller).
+        { text: p.title, style: 'subheader', fontSize: 8, alignment: 'left', width: '*' },
+        { text: `Total Vouchers: ${rows.length}`, style: 'subheader', fontSize: 8, alignment: 'right', width: 'auto' }
     ],
     margin: [0, 0, 0, 5],
   };
@@ -458,7 +479,8 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
                   bold: true,
                   color: closing >= 0 ? 'green' : 'red',
                   noWrap: true,
-                  fontSize: getAutoFontSize(closingText, 10) // Apply dynamic font
+                  // Keep top closing-balance label same size as "Total Vouchers".
+                  fontSize: getAutoFontSize(closingText, 8) // Apply dynamic font
               }
           ],
           margin: [0, 5, 0, 10],
@@ -535,9 +557,10 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
     footer: footer,
     content: body,
     styles: {
-      header: { fontSize: 18, bold: true },
+      // Keep top labels slightly smaller for cleaner print header.
+      header: { fontSize: 16, bold: true },
       sub: { fontSize: 9, color: '#555' },
-      subheader: { fontSize: 14, bold: true, margin: [0, 0, 0, 0] },
+      subheader: { fontSize: 12, bold: true, margin: [0, 0, 0, 0] },
       body: { fontSize: 9 }
     }
   };
@@ -568,11 +591,57 @@ function computeRows(payload: PrintPayload) {
     return { rows: rowsAsc, periodDr, periodCr, closing: periodDr - periodCr };
   }
 
-  const sorted = [...payload.transactions].filter(t => t.type !== 'note').sort(
-    (a, b) =>
-      (a.date?.toDate ? a.date.toDate() : new Date(a.date)).getTime() -
-      (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
-  );
+  if (payload.spendWise === true) {
+    // Spend-wise print: preserve prepared row values/order from UI instead of rebuilding statement running logic.
+    const includeNotes = payload.includeNotes === true;
+    const base = [...payload.transactions]
+      .filter((t: any) => !(t as any)?._spendWiseSpacer)
+      .filter((t: any) => includeNotes || t.type !== "note");
+    const prepared = payload.preserveOrder
+      ? base
+      : base.sort(
+          (a: any, b: any) =>
+            (a.date?.toDate ? a.date.toDate() : new Date(a.date)).getTime() -
+            (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
+        );
+
+    const rows = prepared.map((t: any) => {
+      let debit = Number(t.debit) || 0;
+      let credit = Number(t.credit) || 0;
+      const linkedAmt = Number((t as any)._spendWiseLinkedAmount) || 0;
+      if ((t as any)._spendWiseChild && linkedAmt > 0) {
+        const isOutflow = (t.type === "payment_out" || t.type === "direct_expense") || (Number(t.credit) > 0);
+        if (isOutflow) {
+          debit = 0;
+          credit = linkedAmt;
+        } else {
+          debit = linkedAmt;
+          credit = 0;
+        }
+      }
+      const spendWiseBalance = typeof (t as any)._spendWiseRunningBalance === "number"
+        ? Number((t as any)._spendWiseRunningBalance)
+        : (Number(t.balance ?? t.runningBalance) || 0);
+      return { ...t, debit, credit, runningBalance: spendWiseBalance };
+    });
+
+    const periodDr = rows.reduce((sum, row) => sum + (Number(row.debit) || 0), 0);
+    const periodCr = rows.reduce((sum, row) => sum + (Number(row.credit) || 0), 0);
+    // Spend-wise UI groups can restart per group; closing should follow accounting total, not last displayed group balance.
+    const closing = (Number(payload.openingBalance) || 0) + periodDr - periodCr;
+    return { rows, periodDr, periodCr, closing };
+  }
+
+  // Respect UI note toggle and selected order (statement/bill-wise/spend-wise) in print rows.
+  const includeNotes = payload.includeNotes === true;
+  const filtered = [...payload.transactions].filter((t) => includeNotes || t.type !== "note");
+  const sorted = payload.preserveOrder
+    ? filtered
+    : filtered.sort(
+        (a, b) =>
+          (a.date?.toDate ? a.date.toDate() : new Date(a.date)).getTime() -
+          (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
+      );
 
   const openingBalNum = typeof payload.openingBalance === 'number' ? payload.openingBalance : 0;
   let runningBalance = openingBalNum;
@@ -583,7 +652,21 @@ function computeRows(payload: PrintPayload) {
     const { debit, credit } = getTransactionAmounts(t, payload.context, itemForContext || payload.contextId, payload.stockView, payload.itemsData);
     // Preserve dueDate / due_date and status so party/account print shows "xx days" like UI
     const dueDate = t.dueDate ?? t.due_date;
-    const row = { ...t, debit, credit, runningBalance, dueDate, due_date: t.due_date ?? t.dueDate, isOverdue: t.isOverdue, paymentStatus: t.paymentStatus, linkedFromVoucherNos: t.linkedFromVoucherNos, linkedToVoucherNos: t.linkedToVoucherNos };
+    // Preserve link arrays so bill-wise status detail (voucher no / Multi link) can print in sub-row.
+    const row = {
+      ...t,
+      debit,
+      credit,
+      runningBalance,
+      dueDate,
+      due_date: t.due_date ?? t.dueDate,
+      isOverdue: t.isOverdue,
+      paymentStatus: t.paymentStatus,
+      linkedFromVoucherNos: t.linkedFromVoucherNos,
+      linkedToVoucherNos: t.linkedToVoucherNos,
+      linkedFromVoucherNosBillWise: t.linkedFromVoucherNosBillWise,
+      linkedToVoucherNosBillWise: t.linkedToVoucherNosBillWise,
+    };
     if (t.type === 'opening_balance' && typeof t.runningBalance === 'number') {
       runningBalance = t.runningBalance;
       return { ...row, runningBalance };
@@ -986,10 +1069,14 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
     displayOpeningBalanceCr = openingBalanceCr > 0 ? formatCurrencyForPrint(openingBalanceCr, { noSuffix: true }) : '-';
   }
 
-  const isBillWise = Boolean(p.billWise && (p.context === 'party' || p.context === 'group' || p.context === 'staff' || p.context === 'account'));
-  // Column order: Date(s), Voucher Type, Voucher No., [Daybook Particulars], Debit, Credit, [Status], Balance
-  // For opening balance: Label spans up to Debit, then Debit, Credit, [Status], Balance
-  const labelColSpan = isBillWise ? colSpan - 4 : colSpan - 3; // -4 for Debit, Credit, Status, Balance when billWise; -3 for Debit, Credit, Balance when not billWise
+  const isBillWise = isBillWiseContext(p);
+  const showDr = isColVisible(p, "dr");
+  const showCr = isColVisible(p, "cr");
+  const showStatus = isBillWise && isColVisible(p, "status");
+  const showBalance = isColVisible(p, "runningBalance");
+  const visibleDataCols = [showDr, showCr, showStatus, showBalance].filter(Boolean).length;
+  // Keep opening-balance row shape aligned to currently visible print columns.
+  const labelColSpan = colSpan - visibleDataCols;
   if (labelColSpan < 1) {
     return [
       { text: 'Opening Balance', colSpan, bold: true, alignment: 'left', fontSize: 9, noWrap: true }
@@ -1039,28 +1126,30 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
 
   if (isBillWise) {
     const obStatusLabel = obOutstanding <= 0 ? 'Paid' : obOutstanding >= obAmount ? 'Unpaid' : 'Partial';
+    const obStatusDetail = p.openingBalanceLinkedVoucherNos?.length
+      ? (p.openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${p.openingBalanceLinkedVoucherNos[0]}`)
+      : "";
     const statusCell: TableCell = {
-      text: obStatusLabel,
+      // Keep opening-balance print status and detail aligned with table UI.
+      stack: [
+        { text: obStatusLabel, color: obStatusLabel === 'Paid' ? 'green' : 'red', fontSize: 9 },
+        ...(p.showNarration && obStatusDetail ? [{ text: obStatusDetail, color: 'black', fontSize: 7 }] : []),
+      ] as any,
       alignment: 'left',
-      fontSize: 9,
-      color: obStatusLabel === 'Paid' ? 'green' : 'red' // Unpaid, Partial -> red
+      noWrap: false,
     };
-    return [
-      labelCell,
-      ...placeholders,
-      debitCell, // Debit
-      creditCell, // Credit
-      statusCell, // Status
-      balanceCell // Balance
-    ];
+    const row: TableCell[] = [labelCell, ...placeholders];
+    if (showDr) row.push(debitCell);
+    if (showCr) row.push(creditCell);
+    if (showStatus) row.push(statusCell);
+    if (showBalance) row.push(balanceCell);
+    return row;
   }
-  return [
-    labelCell,
-    ...placeholders,
-    debitCell, // Debit
-    creditCell, // Credit
-    balanceCell // Balance
-  ];
+  const row: TableCell[] = [labelCell, ...placeholders];
+  if (showDr) row.push(debitCell);
+  if (showCr) row.push(creditCell);
+  if (showBalance) row.push(balanceCell);
+  return row;
 }
 
 const buildTableHeader = (p: PrintPayload): TableCell[] => {
@@ -1088,34 +1177,33 @@ const buildTableHeader = (p: PrintPayload): TableCell[] => {
   }
   
   let headers: TableCell[] = [];
-  if (p.dateSystem === 'Both') {
-    headers.push(boldHeader('Date (BS)'), boldHeader('Date (AD)'));
-  } else {
-    headers.push(boldHeader('Date'));
+  if (isColVisible(p, "date")) {
+    if (p.dateSystem === 'Both') {
+      headers.push(boldHeader('Date (BS)'), boldHeader('Date (AD)'));
+    } else {
+      headers.push(boldHeader('Date'));
+    }
   }
-  
-  headers.push(
-    boldHeader('Voucher Type'),
-    boldHeader('Voucher No.')
-  );
+  if (isColVisible(p, "type")) headers.push(boldHeader('Voucher Type'));
+  if (isColVisible(p, "voucherNo")) headers.push(boldHeader('Voucher No.'));
   
   if (p.context === 'daybook') {
       headers.push(boldHeader('Particulars'));
   }
+  if (isColVisible(p, "user")) headers.push(boldHeader('User'));
+  if (isColVisible(p, "file")) headers.push(boldHeader('File'));
 
   const debitLabel = p.context === 'item' && p.stockView === 'qty' ? 'In' : 'Debit';
   const creditLabel = p.context === 'item' && p.stockView === 'qty' ? 'Out' : 'Credit';
   const balanceLabel = p.context === 'item' && p.stockView === 'qty' ? 'Stock' : 'Balance';
 
-  const isBillWise = p.billWise && (p.context === 'party' || p.context === 'group' || p.context === 'staff' || p.context === 'account');
-  headers.push(
-    { text: debitLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true },
-    { text: creditLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true }
-  );
-  if (isBillWise) {
+  const isBillWise = isBillWiseContext(p);
+  if (isColVisible(p, "dr")) headers.push({ text: debitLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true });
+  if (isColVisible(p, "cr")) headers.push({ text: creditLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true });
+  if (isBillWise && isColVisible(p, "status")) {
     headers.push({ text: 'Status', bold: true, fontSize: 9, alignment: 'left', noWrap: true });
   }
-  headers.push({ text: balanceLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true });
+  if (isColVisible(p, "runningBalance")) headers.push({ text: balanceLabel, bold: true, fontSize: 9, alignment: 'right', noWrap: true });
   
   return headers;
 }
@@ -1135,6 +1223,78 @@ const formatBillStatus = (paymentStatus?: string, isOverdue?: boolean): string =
   if (paymentStatus === 'partially_paid') return 'Partial';
   if (paymentStatus === 'unpaid') return 'Unpaid';
   return paymentStatus;
+};
+
+const getBillStatusLabelForPrint = (t: any, context: Context, isOverdue?: boolean): string => {
+  if (isOverdue) return "Overdue";
+  const isStaffLikeContext = context === "staff" || context === "group";
+  const isAddSalary = t.type === "journal" && t.subType === "add_salary";
+
+  if (isAddSalary) {
+    const status = t.paymentStatus;
+    if (status === "paid") return "Paid";
+    if (status === "unpaid") return "Unpaid";
+    if (status === "partially_paid") return "Partial";
+    if (status === "overdue" || t.isOverdue) return "Overdue";
+    // Keep print fallback aligned with table UI when paymentStatus is missing on Add Salary.
+    const allocations = (t.allocations as any[] | undefined) || [];
+    const linkedFrom = (t.linkedFromVoucherNos as string[] | undefined) || [];
+    const linkedTo = (t.linkedToVoucherNos as string[] | undefined) || [];
+    if (allocations.length > 0 || linkedFrom.length > 0 || linkedTo.length > 0) {
+      const amount = Number(t.amount ?? t.total ?? t.debit ?? t.credit ?? 0) || 0;
+      if (amount > 0) {
+        const totalLinked = allocations.reduce((sum, a) => sum + getAllocationTotal(a), 0);
+        if (totalLinked >= amount) return "Paid";
+        if (totalLinked > 0) return "Partial";
+      }
+    }
+    return "Unpaid";
+  }
+
+  if (isStaffLikeContext && (t.type === "payment_out" || t.type === "direct_expense")) {
+    // Staff/group bill-wise: payment out should show Paid/Partial/Unpaid from allocations even without paymentStatus.
+    const amountPaid = Number(t.amount ?? t.total ?? 0) || 0;
+    const allocations = (t.allocations as any[] | undefined) || [];
+    const totalLinked = allocations.reduce((sum, a) => sum + getAllocationTotal(a), 0);
+    if (amountPaid <= 0) return "Unpaid";
+    if (totalLinked >= amountPaid) return "Paid";
+    if (totalLinked > 0) return "Partial";
+    return "Unpaid";
+  }
+
+  return formatBillStatus(t.paymentStatus, false);
+};
+
+// Keep print status-detail text aligned with table UI (to/from voucher no, Multi link).
+const getStatusDetailForPrint = (t: any, opts?: { billWiseOnly?: boolean }): string => {
+  const useBillWise =
+    opts?.billWiseOnly &&
+    (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
+  const from = (useBillWise
+    ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
+    : (t.linkedFromVoucherNos as string[] | undefined)) || [];
+  const to = (useBillWise
+    ? (t.linkedToVoucherNosBillWise as string[] | undefined)
+    : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  if (from.length === 0 && to.length === 0) return "";
+  const isPaymentOrDirect = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(t.type);
+  const isSaleOrPurchase = t.type === "sale" || t.type === "purchase";
+  const isAddSalary = t.type === "journal" && t.subType === "add_salary";
+  if (isPaymentOrDirect) {
+    if (from.length > 1 || to.length > 1) return "Multi link";
+    if (from.length) return `from ${from[0]}`;
+    return to.length ? `to ${to[0]}` : "";
+  }
+  if (isSaleOrPurchase || isAddSalary) {
+    if (from.length > 1 || to.length > 1) return "Multi link";
+    if (from.length) return `from ${from[0]}`;
+    if (to.length) return `to ${to[0]}`;
+    return "";
+  }
+  if (to.length > 1 || from.length > 1) return "Multi link";
+  if (to.length) return `to ${to[0]}`;
+  if (from.length) return `from ${from[0]}`;
+  return "";
 };
 
 function getOverdueDays(dueDate: any): number {
@@ -1212,11 +1372,13 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
     }
     
     const dateCells: TableCell[] = [];
-    if (p.dateSystem === 'Both') {
-        dateCells.push({ text: formatDateBS(d), fontSize: 9, noWrap: true }); 
-        dateCells.push({ text: formatDate(d), fontSize: 9, noWrap: true }); 
-    } else {
-        dateCells.push({ text: p.dateSystem === 'AD' ? formatDate(d) : formatDateBS(d), fontSize: 9, noWrap: true }); 
+    if (isColVisible(p, "date")) {
+      if (p.dateSystem === 'Both') {
+          dateCells.push({ text: formatDateBS(d), fontSize: 9, noWrap: true }); 
+          dateCells.push({ text: formatDate(d), fontSize: 9, noWrap: true }); 
+      } else {
+          dateCells.push({ text: p.dateSystem === 'AD' ? formatDate(d) : formatDateBS(d), fontSize: 9, noWrap: true }); 
+      }
     }
     
     const voucherType = { text: row.type.replace(/_/g, ' '), fontSize: 9, noWrap: true };
@@ -1247,7 +1409,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
     }; 
 
     // For bill-wise print, use outstanding balance (each row balance) instead of running balance
-    const isBillWise = p.billWise && (p.context === 'party' || p.context === 'group' || p.context === 'staff' || p.context === 'account');
+    const isBillWise = isBillWiseContext(p);
     let balanceValue: number;
     let balanceText: string;
     
@@ -1282,14 +1444,25 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         noWrap: true 
     }; 
     
-    const mainRow: TableCell[] = [
-        ...dateCells,
-        voucherType,
-        voucherNo,
-    ];
+    const mainRow: TableCell[] = [...dateCells];
+    if (isColVisible(p, "type")) mainRow.push(voucherType);
+    if (isColVisible(p, "voucherNo")) mainRow.push(voucherNo);
 
     if (p.context === 'daybook') {
         mainRow.push({ text: getParticularsText(row, p.journalAccountNames), fontSize: 8 });
+    }
+    if (isColVisible(p, "user")) {
+      const resolvedUserName = row.userId ? p.userNames?.[row.userId] : undefined;
+      const userLabel =
+        (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : undefined) ||
+        row.userDisplayName ||
+        row.userName ||
+        "N/A";
+      mainRow.push({ text: String(userLabel), fontSize: 9, noWrap: true });
+    }
+    if (isColVisible(p, "file")) {
+      const hasFile = Array.isArray(row.fileUrls) && row.fileUrls.length > 0;
+      mainRow.push({ text: hasFile ? "Yes" : "-", fontSize: 9, alignment: 'center' as const, noWrap: true });
     }
 
     // Overdue days: same logic as overdue context — use dueDate/due_date so "xx days" shows in party/account print
@@ -1311,65 +1484,149 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         statusContent = { text: row.type.replace(/_/g, ' '), fontSize: 9, alignment: 'left' as const };
       } else {
         const isOverdueDisplay = row.isOverdue || overdueDays > 0;
-        const statusLabel = formatBillStatus(row.paymentStatus, isOverdueDisplay);
+        // Keep bill-wise status text in print aligned with table logic for staff/group rows.
+        const statusLabel = getBillStatusLabelForPrint(row, p.context, isOverdueDisplay);
         const statusColor = statusLabel === 'Paid' ? 'green' : (statusLabel === 'Overdue' || statusLabel === 'Unpaid' || statusLabel === 'Partial') ? 'red' : undefined;
         statusContent = { text: statusLabel || '-', fontSize: 9, alignment: 'left' as const, color: statusColor };
       }
     }
-    // Push debit and credit first, then status (if billWise), then balance
-    mainRow.push(debitContent, creditContent);
-    if (isBillWise && statusContent) {
+    // Match printed columns with currently selected UI columns.
+    if (isColVisible(p, "dr")) mainRow.push(debitContent);
+    if (isColVisible(p, "cr")) mainRow.push(creditContent);
+    if (isBillWise && isColVisible(p, "status") && statusContent) {
       mainRow.push(statusContent);
     }
-    mainRow.push(balanceContent);
+    if (isColVisible(p, "runningBalance")) mainRow.push(balanceContent);
 
-    const resultRows: TableCell[][] = [mainRow];
+    const isSpendWiseOutRow = Boolean(
+      p.spendWise === true &&
+      (
+        row._spendWiseChild === true ||
+        row.type === "payment_out" ||
+        row.type === "direct_expense" ||
+        (row.type === "contra" && (Number(row.credit) || 0) > (Number(row.debit) || 0))
+      )
+    );
+    const spendWiseMainFontSize = isSpendWiseOutRow ? 7 : 9;
+    // Spend-wise print: in-flow rows look prominent; out-flow rows look smaller (like table view).
+    for (let i = 0; i < mainRow.length; i++) {
+      const c: any = mainRow[i];
+      if (c && typeof c === "object") {
+        c.fontSize = spendWiseMainFontSize;
+        if (isSpendWiseOutRow && i === 0) {
+          // Out rows start further right to mimic table child indentation.
+          c.margin = [12, 0, 0, 0];
+        }
+      }
+    }
 
-    // Bill-wise: show sub-row when narration (if showNarration), OR overdue days (no link/voucher no details in print)
-    const showBillWiseSubRow = isBillWise && ((p.showNarration && narration) || overdueDaysText || isOverdueRow);
-    if (showBillWiseSubRow) {
-        // Narration left (colSpan 5/6), status column (overdue days only), balance placeholder
-        const baseCols = p.dateSystem === 'Both' ? 2 : 1;
-        const daybookCols = p.context === 'daybook' ? 1 : 0;
-        const narrationColSpan = baseCols + 2 + daybookCols + 2;
-        const overdueLabel = overdueDaysText ? `Overdue, ${overdueDaysText}` : (isOverdueRow ? 'Overdue' : '');
-        const statusLine = overdueLabel;
-        const statusCellContent: TableCell = statusLine
-            ? { text: statusLine, fontSize: 7, color: isOverdueRow ? 'red' : 'black', alignment: 'left' as const }
-            : { text: '', fontSize: 7, alignment: 'left' as const };
-        const narrationRow: TableCell[] = [
-            {
-                text: narration
-                    ? [{ text: 'Narration: ', bold: true, fontSize: 7, color: 'black' }, { text: narration, color: 'black', fontSize: 7, italics: true }]
-                    : '',
-                colSpan: narrationColSpan,
-                alignment: 'left',
-                margin: [0, 0, 10, 0],
-                style: 'narrationRow',
-            },
-            statusCellContent,
-            { text: '', border: [false, false, false, false] },
-        ];
-        ensureRowLength(narrationRow, mainRow.length);
-        resultRows.push(narrationRow);
-    } else if (!isBillWise && p.showNarration && narration) {
-        // Same layout as overdue: one sub-row with narration (left) and status (right) side by side
-        const n = mainRow.length;
-        const narrationSpan = n - 2;
-        const subRow: TableCell[] = [
-            {
-                text: [{ text: 'Narration: ', bold: true, fontSize: 7, color: 'black' }, { text: narration, color: 'black', fontSize: 7, italics: true }],
-                colSpan: narrationSpan,
-                alignment: 'left',
-                margin: [0, 0, 0, 0],
-                style: 'narrationRow',
-            },
-        ];
+    // Spend-wise print: draw grouped container-like borders using first/child/last metadata.
+    const applySpendWiseBorders = (cells: TableCell[], opts: { top: boolean; bottom: boolean; color: string }) => {
+      const count = cells.length;
+      return cells.map((cell, idx) => {
+        const c: any = typeof cell === "object" && cell !== null ? { ...cell } : { text: String(cell ?? "") };
+        // pdfmake rejects cells that only contain border metadata; keep empty placeholders as valid text cells.
+        const hasRenderableContent =
+          "text" in c ||
+          "stack" in c ||
+          "table" in c ||
+          "columns" in c ||
+          "image" in c ||
+          "canvas" in c ||
+          "svg" in c ||
+          "qr" in c ||
+          "ul" in c ||
+          "ol" in c;
+        if (!hasRenderableContent) c.text = "";
+        // Keep only top/bottom colored lines in print (box sides optional), as requested.
+        c.border = [false, opts.top, false, opts.bottom];
+        c.borderColor = [opts.color, opts.color, opts.color, opts.color];
+        return c as TableCell;
+      });
+    };
+
+    const inSpendWiseGroup = Boolean(
+      p.spendWise === true &&
+      (row._spendWiseGroupFirst === true || row._spendWiseChild === true || row._spendWiseGroupLast === true)
+    );
+    const spendWiseColor = (() => {
+      const idx = Number(row._spendWiseGroupColorIndex);
+      if (idx === 1) return "#16a34a"; // green-600
+      if (idx === 2) return "#db2777"; // pink-600
+      return "#2563eb"; // blue-600
+    })();
+
+    const statusDetailText = isBillWise && p.showNarration ? getStatusDetailForPrint(row, { billWiseOnly: true }) : '';
+    const mainHasSubRow = Boolean(
+      (isBillWise && (p.showNarration && (narration || statusDetailText || overdueDaysText || isOverdueRow))) ||
+      (!isBillWise && p.showNarration && narration)
+    );
+    const mainTop = row._spendWiseGroupFirst === true;
+    const mainBottom = row._spendWiseGroupLast === true && !mainHasSubRow;
+
+    const mainRowFinal: TableCell[] = inSpendWiseGroup
+      ? applySpendWiseBorders(mainRow, { top: mainTop, bottom: mainBottom, color: spendWiseColor })
+      : mainRow;
+
+    const resultRows: TableCell[][] = [mainRowFinal];
+
+    // Keep print narration behavior aligned with UI toggle and current bill-wise status details.
+    const showBillWiseSubRow = isBillWise && (p.showNarration && (narration || statusDetailText || overdueDaysText || isOverdueRow));
+    if (showBillWiseSubRow || (!isBillWise && p.showNarration && narration)) {
+      const narrationParts: Array<string | { text: string; bold?: boolean; fontSize?: number; color?: string; italics?: boolean }> = [];
+      if (p.showNarration && narration) {
+        narrationParts.push({ text: 'Narration: ', bold: true, fontSize: 7, color: 'black' });
+        narrationParts.push({ text: String(narration), color: 'black', fontSize: 7, italics: true });
+      }
+      const statusParts: Array<string | { text: string; bold?: boolean; fontSize?: number; color?: string; italics?: boolean }> = [];
+      if (p.showNarration && statusDetailText) {
+        statusParts.push({ text: statusDetailText, color: 'black', fontSize: 7 });
+      }
+      if (p.showNarration && (overdueDaysText || isOverdueRow)) {
+        const overdueOnly = overdueDaysText || 'Overdue';
+        if (statusParts.length > 0) statusParts.push({ text: ', ', color: 'black', fontSize: 7 });
+        statusParts.push({ text: overdueOnly, color: 'red', fontSize: 7, italics: false });
+      }
+      const subRow: TableCell[] = [];
+      if (isBillWise && isColVisible(p, "status")) {
+        // Keep status-detail text under Status column instead of merging into narration text.
+        const hasBalanceCol = isColVisible(p, "runningBalance");
+        const narrationSpan = Math.max(1, mainRow.length - (hasBalanceCol ? 2 : 1));
+        subRow.push({
+          text: narrationParts.length > 0 ? (narrationParts as any) : '',
+          colSpan: narrationSpan,
+          alignment: 'left',
+          margin: [p.spendWise ? 10 : 0, 0, 0, 0],
+          style: 'narrationRow',
+        });
         for (let i = 1; i < narrationSpan; i++) subRow.push({});
-        subRow.push({ text: '', fontSize: 7 });
-        subRow.push({ text: '' });
-        ensureRowLength(subRow, n);
-        resultRows.push(subRow);
+        subRow.push({ text: statusParts.length > 0 ? (statusParts as any) : '', alignment: 'left', style: 'narrationRow' });
+        if (hasBalanceCol) subRow.push({ text: '', style: 'narrationRow' });
+      } else {
+        subRow.push({
+          text: narrationParts.length > 0 ? (narrationParts as any) : '',
+          colSpan: mainRow.length,
+          alignment: 'left',
+          // Keep narration/details slightly indented from the left in spend-wise print.
+          margin: [p.spendWise ? 10 : 0, 0, 0, 0],
+          style: 'narrationRow',
+        });
+        for (let i = 1; i < mainRow.length; i++) subRow.push({});
+      }
+      const subTop = false;
+      // Always show group closing line at the bottom of the last grouped row (including narration sub-row).
+      const subBottom = inSpendWiseGroup && row._spendWiseGroupLast === true;
+      const subRowFinal: TableCell[] = inSpendWiseGroup
+        ? applySpendWiseBorders(subRow, { top: subTop, bottom: subBottom, color: spendWiseColor })
+        : subRow;
+      resultRows.push(subRowFinal);
+    }
+
+    // Keep a small visual gap after each spend-wise group so containers don't touch.
+    if (inSpendWiseGroup && row._spendWiseGroupLast === true) {
+      const spacer: TableCell[] = [{ text: '', colSpan: mainRow.length, style: 'narrationRow', margin: [0, 1, 0, 1] }];
+      for (let i = 1; i < mainRow.length; i++) spacer.push({});
+      resultRows.push(spacer);
     }
     
     return resultRows;
@@ -1440,8 +1697,12 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
         ];
     }
     
-    const isBillWise = p.billWise && (p.context === 'party' || p.context === 'group' || p.context === 'staff' || p.context === 'account');
-    const numDataCols = isBillWise ? 4 : 3; // Debit, Credit, [Status], Balance
+    const isBillWise = isBillWiseContext(p);
+    const showDr = isColVisible(p, "dr");
+    const showCr = isColVisible(p, "cr");
+    const showStatus = isBillWise && isColVisible(p, "status");
+    const showBalance = isColVisible(p, "runningBalance");
+    const numDataCols = [showDr, showCr, showStatus, showBalance].filter(Boolean).length;
     const colSpan = header.length - numDataCols;
     if (colSpan < 1) return [];
 
@@ -1470,16 +1731,12 @@ const buildTableFooter = (p: PrintPayload, periodDr: number, periodCr: number, c
     const debitText = formatFooterValue(totalDr);
     const creditText = formatFooterValue(totalCr);
 
-    footerRow.push(
-      { text: debitText, bold: true, fontSize: getAutoFontSize(debitText, 10), color: 'green', alignment: 'right', noWrap: true },
-      { text: creditText, bold: true, fontSize: getAutoFontSize(creditText, 10), color: 'red', alignment: 'right', noWrap: true }
-    );
-    if (isBillWise) {
+    if (showDr) footerRow.push({ text: debitText, bold: true, fontSize: getAutoFontSize(debitText, 10), color: 'green', alignment: 'right', noWrap: true });
+    if (showCr) footerRow.push({ text: creditText, bold: true, fontSize: getAutoFontSize(creditText, 10), color: 'red', alignment: 'right', noWrap: true });
+    if (showStatus) {
       footerRow.push({ text: '-', bold: true, fontSize: 10, alignment: 'left', noWrap: true });
     }
-    footerRow.push(
-      { text: footerClosingText, bold: true, fontSize: getAutoFontSize(footerClosingText, 10), color: closing >= 0 ? 'green' : 'red', alignment: 'right', noWrap: true }
-    );
+    if (showBalance) footerRow.push({ text: footerClosingText, bold: true, fontSize: getAutoFontSize(footerClosingText, 10), color: closing >= 0 ? 'green' : 'red', alignment: 'right', noWrap: true });
     
     return [footerRow];
 }
@@ -1499,25 +1756,30 @@ const getColumnWidths = (p: PrintPayload): (string | number)[] => {
   
   const widths: (string | number)[] = [];
   
-  if (p.dateSystem === 'Both') {
-    widths.push('auto', 'auto');
-  } else {
-    widths.push('auto');
+  if (isColVisible(p, "date")) {
+    if (p.dateSystem === 'Both') {
+      widths.push('auto', 'auto');
+    } else {
+      widths.push('auto');
+    }
   }
   
-  widths.push('auto');
-  widths.push('*'); 
+  if (isColVisible(p, "type")) widths.push('auto');
+  if (isColVisible(p, "voucherNo")) widths.push('*'); 
   
   if (p.context === 'daybook') {
       widths.push('*'); 
   }
+  if (isColVisible(p, "user")) widths.push('auto');
+  if (isColVisible(p, "file")) widths.push('auto');
 
   // --- KEPT 'auto' for dynamic width ---
-  widths.push('auto', 'auto');
-  if (p.billWise && (p.context === 'party' || p.context === 'group' || p.context === 'staff' || p.context === 'account')) {
+  if (isColVisible(p, "dr")) widths.push('auto');
+  if (isColVisible(p, "cr")) widths.push('auto');
+  if (isBillWiseContext(p) && isColVisible(p, "status")) {
     widths.push('auto'); // Status
   }
-  widths.push('auto'); // Balance
+  if (isColVisible(p, "runningBalance")) widths.push('auto'); // Balance
 
   return widths;
 };

@@ -6,7 +6,7 @@ import { Loader2, PlusCircle } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { StaffGroup } from "@/components/staff/types";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { isSystemGroupName } from "@/lib/system-group-names";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -80,18 +81,30 @@ export function CreateStaffGroupDialog({ onGroupCreated, children, isOpen, onOpe
         return;
       }
       
-      // Check for duplicate group name
-      const q = query(
-        collection(firestore, `companies/${companyId}/staff_groups`),
-        where("name", "==", nameTrimmed)
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "staff_groups",
+        name: nameTrimmed,
+        entityLabel: "Staff Group",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         toast({
           variant: "destructive",
           title: "Duplicate Group Name",
           description: "A group with this name already exists.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        toast({
+          title: "Group Restored!",
+          description: `"${nameTrimmed}" was restored from Recycle Bin.`,
+        });
+        onGroupCreated(duplicateDecision.restoredId);
+        if (saveAndNew) form.reset({ name: "", parentId: "loans_liabilities" });
+        else if (onOpenChange) onOpenChange(false);
         setIsLoading(false);
         return;
       }

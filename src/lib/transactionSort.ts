@@ -89,3 +89,17 @@ export function sortTransactions<T = any>(
 
   return [...list].sort(compare);
 }
+
+/** Recompute running balance in current visible order (top to bottom), used after custom sorting in statement view. */
+export function recomputeRunningBalanceTopToBottom<T = any>(list: T[], openingBalance: number): T[] {
+  let running = Number(openingBalance) || 0;
+  return (list || []).map((tx: any) => {
+    if (tx?.type === "opening_balance") {
+      const explicit = typeof tx?.runningBalance === "number" ? Number(tx.runningBalance) : running;
+      running = explicit;
+      return { ...tx, runningBalance: explicit, balance: explicit } as T;
+    }
+    running += (Number(tx?.debit) || 0) - (Number(tx?.credit) || 0);
+    return { ...tx, runningBalance: running, balance: running } as T;
+  });
+}

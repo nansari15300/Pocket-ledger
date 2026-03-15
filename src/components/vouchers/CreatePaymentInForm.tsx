@@ -58,6 +58,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
+import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { LinkPaymentInToSalaryDialog } from "@/components/vouchers/LinkPaymentInToSalaryDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import type { Allocation } from "@/lib/payment-allocation-utils";
@@ -247,6 +248,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const staffId = form.watch("staffId");
   const taxAccountId = form.watch("taxAccountId");
   const accountId = form.watch("accountId");
+  const accountOpeningBalance = Number(processedAccounts.find((a: any) => a.id === accountId)?.openingBalance ?? 0) || 0;
   const { displayBalance: accountBalance } = useAccountBalance(accountId);
   const incomeAccountId = form.watch("incomeAccountId");
   
@@ -354,6 +356,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   /** Show Link for spend wise (From/To cards) in both add new and edit — so user sees and can link even before saving. */
   const showSpendWiseOppositeSection = !!accountId && (voucherType === "payment_in" || voucherType === "direct_income");
+  const openingBalanceLinkedByOthers = useMemo(() => {
+    if (!accountId) return 0;
+    return (allVouchers ?? [])
+      .filter((v: any) => {
+        const isInVoucherForAccount =
+          ((v.type === "payment_in" || v.type === "direct_income") && (v.accountId ?? v.toAccountId ?? v.bankAccountId) === accountId) ||
+          (v.type === "contra" && (v.toAccountId ?? v.accountId) === accountId);
+        return isInVoucherForAccount && v.id !== currentVoucherId && !v.isDeleted;
+      })
+      .reduce((sum: number, v: any) => {
+        if ((v.linkedOpeningBalanceAccountId ?? "") !== accountId) return sum;
+        return sum + (Number(v.linkedOpeningBalanceAmount) || 0);
+      }, 0);
+  }, [allVouchers, accountId, currentVoucherId]);
 
   /** Outflow vouchers that currently link to this Payment In (server data). Used for count and display. */
   const spendWiseLinkedToMeRows = useMemo(() => {
@@ -368,7 +384,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           (v.type === "direct_expense" && v.accountId === accId) ||
           (v.type === "contra" && v.fromAccountId === accId))
     );
-    return outflows.map((v: any) => {
+    const rows = outflows.map((v: any) => {
       const date = v.date?.toDate ? v.date.toDate() : (v.date ? new Date(v.date) : null);
       const amount = Number(v.total ?? v.amount ?? 0) || 0;
       const amounts = v.linkedPaymentInAmounts && typeof v.linkedPaymentInAmounts === "object" ? v.linkedPaymentInAmounts : {};
@@ -393,8 +409,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         typeLabel,
         from,
       };
-    }).sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [showSpendWiseOppositeSection, allVouchers, currentVoucherId, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts]);
+    });
+    const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "cr");
+    const currentLinkedOB = Number((voucher as any)?.linkedOpeningBalanceAccountId === accountId ? (voucher as any)?.linkedOpeningBalanceAmount : 0) || 0;
+    if (openingBase > 0 && currentLinkedOB > 0) {
+      // Show saved Opening Balance link as a normal row in spend-wise "To Voucher" card.
+      rows.push({
+        id: SPEND_WISE_OPENING_BALANCE_ID,
+        voucherNumber: "Opening Balance (Cr)",
+        date: null,
+        amount: openingBase,
+        linked: currentLinkedOB,
+        typeLabel: "Opening Balance",
+        from: "Opening Balance",
+      });
+    }
+    return rows.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
+  }, [showSpendWiseOppositeSection, allVouchers, currentVoucherId, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts, accountOpeningBalance, voucher]);
 
   /** For Link Pay In dialog: outflow voucher ids that currently link to this Payment In (for count "already selected"). */
   const linkedPaymentOutSelectedIdsForCount = useMemo(
@@ -435,6 +466,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const linkable = Math.max(0, amount - alreadyLinked + currentLinked);
         return { id: v.id, linkable };
       });
+    const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "cr");
+    const currentLinkedOB = Number(currentVoucherLinkedAmountsForCount?.[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+    const obLinkable = Math.max(0, openingBase - openingBalanceLinkedByOthers + currentLinkedOB);
+    if (openingBase > 0) {
+      list.push({ id: SPEND_WISE_OPENING_BALANCE_ID, linkable: obLinkable });
+    }
     return list.filter((r) => r.linkable > 0 || selectedSet.has(r.id)).length;
   }, [
     showSpendWiseOppositeSection,
@@ -442,6 +479,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     allVouchers,
     linkedPaymentOutSelectedIdsForCount,
     currentVoucherLinkedAmountsForCount,
+    accountOpeningBalance,
+    openingBalanceLinkedByOthers,
   ]);
 
   /** When Link for Bill Wise is ON: cannot save without bill-wise link if vouchers available (party only). */
@@ -456,6 +495,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const accId = accountId;
     const rows = pendingLinkedPaymentOut.ids
       .map((id) => {
+        if (id === SPEND_WISE_OPENING_BALANCE_ID) {
+          const openingBase = getOpeningBalanceBaseAmount(accountOpeningBalance, "cr");
+          const linked = pendingLinkedPaymentOut.amountsByVoucherId[id] ?? 0;
+          return {
+            id,
+            voucherNumber: "Opening Balance (Cr)",
+            date: null as Date | null,
+            amount: openingBase,
+            linked,
+            typeLabel: "Opening Balance",
+            from: "Opening Balance",
+          };
+        }
         const v = allVouchers.find((x: any) => x.id === id);
         if (!v || v.isDeleted) return null;
         const ok = (v.type === "payment_out" && v.accountId === accId) || (v.type === "direct_expense" && v.accountId === accId) || (v.type === "contra" && v.fromAccountId === accId);
@@ -478,7 +530,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       .filter(Boolean);
     const typed = rows as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; typeLabel: string; from: string }[];
     return typed.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts]);
+  }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts, accountOpeningBalance]);
 
   /** Current Payment In as it appears on the opposite voucher (Payment Out / Contra / Direct Expense) — one row for the two-card "From Voucher" layout. */
   const formDate = form.watch("date");
@@ -788,6 +840,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const currentlyLinkedIds = new Set(spendWiseLinkedToMeRows.map((r) => r.id));
           const allAffectedIds = new Set([...currentlyLinkedIds, ...pendingLinkedPaymentOut.ids]);
           for (const poId of allAffectedIds) {
+            if (poId === SPEND_WISE_OPENING_BALANCE_ID) continue;
             const v = allVouchers?.find((x: any) => x.id === poId);
             if (!v) continue;
             const existingIds = Array.isArray(v.linkedPaymentInIds) ? [...v.linkedPaymentInIds] : [];
@@ -803,6 +856,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             }
             await updateVoucherSpendWiseLinks(companyId, poId, newIds, existingAmounts, user.uid);
           }
+          const openingLinked = Number(pendingLinkedPaymentOut.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
+          // Persist Opening Balance spend-wise link on current voucher so popup and count remain consistent after save.
+          await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, docId), {
+            linkedOpeningBalanceAmount: openingLinked,
+            linkedOpeningBalanceAccountId: openingLinked > 0 ? accountId : null,
+          });
           setPendingLinkedPaymentOut(null);
         }
 
@@ -2226,6 +2285,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           names={paymentOutDialogNames}
           requiredAmount={amountReceived}
           accountName={processedAccounts?.find((a: any) => a.id === accountId)?.accountName ?? undefined}
+          accountOpeningBalance={accountOpeningBalance}
           currentVoucherLinkedAmounts={pendingLinkedPaymentOut ? pendingLinkedPaymentOut.amountsByVoucherId : Object.fromEntries(spendWiseLinkedToMeRows.map((r) => [r.id, r.linked]))}
           currentVoucherSummary={currentVoucherAsOnOppositeRows.length > 0 ? { voucherNumber: currentVoucherAsOnOppositeRows[0].voucherNumber, date: currentVoucherAsOnOppositeRows[0].date, from: currentVoucherAsOnOppositeRows[0].from, amount: currentVoucherAsOnOppositeRows[0].amount, linkedTotal: currentVoucherAsOnOppositeRows[0].linked } : undefined}
           onConfirm={(selectedIds: string[], amountsByVoucherId: Record<string, number>) => {

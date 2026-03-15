@@ -134,8 +134,17 @@ export const getOppositeAccountLabel = (
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
 ): string => {
   const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
+  const getPartyDisplay = (partyId: string | undefined) => {
+    // Item-ledger rows can carry partyName even when id->name map is incomplete.
+    const fromMap = partyId ? names[partyId] : undefined;
+    return fromMap || t.partyName || t.payeeName || "—";
+  };
   if (context === "item" && (t.type === "sale" || t.type === "purchase")) {
-    return getName(t.partyId);
+    return getPartyDisplay(t.partyId);
+  }
+  if (context === "item" && t.type === "note") {
+    // Item details note row should display linked item/entity name in Party column.
+    return t.entityName || getName(t.entityId);
   }
   // Party context: show opposite/counter account (bank, expense, etc.) not the current party
   if (context === "party" && contextId) {
@@ -163,6 +172,14 @@ export const getOppositeAccountLabel = (
   // Tax group: sale/purchase show party (opposite of tax), not Sales/Purchase account
   if (context === "group" && groupEntityType === "tax" && (t.type === "sale" || t.type === "purchase")) {
     return getName(t.partyId);
+  }
+  // Item group: sale/purchase should show party (same as item details Party column).
+  if (context === "group" && groupEntityType === "item" && (t.type === "sale" || t.type === "purchase")) {
+    return getPartyDisplay(t.partyId);
+  }
+  if (context === "group" && groupEntityType === "item" && t.type === "note") {
+    // Item-group note rows should display linked item/entity name in Party column.
+    return t.entityName || getName(t.entityId);
   }
   // Group context: sale/purchase show Sales/Purchase account (party group, etc.)
   if (context === "group" && (t.type === "sale" || t.type === "purchase")) {
@@ -405,6 +422,7 @@ export const TransactionRow = React.memo(
     onRowSelect,
     isSelected,
     isRelatedBlink = false,
+    isSelectedRowBlink = false,
     getDisplayValue,
     isTaxContext,
     isBalanceMasked,
@@ -415,6 +433,7 @@ export const TransactionRow = React.memo(
     isBillWise,
     ensureMinGaps = false,
     showFileColumn = false,
+    showItemPartyColumn = true,
     isSpendWiseChild = false,
     isSpendWiseGroupFirst = false,
     isSpendWiseGroupLast = false,
@@ -514,6 +533,7 @@ export const TransactionRow = React.memo(
       (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
       "N/A";
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
+    const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
 
     const mainRowContent = (
       <>
@@ -539,7 +559,8 @@ export const TransactionRow = React.memo(
             {getParticularsText(transaction, names)}
           </TableCell>
         )}
-        {context === "item" && (
+        {/* Item + Item-group page: Party/Entity column should respect page-level show/hide toggle. */}
+        {isItemPartyContext && showItemPartyColumn && (
           <TableCell className="max-w-[180px] truncate text-muted-foreground">
             {getOppositeAccountLabel(transaction, names, context, contextId, groupEntityType)}
           </TableCell>
@@ -571,15 +592,22 @@ export const TransactionRow = React.memo(
             const paidByLabel = statusLabel === "Paid";
             const unpaidByLabel = statusLabel === "Partial" || statusLabel === "Unpaid";
             const statusDetailText = getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly });
+            // Keep status voucher-link text tied to the shared "Show Narration" toggle.
+            const showStatusDetailText = showNarration && !!statusDetailText;
+            // Keep status pill vertically stable by moving voucher-link detail to narration row.
+            const showStatusDetailUnderBadge = false;
             const isOverdueRow = statusLabel === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
             const overdueDays = isOverdueRow ? getOverdueDays(transaction) : 0;
+            // Keep status badge vertically centered like amount cells in every view.
             return (
-              <TableCell className={cn("text-center", isBillWise ? "align-middle" : "align-baseline", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-                <div className={cn("flex items-center justify-center gap-[1px] leading-tight", !isBillWise && "flex-col")}>
+              <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                {/* In bill-wise mode, switch to vertical stack only when detail text is visible. */}
+                <div className={cn("flex min-h-6 items-center justify-center gap-[1px] leading-tight", (!isBillWise || showStatusDetailUnderBadge) && "flex-col")}>
                   <Badge
                     variant="outline"
                     className={cn(
-                      "inline-flex h-[22px] font-semibold shrink-0",
+                      // Keep status pill dimensions aligned with Type pill so it doesn't touch row lines.
+                      "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
                       useNeutralBadge
                         ? "text-muted-foreground border-muted-foreground/40"
                         : paidByLabel || (transaction as any).paymentStatus === "paid"
@@ -595,10 +623,12 @@ export const TransactionRow = React.memo(
                   >
                     {statusLabel || "-"}
                   </Badge>
-                  {!isBillWise && statusDetailText && (
-                    <span className="text-[10px] text-muted-foreground">{statusDetailText}</span>
+                  {showStatusDetailUnderBadge && (
+                    // Keep status voucher-detail text pure black as requested.
+                    <span className="text-[10px] text-black">{statusDetailText}</span>
                   )}
-                  {!isBillWise && isOverdueRow && overdueDays > 0 && (
+                  {/* When narration is hidden, keep overdue hint under status badge. */}
+                  {!showNarration && !isBillWise && isOverdueRow && overdueDays > 0 && (
                     <span className="text-[10px] text-red-600 font-medium">{overdueDays} {overdueDays === 1 ? "day" : "days"}</span>
                   )}
                 </div>
@@ -616,15 +646,29 @@ export const TransactionRow = React.memo(
             // When balance/outstanding is 0 show "Settled" (running balance and bill-wise both)
             const valueToShow = useOutstandingForBalance ? displayValue : balance;
             const isZeroBalance = !isBalanceMasked && (typeof valueToShow === "number" && Math.abs(valueToShow) < 1e-6);
-            /** Spend-wise blink: off = never; all = last row non-0 balance; group = last row non-0 only if multi-row group */
-            const isGroupBalanceNonZero =
-              blinkMode === "off" || !blinkMode
-                ? false
-                : blinkMode === "all"
-                  ? isSpendWiseGroupLast && hasSpendWiseColor && balance !== 0 && !isBalanceMasked
-                  : blinkMode === "group"
-                    ? isSpendWiseGroupLast && hasSpendWiseColor && balance !== 0 && !isBalanceMasked && (spendWiseGroupSize ?? 0) > 1
-                    : false;
+            /** Spend-wise blink multi-select: row mode is selection-driven; all/group remain balance-driven. */
+            const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
+            const shouldBlinkByAll =
+              activeBlinkModes.includes("all") &&
+              isSpendWiseGroupLast &&
+              hasSpendWiseColor &&
+              balance !== 0 &&
+              !isBalanceMasked;
+            const shouldBlinkByGroup =
+              activeBlinkModes.includes("group") &&
+              isSpendWiseGroupLast &&
+              hasSpendWiseColor &&
+              balance !== 0 &&
+              !isBalanceMasked &&
+              (spendWiseGroupSize ?? 0) > 1;
+            const shouldBlinkByRow =
+              activeBlinkModes.includes("row") &&
+              // Row mode should blink only the clicked row (and only when that row is multi-row eligible).
+              isSelectedRowBlink &&
+              hasSpendWiseColor &&
+              balance !== 0 &&
+              !isBalanceMasked;
+            const isGroupBalanceNonZero = shouldBlinkByAll || shouldBlinkByGroup || shouldBlinkByRow;
             return (
               <TableCell
                 className={cn(
@@ -703,12 +747,12 @@ export const TransactionRow = React.memo(
     const dateCols = dateSystem === "Both" ? 2 : 1;
     const colsThroughCredit =
       visibleColumns == null
-        ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (context === "item" ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
+        ? dateCols + 1 + 1 + (context === "daybook" ? 1 : 0) + (isItemPartyContext && showItemPartyColumn ? 1 : 0) + (context !== "note" ? 1 : 0) + (showFileColumn ? 1 : 0) + 1 + 1
         : (showCol("date") ? dateCols : 0) +
           (showCol("type") ? 1 : 0) +
           (showCol("voucherNo") ? 1 : 0) +
           (context === "daybook" ? 1 : 0) +
-          (context === "item" ? 1 : 0) +
+          (isItemPartyContext && showItemPartyColumn ? 1 : 0) +
           (showCol("user") && context !== "note" ? 1 : 0) +
           (showFileColumn ? 1 : 0) +
           (showCol("dr") ? 1 : 0) +
@@ -734,19 +778,16 @@ export const TransactionRow = React.memo(
       swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
       "[&>td:first-child]:border-l [&>td:last-child]:border-r"
     );
-    const narrationColSpan = colsThroughCredit + (hideStatusColumn || !showCol("status") ? 1 : 0);
-    const narrationFullColSpan =
-      narrationColSpan +
-      (showCol("status") && !hideStatusColumn ? 1 : 0) +
-      (showCol("runningBalance") && !hideBalanceColumn ? 1 : 0) +
-      1;
+    // Keep narration row width identical to data rows in every mode; status/running/actions are rendered as separate cells.
+    const narrationColSpan = colsThroughCredit;
 
     const inSpendWiseGroup = hasSpendWiseColor && (isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild);
     /** Spend-wise row type: inflow (payment in / direct income / contra in) = green bg; outflow (payment out / direct expense / contra out) = dim white, smaller text, 30px left gap */
     const isSpendWiseInflowRow = inSpendWiseGroup && (
       transaction.type === "payment_in" ||
       transaction.type === "direct_income" ||
-      (transaction.type === "contra" && context === "account" && contextId && transaction.toAccountId === contextId)
+      (transaction.type === "contra" && context === "account" && contextId && transaction.toAccountId === contextId) ||
+      (transaction.type === "contra" && (transaction.debit ?? 0) > 0) // Contra In (debit) = inflow, green on both details and group page
     );
     const isSpendWiseOutflowRow = inSpendWiseGroup && (
       transaction.type === "payment_out" ||
@@ -754,7 +795,15 @@ export const TransactionRow = React.memo(
       (transaction.type === "contra" && context === "account" && contextId && transaction.fromAccountId === contextId)
     );
     /** In group details (context "group") contra child rows are not classified as outflow (no single account contextId), so give them 30px indent by treating any non-inflow child as indent-worthy. */
-    const spendWiseChildNeedsIndent = isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow);
+    /** Bank group: standalone out Cr rows (payment_out, direct_expense, contra with credit) also get left indent like PYMT row. */
+    const spendWiseGroupStandaloneOutflow =
+      context === "group" &&
+      (isSpendWiseGroupFirst && isSpendWiseGroupLast) &&
+      (transaction.type === "payment_out" ||
+        transaction.type === "direct_expense" ||
+        (transaction.type === "contra" && (transaction.credit ?? 0) > 0));
+    const spendWiseChildNeedsIndent =
+      isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow;
     /** Extra gap below last row of each group so containers don't touch during layout animation */
     const groupGapBottom = "[&>td]:pb-3";
     const spendWiseMainInset = inSpendWiseGroup && cn(
@@ -791,7 +840,7 @@ export const TransactionRow = React.memo(
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
           isSpendWiseChild && !isSelected && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
-          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow)) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
+          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           spendWiseMainInset,
           spendWiseBorderFirst,
           spendWiseBorderLast,
@@ -813,8 +862,12 @@ export const TransactionRow = React.memo(
           isSelected && !showNarrationRow && "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
           isSelected && !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
           isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
-          isRelatedBlink && !isSelected && "animate-spend-wise-related-blink [&>td]:animate-spend-wise-related-blink",
-          showNarrationRow && isBillWise && "[&>td]:pb-0.5",
+          // Use the same single-pass blink style as spend-wise balance for smoother related-row highlight.
+          isRelatedBlink && !isSelected && "animate-spend-wise-balance-blink",
+          // In Blink row mode, blink only the clicked multi-row entry's selected row.
+          isSelectedRowBlink && "animate-spend-wise-balance-blink",
+          // Keep transaction row compact when narration is visible (override default TableCell p-1).
+          showNarrationRow && "[&>td]:pt-0.5 [&>td]:pb-0",
           !showNarrationRow && "md:[&>td]:pb-1",
           showNarration &&
             (narrationText || (!hideStatusColumn && getStatusDetail(transaction, { billWiseOnly: statusBillWiseOnly })))
@@ -833,7 +886,11 @@ export const TransactionRow = React.memo(
       return lbl === "Overdue" || (transaction as any).isOverdue || (transaction as any).paymentStatus === "overdue";
     })();
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
-    const subRowStatusText = [statusDetailText, overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+    // Keep voucher-link + overdue helper beside narration in same row.
+    const subRowStatusText = [
+      (showNarration && statusDetailText) ? statusDetailText : "",
+      (showNarration && overdueDaysForSubRow > 0) ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : ""
+    ].filter(Boolean).join(", ");
     const NarrationRow = showNarrationRow ? (
       <motion.tr
         layout={animateLayout ? "position" : false}
@@ -872,34 +929,52 @@ export const TransactionRow = React.memo(
             ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
             : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",
           isSpendWiseInflowRow && !isSelected && "bg-green-100 dark:bg-green-900/30 [&>td]:bg-green-100 [&>td]:dark:bg-green-900/30 hover:bg-green-200 [&>td]:hover:bg-green-200 [&>td]:dark:hover:bg-green-900/40",
-          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow)) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
+          (isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow) && !isSelected && "bg-gray-50 dark:bg-gray-900/20 [&>td]:bg-gray-50 [&>td]:dark:bg-gray-900/20 [&>td]:text-xs",
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
-          isRelatedBlink && !isSelected && "animate-spend-wise-related-blink [&>td]:animate-spend-wise-related-blink",
-          "md:[&>td]:pb-1"
+          // Use the same single-pass blink style as spend-wise balance for smoother related-row highlight.
+          isRelatedBlink && !isSelected && "animate-spend-wise-balance-blink",
+          // Avoid extra bottom expansion in sub-row; we only want a small top gap.
+          "md:[&>td]:pb-0"
         )}
       >
         <TableCell
-          colSpan={narrationFullColSpan}
+          colSpan={narrationColSpan}
           className={cn(
             "px-3 text-[11px] italic leading-tight align-top whitespace-normal break-words w-full min-w-0 overflow-hidden",
-            isPendingApproval && !isSelected ? "text-pink-950 dark:text-pink-100" : "text-muted-foreground",
-            isBillWise ? "pt-0.5 pb-0.5" : "py-0",
+            // Keep narration text pure black in all row states.
+            "text-black",
+            // Keep narration text exactly 2px below the main transaction row.
+            isBillWise ? "pt-[1px] pb-0" : "pt-[1px] pb-0",
             inSpendWiseGroup && "pr-[10px]"
           )}
         >
-          {narrationText || (isBillWise && subRowStatusText) ? (
-            <span className="block min-w-0 overflow-hidden break-words" style={{ overflowWrap: "anywhere" }}>
-              <span className="font-semibold not-italic">{narrationLabel}:</span> {narrationText || ""}
-              {isBillWise && subRowStatusText ? (
-                <span className={cn("ml-2 not-italic", isOverdueForSubRow && overdueDaysForSubRow > 0 ? "text-red-600 font-medium" : "text-muted-foreground")}>
-                  ({subRowStatusText})
-                </span>
-              ) : null}
+          {narrationText ? (
+            <span className="block min-w-0 overflow-hidden break-words font-normal" style={{ overflowWrap: "anywhere" }}>
+              <span className="not-italic">{narrationLabel}:</span> {narrationText}
             </span>
           ) : null}
         </TableCell>
+        {/* Keep voucher-detail text aligned under the Status column, not attached to narration text. */}
+        {showCol("status") && !hideStatusColumn && (
+          <TableCell
+            className={cn(
+              // Halve detail-row cell vertical padding for tighter narration/detail grouping.
+              // Keep voucher-detail text pure black as requested.
+              "text-center text-[10px] leading-tight align-top whitespace-nowrap py-0 text-black",
+              isOverdueForSubRow && overdueDaysForSubRow > 0 && "font-medium",
+              ensureMinGaps && "min-w-[95px] px-[5px]"
+            )}
+          >
+            {subRowStatusText || ""}
+          </TableCell>
+        )}
+        {/* Keep narration sub-row column structure in sync with main row. */}
+        {showCol("runningBalance") && !hideBalanceColumn && (
+          <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+        )}
+        <TableCell className="w-10 p-0" />
       </motion.tr>
     ) : null;
 

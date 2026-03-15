@@ -6,7 +6,7 @@ import { Loader2, PlusCircle } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, where, getDocs } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/select";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { isSystemGroupName } from "@/lib/system-group-names";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const formSchema = z.object({
   name: z
@@ -110,18 +111,33 @@ export function CreateAccountGroupDialog({
         return;
       }
       
-      // Check for duplicate group name
-      const q = query(
-        collection(firestore, `companies/${companyId}/account_groups`),
-        where("name", "==", nameTrimmed)
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "account_groups",
+        name: nameTrimmed,
+        entityLabel: "Account Group",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         toast({
           variant: "destructive",
           title: "Duplicate Group Name",
           description: "A group with this name already exists. Please choose a different name.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        toast({
+          title: "Group Restored!",
+          description: `"${nameTrimmed}" was restored from Recycle Bin.`,
+        });
+        onGroupCreated(duplicateDecision.restoredId);
+        if (saveAndNew) {
+          form.reset({ name: "", parentId: "" });
+        } else if (onOpenChange) {
+          onOpenChange(false);
+        }
         setIsLoading(false);
         return;
       }

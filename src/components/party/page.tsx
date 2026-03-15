@@ -74,7 +74,8 @@ export default function PartyPage() {
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
   
    const processedGroups = useMemo(() => {
-    const ungrouped = processedParties.filter(p => !p.groupId);
+    // Treat both blank groupId and storage ungrouped id as Ungrouped bucket.
+    const ungrouped = processedParties.filter(p => !p.groupId || p.groupId === "ungrouped_party");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: Group = {
@@ -239,7 +240,8 @@ export default function PartyPage() {
   const partiesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-        return processedParties.filter(p => !p.groupId);
+        // Keep Ungrouped group selection aligned with stored ungrouped ids.
+        return processedParties.filter(p => !p.groupId || p.groupId === "ungrouped_party");
     }
     return processedParties.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedParties]);

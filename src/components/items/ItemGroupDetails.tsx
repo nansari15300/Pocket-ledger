@@ -33,7 +33,7 @@ import {
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -158,6 +158,11 @@ export function ItemGroupDetails({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDesktopCalendarOpen, setIsDesktopCalendarOpen] = useState(false);
   const [tempDateRange, setTempDateRange] = useState<DateRange | undefined>(dateRange);
+  // Item group page: persist Party column visibility for Columns dropdown show/hide.
+  const [showPartyColumn, setShowPartyColumn] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    return sessionStorage.getItem("itemPartyColumnVisible") !== "false";
+  });
   const [selectedPartyIds, setSelectedPartyIds] = useState<string[]>(['all']);
 
   useEffect(() => {
@@ -208,6 +213,11 @@ export function ItemGroupDetails({
     // Return only parties that have transactions with items in this group
     return processedParties.filter(party => partyIdsWithTransactions.has(party.id));
   }, [items, processedParties, allProcessedTransactions]);
+  // Provide party-id -> party-name map so Item Group "Party" column can resolve names.
+  const partyNamesMap = useMemo(
+    () => Object.fromEntries((processedParties || []).map((p: any) => [p.id, p.name])),
+    [processedParties]
+  );
 
   // Filter transactions: show Sale, Purchase, and Notes linked to items in this group
   const filteredTransactions = useMemo(() => {
@@ -355,8 +365,12 @@ export function ItemGroupDetails({
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
   const sortedTransactions = useMemo(
-    () => sortTransactions(displayTransactions, sortBy, sortOrder),
-    [displayTransactions, sortBy, sortOrder]
+    () =>
+      recomputeRunningBalanceTopToBottom(
+        sortTransactions(displayTransactions, sortBy, sortOrder),
+        openingBalanceForPeriod
+      ),
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
   );
   const totalPages = Math.max(
     1,
@@ -489,6 +503,8 @@ export function ItemGroupDetails({
 
   const handlePrint = () => {
     if (!company) return;
+    // Keep item-group print headers aligned with selected table columns.
+    const printVisibleColumns = { ...visibleColumns, status: false };
     const from = dateRange?.from;
     const to = dateRange?.to;
     let dateRangeText = "All Time";
@@ -524,8 +540,15 @@ export function ItemGroupDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
+      includeNotes: showNotes,
+      visibleColumns: printVisibleColumns,
       userNames: userNames,
     }, true);
+  };
+  const handlePartyColumnToggle = (checked: boolean) => {
+    // Keep Party column preference sticky within the current browser session.
+    setShowPartyColumn(checked);
+    if (typeof window !== "undefined") sessionStorage.setItem("itemPartyColumnVisible", checked ? "true" : "false");
   };
 
   if (isMobile) {
@@ -878,11 +901,16 @@ export function ItemGroupDetails({
             <TransactionsTable
               transactions={paginatedTransactions}
               context="group"
+              // Mark this group table as item-group so Party column/header can render.
+              groupEntityType="item"
               contextId={group.id}
+              showItemPartyColumn={showPartyColumn}
               showNarration={showNarration}
               visibleColumns={{ ...visibleColumns, status: false }}
               openingBalance={openingBalanceForPeriod}
               userNames={userNames}
+              // Reuse generic names resolver in table to show party names for item group rows.
+              accountNames={partyNamesMap}
               onRowClick={handleEditVoucher}
               filters={filters}
               setFilters={setFilters}
@@ -924,9 +952,27 @@ export function ItemGroupDetails({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-52 p-2">
-                  {(Object.keys(COLUMN_LABELS) as TransactionColumnKey[])
+                  {(["date", "type", "voucherNo", "party", "user", "file", "dr", "cr", "runningBalance", "status"] as Array<TransactionColumnKey | "party">)
                     .filter((key) => key !== "status" || balanceMode === "bill_wise")
                     .map((key) => {
+                    if (key === "party") {
+                      return (
+                        <DropdownMenuItem
+                          key="party"
+                          onSelect={(e) => e.preventDefault()}
+                          className="flex items-center gap-2 cursor-pointer"
+                        >
+                          <Checkbox
+                            id="col-party-item-group"
+                            checked={showPartyColumn}
+                            onCheckedChange={(c) => handlePartyColumnToggle(Boolean(c))}
+                          />
+                          <label htmlFor="col-party-item-group" className="text-sm font-medium flex-1 cursor-pointer">
+                            Party
+                          </label>
+                        </DropdownMenuItem>
+                      );
+                    }
                     const isStatusInStatement = key === "status" && balanceMode === "statement";
                     const isStatusInBillWise = key === "status" && balanceMode === "bill_wise";
                     const isStatusLocked = isStatusInStatement || isStatusInBillWise;

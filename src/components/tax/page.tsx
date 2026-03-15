@@ -56,7 +56,8 @@ export default function TaxPage() {
   }>({ taxes: null, groups: null });
   
   const processedTaxGroups = useMemo(() => {
-    const ungrouped = processedTaxes.filter(p => !p.groupId);
+    // Treat both blank groupId and storage ungrouped id as Ungrouped bucket.
+    const ungrouped = processedTaxes.filter(p => !p.groupId || p.groupId === "ungrouped_tax");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: TaxGroup = {
@@ -160,7 +161,8 @@ export default function TaxPage() {
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-      return processedTaxes.filter(p => !p.groupId);
+      // Keep Ungrouped group selection aligned with stored ungrouped ids.
+      return processedTaxes.filter(p => !p.groupId || p.groupId === "ungrouped_tax");
     }
     return processedTaxes.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedTaxes]);

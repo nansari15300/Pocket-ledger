@@ -32,7 +32,7 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { firestore } from "@/lib/firebase";
-import { collection, query, where, getDocs, addDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import { collection, getDocs, addDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 import { uploadFile } from "@/lib/storage";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { Calendar } from "@/components/ui/calendar";
@@ -43,6 +43,7 @@ import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 const schema = z.object({
   name: z.string().min(2, "Item name must be at least 2 characters."),
@@ -147,13 +148,26 @@ export function CreateFinishedGoodDialog({
     setIsLoading(true);
 
     try {
-      const q = query(
-        collection(firestore, `companies/${companyId}/items`),
-        where("name", "==", values.name.trim())
-      );
-      const snap = await getDocs(q);
-      if (!snap.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "items",
+        name: values.name.trim(),
+        entityLabel: "Item",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate name", { id: toastId, description: "An item with this name already exists." });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        sonnerToast.success("Item Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        // Keep callback consistent with component API after restore path.
+        onItemCreated?.(duplicateDecision.restoredId);
+        onOpenChange(false);
         setIsLoading(false);
         return;
       }

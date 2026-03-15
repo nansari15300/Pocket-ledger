@@ -8,7 +8,7 @@ import type { TaxGroup } from "@/components/tax/types";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
@@ -32,6 +32,8 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
 
 const fileSchema = z.object({
@@ -77,6 +79,21 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
       form.setValue("name", prefillName.trim());
     }
   }, [prefillName, form]);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!companyId || !user?.uid) return;
+      // Keep Tax create default on canonical Ungrouped bucket.
+      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "tax");
+      if (!alive) return;
+      const current = form.getValues("groupId");
+      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [companyId, user?.uid, form]);
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -150,16 +167,36 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
     setIsLoading(true);
     
     try {
-       const q = query(
-        collection(firestore, `companies/${companyId}/taxes`),
-        where("name", "==", values.name.trim())
-      );
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
+      // Recycle-bin duplicate flow: restore or create-new on user choice.
+      const duplicateDecision = await resolveRecycleBinDuplicate({
+        companyId,
+        collectionName: "taxes",
+        name: values.name.trim(),
+        entityLabel: "Tax",
+      });
+      if (duplicateDecision.decision === "active_exists") {
         sonnerToast.error("Duplicate Tax Name", {
           id: toastId,
           description: "A tax with this name already exists.",
         });
+        setIsLoading(false);
+        return;
+      }
+      if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
+        const restoredTax = {
+          id: duplicateDecision.restoredId,
+          name: values.name.trim(),
+          rate: values.rate,
+          balance: values.openingBalance || 0,
+          companyId,
+          groupId: values.groupId || undefined,
+        };
+        sonnerToast.success("Tax Restored!", {
+          id: toastId,
+          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        });
+        triggerSync();
+        onTaxCreated?.(saveAndNew, duplicateDecision.restoredId, restoredTax as any);
         setIsLoading(false);
         return;
       }
@@ -171,12 +208,15 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
           fileUrl = await getDownloadURL(snapshot.ref);
       }
       
+      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+      const resolvedGroupId =
+        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "tax"));
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/taxes`), {
         name: values.name.trim(),
         rate: values.rate,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
-        groupId: values.groupId || null,
+        groupId: resolvedGroupId || getUngroupedGroupId("tax"),
         ownerId: user.uid,
         companyId,
         balance: values.openingBalance || 0,
@@ -199,7 +239,8 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
       triggerSync();
 
       if (saveAndNew) {
-        form.reset();
+        // Keep default selection on Ungrouped for next quick entry.
+        form.reset({ name: "", rate: 0, openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("tax") });
         removeFile();
       }
       
@@ -226,9 +267,9 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
   
   const groupOptions = React.useMemo(() => {
     const userGroups = (groups || []).filter(
-      (g) => !(g as any).isSystemReserved && !isSystemParentGroup("tax_groups", g.id)
+      (g) => !(g as any).isSystemReserved && !isSystemParentGroup("tax_groups", g.id) && (g as any).isAutoUngrouped !== true
     );
-    return userGroups.map((g) => ({ value: g.id, label: g.name }));
+    return [{ value: getUngroupedGroupId("tax"), label: "Ungrouped" }, ...userGroups.map((g) => ({ value: g.id, label: g.name }))];
   }, [groups]);
 
   const filteredGroups = React.useMemo(() => {

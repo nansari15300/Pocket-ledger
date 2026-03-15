@@ -91,7 +91,10 @@ export default function TaxPage() {
   const selectedGroup = activeView === 'groups' ? selected as TaxGroup : null;
   
   const processedTaxGroups = useMemo(() => {
-    const ungrouped = processedTaxes.filter(p => !p.groupId);
+    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
+    const baseGroups = initialProcessedTaxGroups.filter((g) => (g as any).isAutoUngrouped !== true);
+    // Show Ungrouped row only when at least one tax is in the Ungrouped bucket.
+    const ungrouped = processedTaxes.filter((p: any) => !p.groupId || p.groupId === "ungrouped_tax");
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: TaxGroup = {
@@ -102,9 +105,9 @@ export default function TaxPage() {
         debit: ungrouped.reduce((sum, p) => sum + p.debit, 0),
         credit: ungrouped.reduce((sum, p) => sum + p.credit, 0),
       };
-      return [...initialProcessedTaxGroups, ungroupedGroup];
+      return [...baseGroups, ungroupedGroup];
     }
-    return initialProcessedTaxGroups;
+    return baseGroups;
   }, [processedTaxes, initialProcessedTaxGroups, companyId]);
 
   // ========== MEMORY LOGIC ==========
@@ -233,7 +236,7 @@ export default function TaxPage() {
   const taxesForSelectedGroup = useMemo(() => {
     if (!selectedGroup) return [];
     if (selectedGroup.id === 'ungrouped') {
-      return processedTaxes.filter(p => !p.groupId);
+      return processedTaxes.filter((p: any) => !p.groupId || p.groupId === "ungrouped_tax");
     }
     return processedTaxes.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedTaxes]);
