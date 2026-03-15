@@ -3,7 +3,7 @@
 
 import { CompanySelector } from "@/components/company/CompanySelector";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useMemo } from "react";
+import { Suspense, useEffect, useState, useMemo } from "react";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
@@ -21,7 +21,7 @@ export type Company = {
   storageOption?: 'firebase' | 'drive';
 };
 
-export default function SelectCompanyPage() {
+function SelectCompanyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
@@ -164,4 +164,29 @@ export default function SelectCompanyPage() {
   }
 
   return <CompanySelector companies={allCompanies} />;
+}
+
+function SelectCompanyPageLoading() {
+  return (
+    <div className="min-h-screen p-4 max-w-2xl mx-auto">
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-8 w-64" />
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function SelectCompanyPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<SelectCompanyPageLoading />}>
+      <SelectCompanyPageContent />
+    </Suspense>
+  );
 }

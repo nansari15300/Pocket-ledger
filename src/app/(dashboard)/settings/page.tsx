@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { Suspense, useState, useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,7 +54,7 @@ function getInitialSettingsTab(): string {
     }
 }
 
-export default function SettingsPage() {
+function SettingsPageContent() {
     const { can } = usePermissions();
     const { company, companyId } = useCompany();
     const searchParams = useSearchParams();
@@ -217,5 +217,22 @@ export default function SettingsPage() {
   
         </div>
       </div>
+  );
+}
+
+function SettingsPageLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="text-center text-muted-foreground">Loading settings...</div>
+    </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<SettingsPageLoading />}>
+      <SettingsPageContent />
+    </Suspense>
   );
 }

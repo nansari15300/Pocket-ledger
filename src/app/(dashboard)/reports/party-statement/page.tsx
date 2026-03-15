@@ -1,20 +1,25 @@
 
 "use client";
 
-import { useIsMobile } from "@/hooks/use-mobile";
+import { Suspense } from "react";
 import DesktopPartyStatementPage from "@/components/reports/DesktopPartyStatementPage";
-import { useSearchParams } from "next/navigation";
-import GroupStatementPage from "@/app/(dashboard)/reports/group-statement/page";
+
+function PartyStatementLoading() {
+    return (
+        <div className="flex min-h-screen items-center justify-center p-4">
+            <div className="text-center">
+                <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
+                <p className="mt-4 text-muted-foreground">Loading statement...</p>
+            </div>
+        </div>
+    );
+}
 
 export default function PartyStatementPage() {
-    const isMobile = useIsMobile();
-    const searchParams = useSearchParams();
-    
-    // The check for groupId was causing a circular dependency issue during build.
-    // The routing logic should handle directing to the correct page.
-    // if (searchParams.get('groupId')) {
-    //   return <GroupStatementPage />;
-    // }
-    
-    return <DesktopPartyStatementPage />;
+    return (
+        // Keep child route content in Suspense because statement UI reads URL query params.
+        <Suspense fallback={<PartyStatementLoading />}>
+            <DesktopPartyStatementPage />
+        </Suspense>
+    );
 }

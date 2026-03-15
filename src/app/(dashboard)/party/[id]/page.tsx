@@ -4,7 +4,7 @@
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { PartyDetails as DesktopPartyDetails } from '@/components/party/PartyDetails';
 import { useVouchers } from '@/hooks/useVouchers';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
@@ -14,7 +14,7 @@ import { firestore } from '@/lib/firebase';
 import { useIsMobile } from '@/hooks/use-mobile';
 
 
-export default function PartyDetailsPage() {
+function PartyDetailsPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -163,6 +163,15 @@ export default function PartyDetailsPage() {
         journalAccountNames={journalAccountNames}
       />
     </div>
+  );
+}
+
+export default function PartyDetailsPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <PartyDetailsPageContent />
+    </Suspense>
   );
 }
 

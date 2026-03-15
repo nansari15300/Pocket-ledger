@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { Suspense, useState, useEffect, useMemo, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -41,7 +41,7 @@ import { toast } from "sonner";
 import type { Account } from "@/components/bank-cash/types";
 import { useIsMobile } from "@/hooks/use-mobile";
 
-export default function ContraReportPage() {
+function ContraReportPageContent() {
     const { vouchers, loading, processedAccounts } = useVouchers();
     const isMobile = useIsMobile();
     const { company, companyId } = useCompany();
@@ -575,5 +575,14 @@ export default function ContraReportPage() {
             </footer>
         </div>
     );
+}
+
+export default function ContraReportPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <ContraReportPageContent />
+    </Suspense>
+  );
 }
 

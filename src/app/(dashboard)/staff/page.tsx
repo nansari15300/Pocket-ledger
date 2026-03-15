@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { doc, getDoc } from "firebase/firestore";
@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
-export default function StaffPage() {
+function StaffPageContent() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
@@ -360,6 +360,15 @@ export default function StaffPage() {
         defaultVoucherData={voucherDefaultTab === 'payment_out' ? { payeeType: 'staff', ...(selectedStaff ? { staffId: selectedStaff.id } : {}) } : undefined}
      />
     </>
+  );
+}
+
+export default function StaffPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <StaffPageContent />
+    </Suspense>
   );
 }
 

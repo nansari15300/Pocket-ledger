@@ -3,7 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Search } from "lucide-react";
-import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
+import React, { Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { AccountDetails } from "@/components/bank-cash/AccountDetails";
@@ -136,7 +136,7 @@ type AccountsStatementPageProps = {
   mode?: "account" | "group";
 };
 
-export default function AccountsStatementPage({ onPartySelectionChange, mode = "account" }: AccountsStatementPageProps) {
+function AccountsStatementPageContent({ onPartySelectionChange, mode = "account" }: AccountsStatementPageProps) {
   const { formatCurrency, formatDateBS, formatDate, dateSystem } = useDate();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -2273,5 +2273,22 @@ export default function AccountsStatementPage({ onPartySelectionChange, mode = "
         </div>
       </div>
     </div>
+  );
+}
+
+function AccountsStatementLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="text-center text-muted-foreground">Loading report...</div>
+    </div>
+  );
+}
+
+export default function AccountsStatementPage(props: AccountsStatementPageProps) {
+  return (
+    // Wrap useSearchParams consumer tree for Next.js static prerender compatibility.
+    <Suspense fallback={<AccountsStatementLoading />}>
+      <AccountsStatementPageContent {...props} />
+    </Suspense>
   );
 }

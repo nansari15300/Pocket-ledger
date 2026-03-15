@@ -3,14 +3,14 @@
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { AccountDetails as DesktopAccountDetails } from '@/components/bank-cash/AccountDetails';
 import { useVouchers } from '@/hooks/useVouchers';
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 import { useIsMobile } from '@/hooks/use-mobile';
 
-export default function BankAccountDetailsPage() {
+function BankAccountDetailsPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -95,5 +95,14 @@ export default function BankAccountDetailsPage() {
         userNames={displayUserNames}
       />
     </div>
+  );
+}
+
+export default function BankAccountDetailsPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <BankAccountDetailsPageContent />
+    </Suspense>
   );
 }

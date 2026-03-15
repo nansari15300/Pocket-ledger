@@ -5,12 +5,23 @@ import { CreateCompanyForm } from "@/components/company/CreateCompanyForm";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 
-export default function CreateCompanyPage() {
+function CreateCompanyPageLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="text-center">
+        <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
+        <p className="mt-4 text-muted-foreground">Loading...</p>
+      </div>
+    </div>
+  );
+}
+
+function CreateCompanyPageContent() {
   const { user, loading: authLoading } = useAuth();
   const { setCompanyId, allCompanies } = useCompany();
   const router = useRouter();
@@ -95,14 +106,7 @@ export default function CreateCompanyPage() {
 
   // Show loading while checking companies
   if (checkingCompanies || authLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
-          <p className="mt-4 text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    return <CreateCompanyPageLoading />;
   }
 
   return (
@@ -120,6 +124,15 @@ export default function CreateCompanyPage() {
         isDismissable={false} // Prevent closing by clicking outside when auto-opened
       />
     </div>
+  );
+}
+
+export default function CreateCompanyPage() {
+  return (
+    // Next.js requires Suspense boundary around useSearchParams() consumers for static prerender.
+    <Suspense fallback={<CreateCompanyPageLoading />}>
+      <CreateCompanyPageContent />
+    </Suspense>
   );
 }
 

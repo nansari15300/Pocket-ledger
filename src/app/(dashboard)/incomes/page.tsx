@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -44,7 +44,7 @@ import { PermissionButton } from "@/components/permission";
 import usePermissions from "@/hooks/usePermissions";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 
-export default function IncomeExpensePage() {
+function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
     () => new Set(["direct_income", "indirect_income", "direct_expense", "indirect_expense"]),
     []
@@ -487,5 +487,14 @@ export default function IncomeExpensePage() {
         allowedTabs={["sale", "purchase", "direct_income", "direct_expense", "add_salary"]}
       />
     </>
+  );
+}
+
+export default function IncomeExpensePage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <IncomeExpensePageContent />
+    </Suspense>
   );
 }

@@ -20,7 +20,7 @@ import {
   where,
 } from 'firebase/firestore';
 import * as React from 'react';
-import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { Suspense, useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   BookText,
   Landmark,
@@ -461,7 +461,7 @@ useEffect(() => {
 };
 
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   const { company, companyId, setCompanyId } = useCompany();
   const { can } = usePermissions();
   const { user } = useAuth();
@@ -1610,5 +1610,22 @@ export default function DashboardPage() {
          />
        )}
     </div>
+  );
+}
+
+function DashboardPageLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <div className="text-center text-muted-foreground">Loading dashboard...</div>
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<DashboardPageLoading />}>
+      <DashboardPageContent />
+    </Suspense>
   );
 }

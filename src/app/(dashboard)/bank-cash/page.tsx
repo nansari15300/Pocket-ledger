@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -44,7 +44,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
-export default function BankCashPage() {
+function BankCashPageContent() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
@@ -334,6 +334,15 @@ export default function BankCashPage() {
       isMobile={isMobile}
       mobileListOnly={true}
     />
+  );
+}
+
+export default function BankCashPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <BankCashPageContent />
+    </Suspense>
   );
 }
 

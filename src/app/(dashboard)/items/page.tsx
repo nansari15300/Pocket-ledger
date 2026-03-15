@@ -3,7 +3,7 @@
 import { ItemList } from "@/components/items/ItemList";
 import ItemDetails from "@/components/items/ItemDetails";
 import { ItemGroupList } from "@/components/items/ItemGroupList";
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { getDoc, doc, collection, query, getDocs, where } from "firebase/firestore";
@@ -41,7 +41,7 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 
 type DisplayUnitState = Record<string, string>;
 
-export default function ItemsPage() {
+function ItemsPageContent() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency } = useDate();
@@ -446,5 +446,14 @@ export default function ItemsPage() {
       isMobile={isMobile}
       mobileListOnly={true}
     />
+  );
+}
+
+export default function ItemsPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <ItemsPageContent />
+    </Suspense>
   );
 }

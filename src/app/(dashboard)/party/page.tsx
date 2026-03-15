@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import {
@@ -54,7 +54,7 @@ import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
-export default function PartyPage() {
+function PartyPageContent() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency } = useDate();
@@ -738,5 +738,14 @@ export default function PartyPage() {
         />
       )}
     </>
+  );
+}
+
+export default function PartyPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <PartyPageContent />
+    </Suspense>
   );
 }

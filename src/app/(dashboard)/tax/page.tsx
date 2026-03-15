@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,7 +33,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
-export default function TaxPage() {
+function TaxPageContent() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency } = useDate();
@@ -353,5 +353,14 @@ export default function TaxPage() {
       isMobile={isMobile}
       mobileListOnly={true}
     />
+  );
+}
+
+export default function TaxPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <TaxPageContent />
+    </Suspense>
   );
 }

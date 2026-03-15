@@ -4,14 +4,14 @@
 import { useParams, useSearchParams } from 'next/navigation';
 import { ExpenseAccountDetails as DesktopExpenseAccountDetails } from '@/components/expenses/ExpenseAccountDetails';
 import { useVouchers } from '@/hooks/useVouchers';
-import { useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback } from 'react';
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useRouter } from 'next/navigation';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 
-export default function ExpenseAccountDetailsPage() {
+function ExpenseAccountDetailsPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -90,5 +90,14 @@ export default function ExpenseAccountDetailsPage() {
         journalAccountNames={journalAccountNames}
       />
     </div>
+  );
+}
+
+export default function ExpenseAccountDetailsPage() {
+  return (
+    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
+    <Suspense fallback={<LoadingSpinner />}>
+      <ExpenseAccountDetailsPageContent />
+    </Suspense>
   );
 }

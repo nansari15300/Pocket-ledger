@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { Suspense, useState, useMemo, useEffect, useCallback } from "react";
 import { ReportList } from "@/components/reports/ReportList";
 import { reports, type Report } from "@/components/reports/report-data";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -22,7 +22,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 export default function ReportsPage() {
   return (
     <PermissionRouteGuard permission="export_data">
-      <ReportsPageContent />
+      {/* Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility. */}
+      <Suspense fallback={<LoadingSpinner />}>
+        <ReportsPageContent />
+      </Suspense>
     </PermissionRouteGuard>
   );
 }
