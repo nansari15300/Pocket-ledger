@@ -31,7 +31,7 @@ import {
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { sortTransactions } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
-import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History, Link2 } from "lucide-react";
+import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
@@ -454,15 +454,7 @@ export function OverdueAccountView({
                               History
                             </DropdownMenuItem>
                           )}
-                          {can('add_link') && onAddLink && (
-                            <DropdownMenuItem
-                              onClick={() => onAddLink(t)}
-                              className="flex items-center gap-2"
-                            >
-                              <Link2 className="h-3.5 w-3.5" />
-                              Add Link
-                            </DropdownMenuItem>
-                          )}
+                          {/* Add Link action removed from 3-dot menu to match transaction table behavior. */}
                           <DropdownMenuItem
                             onClick={() => onEditVoucher?.(t)}
                             className="flex items-center gap-2"

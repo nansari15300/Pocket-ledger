@@ -1518,11 +1518,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       )}
                       <div className="flex flex-wrap gap-2 items-center">
-                        {/* Link Pay Out must open the outflow dialog so only same-account out vouchers are shown. */}
-                        <Button type="button" onClick={() => setIsLinkPaymentOutDialogOpen(true)} className={cn("w-fit", BTN_SAVE_CLASS)}>
-                          <Link2 className="h-4 w-4 mr-2" />
-                          Link Pay Out
-                        </Button>
+                        {/* Current-voucher card should be read-only for linking action; keep only guidance/help action here. */}
                         <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                           <Info className="h-4 w-4 shrink-0" />
                           Read me

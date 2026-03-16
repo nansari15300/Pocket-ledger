@@ -51,7 +51,8 @@ export function CreateCompanyDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent 
-        className="w-[98%] h-[90vh] max-h-[90vh] flex flex-col rounded-xl"
+        // Mobile keeps current full-height style; desktop uses requested 80% width and 70% height.
+        className="w-[98%] h-[90vh] max-h-[90vh] md:w-[80vw] md:max-w-[80vw] md:h-[70vh] md:max-h-[70vh] flex flex-col rounded-xl"
         {...dialogProps}
         hideCloseButton={!isDismissable}
         onPointerDownOutside={isDismissable ? undefined : (e) => e.preventDefault()}

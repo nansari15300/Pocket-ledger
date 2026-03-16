@@ -8,7 +8,6 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Input } from "@/components/ui/input";
 import { Search, PanelRight } from "lucide-react";
 import { ReportDetails } from "@/components/reports/ReportDetails";
-import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useReportList } from "@/contexts/ReportListContext";
@@ -18,6 +17,8 @@ import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useCompany } from "@/hooks/useCompany";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export default function ReportsPage() {
   return (
@@ -33,6 +34,7 @@ export default function ReportsPage() {
 function ReportsPageContent() {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [isDesktopReportListOpen, setIsDesktopReportListOpen] = useState(true);
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const pathname = usePathname();
@@ -41,13 +43,12 @@ function ReportsPageContent() {
   const { setIsOpen } = useSidebar();
   const { company } = useCompany();
 
-  // Auto-minimize app sidebar when any voucher report is selected (Sale, Purchase, Payment In, etc.)
-  const voucherReportIds = ["sale", "purchase", "payment-in", "payment-out", "add-salary", "contra", "journal", "notes", "anusuchi-13"];
+  // Auto-collapse app sidebar whenever user is on reports page.
   useEffect(() => {
-    if (pathname?.startsWith("/reports") && selectedReport?.id && voucherReportIds.includes(selectedReport.id)) {
+    if (pathname?.startsWith("/reports")) {
       setIsOpen(false);
     }
-  }, [pathname, selectedReport?.id, setIsOpen]);
+  }, [pathname, setIsOpen]);
 
   const reportsForCompany = useMemo(() => {
     if (company?.country !== undefined) {
@@ -203,12 +204,51 @@ function ReportsPageContent() {
   }
 
   return (
-    <ResponsiveMasterDetail
-      title="Reports"
-      balance=""
-      listView={listView}
-      detailView={detailView}
-      isMobile={isMobile}
-    />
+    <ReportPageProvider onBackToReportList={() => setSelectedReportWithUrl(null)}>
+      <div className="grid h-full overflow-hidden md:grid-cols-[auto_minmax(0,1fr)]">
+        {/* Desktop report list behaves like collapsible app sidebar. */}
+        <div
+          className={cn(
+            "border-r overflow-hidden transition-all duration-300",
+            isDesktopReportListOpen ? "w-[320px] opacity-100" : "w-0 opacity-0"
+          )}
+        >
+          <div className="h-full min-w-[320px]">
+            <div className="p-4 border-b flex items-center justify-between gap-2">
+              <h1 className="text-xl font-bold font-headline">Reports</h1>
+              {/* Dedicated hide control for report list panel. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setIsDesktopReportListOpen(false)}
+                title="Hide report list"
+              >
+                <PanelRight className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="h-[calc(100%-65px)]">{listView}</div>
+          </div>
+        </div>
+        <div className="min-w-0 flex flex-col overflow-hidden">
+          <div className="p-2 border-b flex items-center gap-2">
+            {/* Sidebar-like show control for report list panel. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsDesktopReportListOpen((prev) => !prev)}
+              className="gap-2"
+            >
+              <PanelRight className="h-4 w-4" />
+              {isDesktopReportListOpen ? "Hide List" : "Show List"}
+            </Button>
+            <span className="text-sm text-muted-foreground truncate">
+              {selectedReport ? selectedReport.name : "Select a report"}
+            </span>
+          </div>
+          <div className="flex-1 min-h-0 overflow-hidden">{detailView}</div>
+        </div>
+      </div>
+    </ReportPageProvider>
   );
 }

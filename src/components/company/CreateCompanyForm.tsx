@@ -46,6 +46,7 @@ import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
 import { slugify } from "@/lib/slugify";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { PlanId } from "@/config/plans";
+import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -90,6 +91,60 @@ const formSchema = z
 
 type FormValues = z.infer<typeof formSchema>;
 
+type FiscalTemplate = {
+  startMonth: number;
+  startDay: number;
+  endMonth: number;
+  endDay: number;
+};
+
+// Country-specific fiscal templates used when non-Nepal countries are selected.
+function getFiscalTemplateForCountry(country?: string): FiscalTemplate {
+  const normalized = (country || "").trim().toLowerCase();
+  if (normalized === "india") return { startMonth: 3, startDay: 1, endMonth: 2, endDay: 31 }; // Apr 1 - Mar 31
+  if (normalized === "bangladesh" || normalized === "pakistan" || normalized === "australia" || normalized === "new zealand") {
+    return { startMonth: 6, startDay: 1, endMonth: 5, endDay: 30 }; // Jul 1 - Jun 30
+  }
+  return { startMonth: 0, startDay: 1, endMonth: 11, endDay: 31 }; // Jan 1 - Dec 31
+}
+
+// Returns fiscal start/end dates for the running year by selected country rule.
+function getFiscalRangeForCountry(country?: string, baseDate: Date = new Date()) {
+  const normalized = (country || "").trim().toLowerCase();
+  if (normalized === "nepal") {
+    // Nepal: running FY must be Shrawan 1 to Asar last day.
+    const bsToday = adToBs(baseDate);
+    const runningStartYear = bsToday.m >= 4 ? bsToday.y : bsToday.y - 1;
+    const runningEndYear = runningStartYear + 1;
+    const asarDays = getBSMonthDays(runningEndYear)[2] || 32;
+    return {
+      start: bsToAd({ y: runningStartYear, m: 4, d: 1 }),
+      end: bsToAd({ y: runningEndYear, m: 3, d: asarDays }),
+    };
+  }
+
+  const template = getFiscalTemplateForCountry(country);
+  const isCrossYear =
+    template.endMonth < template.startMonth ||
+    (template.endMonth === template.startMonth && template.endDay < template.startDay);
+  const year = baseDate.getFullYear();
+
+  let startYear = year;
+  let start = new Date(startYear, template.startMonth, template.startDay);
+  let end = new Date(isCrossYear ? startYear + 1 : startYear, template.endMonth, template.endDay);
+
+  if (baseDate < start) {
+    startYear = startYear - 1;
+    start = new Date(startYear, template.startMonth, template.startDay);
+    end = new Date(isCrossYear ? startYear + 1 : startYear, template.endMonth, template.endDay);
+  } else if (baseDate > end) {
+    startYear = startYear + 1;
+    start = new Date(startYear, template.startMonth, template.startDay);
+    end = new Date(isCrossYear ? startYear + 1 : startYear, template.endMonth, template.endDay);
+  }
+  return { start, end };
+}
+
 
 export function CreateCompanyForm({
   onCompanyCreated,
@@ -126,6 +181,16 @@ export function CreateCompanyForm({
     },
     mode: "onChange",
   });
+  const selectedCountry = form.watch("country");
+  const isNepalCountry = (selectedCountry || "").trim().toLowerCase() === "nepal";
+
+  useEffect(() => {
+    if (!selectedCountry) return;
+    // Keep fiscal year defaults synced with current selected country.
+    const { start, end } = getFiscalRangeForCountry(selectedCountry);
+    form.setValue("fiscalYearStart", start, { shouldDirty: false });
+    form.setValue("fiscalYearEnd", end, { shouldDirty: false });
+  }, [selectedCountry, form]);
 
 
   const displayDate = (date?: Date) => {
@@ -507,12 +572,28 @@ export function CreateCompanyForm({
             render={({ field }: any) => (
               <FormItem className="flex flex-col">
                 <FormLabel className="text-xs sm:text-sm">Fiscal Year Start</FormLabel>
-                <BsDatePicker
-                  valueAD={field.value}
-                  onChangeAD={(d) => field.onChange(d as Date)}
-                  numberOfMonths={1}
-                  isRange={false}
-                />
+                {isNepalCountry ? (
+                  // Nepal: show BS picker only for fiscal year fields.
+                  <BsDatePicker
+                    valueAD={field.value}
+                    onChangeAD={(d) => field.onChange(d as Date)}
+                    numberOfMonths={1}
+                    isRange={false}
+                  />
+                ) : (
+                  // Other countries: show AD picker only for fiscal year fields.
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !field.value && "text-muted-foreground")}>
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {field.value ? formatDate(field.value) : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar mode="single" selected={field.value} onSelect={(date) => field.onChange(date)} initialFocus />
+                    </PopoverContent>
+                  </Popover>
+                )}
                 <FormMessage />
               </FormItem>
             )}
@@ -524,12 +605,28 @@ export function CreateCompanyForm({
             render={({ field }: any) => (
               <FormItem className="flex flex-col">
                 <FormLabel className="text-xs sm:text-sm">Fiscal Year End</FormLabel>
-                <BsDatePicker
-                  valueAD={field.value}
-                  onChangeAD={(d) => field.onChange(d as Date)}
-                  numberOfMonths={1}
-                  isRange={false}
-                />
+                {isNepalCountry ? (
+                  // Nepal: show BS picker only for fiscal year fields.
+                  <BsDatePicker
+                    valueAD={field.value}
+                    onChangeAD={(d) => field.onChange(d as Date)}
+                    numberOfMonths={1}
+                    isRange={false}
+                  />
+                ) : (
+                  // Other countries: show AD picker only for fiscal year fields.
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className={cn("w-full justify-start text-left font-normal", !field.value && "text-muted-foreground")}>
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {field.value ? formatDate(field.value) : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar mode="single" selected={field.value} onSelect={(date) => field.onChange(date)} initialFocus />
+                    </PopoverContent>
+                  </Popover>
+                )}
                 <FormMessage />
               </FormItem>
             )}

@@ -320,7 +320,7 @@ useEffect(() => {
 
 
     const bankCashSummary = React.useMemo(() => {
-        if (!processedAccounts || !vouchers) return { cashAccounts: [], bankAccounts: [], totalBankInflow: 0, totalBankOutflow: 0, totalCashInflow: 0, totalCashOutflow: 0 };
+        if (!processedAccounts || !vouchers) return { cashAccounts: [], bankAccounts: [], totalBankInflow: 0, totalBankOutflow: 0, totalCashInflow: 0, totalCashOutflow: 0, totalClosingBalance: 0 };
     
         const fromDate = bankCashDateRange?.from ? startOfDay(bankCashDateRange.from) : null;
         const toDate = bankCashDateRange?.to ? endOfDay(bankCashDateRange.to) : fromDate ? endOfDay(fromDate) : null;
@@ -384,15 +384,23 @@ useEffect(() => {
         const totalBankOutflow = bankAccounts.reduce((sum, acc) => sum + acc.outflow, 0);
         const totalCashInflow = cashAccounts.reduce((sum, acc) => sum + acc.inflow, 0);
         const totalCashOutflow = cashAccounts.reduce((sum, acc) => sum + acc.outflow, 0);
+        // Combined Bank + Cash closing balance for quick dashboard visibility.
+        const totalClosingBalance = [...bankAccounts, ...cashAccounts].reduce((sum, acc) => sum + acc.balance, 0);
 
-        return { cashAccounts, bankAccounts, totalBankInflow, totalBankOutflow, totalCashInflow, totalCashOutflow };
+        return { cashAccounts, bankAccounts, totalBankInflow, totalBankOutflow, totalCashInflow, totalCashOutflow, totalClosingBalance };
       }, [processedAccounts, vouchers, bankCashDateRange]);
 
     return (
         <Card id="bank-cash-summary-area" className="flex-1 flex flex-col min-h-0 border-foreground/20">
             <CardHeader className="py-3">
                 <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm font-medium">Bank/Cash Summary</CardTitle>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <CardTitle className="text-sm font-medium">Bank/Cash Summary</CardTitle>
+                      {/* Show combined closing balance (Bank + Cash) beside summary title. */}
+                      <span className={cn("text-xs sm:text-sm font-semibold whitespace-nowrap", bankCashSummary.totalClosingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                        Closing: {formatCurrency(bankCashSummary.totalClosingBalance, { showDrCr: true, noAnimation: true })}
+                      </span>
+                    </div>
                     <MonthYearFilter dateRange={bankCashDateRange} setDateRange={setBankCashDateRange} dateSystem={dateSystem} />
                 </div>
             </CardHeader>

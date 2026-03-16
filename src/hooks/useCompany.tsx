@@ -155,12 +155,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
+      // During auth bootstrap, avoid clearing persisted company selection.
+      if (authLoading) return;
       if (!user) {
           clearCompanyId();
       } else if (customUser?.companyId && !companyId) {
           setCompanyId(customUser.companyId);
       }
-  }, [user, customUser, companyId, clearCompanyId, setCompanyId]);
+  }, [user, customUser, companyId, clearCompanyId, setCompanyId, authLoading]);
 
   const handleSnapshotUpdate = useCallback(async (ownedSnap: any, sharedSnap: any, ownedByEmailSnap?: any) => {
     const isOwnedByUser = (c: Company) =>

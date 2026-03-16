@@ -324,7 +324,8 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
   const activeCompany = companies.find(c => c.id === companyId) || companies[0];
   
   useEffect(() => {
-    if (!companyId && companies.length > 0) {
+    // Keep persisted selection stable; only auto-pick first when nothing is saved at all.
+    if (!companyId && companies.length > 0 && !localStorage.getItem("companyId")) {
       setCompanyId(companies[0].id);
     }
   }, [companyId, companies, setCompanyId]);

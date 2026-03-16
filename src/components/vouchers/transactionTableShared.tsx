@@ -4,7 +4,7 @@ import * as React from "react";
 import { TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Pencil, Link2, History, CheckCircle } from "lucide-react";
+import { MoreVertical, Pencil, History, CheckCircle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -700,20 +700,7 @@ export const TransactionRow = React.memo(
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {(() => {
-                const isSalePurchase = ["sale", "purchase", "sale_service", "purchase_service"].includes(transaction.type);
-                const isPaymentLinkable = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(transaction.type);
-                const showAddLink = can('add_link') && onAddLink && (
-                  (isSalePurchase || isPaymentLinkable) &&
-                  (context === "party" || context === "staff" || !!transaction.partyId || !!transaction.staffId)
-                );
-                return showAddLink ? (
-                  <DropdownMenuItem onClick={() => onAddLink?.(transaction)} className="flex items-center gap-2">
-                    <Link2 className="h-3.5 w-3.5" />
-                    Add Link
-                  </DropdownMenuItem>
-                ) : null;
-              })()}
+              {/* Add Link action intentionally removed from 3-dot menu as per latest UX requirement. */}
               {can("approve_transactions") &&
                 company?.notificationSettings?.approve?.on !== false &&
                 company?.notificationSettings?.approve?.onTransaction !== false &&
