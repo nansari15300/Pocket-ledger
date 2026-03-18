@@ -583,6 +583,18 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     const isMobile = useIsMobile();
     const pathname = usePathname();
     const { user, loading } = useAuth();
+
+    // Settings page: hide body/html scroll so only list + details scroll independently
+    useEffect(() => {
+        if (pathname?.startsWith("/settings")) {
+            document.documentElement.style.overflow = "hidden";
+            document.body.style.overflow = "hidden";
+            return () => {
+                document.documentElement.style.overflow = "";
+                document.body.style.overflow = "";
+            };
+        }
+    }, [pathname]);
     useMarkMessagesDelivered();
     const { toast } = useToast();
     const [showDisclaimer, setShowDisclaimer] = useState(false);
@@ -727,11 +739,11 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <ReportListProvider>
               <ReportPartyViewProvider>
                 <DeviceLimitProvider>
-                  <div id="app-container" className="relative flex h-screen bg-background">
+                  <div id="app-container" className={cn("relative flex h-screen bg-background", pathname?.startsWith("/settings") && "overflow-hidden")}>
                     <AppSidebar />
                     <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l app-main-border")}>
                       <AppHeader />
-                      <main className={cn("flex-1 overflow-y-auto")}>{children}</main>
+                      <main className={cn("flex-1 min-h-0", pathname?.startsWith("/settings") ? "overflow-hidden" : "overflow-y-auto")}>{children}</main>
                       <MobileFloatingButton />
                     </div>
                     <DeviceLimitOverlay />

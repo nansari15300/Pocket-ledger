@@ -58,6 +58,9 @@ const DEFAULT_VOUCHER_SETTINGS = {
     direct_expense: false, journal: false, note: false, add_salary: false, pay_salary: false,
   },
   enableLinkPaymentToTxns: true,
+  voucherHistoryEnabled: true,
+  voucherHistoryLimit: 10,
+  voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
 };
 
 const DEFAULT_INCOME_EXPENSE_ACCOUNTS = [

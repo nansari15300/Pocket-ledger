@@ -212,6 +212,8 @@ export function CreateJournalForm({
   const initialFilesRef = useRef<string[]>([]);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
+  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
   const processAndSaveRef = useRef<((data: JournalFormValues, saveAndNew: boolean, approveAfterSave?: boolean) => Promise<void>) | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -297,6 +299,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
  useEffect(() => {
     if (voucher) {
+        const vid = voucher.id;
+        const isSameVoucher = lastResetVoucherIdRef.current === vid;
+        if (vid && isSameVoucher && isFormDirty) return;
+        if (vid) lastResetVoucherIdRef.current = vid;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
             initialValues.voucherNumber = "";
@@ -323,10 +329,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setJournalAllocationsBySide({ debit, credit });
         initialJournalAllocationsRef.current = { debit: [...debit], credit: [...credit] };
     } else {
+        lastResetVoucherIdRef.current = null;
         setJournalAllocationsBySide({ debit: [], credit: [] });
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
     }
-}, [voucher, form, isEditingAndConverting]);
+}, [voucher, form, isEditingAndConverting, isFormDirty]);
 
   
   useEffect(() => {
@@ -2125,7 +2132,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
@@ -2182,7 +2189,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>

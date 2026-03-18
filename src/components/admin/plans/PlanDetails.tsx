@@ -27,6 +27,8 @@ const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
     allowCompanyAdminRecycleBin: "Allow Restore Company",
     canAddAvatar: "Can add avatar (Profile & Company logo)",
     canAddFileImagePdf: "Can add file (image/PDF) on vouchers",
+    voucherHistoryEnabled: "Voucher edit history enabled",
+    voucherHistoryLimit: "Max history entries per voucher",
 };
 
 export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
@@ -266,6 +268,36 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                     className="w-20 h-8"
                                     value={Math.max(0, Math.min(10, Number(editablePlan.entitlements.maxVoucherFileCount) || 0))}
                                     onChange={(e) => handleEntitlementChange('maxVoucherFileCount', Math.max(0, Math.min(10, parseInt(e.target.value, 10) || 0)))}
+                                />
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">
+                        <Switch
+                            id={`${plan.id}-voucherHistoryEnabled`}
+                            checked={!!editablePlan.entitlements.voucherHistoryEnabled}
+                            onCheckedChange={(checked) => {
+                                handleEntitlementChange('voucherHistoryEnabled', checked);
+                                if (!checked) {
+                                    handleEntitlementChange('voucherHistoryLimit', 0);
+                                } else if ((editablePlan.entitlements.voucherHistoryLimit as number) <= 0) {
+                                    handleEntitlementChange('voucherHistoryLimit', 10);
+                                }
+                            }}
+                        />
+                        <Label htmlFor={`${plan.id}-voucherHistoryEnabled`} className="flex-1">{entitlementLabels.voucherHistoryEnabled}</Label>
+                        {editablePlan.entitlements.voucherHistoryEnabled && (
+                            <div className="flex items-center gap-2">
+                                <Label htmlFor={`${plan.id}-voucherHistoryLimit`} className="text-sm whitespace-nowrap">Max history entries</Label>
+                                <Input
+                                    id={`${plan.id}-voucherHistoryLimit`}
+                                    type="number"
+                                    min={1}
+                                    max={100}
+                                    className="w-20 h-8"
+                                    value={Math.max(0, Math.min(100, Number(editablePlan.entitlements.voucherHistoryLimit) || 0))}
+                                    onChange={(e) => handleEntitlementChange('voucherHistoryLimit', Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
                                 />
                             </div>
                         )}

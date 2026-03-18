@@ -33,6 +33,7 @@ import { CheckCircle } from "lucide-react";
 import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -256,6 +257,8 @@ export function AddVoucherDialog(props: any) {
   const [isApproving, setIsApproving] = useState(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
   const [editingDisabled, setEditingDisabled] = useState(false);
+  /** Block edit rule: when voucher history is full and setting is "Block edit", disable Save. */
+  const [historyBlocksEdit, setHistoryBlocksEdit] = useState(false);
   /** When sale/purchase form has pending link changes (e.g. user unlinked in dialog), form reports effective state so we enable edit locally. */
   const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
 
@@ -439,6 +442,23 @@ export function AddVoucherDialog(props: any) {
     return () => { cancelled = true; };
   }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, companyId, user?.uid, vouchers, canEditRecord]);
 
+  // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
+  // Re-run when company changes so live voucher settings (from Settings) apply immediately
+  useEffect(() => {
+    if (!companyId || !effectiveVoucher?.id) {
+      setHistoryBlocksEdit(false);
+      return;
+    }
+    let cancelled = false;
+    getEffectiveHistorySettings(companyId).then(({ enabled, limit, fullBehavior }) => {
+      if (cancelled) return;
+      const existingHistory = Array.isArray(effectiveVoucher?.history) ? effectiveVoucher.history : [];
+      const blocks = enabled && fullBehavior === 'block_edit' && existingHistory.length >= limit;
+      setHistoryBlocksEdit(blocks);
+    });
+    return () => { cancelled = true; };
+  }, [companyId, effectiveVoucher?.id, effectiveVoucher?.history, company?.voucherHistoryFullBehavior, company?.voucherHistoryEnabled, company?.voucherHistoryLimit]);
+
   // Show Approve / Save & Approve for any existing voucher if user can approve (approved voucher: enable when form has changes)
   const showApproveButton =
     !!effectiveVoucher?.id &&
@@ -508,7 +528,7 @@ export function AddVoucherDialog(props: any) {
   }, [onOpenChange, companyId, defaultVoucherData?.unassignedFile?.id, props]);
 
   const headerBlock = (
-    <DialogHeader className={cn("px-[2px] py-6 pb-2 md:p-6 md:pb-2 border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center", hasLinks && "min-h-[140px]", isDesktop && "cursor-grab active:cursor-grabbing select-none")} onMouseDown={isDesktop ? handleDragStart : undefined}>
+    <DialogHeader className={cn("px-[2px] py-6 pb-2 md:p-6 md:pb-2 border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center", (hasLinks || historyBlocksEdit) && "min-h-[140px]", isDesktop && "cursor-grab active:cursor-grabbing select-none")} onMouseDown={isDesktop ? handleDragStart : undefined}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <DialogTitle className="text-2xl font-bold font-headline text-inherit">
@@ -530,6 +550,14 @@ export function AddVoucherDialog(props: any) {
           </p>
         </div>
       )}
+      {/* Block edit rule: when history full + setting "Block edit", show message and disable Save */}
+      {historyBlocksEdit && !hasLinks && (
+        <div className="w-fit max-w-full mx-auto mt-3 bg-amber-600 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
+          <p className="text-base md:text-xl font-semibold text-center text-white m-0">
+            Voucher history is full. Clear history in History dialog to edit and save changes.
+          </p>
+        </div>
+      )}
     </DialogHeader>
   );
 
@@ -542,7 +570,7 @@ export function AddVoucherDialog(props: any) {
         onVoucherAction={handleAction}
         onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
         showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
-        editingDisabled={editingDisabled}
+        editingDisabled={editingDisabled || historyBlocksEdit}
         restrictConvertWhenLinked={hasLinks}
         deleteDisabledWhenLinked={hasLinks}
         showApproveButton={showApproveButton}

@@ -180,37 +180,38 @@ function SettingsPageContent() {
 
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 p-4 sm:p-6 md:p-8 flex-1 min-h-0">
+        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 p-4 sm:p-6 md:p-8 flex-1 min-h-0 overflow-hidden">
           
-          <aside className="flex flex-col min-h-0">
-              <div className="pb-4 flex-shrink-0">
-                  <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                  <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <div className="flex flex-col gap-1">
-                    {availableNavItems.map((item) => (
+          <aside className="flex flex-col min-h-0 overflow-hidden md:w-[280px] md:shrink-0 md:border-r md:border-border -mt-4 sm:-mt-6 md:-mt-8">
+              <div className="flex flex-col min-h-0 h-full pt-4 sm:pt-6 md:pt-8">
+                  <div className="pb-4 flex-shrink-0 px-4">
+                      <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                      <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-0">
+                    <div className="flex flex-col gap-1">
+                        {availableNavItems.map((item) => (
                          <Button
                             key={item.id}
                             variant={activeView === item.id ? "secondary" : "ghost"}
                             className={cn(
-                                "justify-start gap-3 w-full",
+                                "justify-start gap-3 w-full px-4",
                                 activeView === item.id && "bg-secondary font-medium",
                                 item.isDanger && "text-destructive hover:bg-destructive/10 hover:text-destructive"
                             )}
                             onClick={() => setActiveViewWithUrl(item.id)}
                         >
-                            <item.icon className="h-5 w-5" />
+                            <item.icon className="h-5 w-5 shrink-0" />
                             <span>{item.title}</span>
                         </Button>
-                      )
-                    )}
-                </div>
+                      ))}
+                    </div>
+                  </div>
               </div>
           </aside>
   
-          <main className="min-h-0 w-full flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto">
+          <main className="min-h-0 w-full flex flex-col overflow-hidden min-w-0 -mt-4 sm:-mt-6 md:-mt-8 pt-4 sm:pt-6 md:pt-8">
+              <div className="flex-1 min-h-0 overflow-y-auto">
                   {renderActiveView()}
               </div>
           </main>

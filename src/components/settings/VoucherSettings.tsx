@@ -16,7 +16,9 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, PlusCircle, X } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { getPlanVoucherHistoryLimit } from "@/lib/voucherHistoryUtils";
 import { useAuth } from "@/hooks/useAuth";
 import { useState, useEffect } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
@@ -150,6 +152,9 @@ const voucherSettingsSchema = z.object({
   requirePaymentLinkByRole: requireLinkByRoleSchema.optional(),
   /** On opposite vouchers (Payment In, Contra in, Direct Income): when true, "Link for spend wise" is editable; when false, read-only. */
   spendWiseOppositeVoucherEditable: z.boolean(),
+  voucherHistoryEnabled: z.boolean(),
+  voucherHistoryLimit: z.number().min(1).max(100),
+  voucherHistoryFullBehavior: z.enum(['block_edit', 'allow_edit_delete_last']),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
@@ -160,6 +165,7 @@ export function VoucherSettings() {
   const { toast } = useToast();
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
   const [isLoading, setIsLoading] = useState(false);
+  const [planHistoryLimit, setPlanHistoryLimit] = useState<number>(10);
    const [newPrefixValues, setNewPrefixValues] = useState<Record<keyof VoucherPrefixValues, string>>(
       Object.keys(defaultPrefixes).reduce((acc, key) => ({ ...acc, [key]: "" }), {} as any)
     );
@@ -193,8 +199,16 @@ export function VoucherSettings() {
           (acc, r) => ({ ...acc, [r]: { payment_out: true, contra: true, direct_expense: true } }),
           {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
         ),
+        voucherHistoryEnabled: true,
+        voucherHistoryLimit: 10,
+        voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
     },
   });
+
+  useEffect(() => {
+    if (!companyId) return;
+    getPlanVoucherHistoryLimit(companyId).then(setPlanHistoryLimit);
+  }, [companyId]);
 
   useEffect(() => {
     if (company) {
@@ -240,9 +254,12 @@ export function VoucherSettings() {
             return acc;
           }, {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>);
         })(),
-      });
+        voucherHistoryEnabled: (company as any).voucherHistoryEnabled !== false,
+        voucherHistoryLimit: Math.max(1, Math.min(planHistoryLimit, Number((company as any).voucherHistoryLimit) || 10)),
+        voucherHistoryFullBehavior: ((company as any).voucherHistoryFullBehavior as 'block_edit' | 'allow_edit_delete_last') || 'allow_edit_delete_last',
+    });
     }
-  }, [company, form]);
+  }, [company, form, planHistoryLimit]);
   
   const handleAddPrefix = (key: keyof VoucherPrefixValues) => {
         const newValue = newPrefixValues[key]?.trim();
@@ -272,6 +289,10 @@ export function VoucherSettings() {
     }
     setIsLoading(true);
     try {
+      const cappedHistoryLimit = Math.min(data.voucherHistoryLimit, planHistoryLimit);
+      if (data.voucherHistoryLimit > planHistoryLimit) {
+        toast({ title: "Plan limit applied", description: `Max history entries capped to ${planHistoryLimit} (your plan's limit).` });
+      }
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, {
         autoVoucherNumbering: data.autoVoucherNumbering,
@@ -283,6 +304,9 @@ export function VoucherSettings() {
       spendWiseEnabled: data.spendWiseEnabled,
       spendWiseOppositeVoucherEditable: data.spendWiseOppositeVoucherEditable,
       requirePaymentLinkByRole: data.requirePaymentLinkByRole,
+      voucherHistoryEnabled: data.voucherHistoryEnabled,
+      voucherHistoryLimit: cappedHistoryLimit,
+      voucherHistoryFullBehavior: data.voucherHistoryFullBehavior,
       });
       toast({ title: "Success", description: "Voucher settings have been updated." });
     } catch (error) {
@@ -466,6 +490,86 @@ export function VoucherSettings() {
                 )}
               </div>
             </div>
+
+            {/* Voucher Edit History — company setting */}
+            {isCompanyOwner && (
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium border-b pb-2">Voucher Edit History</h3>
+                <CardDescription>
+                  Track changes to vouchers. When history is full, choose to block edits or allow edit by overwriting oldest history.
+                </CardDescription>
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={isLoading} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Save Voucher Settings
+                  </Button>
+                </div>
+                <Card className="p-4 space-y-4">
+                  <FormField
+                    control={form.control}
+                    name="voucherHistoryEnabled"
+                    render={({ field }: any) => (
+                      <FormItem className="flex flex-row items-center justify-between">
+                        <div>
+                          <FormLabel>Enable voucher edit history</FormLabel>
+                          <FormDescription className="sr-only">When ON, edits are tracked; when OFF, no history is stored.</FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  {form.watch("voucherHistoryEnabled") && (
+                    <>
+                      <FormField
+                        control={form.control}
+                        name="voucherHistoryLimit"
+                        render={({ field }: any) => (
+                          <FormItem>
+                            <FormLabel>Max history entries per voucher</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={planHistoryLimit}
+                                {...field}
+                                onChange={(e) => field.onChange(Math.max(1, Math.min(planHistoryLimit, parseInt(e.target.value, 10) || 10)))}
+                              />
+                            </FormControl>
+                            <FormDescription>1–{planHistoryLimit}. Plan cap from subscription.</FormDescription>
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="voucherHistoryFullBehavior"
+                        render={({ field }: any) => (
+                          <FormItem>
+                            <FormLabel>When history is full</FormLabel>
+                            <Select
+                              value={field.value ?? 'allow_edit_delete_last'}
+                              onValueChange={field.onChange}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select behavior" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="block_edit">Block edit (user cannot edit until admin clears history)</SelectItem>
+                                <SelectItem value="allow_edit_delete_last">Allow edit over writing oldest History</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </>
+                  )}
+                </Card>
+              </div>
+            )}
 
             {/* Auto Numbering */}
              <div className="space-y-4">

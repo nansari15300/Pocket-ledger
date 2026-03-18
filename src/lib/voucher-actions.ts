@@ -16,6 +16,7 @@ import { firestore } from '@/lib/firebase';
 import { ensureSuperAdminInSharedEmails } from '@/lib/superAdminEmails';
 import { diff } from 'deep-object-diff';
 import { moveFilesToVoucherDate } from './storage'; // Import the move function
+import { getEffectiveHistorySettings } from './voucherHistoryUtils';
 
 /**
  * 1. Auto-setup function: Creates default groups and accounts for each menu.
@@ -318,16 +319,20 @@ export async function saveVoucher(
     }
   }
 
-  // Prepare history entry
+  const existingHistory = Array.isArray((oldData as any).history) ? (oldData as any).history : [];
+  const { enabled: historyEnabled, limit: historyLimit, fullBehavior } = await getEffectiveHistorySettings(companyId);
+
+  // When block_edit: disallow editing if history is already at limit
+  if (historyEnabled && fullBehavior === 'block_edit' && existingHistory.length >= historyLimit) {
+    throw new Error("Voucher history limit reached. Cannot edit until history is cleared or settings allow overwriting.");
+  }
+
   const newEntry = {
     changedAt: new Date(),
     changedBy: userId,
     changes: changedFields,
   };
-
-  // Merge new history
-  const existingHistory = Array.isArray((oldData as any).history) ? (oldData as any).history : [];
-  const newHistory = [newEntry, ...existingHistory].slice(0, 10);
+  const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
 
   // ✅ Update payload (filePaths only if moved)
   const updatePayload: any = {

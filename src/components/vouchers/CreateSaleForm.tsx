@@ -264,6 +264,8 @@ export function CreateSaleForm({
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
+  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
@@ -513,6 +515,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (voucher?.id) {
+      const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
+      if (isSameVoucher && isFormDirty) return;
+      lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
@@ -521,6 +526,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
       }
     } else if (voucher) {
+      lastResetVoucherIdRef.current = null;
       setSavedVoucherId(null);
       if (voucher.partyId != null) form.setValue("partyId", voucher.partyId);
       if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
@@ -529,8 +535,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setFiles(urlsToSet);
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
       }
+    } else {
+      lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form]);
+  }, [voucher, form, isFormDirty]);
 
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 
@@ -2912,7 +2920,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve"))}
                 </Button>
                 <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2961,7 +2969,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     {showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve")}
                   </Button>

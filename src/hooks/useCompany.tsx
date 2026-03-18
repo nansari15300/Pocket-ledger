@@ -105,6 +105,12 @@ export type Company = {
     storageUsedBytes?: number;
     /** If false, shared users can only use one device; when they log in on a new device, they must log out from this device or replace the old one. Plan max devices still applies. */
     userCanUseMultiDevice?: boolean;
+    /** Plan-wise: enable voucher edit history. Company can further toggle. */
+    voucherHistoryEnabled?: boolean;
+    /** Max history entries per voucher (capped by plan). */
+    voucherHistoryLimit?: number;
+    /** When history full: block_edit = disallow edit; allow_edit_delete_last = allow edit, overwrite oldest. */
+    voucherHistoryFullBehavior?: 'block_edit' | 'allow_edit_delete_last';
 };
 
 type CompanyContextType = {
