@@ -80,8 +80,6 @@ export function CreateNoteForm({
     initialContext,
     initialEntityId,
     editingDisabled = false,
-    historyLimitReached = false,
-    onSaveBlockedByHistoryLimit,
     showApproveButton = false,
     showSaveAndApproveOnCreate = false,
     onApprove,
@@ -95,8 +93,6 @@ export function CreateNoteForm({
     initialContext?: string,
     initialEntityId?: string,
     editingDisabled?: boolean,
-    historyLimitReached?: boolean,
-    onSaveBlockedByHistoryLimit?: () => void,
     showApproveButton?: boolean,
     showSaveAndApproveOnCreate?: boolean,
     onApprove?: () => void,
@@ -328,14 +324,6 @@ export function CreateNoteForm({
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    // block_edit + history full: block everything (no save, no approve)
-    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
-    // hasLinks only: approve-only — user can approve voucher without saving form changes
-    if (options.approveAfterSave && onApprove && editingDisabled) {
-      onApprove();
-      return;
-    }
-    if (editingDisabled) return;
     const isValid = await form.trigger();
     if (!isValid) {
         sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
@@ -808,7 +796,7 @@ export function CreateNoteForm({
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : canShowCreateApproveButton ? (
-                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || historyLimitReached || (editingDisabled && !historyLimitReached) || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
+                  <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_APPROVE_CLASS)}>{isLoading ? "..." : "Save & Approve"}</Button>
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
@@ -851,7 +839,7 @@ export function CreateNoteForm({
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || historyLimitReached || (editingDisabled && !historyLimitReached) || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!canShowCreateApproveButton || !canApproveTransactions || isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>

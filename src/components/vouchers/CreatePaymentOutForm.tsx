@@ -177,8 +177,6 @@ export function CreatePaymentOutForm({
   defaultTab,
   defaultVoucherData,
   editingDisabled = false,
-  historyLimitReached = false,
-  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -193,8 +191,6 @@ export function CreatePaymentOutForm({
   defaultTab?: 'payment_out' | 'direct_expense';
   defaultVoucherData?: any;
   editingDisabled?: boolean;
-  historyLimitReached?: boolean;
-  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -636,14 +632,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    // block_edit + history full: block everything (no save, no approve)
-    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
-    // hasLinks only: approve-only — user can approve voucher without saving form changes
-    if (options.approveAfterSave && onApprove && editingDisabled) {
-      onApprove();
-      return;
-    }
-    if (editingDisabled) return;
     const enteredAmount = Number(form.getValues("amount")) || 0;
     if (isAmountExceedingSelectedAccount(enteredAmount)) {
       // Stop save when typed amount is higher than currently selected account balance.
@@ -2421,7 +2409,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem className="min-w-0 max-w-full overflow-hidden">
                       <FormLabel>Narration</FormLabel>
                       <FormControl>
-                        <Textarea placeholder="Additional details..." {...field} disabled={historyLimitReached} className="min-w-0 max-w-full w-full resize-none overflow-hidden text-ellipsis" />
+                        <Textarea placeholder="Additional details..." {...field} className="min-w-0 max-w-full w-full resize-none overflow-hidden text-ellipsis" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -2513,7 +2501,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                     <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2550,7 +2538,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                     <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2604,12 +2592,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         Save
                       </Button>
                       {voucher?.id ? (
-                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                           {isFormDirty ? "Save & Approve" : "Approve"}
                         </Button>
                       ) : (
-                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           Save & Approve
                         </Button>
@@ -2659,12 +2647,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         Save
                       </Button>
                       {voucher?.id ? (
-                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                           {isFormDirty ? "Save & Approve" : "Approve"}
                         </Button>
                       ) : (
-                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           Save & Approve
                         </Button>

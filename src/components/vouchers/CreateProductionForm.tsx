@@ -134,8 +134,6 @@ export function CreateProductionForm({
   voucher,
   onVoucherAction,
   editingDisabled = false,
-  historyLimitReached = false,
-  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -145,8 +143,6 @@ export function CreateProductionForm({
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
   editingDisabled?: boolean;
-  historyLimitReached?: boolean;
-  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -168,8 +164,6 @@ export function CreateProductionForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
-  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
-  const lastResetVoucherIdRef = useRef<string | null>(null);
 
   const isMobile = useIsMobile();
   const canEditRates = can('edit_item_rates_in_vouchers');
@@ -241,10 +235,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (voucher) {
-      const vid = voucher.id;
-      const isSameVoucher = lastResetVoucherIdRef.current === vid;
-      if (vid && isSameVoucher && isFormDirty) return;
-      if (vid) lastResetVoucherIdRef.current = vid;
       const initialValues = getInitialFormValues(voucher);
       if (isEditingAndConverting) {
         initialValues.productionNumber = "";
@@ -254,10 +244,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if(voucher.unassignedFile) {
         form.setValue('unassignedFile', voucher.unassignedFile);
       }
-    } else {
-      lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form, isEditingAndConverting, isFormDirty]);
+  }, [voucher, form, isEditingAndConverting]);
 
   useEffect(() => {
     if (!isEditing || isEditingAndConverting) {
@@ -497,15 +485,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const onSubmit = async (data: ProductionFormValues) => {
     if (!user || !companyId) return;
-    // block_edit + history full: block everything (no save, no approve)
-    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
-    // hasLinks only: approve-only — user can approve voucher without saving form changes
-    if (approveAfterSaveRef.current && onApprove && editingDisabled) {
-      approveAfterSaveRef.current = false;
-      onApprove();
-      return;
-    }
-    if (editingDisabled) return;
 
     try {
       if (isEditing) {
@@ -1210,7 +1189,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 Cancel
               </Button>
               {voucher?.id ? (
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                 </Button>
               ) : showSaveAndApproveOnCreate ? (
@@ -1257,7 +1236,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Save
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     {isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>

@@ -18,7 +18,6 @@ import { auth, firestore, storage } from "@/lib/firebase";
 import { ref as storageRef, deleteObject } from "firebase/storage";
 import { moveFilesToVoucherDateClient } from "./storageClient";
 import { getPlan, type PlanId } from "@/config/plans";
-import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
@@ -152,7 +151,6 @@ export async function saveVoucher(
   if (!voucherRef) {
     const companySnap = await getDoc(doc(firestore, "companies", companyId));
     const companyData = companySnap.data() || {};
-    const { enabled: historyEnabled } = await getEffectiveHistorySettings(companyId);
     const planId = (companyData?.planId as PlanId) || "basic";
     const defaultPlan = getPlan(planId);
     const plansSnap = await getDoc(doc(firestore, "app_settings", "plans"));
@@ -205,10 +203,6 @@ export async function saveVoucher(
     const isOwnerCreator = companyData?.ownerId === userId;
 
     const now = new Date();
-    // When history disabled, store empty array; when enabled, store initial creation entry
-    const initialHistory = historyEnabled
-      ? [{ changedAt: now, changedBy: userId, changes: { created: { from: "N/A", to: "Created" }, lastEditedByUserName: { from: "N/A", to: creatorDisplayName || userId }, lastEditedAt: { from: null, to: now } } }]
-      : [];
     const docRef = await addDoc(collection(firestore, voucherPath), {
       ...cleanVoucherData,
       companyId,
@@ -219,7 +213,17 @@ export async function saveVoucher(
       lastEditedByUserName: creatorDisplayName || userId,
       lastEditedAt: serverTimestamp(),
       createdAt: serverTimestamp(),
-      history: initialHistory,
+      history: [
+        {
+          changedAt: now,
+          changedBy: userId,
+          changes: {
+            created: { from: "N/A", to: "Created" },
+            lastEditedByUserName: { from: "N/A", to: creatorDisplayName || userId },
+            lastEditedAt: { from: null, to: now },
+          },
+        },
+      ],
     });
     const newId = docRef.id;
 
@@ -309,21 +313,16 @@ export async function saveVoucher(
     }
   }
 
-  const { enabled: historyEnabled, limit: historyLimit, fullBehavior } = await getEffectiveHistorySettings(companyId);
-  const existingHistory = Array.isArray((oldData as any)?.history) ? (oldData as any).history : [];
-  // block_edit: when history full, reject any save (user must clear history). allow_edit_delete_last: overwrite oldest.
-  if (fullBehavior === 'block_edit' && existingHistory.length >= historyLimit) {
-    throw new Error("Voucher history is full. Clear history in History dialog to edit and save changes.");
-  }
   const now = new Date();
   const currentUserName = auth.currentUser?.displayName || auth.currentUser?.email?.split("@")?.[0] || userId;
+  const existingHistory = Array.isArray((oldData as any)?.history) ? (oldData as any).history : [];
   // Old: use saved name, or previous entry's editor UID (so history can show name for old vouchers)
   const previousEditor = (oldData as any)?.lastEditedByUserName || (existingHistory[0] as any)?.changedBy || "N/A";
   changedFields.lastEditedByUserName = { from: previousEditor, to: currentUserName };
   changedFields.lastEditedAt = { from: (oldData as any)?.lastEditedAt ?? (oldData as any)?.updatedAt ?? null, to: now };
 
   const newEntry = { changedAt: now, changedBy: userId, changes: changedFields };
-  const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const newHistory = [newEntry, ...existingHistory].slice(0, 10);
   const updatePayload: any = {
     ...cleanVoucherData,
     lastEditedBy: userId,
@@ -366,7 +365,6 @@ export async function updateVoucherSpendWiseLinks(
 ): Promise<void> {
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
-  const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
   const authUser = auth.currentUser;
   const currentUserName = authUser?.displayName || authUser?.email?.split("@")?.[0] || userId;
   const now = new Date();
@@ -384,7 +382,7 @@ export async function updateVoucherSpendWiseLinks(
       lastEditedAt: { from: oldData?.lastEditedAt ?? null, to: now },
     },
   };
-  const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const newHistory = [newEntry, ...existingHistory].slice(0, 10);
   await updateDoc(voucherRef, {
     linkedPaymentInIds,
     linkedPaymentInAmounts,
@@ -474,7 +472,6 @@ export async function approveVoucherWithHistory(
   }
 
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
-  const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
 
   await runTransaction(firestore, async (tx) => {
     const snap = await tx.get(voucherRef);
@@ -498,7 +495,7 @@ export async function approveVoucherWithHistory(
       },
     };
 
-    const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+    const newHistory = [approvalEntry, ...existingHistory].slice(0, 10);
 
     tx.update(voucherRef, {
       isApproved: true,

@@ -20,7 +20,6 @@ import { firestore } from '@/lib/firebase';
 import { ensureSuperAdminInSharedEmails } from '@/lib/superAdminEmails';
 import { diff } from 'deep-object-diff';
 import { moveFilesToVoucherDate } from './storage'; // Import the move function
-import { getEffectiveHistorySettings } from '@/lib/voucherHistoryUtils';
 
 /** Default voucher prefixes matching VoucherSettings - used when creating new company */
 const DEFAULT_VOUCHER_PREFIXES: Record<string, string[]> = {
@@ -41,9 +40,6 @@ const DEFAULT_VOUCHER_PREFIXES: Record<string, string[]> = {
 
 /** Default voucher/company settings for new company */
 const DEFAULT_VOUCHER_SETTINGS = {
-  voucherHistoryEnabled: true,
-  voucherHistoryLimit: 10,
-  voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
   autoVoucherNumbering: {
     sale: true, sale_service: true, purchase: true, purchase_service: true,
     payment_in: true, payment_out: true, contra: true, direct_income: true,
@@ -484,8 +480,7 @@ export async function saveVoucher(
     }
   }
 
-  // Prepare history entry — use configurable limit from company + plan
-  const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
+  // Prepare history entry
   const newEntry = {
     changedAt: new Date(),
     changedBy: userId,
@@ -494,7 +489,7 @@ export async function saveVoucher(
 
   // Merge new history
   const existingHistory = Array.isArray((oldData as any).history) ? (oldData as any).history : [];
-  const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const newHistory = [newEntry, ...existingHistory].slice(0, 10);
 
   // ✅ Update payload (filePaths only if moved)
   const updatePayload: any = {

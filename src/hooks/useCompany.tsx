@@ -96,12 +96,6 @@ export type Company = {
     storageOption?: 'firebase' | 'drive';
     /** Enable "Link Payment to Txns" feature (allocate payment to invoices). */
     enableLinkPaymentToTxns?: boolean;
-    /** Company override: enable voucher edit history (plan must allow). */
-    voucherHistoryEnabled?: boolean;
-    /** Company override: max history entries per voucher (capped by plan). */
-    voucherHistoryLimit?: number;
-    /** When history is full: block_edit = disable edit; allow_edit_delete_last = allow edit by overwriting oldest history. */
-    voucherHistoryFullBehavior?: 'block_edit' | 'allow_edit_delete_last';
     /** Country selected when company was created (e.g. Nepal for VAT reports). */
     country?: string;
     /** Approve & message notification on/off and where to show (entity, list, transaction). */

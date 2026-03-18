@@ -263,8 +263,6 @@ export function SalaryForm({
   initialMode = "add_salary",
   defaultVoucherData,
   editingDisabled = false,
-  historyLimitReached = false,
-  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -279,8 +277,6 @@ export function SalaryForm({
   initialMode?: "add_salary" | "payment_out";
   defaultVoucherData?: any;
   editingDisabled?: boolean;
-  historyLimitReached?: boolean;
-  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -337,8 +333,6 @@ export function SalaryForm({
   const [hasLocalBillWiseDraftEdits, setHasLocalBillWiseDraftEdits] = useState(false);
   const initialSalaryLinkMapRef = useRef<SalaryLinkMap>({});
   const initialOBAllocatedRef = useRef<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
-  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
-  const lastResetVoucherIdRef = useRef<string | null>(null);
 
   const [activeLineIndex, setActiveLineIndex] = React.useState<number | null>(null);
 
@@ -420,19 +414,6 @@ export function SalaryForm({
     useEffect(() => {
         const isEditingExisting = !!voucher?.id;
         if (isEditingExisting) {
-            const vid = voucher.id;
-            const isSameVoucher = lastResetVoucherIdRef.current === vid;
-            const _formDirty = form.formState.isDirty;
-            const _fileDirty = (() => {
-                const currentUrls = files.filter(f => typeof f === 'string') as string[];
-                const newFiles = files.filter(f => f instanceof File);
-                if (newFiles.length > 0) return true;
-                const init = initialFilesRef.current;
-                return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
-            })();
-            const _billWiseDirty = !areSalaryLinkMapsEqual(localSalaryLinkMap, initialSalaryLinkMapRef.current) || latestOBAllocated !== initialOBAllocatedRef.current;
-            if (isSameVoucher && (_formDirty || _fileDirty || _billWiseDirty)) return;
-            lastResetVoucherIdRef.current = vid;
             // Existing salary voucher edit: hydrate full form + linked files from saved voucher.
             const initialValues = getInitialFormValues(voucher, processedStaff, processedTaxes);
             form.reset(initialValues);
@@ -446,7 +427,6 @@ export function SalaryForm({
             setHasLocalBillWiseDraftEdits(false);
             return;
         }
-        lastResetVoucherIdRef.current = null;
         if (defaultVoucherData) {
             // Gallery -> Unassigned "Attach to Add Salary": preload file URL and defaults for new salary voucher.
             const initialValues = getInitialFormValues(defaultVoucherData, processedStaff, processedTaxes);
@@ -460,7 +440,7 @@ export function SalaryForm({
             setHasLocalBillWiseDraftEdits(false);
         }
     // Rehydrate only when source voucher/default payload changes; avoid resetting local draft on background refresh.
-    }, [voucher?.id, defaultVoucherData, processedStaff, processedTaxes, form, files, localSalaryLinkMap, latestOBAllocated]);
+    }, [voucher?.id, defaultVoucherData, processedStaff, processedTaxes, form]);
 
   const prevLinkDialogOpenRef = useRef(false);
 
@@ -986,14 +966,6 @@ export function SalaryForm({
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; approveAfterSave?: boolean; print?: boolean } = {}) {
     e?.preventDefault?.();
-    // block_edit + history full: block everything (no save, no approve)
-    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
-    // hasLinks only: approve-only — user can approve voucher without saving form changes
-    if (options.approveAfterSave && onApprove && editingDisabled) {
-      onApprove();
-      return;
-    }
-    if (editingDisabled) return;
     const isValid = await form.trigger();
     if (!isValid) {
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
@@ -2293,7 +2265,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || (editingDisabled && !historyLimitReached)) : (!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : "Save & Approve"}
                 </Button>
                 <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2342,7 +2314,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || (editingDisabled && !historyLimitReached)) : (!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     Save & Approve
                   </Button>
