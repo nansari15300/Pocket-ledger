@@ -61,11 +61,15 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     : [];
   const toRemoveFromTarget = targetAllocations.filter((a) => a.voucherId && !(Number(linkedAmounts[a.voucherId]) > 0)).map((a) => a.voucherId);
   const toRemove = toRemoveFromTarget.length > 0 ? toRemoveFromTarget : (() => {
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service"];
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
     const sourceTypes = mode === "sale" ? crTypes : drTypes;
     return (vouchers as any[])
-      .filter((v) => sourceTypes.includes(v.type) && String((v as any).partyId ?? "") === String(targetPartyId))
+      .filter((v) => {
+        if (!sourceTypes.includes(v.type)) return false;
+        if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        return String((v as any).partyId ?? "") === String(targetPartyId);
+      })
       .filter((v) => ((v.allocations as Allocation[] | undefined) || []).some((a) => a.voucherId === targetVoucherId))
       .filter((v) => !(Number(linkedAmounts[v.id]) > 0))
       .map((v) => v.id);
@@ -109,6 +113,8 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     const newTax = balanceKind === "tax" ? prevTax + addAmt : prevTax;
     const newNet = balanceKind === "net" || balanceKind === "all" ? prevNet + addAmt : prevNet;
     const newEntry: Allocation = { voucherId: targetVoucherId, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
+    const sourceVoucher = (vouchers as any[]).find((v) => v.id === sourceVoucherId);
+    if (sourceVoucher?.type === "journal") (newEntry as any).linkedAccountId = targetPartyId;
     if (idx >= 0) allocations[idx] = newEntry;
     else allocations.push(newEntry);
     await updateDoc(ref, { allocations });
@@ -244,11 +250,15 @@ export function LinkAdvancesToVoucherDialog({
     const targetVoucher = (vouchers as any[]).find((v) => v.id === targetVoucherId);
     const obAllocated = Number(targetVoucher?.openingBalanceAllocated) || 0;
     if (obAllocated > 0) initial[OPENING_BALANCE_VOUCHER_ID] = obAllocated;
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service"];
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
     const srcTypes = mode === "sale" ? crTypes : drTypes;
     (vouchers as any[])
-      .filter((v) => srcTypes.includes(v.type) && String((v as any).partyId ?? "") === String(targetPartyId))
+      .filter((v) => {
+        if (!srcTypes.includes(v.type)) return false;
+        if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        return String((v as any).partyId ?? "") === String(targetPartyId);
+      })
       .forEach((v) => {
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         const entry = allocations.find((a) => a.voucherId === targetVoucherId);
@@ -307,12 +317,16 @@ export function LinkAdvancesToVoucherDialog({
     const updates = Object.entries(linkedAmounts).filter(([, amt]) => Number(amt) > 0);
     const voucherPath = `companies/${companyId}/vouchers`;
 
-    // Source voucher IDs that currently have an allocation to this target — same types as dialog (sale: Cr incl. purchase; purchase: Dr incl. sale)
-    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service"];
-    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service"];
+    // Source voucher IDs that currently have an allocation to this target — same types as dialog (sale: Cr incl. purchase, journal; purchase: Dr incl. sale, journal)
+    const crTypes = ["payment_in", "direct_income", "purchase", "purchase_service", "journal"];
+    const drTypes = ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
     const sourceTypes = mode === "sale" ? crTypes : drTypes;
     const sourceVoucherIds = (vouchers as any[])
-      .filter((v) => sourceTypes.includes(v.type) && String((v as any).partyId ?? "") === String(targetPartyId))
+      .filter((v) => {
+        if (!sourceTypes.includes(v.type)) return false;
+        if (v.type === "journal") return (v.entries as any[] || []).some((e: any) => String(e?.accountId ?? "") === String(targetPartyId));
+        return String((v as any).partyId ?? "") === String(targetPartyId);
+      })
       .filter((v) => ((v.allocations as Allocation[] | undefined) || []).some((a) => a.voucherId === targetVoucherId))
       .map((v) => v.id);
 
@@ -383,7 +397,7 @@ export function LinkAdvancesToVoucherDialog({
     }
   };
 
-  const title = mode === "sale" ? "Link payment to this sale" : "Link payment to this purchase";
+  const title = mode === "sale" ? "Link Sale to Linkable Cr Txns" : "Link Purchase to Linkable Dr Txns";
   const subLabel = targetLabel || (mode === "sale" ? "Sale" : "Purchase");
   const remainingToLink = Math.max(0, targetOutstanding - totalLinked);
   const sectionTitle = mode === "sale" ? "Cr transactions (same party)" : "Dr transactions (same party)";
@@ -478,7 +492,8 @@ export function LinkAdvancesToVoucherDialog({
                       const otherLinked = allocatedToOthers;
                       const rowType = row.id === OPENING_BALANCE_VOUCHER_ID || row.type === "opening_balance" ? "Opening Balance" : row.type === "payment_in" || row.type === "direct_income" ? "payment in" : row.type === "payment_out" || row.type === "direct_expense" ? "payment out" : row.type === "purchase" || row.type === "purchase_service" ? "purchase" : row.type === "sale" || row.type === "sale_service" ? "sale" : row.type;
                       const isOBRow = row.id === OPENING_BALANCE_VOUCHER_ID;
-                      const rowMax = isOBRow ? row.amount : row.remaining;
+                      // Cap by linkable amount (remaining), not full amount — OB row bhi linkable se cap hona chahiye.
+                      const rowMax = row.remaining;
                       const maxAllowed = Math.min(rowMax, remainingToLink + linked);
                       // When required amount is already met, disable tick for rows not yet selected (only already-linked rows can be unticked)
                       const cannotAddMore = remainingToLink <= 0 && linked === 0;

@@ -15,7 +15,7 @@ import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
 import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
-import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
+import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getAllocatedByVoucherIdFromJournal, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
 
 // --- Report-only party IDs: show only in reports, never in voucher/entity dropdowns or lists ---
 export const REPORT_ONLY_PARTY_IDS = ["owners_capital", "opening_balance_ledger"] as const;
@@ -38,6 +38,8 @@ type ProcessedExpenseGroup = ExpenseGroup & { debit: number; credit: number; bal
 
 type VoucherContextType = {
   vouchers: any[];
+  /** Unfiltered vouchers for allocation computation when view filter would undercount Other Linked. */
+  vouchersAll: any[];
   loading: boolean;
   processedParties: ProcessedParty[];
   /** Parties for dropdowns/lists only; excludes Opening Balance & Owner's Capital (report-only). */
@@ -63,6 +65,7 @@ type VoucherContextType = {
 
 const VoucherContext = createContext<VoucherContextType>({
   vouchers: [],
+  vouchersAll: [],
   loading: true,
   processedParties: [],
   processedPartiesForSelection: [],
@@ -127,6 +130,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
   const previousData = useRef<Omit<VoucherContextType, 'loading'>>({
       vouchers: [],
+      vouchersAll: [],
       processedParties: [],
       processedPartiesForSelection: [],
       processedStaff: [],
@@ -707,6 +711,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const allocatedByPurchase = getAllocatedByVoucherIdFromPaymentOuts(vouchersForDisplay);
     const allocatedToSaleFromPurchase = getAllocatedByVoucherIdFromPurchase(vouchersForDisplay);
     const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
+    const allocatedFromJournal = getAllocatedByVoucherIdFromJournal(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
     const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }> = [];
     for (const v of vouchersForDisplay) {
@@ -715,9 +720,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       const fromPayments = v.type === "sale"
         ? (allocatedBySale.get(v.id) ?? 0) + (allocatedToSaleFromPurchase.get(v.id) ?? 0)
         : (allocatedByPurchase.get(v.id) ?? 0) + (allocatedToPurchaseFromSale.get(v.id) ?? 0);
+      const fromJournal = allocatedFromJournal.get(v.id) ?? 0;
       const fromOB = Number(v.openingBalanceAllocated) || 0;
       const outgoingToOpposite = getOutgoingAllocatedToOpposite(v);
-      const allocated = fromPayments + fromOB + outgoingToOpposite;
+      const allocated = fromPayments + fromJournal + fromOB + outgoingToOpposite;
       const result = getPaymentStatusResult(total, allocated, v.dueDate);
       if (!result.isOverdue) continue;
       const partyName = partyNameById.get(v.partyId) ?? v.partyId;
@@ -916,9 +922,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   }, [processedParties, processedAccounts, processedStaff, processedTaxes, processedExpenseAccounts, processedItems, journalAccountNames]);
   
   const value = useMemo(() => {
-    const currentData = { 
-        vouchers: vouchersForDisplay, 
-        loading, 
+    const currentData = {
+        vouchers: vouchersForDisplay,
+        vouchersAll: vouchers,
+        loading,
         processedParties, 
         processedPartiesForSelection, 
         processedStaff, 
@@ -941,7 +948,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     
     return currentData;
   }, [
-    vouchersForDisplay, loading, processedParties, processedPartiesForSelection, processedStaff, processedAccounts, 
+    vouchersForDisplay, vouchers, loading, processedParties, processedPartiesForSelection, processedStaff, processedAccounts, 
     processedTaxes, expenseAccounts, processedItems, processedItemGroups, 
     processedGroups, processedAccountGroups, processedStaffGroups, processedTaxGroups,
     processedExpenseAccounts, processedExpenseGroups, journalAccountNamesMerged, userNames,

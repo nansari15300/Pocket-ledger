@@ -40,7 +40,7 @@ import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 
 
 const formSchema = z.object({
-  name: z.string().min(2, { message: "Party name must be at least 2 characters." }).max(30, { message: "Company name cannot be more than 30 characters." }),
+  name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   phone: z.string().optional(),
   pan: z.string().optional(),

@@ -37,11 +37,22 @@ export type PaymentOutWithRemaining = {
   type: string;
 };
 
-/** Cr voucher types for party (Payment In, Purchase) — used to settle Sale (Dr). */
+/** Cr voucher types for party (Payment In, Purchase, Journal Cr) — used to settle Sale (Dr). */
 const CR_TYPES = ["payment_in", "direct_income", "purchase", "purchase_service"] as const;
 
-/** Dr voucher types for party (Payment Out, Sale) — used to settle Purchase (Cr). */
+/** Dr voucher types for party (Payment Out, Sale, Journal Dr) — used to settle Purchase (Cr). */
 const DR_TYPES = ["payment_out", "direct_expense", "sale", "sale_service"] as const;
+
+const getJournalPartyAmount = (voucher: any, partyId: string) => {
+  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+  const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
+  if (!partyEntry) return null;
+  const debit = Number((partyEntry as any)?.debit) || 0;
+  const credit = Number((partyEntry as any)?.credit) || 0;
+  const total = credit > 0 ? credit : debit;
+  if (total <= 0) return null;
+  return { debit, credit, total };
+};
 
 
 /**
@@ -62,6 +73,9 @@ export function useAdvancesForSale(
     const crVouchers = (vouchers as any[]).filter(
       (v) => (CR_TYPES as readonly string[]).includes((v.type || "").toLowerCase()) && String((v as any).partyId ?? "") === partyIdStr
     );
+    const journalCrVouchers = (vouchers as any[]).filter(
+      (v) => v.type === "journal" && v.subType !== "add_salary" && getJournalPartyAmount(v, partyIdStr) != null && (getJournalPartyAmount(v, partyIdStr)?.credit ?? 0) > 0
+    );
     const allocatedToSales = getAllocatedByVoucherId(
       crVouchers.filter((v) => v.type === "payment_in" || v.type === "direct_income")
     );
@@ -77,8 +91,20 @@ export function useAdvancesForSale(
       }
       return m;
     })();
+    const allocatedFromJournalCr = (() => {
+      const m = new Map<string, number>();
+      for (const v of journalCrVouchers) {
+        const allocations = (v.allocations as { voucherId?: string; amount?: number; linkedAccountId?: string }[] | undefined) || [];
+        const forParty = allocations.filter((a: any) => !a.voucherId ? false : String(a?.linkedAccountId ?? "") === partyIdStr || (!a.linkedAccountId && (getJournalPartyAmount(v, partyIdStr)?.credit ?? 0) > 0));
+        for (const a of forParty) {
+          if (!a.voucherId) continue;
+          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+        }
+      }
+      return m;
+    })();
     const totalAllocatedToSale = (vid: string) =>
-      (allocatedToSales.get(vid) ?? 0) + (allocatedFromPurchases.get(vid) ?? 0);
+      (allocatedToSales.get(vid) ?? 0) + (allocatedFromPurchases.get(vid) ?? 0) + (allocatedFromJournalCr.get(vid) ?? 0);
 
     const saleOutstanding = (() => {
       if (!targetSaleId) return 0;
@@ -115,11 +141,34 @@ export function useAdvancesForSale(
       };
     });
 
+    const journalCrRows: PaymentInWithRemaining[] = journalCrVouchers.map((v) => {
+      const partyAmount = getJournalPartyAmount(v, partyIdStr)!;
+      const allocations = (v.allocations as { voucherId?: string; amount?: number; linkedAccountId?: string }[] | undefined) || [];
+      const forParty = allocations.filter((a: any) => String(a?.linkedAccountId ?? "") === partyIdStr || (!a.linkedAccountId && partyAmount.credit > 0));
+      const allocatedTotal = forParty.reduce((s, a) => s + getAllocationTotal(a), 0);
+      const allocatedToOthers = (targetSaleId
+        ? forParty.filter((a) => a.voucherId !== targetSaleId).reduce((s, a) => s + getAllocationTotal(a), 0)
+        : allocatedTotal);
+      const remaining = Math.max(0, partyAmount.total - allocatedTotal);
+      return {
+        id: v.id,
+        amount: partyAmount.total,
+        allocatedTotal,
+        allocatedToOthers,
+        remaining,
+        date: v.date,
+        voucherNumber: v.voucherNumber ?? (v as any).voucher_number,
+        type: "journal",
+      };
+    });
+
+    const allCrRows = [...paymentInsWithRemaining, ...journalCrRows];
+
     // Show only if linkable (remaining > 0) OR already linked to this sale (so user can unlink)
-    const filtered = paymentInsWithRemaining.filter((row) => {
+    const filtered = allCrRows.filter((row) => {
       if (row.remaining > 0) return true;
       if (!targetSaleId) return true;
-      const v = crVouchers.find((x) => x.id === row.id);
+      const v = [...crVouchers, ...journalCrVouchers].find((x) => x.id === row.id);
       if (!v) return false;
       const allocations = (v.allocations as Allocation[] | undefined) || [];
       const toCurrent = allocations.find((a) => a.voucherId === targetSaleId);
@@ -154,6 +203,9 @@ export function useAdvancesForPurchase(
     const drVouchers = (vouchers as any[]).filter(
       (v) => (DR_TYPES as readonly string[]).includes((v.type || "").toLowerCase()) && String((v as any).partyId ?? "") === partyIdStr
     );
+    const journalDrVouchers = (vouchers as any[]).filter(
+      (v) => v.type === "journal" && v.subType !== "add_salary" && getJournalPartyAmount(v, partyIdStr) != null && (getJournalPartyAmount(v, partyIdStr)?.debit ?? 0) > 0
+    );
     const allocatedToPurchases = getAllocatedByVoucherIdFromPaymentOuts(
       drVouchers.filter((v) => v.type === "payment_out" || v.type === "direct_expense")
     );
@@ -169,8 +221,20 @@ export function useAdvancesForPurchase(
       }
       return m;
     })();
+    const allocatedFromJournalDr = (() => {
+      const m = new Map<string, number>();
+      for (const v of journalDrVouchers) {
+        const allocations = (v.allocations as { voucherId?: string; amount?: number; linkedAccountId?: string }[] | undefined) || [];
+        const forParty = allocations.filter((a: any) => !a.voucherId ? false : String(a?.linkedAccountId ?? "") === partyIdStr || (!a.linkedAccountId && (getJournalPartyAmount(v, partyIdStr)?.debit ?? 0) > 0));
+        for (const a of forParty) {
+          if (!a.voucherId) continue;
+          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+        }
+      }
+      return m;
+    })();
     const totalAllocatedToPurchase = (vid: string) =>
-      (allocatedToPurchases.get(vid) ?? 0) + (allocatedFromSales.get(vid) ?? 0);
+      (allocatedToPurchases.get(vid) ?? 0) + (allocatedFromSales.get(vid) ?? 0) + (allocatedFromJournalDr.get(vid) ?? 0);
 
     const purchaseOutstanding = (() => {
       if (!targetPurchaseId) return 0;
@@ -207,11 +271,34 @@ export function useAdvancesForPurchase(
       };
     });
 
+    const journalDrRows: PaymentOutWithRemaining[] = journalDrVouchers.map((v) => {
+      const partyAmount = getJournalPartyAmount(v, partyIdStr)!;
+      const allocations = (v.allocations as { voucherId?: string; amount?: number; linkedAccountId?: string }[] | undefined) || [];
+      const forParty = allocations.filter((a: any) => String(a?.linkedAccountId ?? "") === partyIdStr || (!a.linkedAccountId && partyAmount.debit > 0));
+      const allocatedTotal = forParty.reduce((s, a) => s + getAllocationTotal(a), 0);
+      const allocatedToOthers = (targetPurchaseId
+        ? forParty.filter((a) => a.voucherId !== targetPurchaseId).reduce((s, a) => s + getAllocationTotal(a), 0)
+        : allocatedTotal);
+      const remaining = Math.max(0, partyAmount.total - allocatedTotal);
+      return {
+        id: v.id,
+        amount: partyAmount.total,
+        allocatedTotal,
+        allocatedToOthers,
+        remaining,
+        date: v.date,
+        voucherNumber: v.voucherNumber ?? (v as any).voucher_number,
+        type: "journal",
+      };
+    });
+
+    const allDrRows = [...paymentOutsWithRemaining, ...journalDrRows];
+
     // Show only if linkable (remaining > 0) OR already linked to this purchase (so user can unlink)
-    const filtered = paymentOutsWithRemaining.filter((row) => {
+    const filtered = allDrRows.filter((row) => {
       if (row.remaining > 0) return true;
       if (!targetPurchaseId) return true;
-      const v = drVouchers.find((x) => x.id === row.id);
+      const v = [...drVouchers, ...journalDrVouchers].find((x) => x.id === row.id);
       if (!v) return false;
       const allocations = (v.allocations as Allocation[] | undefined) || [];
       const toCurrent = allocations.find((a) => a.voucherId === targetPurchaseId);

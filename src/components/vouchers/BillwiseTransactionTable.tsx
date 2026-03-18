@@ -32,6 +32,7 @@ import {
   TransactionRow,
   getConversionFactor,
   formatQuantity,
+  LinkedVouchersColored,
   type Transaction,
   type Context,
 } from "./transactionTableShared";
@@ -175,9 +176,6 @@ export function BillwiseTransactionTable({
   const obStatusLabel = obOutstandingDisplay != null
     ? (obOutstandingDisplay <= 0 ? "Paid" : obOutstandingDisplay >= obAmount ? "Unpaid" : "Partial")
     : null;
-  const obStatusDetail = openingBalanceLinkedVoucherNos?.length
-    ? (openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${openingBalanceLinkedVoucherNos[0]}`)
-    : "";
   const displayPeriodDr = periodDr / conversionFactor;
   const displayPeriodCr = periodCr / conversionFactor;
   const displayClosingBalance = closingBalance / conversionFactor;
@@ -416,10 +414,9 @@ export function BillwiseTransactionTable({
                         >
                           {obStatusLabel}
                         </Badge>
-                        {obStatusDetail && (
-                          // Keep opening-balance voucher-detail text pure black.
-                          <span className="text-[10px] text-black">{obStatusDetail}</span>
-                        )}
+                        {openingBalanceLinkedVoucherNos?.length ? (
+                          <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" billWisePink />
+                        ) : null}
                       </div>
                     ) : (
                       <span className="font-semibold">-</span>
@@ -474,7 +471,7 @@ export function BillwiseTransactionTable({
                   isBalanceMasked={isBalanceMasked}
                   hideBalanceColumn={hideBalanceColumn}
                   visibleColumns={visibleColumns}
-                  useOutstandingForBalance={true}
+                  useOutstandingForBalance={context === "party" || context === "staff"}
                   isBillWise={true}
                   ensureMinGaps={ensureMinGaps}
                   statusBillWiseOnly={statusBillWiseOnly}

@@ -63,10 +63,10 @@ function generateCompanyId(companyName: string): string {
 
 const formSchema = z
   .object({
+    // Company name: min 2 chars, no max limit (user requested removal of char limits)
     companyName: z
       .string()
-      .min(2, { message: "Company name must be at least 2 characters." })
-      .max(60, { message: "Company name cannot be more than 60 characters." }),
+      .min(2, { message: "Company name must be at least 2 characters." }),
     address: z.string().optional(),
     phone: z.string().optional(),
     email: z

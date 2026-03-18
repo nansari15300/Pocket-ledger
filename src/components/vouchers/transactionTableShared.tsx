@@ -353,6 +353,15 @@ export const getStatusLabel = (t: any, context?: string) => {
     return "Unpaid";
   }
   if (t.type === "contra") return "Contra";
+  // Bill-wise journal: use paymentStatus (Paid/Partial/Unpaid) when set by use-transactions, same as sale/purchase.
+  if (t.type === "journal" && !isAddSalary) {
+    const status = (t as any).paymentStatus;
+    if (status === "paid") return "Paid";
+    if (status === "unpaid") return "Unpaid";
+    if (status === "partially_paid") return "Partial";
+    if (status === "overdue" || (t as any).isOverdue) return "Overdue";
+    // No paymentStatus: fall back to "Journal" (e.g. statement view, non-bill-wise)
+  }
   if (isStatusJournalOrNote(t)) return t.type === "journal" ? "Journal" : "Note";
   const status = (t as any).paymentStatus;
   if (status === "paid") return "Paid";
@@ -375,32 +384,93 @@ const getOverdueDays = (t: any): number => {
   return differenceInDays(today, dueOnly);
 };
 
-/** Status detail: payment show "to PUR-1", purchase/sale show "from PYMT-7". More than one link => "Multi link". No link => "" (only Unpaid badge).
- * When billWiseOnly: use only bill-wise links (sale/purchase/salary/OB); do not show spend-wise voucher nos in party/staff/group billwise view. */
+
+/** Status detail: list all linked voucher nos only (no "from"/"to" prefix). When billWiseOnly: use only bill-wise links. */
 export const getStatusDetail = (t: any, opts?: { billWiseOnly?: boolean }) => {
   const useBillWise = opts?.billWiseOnly && (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
-  const from = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
-  const to = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
-  if (from.length === 0 && to.length === 0) return "";
-  const isPaymentOrDirect = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(t.type);
-  const isSaleOrPurchase = t.type === "sale" || t.type === "purchase";
-  const isAddSalary = t.type === "journal" && t.subType === "add_salary";
-  if (isPaymentOrDirect) {
-    if (from.length > 1 || to.length > 1) return "Multi link";
-    if (from.length) return `from ${from[0]}`;
-    return to.length ? `to ${to[0]}` : "";
-  }
-  if (isSaleOrPurchase || isAddSalary) {
-    if (from.length > 1 || to.length > 1) return "Multi link";
-    if (from.length) return `from ${from[0]}`;
-    if (to.length) return `to ${to[0]}`;
-    return "";
-  }
-  if (to.length > 1 || from.length > 1) return "Multi link";
-  if (to.length) return `to ${to[0]}`;
-  if (from.length) return `from ${from[0]}`;
-  return "";
+  const fromRaw = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
+  const toRaw = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  const all = Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
+  if (all.length === 0) return "";
+  return all.join(", ");
 };
+
+/** Chunk status detail (comma-separated voucher nos) into 2–3 lines for wrap (2 nos per line). */
+export const getStatusDetailLines = (statusDetail: string): string[] => {
+  if (!statusDetail?.trim()) return [];
+  const parts = statusDetail.split(",").map((s) => s.trim()).filter(Boolean);
+  const lines: string[] = [];
+  for (let i = 0; i < parts.length; i += 2) {
+    lines.push(parts.slice(i, i + 2).join(", "));
+  }
+  return lines;
+};
+
+/** Same as getStatusDetail but returns array of voucher strings for per-voucher styling (e.g. cyclical colors). */
+export const getStatusDetailVouchers = (t: any, opts?: { billWiseOnly?: boolean }): string[] => {
+  const useBillWise = opts?.billWiseOnly && (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
+  const fromRaw = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
+  const toRaw = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  return Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
+};
+
+/** Cyclical 3 colors for multi-voucher display: 1st Blue, 2nd Gray, 3rd Green, then repeat. */
+const LINKED_VOUCHER_COLOR_CLASSES = ["text-blue-600", "text-gray-600", "text-green-600"] as const;
+const LINKED_VOUCHER_COLOR_CLASSES_BILLWISE = ["text-blue-600", "text-pink-600", "text-green-600"] as const;
+export const getLinkedVoucherColorClass = (index: number): string =>
+  LINKED_VOUCHER_COLOR_CLASSES[index % 3];
+
+/** Renders voucher list in 2-per-line with cyclical Blue / Gray / Green (or Pink in bill-wise). Reusable for status detail and opening balance. */
+export function LinkedVouchersColored({
+  vouchers,
+  vouchersPerLine = 2,
+  className,
+  align = "center",
+  billWisePink = false,
+}: {
+  vouchers: string[];
+  vouchersPerLine?: number;
+  className?: string;
+  align?: "start" | "center" | "end";
+  /** Bill-wise: use pink instead of gray for voucher details below status. */
+  billWisePink?: boolean;
+}) {
+  if (!vouchers?.length) return null;
+  const lines: string[][] = [];
+  for (let i = 0; i < vouchers.length; i += vouchersPerLine) {
+    lines.push(vouchers.slice(i, i + vouchersPerLine));
+  }
+  const alignClass = align === "end" ? "items-end" : align === "start" ? "items-start" : "items-center";
+  return (
+    <div className={cn("flex flex-col gap-[1px] text-[10px]", alignClass, className)}>
+      {lines.map((lineVouchers, lineIdx) => (
+        <span key={lineIdx} className="block">
+          {lineVouchers.map((v, j) => {
+            const globalIdx = lineIdx * vouchersPerLine + j;
+            const colorClass = billWisePink ? LINKED_VOUCHER_COLOR_CLASSES_BILLWISE[globalIdx % 3] : getLinkedVoucherColorClass(globalIdx);
+            return (
+              <React.Fragment key={globalIdx}>
+                {j > 0 ? ", " : null}
+                <span className={colorClass}>{v}</span>
+              </React.Fragment>
+            );
+          })}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Chunk OB linked voucher nos into 2–3 lines (no "to" prefix). Used by TransactionsTable and BillwiseTransactionTable. */
+export function openingBalanceLinkedLines(nos: string[]): string[] {
+  if (!nos?.length) return [];
+  const deduped = Array.from(new Set(nos));
+  const lines: string[] = [];
+  for (let i = 0; i < deduped.length; i += 2) {
+    lines.push(deduped.slice(i, i + 2).join(", "));
+  }
+  return lines;
+}
 
 export const TransactionRow = React.memo(
   ({
@@ -510,10 +580,11 @@ export const TransactionRow = React.memo(
       );
     };
 
+    // Per-row outstanding: Dr amount (sale, payment_out) → Dr balance; Cr amount (payment_in, purchase) → Cr balance.
     const getOutstandingBalanceDisplay = () => {
       const out = Number((transaction as any).outstanding) || 0;
-      const isCreditSide = ["sale", "payment_in", "direct_income"].includes(transaction.type);
-      const value = isCreditSide ? out : -out;
+      const hasDrAmount = (Number(debit) || 0) > 0;
+      const value = hasDrAmount ? out : -out;
       return formatBalanceCell(value);
     };
 
@@ -553,7 +624,7 @@ export const TransactionRow = React.memo(
             </Badge>
           </TableCell>
         )}
-        {showCol("voucherNo") && <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>{transaction.voucherNumber}</TableCell>}
+        {showCol("voucherNo") && <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>{transaction.voucherNumber ?? transaction.voucher_number ?? ""}</TableCell>}
         {context === "daybook" && (
           <TableCell className="max-w-[200px] truncate">
             {getParticularsText(transaction, names)}
@@ -638,11 +709,23 @@ export const TransactionRow = React.memo(
         {showCol("runningBalance") && !hideBalanceColumn &&
           (() => {
             const out = Number((transaction as any).outstanding) || 0;
-            const isCreditSide = ["sale", "payment_in", "direct_income"].includes(transaction.type);
+            const hasDrAmount = (Number(debit) || 0) > 0;
             const isStaffPaymentOut = (context === "staff" || context === "group") && (transaction.type === "payment_out" || transaction.type === "direct_expense");
-            const displayValue = useOutstandingForBalance
-              ? (isTaxContext ? (isCreditSide ? out : -out) : (isStaffPaymentOut ? out : (isCreditSide ? out : -out)))
-              : balance;
+            // In bill-wise mode, normal journals should reflect linkable remaining amount on the same row (per-row closing balance).
+            const isJournalWithOutstanding =
+              transaction.type === "journal" &&
+              (transaction as any).subType !== "add_salary" &&
+              (transaction as any).outstanding != null;
+            const journalOutstandingSigned = isJournalWithOutstanding
+              ? ((Number(transaction.debit) || 0) > 0 ? out : -out)
+              : 0;
+            // When useOutstandingForBalance: Dr amount → Dr balance, Cr amount → Cr balance (match amount column).
+            const displayValue =
+              useOutstandingForBalance && isJournalWithOutstanding
+                ? journalOutstandingSigned
+                : useOutstandingForBalance
+                ? (isTaxContext ? (hasDrAmount ? out : -out) : (isStaffPaymentOut ? out : (hasDrAmount ? out : -out)))
+                : balance;
             // When balance/outstanding is 0 show "Settled" (running balance and bill-wise both)
             const valueToShow = useOutstandingForBalance ? displayValue : balance;
             const isZeroBalance = !isBalanceMasked && (typeof valueToShow === "number" && Math.abs(valueToShow) < 1e-6);
@@ -874,10 +957,8 @@ export const TransactionRow = React.memo(
     })();
     const overdueDaysForSubRow = isOverdueForSubRow ? getOverdueDays(transaction) : 0;
     // Keep voucher-link + overdue helper beside narration in same row.
-    const subRowStatusText = [
-      (showNarration && statusDetailText) ? statusDetailText : "",
-      (showNarration && overdueDaysForSubRow > 0) ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : ""
-    ].filter(Boolean).join(", ");
+    const statusDetailVouchers = getStatusDetailVouchers(transaction, { billWiseOnly: statusBillWiseOnly });
+    const overdueSubText = showNarration && overdueDaysForSubRow > 0 ? `${overdueDaysForSubRow} day${overdueDaysForSubRow === 1 ? "" : "s"}` : "";
     const NarrationRow = showNarrationRow ? (
       <motion.tr
         layout={animateLayout ? "position" : false}
@@ -948,13 +1029,15 @@ export const TransactionRow = React.memo(
           <TableCell
             className={cn(
               // Halve detail-row cell vertical padding for tighter narration/detail grouping.
-              // Keep voucher-detail text pure black as requested.
-              "text-center text-[10px] leading-tight align-top whitespace-nowrap py-0 text-black",
+              "text-center text-[10px] leading-tight align-top py-0 text-black",
               isOverdueForSubRow && overdueDaysForSubRow > 0 && "font-medium",
               ensureMinGaps && "min-w-[95px] px-[5px]"
             )}
           >
-            {subRowStatusText || ""}
+            <div className="flex flex-col items-center gap-[1px]">
+              <LinkedVouchersColored vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
+              {overdueSubText ? <span className="block font-medium text-red-600">{overdueSubText}</span> : null}
+            </div>
           </TableCell>
         )}
         {/* Keep narration sub-row column structure in sync with main row. */}

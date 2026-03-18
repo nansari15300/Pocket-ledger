@@ -163,6 +163,8 @@ export function CreatePaymentInForm({
   defaultTab,
   defaultVoucherData,
   editingDisabled = false,
+  historyLimitReached = false,
+  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -177,6 +179,8 @@ export function CreatePaymentInForm({
   defaultTab?: 'payment_in' | 'direct_income';
   defaultVoucherData?: any;
   editingDisabled?: boolean;
+  historyLimitReached?: boolean;
+  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -214,6 +218,10 @@ export function CreatePaymentInForm({
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   /** Snapshot of allocations when voucher was loaded — used to detect bill wise link edits for Save & Approve. */
   const initialAllocationsRef = useRef<{ voucherId: string; amount: number }[]>([]);
+  /** Last voucher id we synced allocations from — avoid overwriting user's Link dialog changes when voucher ref changes (e.g. useVouchers refresh). */
+  const lastSyncedVoucherIdRef = useRef<string | null>(null);
+  /** Last voucher id we reset form for — skip reset when same doc updates (liveVoucher) and user has edits. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
   /** Open Link Pay dialog (spend wise: select which Payment Out / Contra / DE link to this Payment In). */
   const [isLinkPaymentOutDialogOpen, setIsLinkPaymentOutDialogOpen] = useState(false);
@@ -285,20 +293,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }).filter(Boolean) as Date[];
   }, [allVouchers]);
 
+  // Outgoing: RCPT allocated to Sale/Payment Out/Journal. Incoming: Journal allocated to RCPT (from Journal form Link to Dr).
   const linkedToRows = useMemo(() => {
-    if (!allocations?.length) return [];
-    return allocations.map((a) => {
+    const all = allVouchers ?? [];
+    const currentId = voucher?.id ?? savedVoucherId;
+    const outgoing = (allocations || []).map((a) => {
       if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) {
-        return {
-          voucherId: a.voucherId,
-          voucherNumber: "Opening Balance",
-          amount: getAllocationTotal(a),
-          date: null as Date | null,
-          typeLabel: "Opening Balance",
-        };
+        return { voucherId: a.voucherId, voucherNumber: "Opening Balance", amount: getAllocationTotal(a), date: null as Date | null, typeLabel: "Opening Balance" };
       }
-      if (!allVouchers?.length) return { voucherId: a.voucherId, voucherNumber: "—", amount: getAllocationTotal(a), date: null as Date | null, typeLabel: "Voucher" };
-      const target = allVouchers.find((v: any) => v.id === a.voucherId);
+      const target = all.find((v: any) => v.id === a.voucherId);
       const rawDate = target?.date;
       const date = rawDate ? (typeof (rawDate as any)?.toDate === "function" ? (rawDate as any).toDate() : new Date(rawDate as string | number)) : null;
       return {
@@ -306,10 +309,70 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         voucherNumber: target?.voucherNumber ?? target?.voucher_number ?? "—",
         amount: getAllocationTotal(a),
         date: date && !isNaN(date.getTime()) ? date : null,
-        typeLabel: target?.type === "payment_out" ? "Payment Out" : target?.type === "direct_expense" ? "Direct Expense" : target?.type === "contra" ? "Contra" : "Voucher",
+        typeLabel: target?.type === "payment_out" ? "Payment Out" : target?.type === "direct_expense" ? "Direct Expense" : target?.type === "journal" ? "Journal" : target?.type === "contra" ? "Contra" : "Voucher",
       };
     });
-  }, [allocations, allVouchers]);
+    // Incoming: journals that allocated TO this RCPT (Journal form Link to Dr → RCPT). Same party filter.
+    const touchesParty = (v: any) => !partyId || String((v as any)?.partyId ?? "") === String(partyId) ||
+      (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
+    const incoming: typeof outgoing = [];
+    for (const v of all) {
+      if (v.type !== "journal" || v.id === currentId || !touchesParty(v)) continue;
+      const allocs = (v.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
+      for (const a of allocs) {
+        if (a.voucherId !== currentId) continue;
+        if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) continue;
+        const amt = getAllocationTotal(a);
+        if (amt <= 0) continue;
+        const rawDate = v?.date;
+        const date = rawDate ? (typeof (rawDate as any)?.toDate === "function" ? (rawDate as any).toDate() : new Date(rawDate as string | number)) : null;
+        incoming.push({
+          voucherId: v.id,
+          voucherNumber: v.voucherNumber ?? v.voucher_number ?? "—",
+          amount: amt,
+          date: date && !isNaN(date.getTime()) ? date : null,
+          typeLabel: "Journal",
+        });
+      }
+    }
+    const combined = [...outgoing, ...incoming];
+    combined.sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+    // Dedupe by voucherId: same link can appear in both RCPT.allocations (outgoing) and Journal.allocations (incoming) after bilateral sync — use max, not sum, to avoid double count.
+    const byId = new Map<string, { voucherId: string; voucherNumber: string; amount: number; date: Date | null; typeLabel: string }>();
+    for (const row of combined) {
+      const existing = byId.get(row.voucherId);
+      if (existing) existing.amount = Math.max(existing.amount, row.amount);
+      else byId.set(row.voucherId, { ...row });
+    }
+    return Array.from(byId.values()).sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
+  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId]);
+
+  /** For Link to Dr dialog: show existing links from both RCPT.allocations and incoming (journals that allocated to this RCPT). Use max, not sum, when same voucher appears in both (bilateral sync) to avoid double count. */
+  const existingAllocationsForLinkDialog = useMemo(() => {
+    const byId = new Map<string, number>();
+    for (const a of allocations || []) {
+      if (!a.voucherId) continue;
+      const total = getAllocationTotal(a);
+      if (total > 0) byId.set(a.voucherId, Math.max(byId.get(a.voucherId) ?? 0, total));
+    }
+    const currentId = voucher?.id ?? savedVoucherId;
+    if (currentId && allVouchers?.length) {
+      const touchesParty = (v: any) => !partyId || String((v as any)?.partyId ?? "") === String(partyId) ||
+        (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
+      for (const v of allVouchers) {
+        if (v.type !== "journal" || v.id === currentId || !touchesParty(v)) continue;
+        const allocs = (v.allocations as { voucherId: string; amount?: number; linkedAccountId?: string }[] | undefined) || [];
+        for (const a of allocs) {
+          if (a.voucherId !== currentId) continue;
+          if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) continue;
+          const amt = getAllocationTotal(a);
+          if (amt <= 0) continue;
+          byId.set(v.id, Math.max(byId.get(v.id) ?? 0, amt));
+        }
+      }
+    }
+    return Array.from(byId.entries(), ([voucherId, amount]) => ({ voucherId, amount }));
+  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId]);
 
   const paymentInAlloc = usePaymentAllocations(partyId, allVouchers ?? [], voucher?.id ?? savedVoucherId ?? undefined);
   /** Bill wise: same count as Link to Dr popup (sales + payment outs + OB with linkable amount). */
@@ -556,7 +619,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** For Link Pay dialog: outflow voucher ids that currently link to this Payment In. */
   const linkedPaymentOutSelectedIds = useMemo(() => spendWiseLinkedToMeRows.map((r) => r.id), [spendWiseLinkedToMeRows]);
 
-  /** Report effective has-links to dialog so fields lock as soon as user links (bill-wise or spend-wise) in this session. */
+  /** Report effective has-links to dialog: 1 link → fields disabled; all unlink → edit enable. Applies to Party, Staff, Tax, Income equally. */
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
     const spendWiseLinked = spendWiseLinkedToMeRows.length > 0 || (pendingLinkedPaymentOut?.ids?.length ?? 0) > 0;
@@ -606,8 +669,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [companyId, company, form, isAutoVoucherEnabled, voucherType]);
 
   // Same as Pay (CreatePaymentOutForm): only reset when editing (voucher.id). New voucher uses defaultValues + fetchVoucherNumber.
+  // Only sync allocations when voucher ID actually changes — avoid overwriting user's Link dialog changes when voucher ref changes (useVouchers refresh).
+  // Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save.
   useEffect(() => {
     if (voucher?.id) {
+        const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
+        if (isSameVoucher && isFormDirty) return;
+        lastResetVoucherIdRef.current = voucher.id;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
             initialValues.voucherNumber = "";
@@ -615,17 +683,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
         setFiles(voucher.fileUrls || []);
-        const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
-        setAllocations(allocs);
-        initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        if (lastSyncedVoucherIdRef.current !== voucher.id) {
+          lastSyncedVoucherIdRef.current = voucher.id;
+          const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
+          setAllocations(allocs);
+          initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        }
     } else if (defaultVoucherData && !voucher?.id) {
         setFiles(defaultVoucherData.fileUrls || []);
-        const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];
-        setAllocations(allocs);
-        initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        if (lastSyncedVoucherIdRef.current !== "new") {
+          lastSyncedVoucherIdRef.current = "new";
+          const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];
+          setAllocations(allocs);
+          initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        }
         form.setValue("partyId", defaultVoucherData.partyId ?? "");
+        lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, defaultVoucherData, form, isEditingAndConverting]);
+  }, [voucher, defaultVoucherData, form, isEditingAndConverting, isFormDirty]);
 
   useEffect(() => {
     if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
@@ -643,6 +718,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
+    // block_edit + history full: block everything (no save, no approve)
+    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
+    // hasLinks only: approve-only — user can approve voucher without saving form changes
+    if (options.approveAfterSave && onApprove && editingDisabled) {
+      onApprove();
+      return;
+    }
+    if (editingDisabled) return;
     const isValid = await form.trigger();
     if (!isValid) {
       const errors = form.formState.errors;
@@ -2044,7 +2127,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem>
                       <FormLabel>Narration</FormLabel>
                       <FormControl>
-                        <Textarea placeholder="Additional details..." {...field} />
+                        <Textarea placeholder="Additional details..." {...field} disabled={historyLimitReached} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -2137,7 +2220,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
@@ -2194,12 +2277,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
@@ -2247,12 +2330,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           partyId={partyId}
           partyName={processedParties.find((p) => p.id === partyId)?.name ?? "Party"}
           receivedAmount={Number(form.watch("amount")) || 0}
-          existingAllocations={allocations}
+          existingAllocations={existingAllocationsForLinkDialog}
           paymentInId={voucher?.id ?? savedVoucherId ?? undefined}
           accountId={form.watch("accountId") || undefined}
           paymentInVoucherNumber={form.watch("voucherNumber") || undefined}
           paymentInDate={form.watch("date")}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
+          dialogTitle="Link Payment In to Linkable Dr Txns"
           onDone={(allocs, _amount) => {
             // Link save only on local; server save when user clicks Save on voucher
             setAllocations(allocs);

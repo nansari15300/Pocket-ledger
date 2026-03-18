@@ -37,6 +37,8 @@ import {
   getParticularsText,
   getStatusLabel,
   getStatusDetail,
+  getStatusDetailVouchers,
+  LinkedVouchersColored,
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -202,8 +204,14 @@ export function TransactionsTable({
     [companyId, user?.uid, user?.displayName, user?.email, customUser?.displayName]
   );
   const effectiveOnApproveVoucher = onApproveVoucher ?? handleApproveVoucherDefault;
-  // Statement view = this component's table (running balance). Bill wise view = BillwiseTransactionTable (outstanding per row). Same for party, group, daybook, and account.
-  const isBillWisePartyOrGroup = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "group" || context === "daybook" || context === "account" || context === "expense" || context === "staff" || context === "tax" || context === "tax_group");
+  // Statement view = running balance. Bill wise: Party/Staff show per-row outstanding (closing balance); others show running balance.
+  const isBillWiseMode = resolvedBalanceMode === "bill_wise";
+  // Party/Staff bill-wise only: show per-row outstanding (per row closing balance), including journal. Daybook/account/expense/tax bill-wise: running balance.
+  const shouldUseOutstandingBalance =
+    isBillWiseMode &&
+    (context === "party" ||
+      context === "staff" ||
+      (context === "group" && (groupEntityType === "party" || groupEntityType === "staff")));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   // Keep spend-wise blink/selection groups consistent for derived row ids.
@@ -566,7 +574,8 @@ export function TransactionsTable({
           credit = 0;
         }
       }
-      const useOutstanding = isBillWiseCardContext && (t.outstanding != null);
+      // Keep mobile card balance behavior aligned with table: party/staff use running balance instead of outstanding.
+      const useOutstanding = shouldUseOutstandingBalance && isBillWiseCardContext && (t.outstanding != null);
       if (useOutstanding) {
         const out = Number(t.outstanding) ?? 0;
         balance = t.type === "purchase" || t.type === "payment_out" || t.type === "direct_expense" ? -out : out;
@@ -608,9 +617,8 @@ export function TransactionsTable({
       const groupAccountName = context === "group" ? getGroupAccountName() : "";
       const showStatusInCard = isBillWiseCardContext;
       const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
-      const statusDetailText = showStatusInCard ? getStatusDetail(t, { billWiseOnly: statusBillWiseOnly }) : "";
-      // Use the same checkbox behavior: hide/show status voucher-link text with narration toggle.
-      const showStatusDetailInCard = showNarration && !!statusDetailText;
+      const statusDetailVouchers = showStatusInCard ? getStatusDetailVouchers(t, { billWiseOnly: statusBillWiseOnly }) : [];
+      const showStatusDetailInCard = showNarration && statusDetailVouchers.length > 0;
       const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
       const isPaidStatus = statusLabel === "Paid";
       const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
@@ -644,7 +652,7 @@ export function TransactionsTable({
               <span className="font-semibold">Narration : </span>
               {t.narration || "—"}
             </p>
-            {showStatusInCard && (statusLabel || statusDetailText) ? (
+            {showStatusInCard && (statusLabel || showStatusDetailInCard) ? (
               <div className="shrink-0 flex flex-col items-end gap-0.5">
                 {statusLabel ? (
                   <Badge
@@ -658,8 +666,7 @@ export function TransactionsTable({
                   </Badge>
                 ) : null}
                 {showStatusDetailInCard ? (
-                  // Keep status voucher-detail text pure black in card view.
-                  <span className="text-[10px] text-black">{statusDetailText}</span>
+                  <LinkedVouchersColored vouchers={statusDetailVouchers} align="end" />
                 ) : null}
               </div>
             ) : !hideBalanceColumn ? (
@@ -746,10 +753,7 @@ export function TransactionsTable({
                       </Badge>
                       {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
                       {(showNarration && openingBalanceLinkedVoucherNos?.length) ? (
-                        // Keep opening-balance voucher-detail text pure black.
-                        <span className="text-[10px] text-black">
-                          {openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${openingBalanceLinkedVoucherNos[0]}`}
-                        </span>
+                        <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="end" />
                       ) : null}
                       <Badge
                         variant="secondary"
@@ -777,10 +781,7 @@ export function TransactionsTable({
                     </span>
                     {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
                     {isBillWiseCardContext && showNarration && openingBalanceLinkedVoucherNos?.length && obOutstandingDisplay == null ? (
-                      // Keep opening-balance voucher-detail text pure black.
-                      <span className="text-[10px] text-black">
-                        {openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${openingBalanceLinkedVoucherNos[0]}`}
-                      </span>
+                      <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="start" />
                     ) : null}
                   </>
                 )}
@@ -984,13 +985,10 @@ export function TransactionsTable({
                             >
                               {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
                             </Badge>
-                            {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
+                            {/* Opening balance: list all linked voucher nos in 2–3 lines (from voucher data). */}
                                     {showNarration && openingBalanceLinkedVoucherNos?.length ? (
-                                      // Keep opening-balance voucher-detail text pure black.
-                                      <span className="text-[10px] text-black">
-                                {openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${openingBalanceLinkedVoucherNos[0]}`}
-                              </span>
-                            ) : null}
+                                      <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
+                                    ) : null}
                           </div>
                         ) : (
                           // Show "-" for opening balance status when no outstanding balance data
@@ -1059,12 +1057,9 @@ export function TransactionsTable({
                           >
                             {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
                           </Badge>
-                          {/* Keep opening-balance status voucher-link text in sync with narration toggle. */}
+                          {/* Opening balance: list all linked voucher nos in 2–3 lines (from voucher data). */}
                           {showNarration && openingBalanceLinkedVoucherNos?.length ? (
-                            // Keep opening-balance voucher-detail text pure black.
-                            <span className="text-[10px] text-black">
-                              {openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${openingBalanceLinkedVoucherNos[0]}`}
-                            </span>
+                            <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
                           ) : null}
                         </div>
                       ) : (
@@ -1195,7 +1190,8 @@ export function TransactionsTable({
                                         hideBalanceColumn={hideBalanceColumn}
                                         hideStatusColumn={hideStatusColumn}
                                         visibleColumns={visibleColumns}
-                                        useOutstandingForBalance={isBillWisePartyOrGroup}
+                                        useOutstandingForBalance={shouldUseOutstandingBalance}
+                                        isBillWise={isBillWiseMode}
                                         ensureMinGaps={ensureMinGaps}
                                         showFileColumn={showFileBySelection}
                                         statusBillWiseOnly={statusBillWiseOnly}
@@ -1250,7 +1246,8 @@ export function TransactionsTable({
                           hideBalanceColumn={hideBalanceColumn}
                           hideStatusColumn={hideStatusColumn}
                           visibleColumns={visibleColumns}
-                          useOutstandingForBalance={isBillWisePartyOrGroup}
+                          useOutstandingForBalance={shouldUseOutstandingBalance}
+                          isBillWise={isBillWiseMode}
                           ensureMinGaps={ensureMinGaps}
                           showFileColumn={showFileBySelection}
                           statusBillWiseOnly={statusBillWiseOnly}
@@ -1314,7 +1311,8 @@ export function TransactionsTable({
                         hideBalanceColumn={hideBalanceColumn}
                         hideStatusColumn={hideStatusColumn}
                         visibleColumns={visibleColumns}
-                        useOutstandingForBalance={isBillWisePartyOrGroup}
+                        useOutstandingForBalance={shouldUseOutstandingBalance}
+                        isBillWise={isBillWiseMode}
                         ensureMinGaps={ensureMinGaps}
                         showFileColumn={showFileBySelection}
                         statusBillWiseOnly={statusBillWiseOnly}

@@ -13,10 +13,12 @@ export type Allocation = {
   taxAmount?: number;
   /** Amount allocated to net portion of the target voucher */
   netAmount?: number;
+  /** Journal bill-wise: party/staff account id for which this allocation applies */
+  linkedAccountId?: string;
 };
 
 /** For backward compatibility: total allocated = amount. If taxAmount/netAmount set, amount should equal taxAmount + netAmount. */
-export function getAllocationTotal(a: Allocation): number {
+export function getAllocationTotal(a: Allocation | { voucherId?: string; amount?: number; taxAmount?: number; netAmount?: number; linkedAccountId?: string }): number {
   const tax = Number((a as any).taxAmount) || 0;
   const net = Number((a as any).netAmount) || 0;
   if (tax > 0 || net > 0) return tax + net;
@@ -102,6 +104,20 @@ export function getAllocatedByVoucherIdFromSale(vouchers: any[]): Map<string, nu
   const map = new Map<string, number>();
   for (const v of vouchers) {
     if (v.type !== "sale" && v.type !== "sale_service") continue;
+    const allocations = (v.allocations as Allocation[] | undefined) || [];
+    for (const a of allocations) {
+      if (!a.voucherId) continue;
+      map.set(a.voucherId, (map.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+    }
+  }
+  return map;
+}
+
+/** Allocations TO Sale/Purchase from Journal vouchers. Journal bill-wise link reduces target's outstanding; balance update ke liye. */
+export function getAllocatedByVoucherIdFromJournal(vouchers: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const v of vouchers) {
+    if (v.type !== "journal") continue;
     const allocations = (v.allocations as Allocation[] | undefined) || [];
     for (const a of allocations) {
       if (!a.voucherId) continue;
@@ -278,8 +294,8 @@ export function getLinkedAmountsToVoucher(
 
   const paymentTypes =
     type === "sale"
-      ? ["payment_in", "direct_income", "purchase", "purchase_service"]
-      : ["payment_out", "direct_expense", "sale", "sale_service"];
+      ? ["payment_in", "direct_income", "purchase", "purchase_service", "journal"]
+      : ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
 
   const rows: LinkedAmountRow[] = [];
 
@@ -359,6 +375,7 @@ export function getOutgoingLinkedAmountRows(
 /**
  * Build linked-amount rows from pending allocations (e.g. after user clicks DONE in link dialog).
  * Used so the voucher form shows updated link list before Save; same shape as getLinkedAmountsToVoucher.
+ * Journal bhi include – LinkAdvancesToVoucherDialog se journal select karne par PUR/Sale form pe dikhe.
  */
 export function getLinkedAmountRowsFromPending(
   pending: Record<string, number>,
@@ -366,7 +383,7 @@ export function getLinkedAmountRowsFromPending(
   type: "sale" | "purchase"
 ): LinkedAmountRow[] {
   if (!pending || !vouchers?.length) return [];
-  const paymentTypes = type === "sale" ? ["payment_in", "direct_income", "purchase", "purchase_service"] : ["payment_out", "direct_expense", "sale", "sale_service"];
+  const paymentTypes = type === "sale" ? ["payment_in", "direct_income", "purchase", "purchase_service", "journal"] : ["payment_out", "direct_expense", "sale", "sale_service", "journal"];
   const rows: LinkedAmountRow[] = [];
   const obAmt = Number(pending[OPENING_BALANCE_VOUCHER_ID]) || 0;
   if (obAmt > 0) rows.push({ date: null, voucherNumber: "Opening Balance", amount: obAmt, paymentVoucherId: OPENING_BALANCE_VOUCHER_ID });
@@ -399,16 +416,16 @@ export function hasPaymentLinks(voucherData: any): boolean {
 }
 
 /**
- * Returns true if any payment_in, direct_income, payment_out or direct_expense voucher in allVouchers
+ * Returns true if any payment_in, direct_income, payment_out, direct_expense, journal, sale, purchase voucher
  * has allocations targeting the given voucherId (bill-wise link to a sale/purchase).
- * Used so sale/purchase edit is disabled when linked from "Link to Txns".
+ * Used so sale/purchase edit is disabled when linked from "Link to Txns" or journal.
  */
 export function hasAllocationsToVoucherId(voucherId: string, allVouchers: any[]): boolean {
   if (!voucherId || !Array.isArray(allVouchers)) return false;
   for (const v of allVouchers) {
     if (v.isDeleted) continue;
     const type = v.type;
-    const isBillWiseSource = ["payment_in", "direct_income", "payment_out", "direct_expense", "purchase", "purchase_service", "sale", "sale_service"].includes(type);
+    const isBillWiseSource = ["payment_in", "direct_income", "payment_out", "direct_expense", "purchase", "purchase_service", "sale", "sale_service", "journal"].includes(type);
     if (!isBillWiseSource) continue;
     const allocations = (v.allocations as Allocation[] | undefined) ?? [];
     if (allocations.some((a) => a.voucherId === voucherId)) return true;

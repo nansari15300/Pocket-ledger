@@ -37,7 +37,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
 } from "../ui/alert-dialog";
 
-import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle } from "lucide-react";
+import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp, Wand2, History, CheckCircle, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -85,10 +85,14 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
+import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
+import { LinkPaymentInToSalaryDialog } from "@/components/vouchers/LinkPaymentInToSalaryDialog";
+import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
 import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
+import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
+import type { Allocation } from "@/lib/payment-allocation-utils";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
 const lineSchema = z.object({
@@ -160,22 +164,29 @@ export function CreateJournalForm({
   onOpenHistory,
   showHistoryButton,
   editingDisabled = false,
+  historyLimitReached = false,
+  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  /** When opening journal in edit mode, auto-select this side’s bill-wise card and blink the matching row (e.g. Dr row). Pass from ledger when user clicks Dr/Cr. */
+  initialFocusSide,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
   onOpenHistory?: () => void;
   showHistoryButton?: boolean;
   editingDisabled?: boolean;
+  historyLimitReached?: boolean;
+  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  initialFocusSide?: "debit" | "credit" | null;
 }) {
   const isMounted = useRef(true);
 
@@ -203,12 +214,29 @@ export function CreateJournalForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
+  // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
+  const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
+  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
   const processAndSaveRef = useRef<((data: JournalFormValues, saveAndNew: boolean, approveAfterSave?: boolean) => Promise<void>) | null>(null);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   
   const [activeInput, setActiveInput] = React.useState<{ index: number, field: string } | null>(null);
+  // Track which journal line requested "add new" so we can fill that exact row instead of appending extra rows.
+  const [pendingCreateLineIndex, setPendingCreateLineIndex] = useState<number | null>(null);
+  // Keep allocations per account/side so debit card (Pashupati) and credit card (Kanhaiya) stay independent.
+  const [journalAllocationsBySide, setJournalAllocationsBySide] = useState<{ debit: Allocation[]; credit: Allocation[] }>({
+    debit: [],
+    credit: [],
+  });
+  // Track which side card is opening link dialog so debit/credit can use opposite-link behavior.
+  const [activeJournalLinkSide, setActiveJournalLinkSide] = useState<"debit" | "credit" | null>(null);
+  /** Selected bill-wise card for select feel; jis card pe click kiya usi ka related amount row blink kare. */
+  const [selectedBillWiseCard, setSelectedBillWiseCard] = useState<"debit" | "credit" | null>(null);
+  /** Tracks whether we already applied initial focus for current voucher so we don’t override user selection. */
+  const initialFocusAppliedRef = useRef<string | null>(null);
 
   const isEditing = !!voucher;
   const isEditingAndConverting = voucher && voucher.type !== 'journal';
@@ -219,7 +247,7 @@ export function CreateJournalForm({
     defaultValues: getInitialFormValues(voucher),
   });
 
-  const { fields, append, remove, update } = useFieldArray({
+  const { fields, remove, update } = useFieldArray({
     control: form.control,
     name: "lines",
   });
@@ -232,7 +260,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
+  const _isAllocationsDirty = (() => {
+    const init = initialJournalAllocationsRef.current;
+    const norm = (a: Allocation[]) => JSON.stringify((a || []).map((x) => ({ v: x.voucherId, a: x.amount, l: x.linkedAccountId })).sort((p, q) => String(p.v).localeCompare(String(q.v))));
+    return norm(journalAllocationsBySide.debit || []) !== norm(init.debit || []) || norm(journalAllocationsBySide.credit || []) !== norm(init.credit || []);
+  })();
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isAllocationsDirty;
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.journal ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.journal ?? false;
@@ -270,6 +303,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
  useEffect(() => {
     if (voucher) {
+        const vid = voucher.id;
+        const isSameVoucher = lastResetVoucherIdRef.current === vid;
+        if (vid && isSameVoucher && isFormDirty) return;
+        if (vid) lastResetVoucherIdRef.current = vid;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
             initialValues.voucherNumber = "";
@@ -280,8 +317,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if(voucher.unassignedFile) {
           form.setValue('unassignedFile', voucher.unassignedFile);
         }
+        // Reset local journal allocations when a different voucher opens in edit mode; split by linkedAccountId.
+        const raw = Array.isArray((voucher as any)?.allocations) ? ((voucher as any).allocations as Allocation[]) : [];
+        const entries = (voucher as any)?.entries ?? [];
+        const debitAccIds = new Set((entries as any[]).filter((e: any) => (Number(e?.debit) || 0) > 0).map((e: any) => String(e?.accountId ?? "")));
+        const creditAccIds = new Set((entries as any[]).filter((e: any) => (Number(e?.credit) || 0) > 0).map((e: any) => String(e?.accountId ?? "")));
+        const debit: Allocation[] = [];
+        const credit: Allocation[] = [];
+        raw.forEach((a: any) => {
+          const lid = String(a?.linkedAccountId ?? "");
+          if (lid && debitAccIds.has(lid)) debit.push(a);
+          else if (lid && creditAccIds.has(lid)) credit.push(a);
+          else if (!lid) debit.push(a);
+        });
+        setJournalAllocationsBySide({ debit, credit });
+        initialJournalAllocationsRef.current = { debit: [...debit], credit: [...credit] };
+    } else {
+        lastResetVoucherIdRef.current = null;
+        setJournalAllocationsBySide({ debit: [], credit: [] });
+        initialJournalAllocationsRef.current = { debit: [], credit: [] };
     }
-}, [voucher, form, isEditingAndConverting]);
+}, [voucher, form, isEditingAndConverting, isFormDirty]);
 
   
   useEffect(() => {
@@ -297,10 +353,664 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       ...processedStaff.map(s => ({ value: s.id, label: `${s.name} (Staff)`, balance: s.balance })),
     ].sort((a,b) => a.label.localeCompare(b.label));
 }, [processedPartiesForSelection, processedStaff]);
+  // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
+  const accountLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    (processedPartiesForSelection || []).forEach((p: any) => map.set(String(p.id), `${p.name} (Party)`));
+    (processedStaff || []).forEach((s: any) => map.set(String(s.id), `${s.name} (Staff)`));
+    (processedAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.accountName || a.name || "Account"} (Account)`));
+    (expenseAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.name || "Expense"} (Expense)`));
+    (processedTaxes || []).forEach((t: any) => map.set(String(t.id), `${t.name || "Tax"} (Tax)`));
+    return map;
+  }, [processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes]);
+  // Source account id from account-ledger click; used to reduce two-account confusion in journal edit.
+  const openedFromAccountId = String((voucher as any)?._openedFromAccountId ?? "");
+
+  // Watch current lines once so bill-wise summary card can react instantly to journal edits.
+  const watchedLines = useWatch({ control: form.control, name: "lines" });
+  // Build fast lookups so journal bill-wise can support both Party and Staff account rows.
+  const partyIdSet = useMemo(
+    () => new Set((processedPartiesForSelection || []).map((p: any) => String(p.id))),
+    [processedPartiesForSelection]
+  );
+  // Staff should also be linkable from Journal bill-wise cards (same as user-requested payment flow behavior).
+  const staffIdSet = useMemo(
+    () => new Set((processedStaff || []).map((s: any) => String(s.id))),
+    [processedStaff]
+  );
+  // Journal link source account can be either party or staff; keep one combined set for row detection.
+  const journalLinkableAccountIdSet = useMemo(() => {
+    const combined = new Set<string>();
+    partyIdSet.forEach((id) => combined.add(id));
+    staffIdSet.forEach((id) => combined.add(id));
+    return combined;
+  }, [partyIdSet, staffIdSet]);
+  // Build dedicated bill-wise source lines for both sides so Debit and Credit can each have their own card.
+  const journalBillLinesBySide = useMemo(() => {
+    const lines = Array.isArray(watchedLines) ? watchedLines : [];
+    const findForSide = (side: "debit" | "credit") => {
+      // Prefer clicked account row only when it matches side + party + positive amount.
+      const preferred = openedFromAccountId
+        ? lines.find(
+            (l: any) =>
+              String(l?.accountId ?? "") === openedFromAccountId &&
+              String(l?.type ?? "") === side &&
+              journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
+              (Number(l?.amount) || 0) > 0
+          )
+        : null;
+      const line =
+        preferred ||
+        lines.find(
+          (l: any) =>
+            String(l?.type ?? "") === side &&
+            journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) &&
+            (Number(l?.amount) || 0) > 0
+        );
+      if (!line) return null;
+      return {
+        partyId: String(line.accountId),
+        amount: Number(line.amount) || 0,
+      };
+    };
+    return {
+      debit: findForSide("debit"),
+      credit: findForSide("credit"),
+    };
+  }, [watchedLines, journalLinkableAccountIdSet, openedFromAccountId]);
+
+  // In edit mode: auto-select Dr card (and blink Dr row) or Cr card when opening journal; once per voucher.
+  useEffect(() => {
+    const vid = voucher?.id;
+    if (!vid || voucher?.type !== "journal") {
+      initialFocusAppliedRef.current = null;
+      return;
+    }
+    if (initialFocusAppliedRef.current === vid) return;
+    const lines = Array.isArray(watchedLines) ? watchedLines : [];
+    const hasDebitLine = lines.some((l: any) => String(l?.type) === "debit" && journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) && (Number(l?.amount) || 0) > 0);
+    const hasCreditLine = lines.some((l: any) => String(l?.type) === "credit" && journalLinkableAccountIdSet.has(String(l?.accountId ?? "")) && (Number(l?.amount) || 0) > 0);
+    const openedFromDebit = openedFromAccountId && lines.some((l: any) => String(l?.accountId) === openedFromAccountId && String(l?.type) === "debit");
+    const side: "debit" | "credit" =
+      initialFocusSide ?? (openedFromAccountId && openedFromDebit ? "debit" : openedFromAccountId && !openedFromDebit ? "credit" : "debit");
+    if (side === "debit" && hasDebitLine) {
+      setSelectedBillWiseCard("debit");
+      initialFocusAppliedRef.current = vid;
+    } else if (side === "credit" && hasCreditLine) {
+      setSelectedBillWiseCard("credit");
+      initialFocusAppliedRef.current = vid;
+    } else if (hasDebitLine) {
+      setSelectedBillWiseCard("debit");
+      initialFocusAppliedRef.current = vid;
+    } else if (hasCreditLine) {
+      setSelectedBillWiseCard("credit");
+      initialFocusAppliedRef.current = vid;
+    }
+  }, [voucher?.id, voucher?.type, watchedLines, initialFocusSide, openedFromAccountId, journalLinkableAccountIdSet]);
+
+  /** Row index that should blink when a bill-wise card is selected (matching type + accountId). */
+  const selectedCardRelatedRowIndex = useMemo(() => {
+    if (!selectedBillWiseCard) return null;
+    const lines = Array.isArray(watchedLines) ? watchedLines : [];
+    const partyId = journalBillLinesBySide[selectedBillWiseCard]?.partyId ?? "";
+    if (!partyId) return null;
+    const idx = lines.findIndex((l: any) => String(l?.type ?? "") === selectedBillWiseCard && String(l?.accountId ?? "") === partyId);
+    return idx >= 0 ? idx : null;
+  }, [selectedBillWiseCard, watchedLines, journalBillLinesBySide]);
+  // Highlight both related party rows so each bill-wise card has a clear matching source row in journal lines.
+  const linkedPartyLineIndices = useMemo(() => {
+    const lines = Array.isArray(watchedLines) ? watchedLines : [];
+    const ids = [
+      String(journalBillLinesBySide.debit?.partyId ?? ""),
+      String(journalBillLinesBySide.credit?.partyId ?? ""),
+    ].filter(Boolean);
+    return new Set(
+      lines
+        .map((l: any, idx: number) => (ids.includes(String(l?.accountId ?? "")) ? idx : -1))
+        .filter((idx: number) => idx >= 0)
+    );
+  }, [watchedLines, journalBillLinesBySide.debit?.partyId, journalBillLinesBySide.credit?.partyId]);
+  // Use persisted voucher id when available so the card can show server-linked allocations.
+  const journalVoucherId = (savedVoucherId || voucher?.id || "") as string;
+  // Resolve current voucher snapshot from live list (fallback to prop voucher while editing).
+  const currentJournalVoucher = useMemo(() => {
+    if (!journalVoucherId) return voucher || null;
+    return (vouchers || []).find((v: any) => String(v?.id ?? "") === String(journalVoucherId)) || voucher || null;
+  }, [journalVoucherId, vouchers, voucher]);
+  // Incoming links = other vouchers allocating to this journal (status "from").
+  const journalLinkedFromRows = useMemo(() => {
+    if (!journalVoucherId || !vouchers?.length) return [] as Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number; sourceType: string }>;
+    const rows: Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number; sourceType: string }> = [];
+    (vouchers as any[]).forEach((v) => {
+      if (!v || String(v.id ?? "") === String(journalVoucherId)) return;
+      const allocs = (v.allocations as any[] | undefined) || [];
+      const linkedAmount = allocs
+        .filter((a: any) => String(a?.voucherId ?? "") === String(journalVoucherId))
+        .reduce((sum: number, a: any) => sum + getAllocationTotal(a), 0);
+      if (linkedAmount <= 0) return;
+      const rawDate = (v as any)?.date;
+      const parsedDate =
+        rawDate && typeof rawDate?.toDate === "function"
+          ? rawDate.toDate()
+          : rawDate
+            ? new Date(rawDate)
+            : null;
+      rows.push({
+        voucherId: String(v.id ?? ""),
+        voucherNumber: String(v.voucherNumber ?? v.voucher_number ?? "—"),
+        amount: linkedAmount,
+        date: parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null,
+        total: Number((v as any)?.total ?? (v as any)?.amount ?? 0) || 0,
+        sourceType: String((v as any)?.type ?? ""),
+      });
+    });
+    return rows;
+  }, [journalVoucherId, vouchers]);
+  // Merged allocations for save payload; each allocation carries linkedAccountId for per-side restore on load.
+  const effectiveJournalAllocations = useMemo(
+    () => [...(journalAllocationsBySide.debit || []), ...(journalAllocationsBySide.credit || [])],
+    [journalAllocationsBySide]
+  );
+  // Per-side outgoing rows so debit card shows only Pashupati links, credit card only Kanhaiya links.
+  const journalLinkedToRowsBySide = useMemo(() => {
+    const buildRows = (allocs: Allocation[]) => {
+      const list = Array.isArray(allocs) ? allocs : [];
+      if (!list.length) return [] as Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number }>;
+      return list
+        .filter((a: any) => Number(a?.amount) > 0)
+        .map((a: any) => {
+          if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) {
+            return {
+              voucherId: OPENING_BALANCE_VOUCHER_ID,
+              voucherNumber: "Opening Balance",
+              amount: getAllocationTotal(a),
+              date: null,
+              total: 0,
+            };
+          }
+          const target = (vouchers || []).find((v: any) => String(v?.id ?? "") === String(a?.voucherId ?? ""));
+          const rawDate = (target as any)?.date;
+          const parsedDate =
+            rawDate && typeof rawDate?.toDate === "function"
+              ? rawDate.toDate()
+              : rawDate
+                ? new Date(rawDate)
+                : null;
+          return {
+            voucherId: String(a?.voucherId ?? ""),
+            voucherNumber: String(target?.voucherNumber ?? target?.voucher_number ?? "—"),
+            amount: getAllocationTotal(a),
+            date: parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null,
+            total: Number((target as any)?.total ?? (target as any)?.amount ?? 0) || 0,
+          };
+        });
+    };
+    return {
+      debit: buildRows(journalAllocationsBySide.debit || []),
+      credit: buildRows(journalAllocationsBySide.credit || []),
+    };
+  }, [journalAllocationsBySide, vouchers]);
+  // Legacy: flat journalLinkedToRows for any code that still expects it (e.g. journalLinkedOnOthersByVoucherId uses allocs, not rows).
+  const journalLinkedToRows = useMemo(() => {
+    const allocs = effectiveJournalAllocations as any[];
+    if (!allocs.length) return [] as Array<{ voucherId: string; voucherNumber: string; amount: number; date: Date | null; total: number }>;
+    return allocs
+      .filter((a: any) => Number(a?.amount) > 0)
+      .map((a: any) => {
+        if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) {
+          return {
+            voucherId: OPENING_BALANCE_VOUCHER_ID,
+            voucherNumber: "Opening Balance",
+            amount: getAllocationTotal(a),
+            date: null,
+            total: 0,
+          };
+        }
+        const target = (vouchers || []).find((v: any) => String(v?.id ?? "") === String(a?.voucherId ?? ""));
+        const rawDate = (target as any)?.date;
+        const parsedDate =
+          rawDate && typeof rawDate?.toDate === "function"
+            ? rawDate.toDate()
+            : rawDate
+              ? new Date(rawDate)
+              : null;
+        return {
+          voucherId: String(a?.voucherId ?? ""),
+          voucherNumber: String(target?.voucherNumber ?? target?.voucher_number ?? "—"),
+          amount: getAllocationTotal(a),
+          date: parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null,
+          total: Number((target as any)?.total ?? (target as any)?.amount ?? 0) || 0,
+        };
+      });
+  }, [effectiveJournalAllocations, vouchers]);
+  // For each row target, show how much already linked by other vouchers (excluding current journal) like payment forms.
+  const journalLinkedOnOthersByVoucherId = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!vouchers?.length) return m;
+    (vouchers as any[]).forEach((v) => {
+      if (!v || String(v?.id ?? "") === String(journalVoucherId)) return;
+      const allocs = (v.allocations as any[] | undefined) || [];
+      allocs.forEach((a: any) => {
+        const key = String(a?.voucherId ?? "");
+        if (!key || key === OPENING_BALANCE_VOUCHER_ID) return;
+        m.set(key, (m.get(key) ?? 0) + getAllocationTotal(a));
+      });
+    });
+    return m;
+  }, [vouchers, journalVoucherId]);
+  // Build side-wise card data so Debit/Credit each get independent bill-wise rows and balances.
+  const journalBillWiseBySide = useMemo(() => {
+    const getJournalPartyAmount = (voucher: any, accountId: string) => {
+      if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+      const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(accountId));
+      if (!partyEntry) return null;
+      const debit = Number((partyEntry as any)?.debit) || 0;
+      const credit = Number((partyEntry as any)?.credit) || 0;
+      const total = credit > 0 ? credit : debit;
+      if (total <= 0) return null;
+      return { debit, credit, total };
+    };
+    const debitSourceTypes = new Set(["payment_in", "direct_income"]);
+    const creditSourceTypes = new Set(["payment_out", "direct_expense"]);
+    const voucherTouchesAccount = (voucherId: string, accountId: string) => {
+      const target = (vouchers || []).find((v: any) => String(v?.id ?? "") === String(voucherId));
+      if (!target || !accountId) return false;
+      return (
+        String((target as any)?.partyId ?? "") === String(accountId) ||
+        String((target as any)?.staffId ?? "") === String(accountId) ||
+        (Array.isArray((target as any)?.entries) &&
+          (target as any).entries.some((e: any) => String(e?.accountId ?? "") === String(accountId)))
+      );
+    };
+    const buildSide = (side: "debit" | "credit") => {
+      const sideLine = journalBillLinesBySide[side];
+      const accountId = String(sideLine?.partyId ?? "");
+      const existingAllocations = (journalAllocationsBySide[side] || []) as Allocation[];
+      const currentVoucherIdStr = String(journalVoucherId ?? "");
+      const isCurrentVoucher = (v: any) => currentVoucherIdStr && String((v as any)?.id ?? "") === currentVoucherIdStr;
+      const voucherTouchesAccountFn = (v: any) =>
+        String((v as any)?.partyId ?? "") === accountId ||
+        String((v as any)?.staffId ?? "") === accountId ||
+        (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === accountId));
+      const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+
+      // Opening balance for party/staff; used for OB linkable row.
+      const getOpeningBalance = () => {
+        if (!accountId) return 0;
+        if (partyIdSet.has(accountId)) {
+          const p = (processedPartiesForSelection || []).find((p: any) => String(p.id) === accountId);
+          return Number((p as any)?.openingBalance ?? 0) || 0;
+        }
+        if (staffIdSet.has(accountId)) {
+          const s = (processedStaff || []).find((s: any) => String(s.id) === accountId);
+          return Number((s as any)?.openingBalance ?? 0) || 0;
+        }
+        return 0;
+      };
+      const partyOB = getOpeningBalance();
+      const showOBInPaymentIn = partyOB > 0;
+      const showOBInPaymentOut = partyOB < 0;
+      const obAmount = partyOB > 0 ? partyOB : Math.abs(partyOB);
+
+      // totalConsumedFromOB: allocations to OB from payments + sale/purchase openingBalanceAllocated.
+      const totalConsumedFromOB = (() => {
+        if (!accountId || !vouchers?.length) return 0;
+        const payType = side === "credit" ? ["payment_in", "direct_income"] : ["payment_out", "direct_expense"];
+        let fromPayments = 0;
+        (vouchers as any[]).forEach((v) => {
+          if (!payType.includes(v.type)) return;
+          if (!voucherTouchesAccountFn(v)) return;
+          const allocs = (v.allocations as any[] | undefined) || [];
+          allocs.forEach((a: any) => {
+            if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) fromPayments += getAllocationTotal(a);
+          });
+        });
+        const fromBillwise = (vouchers as any[]).reduce((sum, v) => {
+          if (v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service") return sum;
+          if (!voucherTouchesAccountFn(v)) return sum;
+          return sum + (Number((v as any).openingBalanceAllocated) || 0);
+        }, 0);
+        return fromPayments + fromBillwise;
+      })();
+      const obOutstandingIn = Math.max(0, obAmount - totalConsumedFromOB);
+      const showOB = side === "credit" ? showOBInPaymentIn : showOBInPaymentOut;
+      const obOutstanding = showOB ? obOutstandingIn : 0;
+
+      const sourceTypes = side === "debit" ? debitSourceTypes : creditSourceTypes;
+      const voucherMatchesJournalSide = (voucherId: string) => {
+        const target = (vouchers || []).find((v: any) => String(v?.id ?? "") === String(voucherId));
+        if (!target || target.type !== "journal" || !sideLine?.partyId) return false;
+        const accountEntry = Array.isArray((target as any)?.entries)
+          ? (target as any).entries.find((e: any) => String(e?.accountId ?? "") === String(sideLine.partyId))
+          : null;
+        if (!accountEntry) return false;
+        return side === "debit" ? (Number(accountEntry.debit) || 0) > 0 : (Number(accountEntry.credit) || 0) > 0;
+      };
+      const filteredIncoming = journalLinkedFromRows.filter((row) =>
+        (
+          sourceTypes.has(String(row.sourceType || "").toLowerCase()) ||
+          String(row.sourceType || "").toLowerCase() === "journal"
+        ) &&
+        voucherTouchesAccount(row.voucherId, accountId) &&
+        (String(row.sourceType || "").toLowerCase() !== "journal" || voucherMatchesJournalSide(row.voucherId))
+      );
+      const map = new Map<string, { voucherId: string; voucherNumber: string; date: Date | null; total: number; linkedOnCurrent: number }>();
+      [...filteredIncoming, ...journalLinkedToRowsBySide[side]].forEach((row) => {
+        const key = String(row.voucherId);
+        const prev = map.get(key);
+        if (prev) {
+          prev.linkedOnCurrent += Number(row.amount) || 0;
+          if (!prev.date && row.date) prev.date = row.date;
+          if (!prev.total && row.total) prev.total = row.total;
+        } else {
+          map.set(key, {
+            voucherId: key,
+            voucherNumber: row.voucherNumber,
+            date: row.date ?? null,
+            total: Number(row.total) || 0,
+            linkedOnCurrent: Number(row.amount) || 0,
+          });
+        }
+      });
+
+      // Add linkable vouchers (same logic as LinkPaymentToTxnsDialog) so card shows voucher numbers.
+      // Debit card links to Cr -> combinedOutList (purchase, payment_in, journal Cr, OB).
+      // Credit card links to Dr -> combinedInList (sale, payment_out, journal Dr, OB).
+      if (accountId && vouchers?.length) {
+        const payInVouchers = (vouchers as any[]).filter(
+          (v) => (v.type === "payment_in" || v.type === "direct_income") && !isCurrentVoucher(v)
+        );
+        const payOutVouchers = (vouchers as any[]).filter(
+          (v) => (v.type === "payment_out" || v.type === "direct_expense") && !isCurrentVoucher(v)
+        );
+        const allocatedByPaymentIns = getAllocatedByVoucherId(payInVouchers);
+        const allocatedByPaymentOuts = getAllocatedByVoucherIdFromPaymentOuts(payOutVouchers);
+        const allocatedByBillWiseVouchers = (() => {
+          const m = new Map<string, number>();
+          for (const v of vouchers as any[]) {
+            if (isCurrentVoucher(v)) continue;
+            if (
+              v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service" && v.type !== "journal"
+            ) continue;
+            const allocations = (v.allocations as Allocation[] | undefined) || [];
+            for (const a of allocations) {
+              if (!a.voucherId) continue;
+              m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+            }
+          }
+          return m;
+        })();
+        const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(vid) ?? 0) + (allocatedByBillWiseVouchers.get(vid) ?? 0);
+        const totalAllocatedToOut = (vid: string) => (allocatedByPaymentOuts.get(vid) ?? 0) + (allocatedByBillWiseVouchers.get(vid) ?? 0);
+        // Other Linked: max(target allocations, sourceSum) + openingBalanceAllocated (Purchase/Sale link to OB via this).
+        const getAllocatedToOthersFromTarget = (targetVoucher: any, vid: string): number => {
+          const allocs = (targetVoucher?.allocations as Allocation[] | undefined) || [];
+          const fromAllocs = allocs.reduce((sum, a) => {
+            if (!a.voucherId || String(a.voucherId) === currentVoucherIdStr) return sum;
+            if (accountId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== accountId) return sum;
+            return sum + getAllocationTotal(a);
+          }, 0);
+          const sourceSum = side === "credit" ? totalAllocatedTo(vid) : totalAllocatedToOut(vid);
+          const obInAllocs = allocs
+            .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID)
+            .reduce((s, a) => s + getAllocationTotal(a), 0);
+          const targetObAlloc = Math.max(0, (Number(targetVoucher?.openingBalanceAllocated) || 0) - obInAllocs);
+          return Math.max(fromAllocs, sourceSum) + targetObAlloc;
+        };
+        const safeToDate = (d: unknown): Date | null => {
+          if (!d) return null;
+          if (d instanceof Date) return d;
+          if (typeof (d as { toDate?: () => Date })?.toDate === "function") return (d as { toDate: () => Date }).toDate();
+          const p = new Date(d as string | number);
+          return isNaN(p.getTime()) ? null : p;
+        };
+
+        if (side === "credit") {
+          // combinedInList: sale, payment_out, journal Dr, OB (Dr)
+          const salesForParty = (vouchers as any[]).filter(
+            (v) => !isCurrentVoucher(v) && (v.type === "sale" || v.type === "sale_service") && voucherTouchesAccountFn(v)
+          );
+          const linkedOnCurrentFor = (vid: string) =>
+            existingAllocations.filter((a) => a.voucherId === vid).reduce((s, a) => s + getAllocationTotal(a), 0);
+          salesForParty.forEach((v) => {
+            const total = Number(v.total ?? v.amount ?? 0);
+            const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+            const outstanding = Math.max(0, total - allocatedToOthers);
+            if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+            const key = String(v.id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).invoiceNumber ?? (v as any).voucherNumber ?? "—"),
+                date: safeToDate(v.date),
+                total,
+                linkedOnCurrent: linkedOnCurrentFor(v.id),
+              });
+            }
+          });
+          const paymentOutsForParty = (vouchers as any[]).filter(
+            (v) => !isCurrentVoucher(v) && (v.type === "payment_out" || v.type === "direct_expense") && voucherTouchesAccountFn(v)
+          );
+          paymentOutsForParty.forEach((v) => {
+            const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+            const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+            const outstanding = Math.max(0, total - allocatedToOthers);
+            if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+            const key = String(v.id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).voucherNumber ?? "—"),
+                date: safeToDate(v.date),
+                total,
+                linkedOnCurrent: linkedOnCurrentFor(v.id),
+              });
+            }
+          });
+          const journalDrRows = (vouchers as any[])
+            .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesAccountFn(v))
+            .map((v) => {
+              const partyAmount = getJournalPartyAmount(v, accountId);
+              if (!partyAmount || partyAmount.debit <= 0) return null;
+              const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+              const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+              if (outstanding <= 0 && !hasExistingAlloc(v.id)) return null;
+              return { v, id: v.id, total: partyAmount.total, date: v.date };
+            })
+            .filter((r): r is NonNullable<typeof r> => !!r);
+          journalDrRows.forEach(({ v, id, total, date }) => {
+            const key = String(id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).voucherNumber ?? "—"),
+                date: safeToDate(date),
+                total,
+                linkedOnCurrent: linkedOnCurrentFor(id),
+              });
+            }
+          });
+          if (showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID))) {
+            const key = OPENING_BALANCE_VOUCHER_ID;
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: "Opening Balance",
+                date: null,
+                total: obAmount,
+                linkedOnCurrent: linkedOnCurrentFor(key),
+              });
+            }
+          }
+        } else {
+          // combinedOutList: purchase, payment_in, journal Cr, OB (Cr)
+          const linkedOnCurrentForOut = (vid: string) =>
+            existingAllocations.filter((a) => a.voucherId === vid).reduce((s, a) => s + getAllocationTotal(a), 0);
+          const purchasesForParty = (vouchers as any[]).filter(
+            (v) => !isCurrentVoucher(v) && (v.type === "purchase" || v.type === "purchase_service") && voucherTouchesAccountFn(v)
+          );
+          purchasesForParty.forEach((v) => {
+            const total = Number(v.total ?? v.amount ?? 0);
+            const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+            const outstanding = Math.max(0, total - allocatedToOthers);
+            if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+            const key = String(v.id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).invoiceNumber ?? (v as any).voucherNumber ?? "—"),
+                date: safeToDate(v.date),
+                total,
+                linkedOnCurrent: linkedOnCurrentForOut(v.id),
+              });
+            }
+          });
+          const paymentInsForParty = (vouchers as any[]).filter(
+            (v) => !isCurrentVoucher(v) && (v.type === "payment_in" || v.type === "direct_income") && voucherTouchesAccountFn(v)
+          );
+          paymentInsForParty.forEach((v) => {
+            const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
+            const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+            const outstanding = Math.max(0, total - allocatedToOthers);
+            if (outstanding <= 0 && !hasExistingAlloc(v.id)) return;
+            const key = String(v.id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).voucherNumber ?? "—"),
+                date: safeToDate(v.date),
+                total,
+                linkedOnCurrent: linkedOnCurrentForOut(v.id),
+              });
+            }
+          });
+          const journalCrRows = (vouchers as any[])
+            .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesAccountFn(v))
+            .map((v) => {
+              const partyAmount = getJournalPartyAmount(v, accountId);
+              if (!partyAmount || partyAmount.credit <= 0) return null;
+              const allocatedToOthers = getAllocatedToOthersFromTarget(v, v.id);
+              const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+              if (outstanding <= 0 && !hasExistingAlloc(v.id)) return null;
+              return { v, id: v.id, total: partyAmount.total, date: v.date };
+            })
+            .filter((r): r is NonNullable<typeof r> => !!r);
+          journalCrRows.forEach(({ v, id, total, date }) => {
+            const key = String(id);
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: String((v as any).voucherNumber ?? "—"),
+                date: safeToDate(date),
+                total,
+                linkedOnCurrent: linkedOnCurrentForOut(id),
+              });
+            }
+          });
+          if (showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID))) {
+            const key = OPENING_BALANCE_VOUCHER_ID;
+            if (!map.has(key)) {
+              map.set(key, {
+                voucherId: key,
+                voucherNumber: "Opening Balance",
+                date: null,
+                total: obAmount,
+                linkedOnCurrent: linkedOnCurrentForOut(key),
+              });
+            }
+          }
+        }
+      }
+
+      const rows = Array.from(map.values()).sort((a, b) => {
+        const dA = a.date ? new Date(a.date).getTime() : 0;
+        const dB = b.date ? new Date(b.date).getTime() : 0;
+        return dA - dB;
+      });
+      const linkedFromTotal = filteredIncoming.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+      const linkedToTotal = (journalLinkedToRowsBySide[side] || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+      const linkableRemaining = Math.max(0, (sideLine?.amount || 0) - linkedToTotal);
+      return {
+        sideLine,
+        rows,
+        linkedFromTotal,
+        linkedToTotal,
+        linkableRemaining,
+      };
+    };
+    return {
+      debit: buildSide("debit"),
+      credit: buildSide("credit"),
+    };
+  }, [journalBillLinesBySide, journalLinkedFromRows, journalLinkedToRowsBySide, journalAllocationsBySide, journalVoucherId, vouchers, partyIdSet, staffIdSet, processedPartiesForSelection, processedStaff]);
+  // Resolve side-wise source account metadata so each Journal card opens the correct link dialog (Party/Staff).
+  const journalLinkContextBySide = useMemo(() => {
+    const resolve = (side: "debit" | "credit") => {
+      const accountId = String(journalBillWiseBySide[side].sideLine?.partyId ?? "");
+      if (!accountId) return { accountId: "", kind: null as "party" | "staff" | null, label: "", openingBalance: 0 };
+      if (partyIdSet.has(accountId)) {
+        const party = (processedPartiesForSelection || []).find((p: any) => String(p.id) === accountId);
+        return {
+          accountId,
+          kind: "party" as const,
+          label: party?.name || accountLabelById.get(accountId) || "Party",
+          openingBalance: Number((party as any)?.openingBalance ?? 0) || 0,
+        };
+      }
+      if (staffIdSet.has(accountId)) {
+        const staff = (processedStaff || []).find((s: any) => String(s.id) === accountId);
+        return {
+          accountId,
+          kind: "staff" as const,
+          label: staff?.name || accountLabelById.get(accountId) || "Staff",
+          openingBalance: Number((staff as any)?.openingBalance ?? 0) || 0,
+        };
+      }
+      return { accountId, kind: null as "party" | "staff" | null, label: accountLabelById.get(accountId) || "Account", openingBalance: 0 };
+    };
+    return {
+      debit: resolve("debit"),
+      credit: resolve("credit"),
+    };
+  }, [journalBillWiseBySide, partyIdSet, processedPartiesForSelection, staffIdSet, processedStaff, accountLabelById]);
+  // Open side-specific linking dialog so Debit card links to Credit vouchers and Credit card links to Debit vouchers.
+  const handleJournalAddLinkClick = useCallback((side: "debit" | "credit") => {
+    setSelectedBillWiseCard(side);
+    const sideLine = journalBillWiseBySide[side].sideLine;
+    if (!sideLine) {
+      sonnerToast.info(`Select a ${side} row with amount before linking.`);
+      return;
+    }
+    const ctx = journalLinkContextBySide[side];
+    if (!ctx.kind) {
+      sonnerToast.info("Only Party/Staff journal rows support bill-wise link from Journal.");
+      return;
+    }
+    setActiveJournalLinkSide(side);
+  }, [journalBillWiseBySide, journalLinkContextBySide]);
+  // Keep currently opened link-card context in one object so party/staff dialogs can reuse the same source details.
+  const activeJournalLinkContext = useMemo(() => {
+    if (!activeJournalLinkSide) return null;
+    const ctx = journalLinkContextBySide[activeJournalLinkSide];
+    const sideAmount = Number(journalBillWiseBySide[activeJournalLinkSide].sideLine?.amount ?? 0) || 0;
+    return {
+      side: activeJournalLinkSide,
+      ...ctx,
+      amount: sideAmount,
+    };
+  }, [activeJournalLinkSide, journalLinkContextBySide, journalBillWiseBySide]);
 
 
   const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
     e.preventDefault();
+    // block_edit + history full: block everything (no save, no approve)
+    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
+    // hasLinks only: approve-only — user can approve voucher without saving form changes
+    if (options.approveAfterSave && onApprove && editingDisabled) {
+      onApprove();
+      return;
+    }
+    if (editingDisabled) return;
     const isValid = await form.trigger();
     if (!isValid) {
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
@@ -308,7 +1018,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     onVoucherAction?.('saved', options.saveAndNew);
     await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave);
-  }, [form, onVoucherAction]);
+  }, [form, onVoucherAction, editingDisabled, historyLimitReached, onSaveBlockedByHistoryLimit]);
   
   async function processAndSave(data: JournalFormValues, saveAndNew: boolean = false, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -438,6 +1148,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           debit: line.type === "debit" ? line.amount : 0,
           credit: line.type === "credit" ? line.amount : 0,
         })),
+        // Persist links made from Journal debit/credit bill-wise cards.
+        allocations: effectiveJournalAllocations,
         fileUrls,
       };
 
@@ -701,17 +1413,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }, 100);
     }
   };
+
+  // Apply newly created account to the requested row to avoid extra debit rows being appended.
+  const applyCreatedAccountToPendingRow = useCallback((id: string) => {
+    if (pendingCreateLineIndex !== null) {
+      form.setValue(`lines.${pendingCreateLineIndex}.accountId`, id, { shouldDirty: true, shouldValidate: true });
+      setPendingCreateLineIndex(null);
+      return;
+    }
+    // Add-row flow removed: fallback assigns created account to an existing empty row (or last row) instead of appending.
+    const currentLines = form.getValues("lines");
+    const emptyRowIndex = currentLines.findIndex((line) => !String(line?.accountId ?? "").trim());
+    const targetRowIndex = emptyRowIndex >= 0 ? emptyRowIndex : Math.max(0, currentLines.length - 1);
+    form.setValue(`lines.${targetRowIndex}.accountId`, id, { shouldDirty: true, shouldValidate: true });
+  }, [form, pendingCreateLineIndex]);
   
   const handleAmountChange = (index: number, value: number) => {
-    const lines = form.getValues("lines");
-    const lastIndex = lines.length - 1;
-
-    // If the user edits the last line, add a new one.
-    if (index === lastIndex && value > 0) {
-        append({ accountId: "", type: "credit", amount: 0, isAutoLine: true });
-    }
-
-    // Now, re-calculate based on the new state
+    // Add-row flow removed: rebalance only within the existing journal rows.
     const updatedLines = form.getValues("lines");
     let totalDebit = 0;
     let totalCredit = 0;
@@ -736,10 +1454,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       <Form {...form}>
         <form onSubmit={(e) => handleFormSubmit(e)} className="h-full flex flex-col min-w-0 w-full max-w-full">
           <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
-            <div className={cn(
-              "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
-              isMobile ? "" : "px-[2px]"
-            )}>
+            <div
+              className={cn(
+                "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
+                isMobile ? "" : "px-[2px]"
+              )}
+              onClick={() => setSelectedBillWiseCard(null)}
+            >
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
@@ -904,7 +1625,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       const lineType = form.watch(`lines.${index}.type`);
                       
                       return (
-                        <div key={line.id} className="flex gap-[2px] items-end border px-[2px] py-2 rounded-md">
+                        <div
+                          key={line.id}
+                          className={cn(
+                            "flex gap-[2px] items-start border px-[2px] py-2 rounded-md",
+                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
+                            selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
+                          )}
+                        >
                           {/* Account */}
                           <FormField
                             control={form.control}
@@ -913,12 +1641,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormItem className="flex-1 min-w-0 overflow-hidden">
                                 <div className="min-w-0 w-full overflow-hidden [&_button]:h-9 [&_button]:text-xs">
                                   <Combobox
-                                    triggerClassName="w-full min-w-0"
+                                    // Match row color: debit=dim green, credit=dim pink.
+                                    triggerClassName={cn(
+                                      "w-full min-w-0 h-9",
+                                      linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
+                                    )}
                                     options={allAccounts.map(a => ({ value: a.value, label: a.label }))}
                                     value={field.value}
                                     onChange={(value, newName) => {
-                                      if (value === "add-new-party") handleCreateNew("party", newName);
-                                      else if (value === "add-new-staff") handleCreateNew("staff", newName);
+                                      if (value === "add-new-party") {
+                                        // Remember source row so newly created party binds here, not as extra row.
+                                        setPendingCreateLineIndex(index);
+                                        handleCreateNew("party", newName);
+                                      }
+                                      else if (value === "add-new-staff") {
+                                        // Remember source row so newly created staff binds here, not as extra row.
+                                        setPendingCreateLineIndex(index);
+                                        handleCreateNew("staff", newName);
+                                      }
                                       else field.onChange(value);
                                     }}
                                     placeholder="Select account"
@@ -949,7 +1689,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   size="sm"
                                   className={cn(
                                     "h-9 px-3 min-w-[40px]",
-                                    field.value === "debit" ? "text-blue-600 border-blue-300" : "text-purple-600 border-purple-300"
+                                    field.value === "debit" ? "text-blue-600 border-blue-300" : "text-purple-600 border-purple-300",
+                                    // Match row color: debit=dim green, credit=dim pink.
+                                    linkedPartyLineIndices.has(index) && (field.value === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
                                   )}
                                   onClick={() => {
                                     if (!isFormEditing || deleteDisabledWhenLinked || (isLastRow && fields.length > 1)) return;
@@ -974,7 +1716,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <Input
                                     type="number"
                                     inputMode="decimal"
-                                    className="h-9 text-xs text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    className={cn(
+                                      "h-9 text-xs text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                                      linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200"),
+                                      selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
+                                    )}
                                     {...field}
                                     disabled={!isFormEditing}
                                     onFocus={(e) => {
@@ -1000,11 +1746,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       );
                     })}
                   </div>
-                  {/* Mobile: Totals and Add Row - Bottom Left */}
+                  {/* Mobile: Totals only; add-row action intentionally removed for journal flow. */}
                   <div className="flex flex-col gap-2 px-[2px]">
-                    <Button type="button" variant="outline" size="sm" onClick={() => append({ accountId: "", type: "debit", amount: 0, isAutoLine: false })} className="w-fit">
-                      <PlusCircle className="mr-2 h-4 w-4"/> Add Row
-                    </Button>
                     <div className="flex gap-2">
                       <div className="bg-green-100 px-3 py-2 rounded text-xs font-medium">
                         Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
@@ -1031,9 +1774,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       const accountId = form.watch(`lines.${index}.accountId`);
                       const balance = allAccounts.find(a => a.value === accountId)?.balance;
                       const isLastRow = index === fields.length - 1;
+                      const lineType = form.watch(`lines.${index}.type`);
                       
                       return (
-                        <div key={line.id} className="grid grid-cols-[2fr_auto_auto_1fr_48px] gap-2 items-end border p-2 rounded-md">
+                        <div
+                          key={line.id}
+                          className={cn(
+                            "grid grid-cols-[2fr_auto_auto_1fr_48px] gap-2 items-start border p-2 rounded-md",
+                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
+                            selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
+                          )}
+                        >
                           {/* Account */}
                           <FormField
                             control={form.control}
@@ -1041,11 +1792,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem>
                                 <Combobox
+                                  triggerClassName={cn(
+                                    "h-9",
+                                    linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
+                                  )}
                                   options={allAccounts.map(a => ({ value: a.value, label: a.label }))}
                                   value={field.value}
                                   onChange={(value, newName) => {
-                                    if (value === "add-new-party") handleCreateNew("party", newName);
-                                    else if (value === "add-new-staff") handleCreateNew("staff", newName);
+                                    if (value === "add-new-party") {
+                                      // Remember source row so newly created party binds here, not as extra row.
+                                      setPendingCreateLineIndex(index);
+                                      handleCreateNew("party", newName);
+                                    }
+                                    else if (value === "add-new-staff") {
+                                      // Remember source row so newly created staff binds here, not as extra row.
+                                      setPendingCreateLineIndex(index);
+                                      handleCreateNew("staff", newName);
+                                    }
                                     else field.onChange(value);
                                   }}
                                   placeholder="Select account"
@@ -1072,7 +1835,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormItem>
                                 <Select onValueChange={field.onChange} value={field.value} disabled={!isFormEditing || deleteDisabledWhenLinked || (isLastRow && fields.length > 1)}>
                                   <FormControl>
-                                    <SelectTrigger className="w-24 justify-center">
+                                    <SelectTrigger
+                                      className={cn(
+                                        "w-24 h-9 justify-center",
+                                        linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
+                                      )}
+                                    >
                                       <SelectValue placeholder="Type" />
                                     </SelectTrigger>
                                   </FormControl>
@@ -1112,7 +1880,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   <Input
                                     type="number"
                                     inputMode="decimal"
-                                    className="text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    className={cn(
+                                      "h-9 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+                                      linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200"),
+                                      selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
+                                    )}
                                     {...field}
                                     disabled={!isFormEditing}
                                     onFocus={(e) => {
@@ -1142,11 +1914,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     })}
                   </div>
 
-                  {/* Desktop: Totals and Add Row */}
+                  {/* Desktop: Totals only; add-row action intentionally removed for journal flow. */}
                   <div className="flex justify-end items-center mt-3 gap-4">
-                    <Button type="button" variant="outline" size="sm" onClick={() => append({ accountId: "", type: "debit", amount: 0, isAutoLine: false })}>
-                      <PlusCircle className="mr-2 h-4 w-4"/> Add Row
-                    </Button>
                     <div className="bg-green-100 px-4 py-2 rounded text-sm font-medium">
                       Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
                     </div>
@@ -1170,51 +1939,174 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </FormItem>
                 )}
               />
-               <FormItem>
+              {/* Attach Files: full width like narration. */}
+              <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 <RestrictedFileUploader>
                   <div className="flex flex-wrap gap-4">
-                    {files.map((file, index) => (
-                      <FilePreview 
-                        key={index} 
-                        file={file} 
-                        onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                      />
-                    ))}
-                    {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <div 
-                        className={cn(
-                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                        )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
+                      {files.map((file, index) => (
+                        <FilePreview 
+                          key={index} 
+                          file={file} 
+                          onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                          className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                        />
+                      ))}
+                      {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                        <div 
+                          className={cn(
+                            "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                              ? "text-muted-foreground hover:border-primary cursor-pointer"
+                              : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                          )}
+                          onClick={() => {
+                            if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                              fileInputRef.current?.click();
+                            }
+                          }}
+                        >
+                           <PlusCircle className="h-6 w-6" />
+                          <span className="text-xs mt-1">Add File</span>
+                          <input 
+                            type="file" 
+                            className="hidden"
+                            ref={fileInputRef}
+                            onChange={handleFileChange}
+                            accept={[
+                              fileAttachmentLimits.allowImage ? "image/*" : "",
+                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                            multiple={fileAttachmentLimits.maxFileCount > 1}
+                            disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </RestrictedFileUploader>
+                </FormItem>
+              {/* Link for bill wise: dono side se 5px inset taaki select ring dikhe. */}
+              <div className="space-y-3 w-full max-w-full min-w-0 mb-[10px] px-[5px]">
+                  {(["debit", "credit"] as const).map((sideKey) => {
+                    const sideData = journalBillWiseBySide[sideKey];
+                    const sideLabel = sideKey === "debit" ? "debit" : "credit";
+                    const sideAccountLabel = sideData.sideLine?.partyId ? (accountLabelById.get(sideData.sideLine.partyId) || "—") : "";
+                    const isDebitCard = sideKey === "debit";
+                    const cardBg = isDebitCard ? "bg-green-50/40 border-green-200" : "bg-pink-50/40 border-pink-200";
+                    const linkAccountBox = isDebitCard ? "border-green-200 bg-green-50/40 text-green-800" : "border-pink-200 bg-pink-50/40 text-pink-800";
+                    return (
+                      <div
+                        key={sideKey}
+                        role="button"
+                        tabIndex={0}
+                        data-billwise-side={sideKey}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Read side from DOM to avoid closure issues; Cr click was incorrectly selecting Dr.
+                          const side = (e.currentTarget as HTMLElement).getAttribute("data-billwise-side") as "debit" | "credit" | null;
+                          if (side) setSelectedBillWiseCard((prev) => (prev === side ? null : side));
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            const side = (e.currentTarget as HTMLElement).getAttribute("data-billwise-side") as "debit" | "credit" | null;
+                            if (side) setSelectedBillWiseCard((prev) => (prev === side ? null : side));
                           }
                         }}
+                        className={cn(
+                          "space-y-2 rounded-lg border-2 p-3 w-full max-w-full min-w-0 overflow-hidden cursor-pointer transition-all",
+                          cardBg,
+                          selectedBillWiseCard === sideKey && "ring-2 ring-primary/60 ring-offset-2 shadow-md"
+                        )}
                       >
-                         <PlusCircle className="h-6 w-6" />
-                        <span className="text-xs mt-1">Add File</span>
-                        <input 
-                          type="file" 
-                          className="hidden"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept={[
-                            fileAttachmentLimits.allowImage ? "image/*" : "",
-                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                          multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                        />
+                        {/* Side label required by UX: show (debit)/(credit) directly in bill-wise title. */}
+                        <div className="flex items-center gap-2 font-semibold border-b border-border/60 pb-2">
+                          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span>Link for bill wise ({sideLabel})</span>
+                        </div>
+                        <div className={cn("w-fit rounded-md border px-2 py-1 text-xs", linkAccountBox)}>
+                          {/* Show selected source account for this side; width fits text length. */}
+                          Link account: <span className="font-semibold">{sideAccountLabel || "Select account row"}</span>
+                        </div>
+                        {!journalVoucherId ? (
+                          <p className="text-sm text-blue-600">Save journal 1st to enable bill-wise linking details.</p>
+                        ) : !sideData.sideLine ? (
+                          <p className="text-sm text-muted-foreground">Select a {sideLabel} party/staff line with amount to show bill-wise link balance.</p>
+                        ) : (
+                          <>
+                            <p className="text-sm text-muted-foreground">
+                              {sideData.rows.length} voucher(s) available to link.{sideData.rows.some((r) => r.linkedOnCurrent > 0) && ` ${sideData.rows.filter((r) => r.linkedOnCurrent > 0).length} linked.`}
+                            </p>
+                            {/* Table sirf linked vouchers ke liye dikhao; link kiye bina linkable list mat dikhao. */}
+                            {!sideData.rows.some((r) => r.linkedOnCurrent > 0) ? null : (
+                              <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
+                                <table className="w-full text-sm border-collapse min-w-[400px]">
+                                  <thead>
+                                    <tr className="border-b bg-muted/50">
+                                      <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
+                                      <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                                      <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Amount</th>
+                                      <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on others</th>
+                                      <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on current</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {sideData.rows.filter((r) => r.linkedOnCurrent > 0).map((row) => (
+                                      <tr key={`${sideKey}-${row.voucherId}`} className="border-b border-border/30 last:border-b-0">
+                                        <td className="p-2 text-muted-foreground whitespace-nowrap">{row.voucherNumber === "Opening Balance" ? "—" : (row.date ? formatDate(row.date) : "—")}</td>
+                                        <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
+                                        <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">
+                                          {formatCurrencyForPrint(row.total || row.linkedOnCurrent, { noSuffix: true, noAnimation: true })}
+                                        </td>
+                                        <td className="p-2 text-right text-muted-foreground whitespace-nowrap">
+                                          {formatCurrencyForPrint(journalLinkedOnOthersByVoucherId.get(row.voucherId) ?? 0, { noSuffix: true, noAnimation: true })}
+                                        </td>
+                                        <td className="p-2 text-right text-muted-foreground whitespace-nowrap">
+                                          {formatCurrencyForPrint(row.linkedOnCurrent, { noSuffix: true, noAnimation: true })}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                            <div className="pt-2 border-t flex justify-end">
+                              <div className="grid grid-cols-2 gap-1.5 text-sm w-fit min-w-0">
+                                <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center">
+                                  <span className="text-muted-foreground leading-tight">Total linked</span>
+                                </div>
+                                <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end">
+                                  <span className="text-right whitespace-nowrap leading-tight">
+                                    {formatCurrencyForPrint(sideData.linkedToTotal ?? 0, { noSuffix: true, noAnimation: true })}
+                                  </span>
+                                </div>
+                                <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium">
+                                  <span className="leading-tight">Balance</span>
+                                </div>
+                                <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium">
+                                  <span className={cn("text-right whitespace-nowrap leading-tight", sideData.linkableRemaining === 0 ? "text-green-600 font-semibold" : "")}>
+                                    {sideData.linkableRemaining === 0
+                                      ? "Settled"
+                                      : formatCurrencyForPrint(sideData.linkableRemaining, { noSuffix: true, noAnimation: true })}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            {can('add_link') && (
+                              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                {/* Card-specific CTA: Debit links to Cr and Credit links to Dr, matching journal opposite-side flow. */}
+                                <Button type="button" variant="outline" size="sm" className="w-fit" onClick={(e) => { e.stopPropagation(); handleJournalAddLinkClick(sideKey); }}>
+                                  <Link2 className="h-4 w-4 mr-2" />
+                                  {sideKey === "debit" ? "Link to Cr" : "Link to Dr"}
+                                </Button>
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </RestrictedFileUploader>
-              </FormItem>
+                    );
+                  })}
+                </div>
             </div>
           </ScrollArea>
 
@@ -1252,7 +2144,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
@@ -1309,12 +2201,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>
@@ -1325,11 +2217,81 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>}
         </form>
       </Form>
-      <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); append({ accountId: id, type: 'debit', amount: 0, isAutoLine: false }) }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
-      <CreateBankAccountDialog onAccountCreated={(id) => { setIsCreateAccountOpen(false); append({ accountId: id, type: 'debit', amount: 0, isAutoLine: false}); }} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
-      <CreateStaffDialog onStaffCreated={(id) => {setIsCreateStaffOpen(false); append({ accountId: id, type: 'debit', amount: 0, isAutoLine: false}); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]} />
-      <CreateExpenseAccountDialog onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); append({ accountId: id, type: 'debit', amount: 0, isAutoLine: false}); }} isOpen={isCreateExpenseOpen} onOpenChange={setIsCreateExpenseOpen} />
-      <CreateTaxDialog onTaxCreated={(id) => { setIsCreateTaxOpen(false); append({ accountId: id, type: 'debit', amount: 0, isAutoLine: false}); }} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen} />
+      {/* Party-side Journal linking: "Link Journal Dr to Linkable Cr Txns" → show Cr list. "Link Journal Cr to Linkable Dr Txns" → show Dr list. */}
+      <LinkPaymentToTxnsDialog
+        isOpen={!!activeJournalLinkContext && activeJournalLinkContext.kind === "party"}
+        onOpenChange={(open) => {
+          if (!open) setActiveJournalLinkSide(null);
+        }}
+        variant={activeJournalLinkContext?.side === "debit" ? "payment_out" : "payment_in"}
+        isJournalLinkDialog={activeJournalLinkContext?.kind === "party"}
+        partyId={activeJournalLinkContext?.kind === "party" ? activeJournalLinkContext.accountId : null}
+        partyName={activeJournalLinkContext?.kind === "party" ? activeJournalLinkContext.label : "Party"}
+        receivedAmount={Number(activeJournalLinkContext?.amount ?? 0) || 0}
+        existingAllocations={activeJournalLinkContext?.side === "debit" ? (journalAllocationsBySide.debit || []) : (journalAllocationsBySide.credit || [])}
+        paymentInId={journalVoucherId || null}
+        paymentOutId={journalVoucherId || null}
+        partyOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
+        dialogTitle={activeJournalLinkContext?.side === "debit" ? "Link Journal Dr to Linkable Cr Txns" : "Link Journal Cr to Linkable Dr Txns"}
+        paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentInDate={form.getValues("date")}
+        paymentOutDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const side = activeJournalLinkContext?.side;
+          const accountId = activeJournalLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
+          setJournalAllocationsBySide((prev) => ({ ...prev, [side === "debit" ? "debit" : "credit"]: tagged }));
+          setActiveJournalLinkSide(null);
+        }}
+      />
+      {/* Staff-side Journal linking for credit card (to Dr sources): uses Payment In → Salary linking behavior. */}
+      <LinkPaymentInToSalaryDialog
+        isOpen={!!activeJournalLinkContext && activeJournalLinkContext.kind === "staff" && activeJournalLinkContext.side === "credit"}
+        onOpenChange={(open) => {
+          if (!open) setActiveJournalLinkSide(null);
+        }}
+        staffId={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.accountId : null}
+        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
+        paymentInId={journalVoucherId || null}
+        amountReceived={Number(activeJournalLinkContext?.amount ?? 0) || 0}
+        existingAllocations={journalAllocationsBySide.credit || []}
+        staffOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
+        paymentInVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentInDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const accountId = activeJournalLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
+          setJournalAllocationsBySide((prev) => ({ ...prev, credit: tagged }));
+          setActiveJournalLinkSide(null);
+        }}
+      />
+      {/* Staff-side Journal linking for debit card (to Cr sources): uses Payment Out → Salary linking behavior. */}
+      <LinkPaymentOutToSalaryDialog
+        isOpen={!!activeJournalLinkContext && activeJournalLinkContext.kind === "staff" && activeJournalLinkContext.side === "debit"}
+        onOpenChange={(open) => {
+          if (!open) setActiveJournalLinkSide(null);
+        }}
+        staffId={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.accountId : null}
+        staffName={activeJournalLinkContext?.kind === "staff" ? activeJournalLinkContext.label : "Staff"}
+        paymentOutId={journalVoucherId || null}
+        amountPaid={Number(activeJournalLinkContext?.amount ?? 0) || 0}
+        existingAllocations={journalAllocationsBySide.debit || []}
+        staffOpeningBalance={Number(activeJournalLinkContext?.openingBalance ?? 0) || 0}
+        paymentOutVoucherNumber={String(form.getValues("voucherNumber") || voucher?.voucherNumber || "")}
+        paymentOutDate={form.getValues("date")}
+        onDone={(allocations) => {
+          const accountId = activeJournalLinkContext?.accountId ?? "";
+          const tagged = (Array.isArray(allocations) ? allocations : []).map((a: any) => ({ ...a, linkedAccountId: accountId }));
+          setJournalAllocationsBySide((prev) => ({ ...prev, debit: tagged }));
+          setActiveJournalLinkSide(null);
+        }}
+      />
+      <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
+      <CreateBankAccountDialog onAccountCreated={(id) => { setIsCreateAccountOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
+      <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]} />
+      <CreateExpenseAccountDialog onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateExpenseOpen} onOpenChange={setIsCreateExpenseOpen} />
+      <CreateTaxDialog onTaxCreated={(id) => { setIsCreateTaxOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen} />
     </>
   );
 }

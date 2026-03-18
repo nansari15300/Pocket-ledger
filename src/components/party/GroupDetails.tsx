@@ -156,6 +156,8 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   if (!anySelected) return txns;
   return txns.filter((t) => {
     if (t.type === "note") return true; // Notes have no payment status; always show
+    // Journal/Contra are non-bill-wise rows; keep visible in group ledger regardless of payment-status filter.
+    if (t.type === "journal" || t.type === "contra") return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -767,7 +769,7 @@ export function GroupDetails({
       visibleColumns: printVisibleColumns,
       userNames: userNames,
       billWise: variant === "bill_wise",
-      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),
+      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
     }, true);
   };
 
@@ -1021,6 +1023,8 @@ export function GroupDetails({
           <TransactionsTable
             transactions={mobileTransactionsToShow}
             context="group"
+            // Mark this as party-group context so bill-wise table keeps running-balance behavior.
+            groupEntityType="party"
             contextId={group.id}
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1329,6 +1333,8 @@ export function GroupDetails({
           <TransactionsTable
             transactions={paginatedTransactions}
             context="group"
+            // Mark this as party-group context so bill-wise table keeps running-balance behavior.
+            groupEntityType="party"
             contextId={group.id}
             showNarration={showNarration}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}

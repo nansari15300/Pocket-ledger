@@ -18,7 +18,11 @@ export type EntitlementKey =
   | "allowCompanyAdminRecycleBin"
   | "canAddAvatar"
   | "canAddFileImagePdf"
-  | "maxVoucherFileCount";
+  | "maxVoucherFileCount"
+  /** Plan-wise: enable voucher edit history for this plan. */
+  | "voucherHistoryEnabled"
+  /** Plan-wise: max history entries per voucher (1–100). 0 = use default 10. */
+  | "voucherHistoryLimit";
 
 export type Entitlements = Record<EntitlementKey, number | boolean>;
 
@@ -66,6 +70,8 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       canAddAvatar: false,
       canAddFileImagePdf: false,
       maxVoucherFileCount: 0,
+      voucherHistoryEnabled: false,
+      voucherHistoryLimit: 0,
     },
     features: [
       "Single user",
@@ -100,6 +106,8 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       canAddAvatar: true,
       canAddFileImagePdf: true,
       maxVoucherFileCount: 3,
+      voucherHistoryEnabled: true,
+      voucherHistoryLimit: 10,
     },
     features: [
       "Up to 5 users",
@@ -136,6 +144,8 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       canAddAvatar: true,
       canAddFileImagePdf: true,
       maxVoucherFileCount: 5,
+      voucherHistoryEnabled: true,
+      voucherHistoryLimit: 20,
     },
     features: [
       "Up to 50 users",
@@ -171,6 +181,8 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       canAddAvatar: true,
       canAddFileImagePdf: true,
       maxVoucherFileCount: 5,
+      voucherHistoryEnabled: true,
+      voucherHistoryLimit: 50,
     },
     features: [
       "Up to 100 users",
@@ -191,7 +203,7 @@ export function getPlan(planId?: PlanId | null): Plan {
 
 export function isFeatureEnabled(
   planId: PlanId,
-  key: Exclude<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices">
+  key: Exclude<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices" | "voucherHistoryLimit">
 ): boolean {
   const p = getPlan(planId);
   const v = p.entitlements[key];
@@ -200,7 +212,7 @@ export function isFeatureEnabled(
 
 export function limitFor(
   planId: PlanId,
-  key: Extract<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices">
+  key: Extract<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices" | "voucherHistoryLimit">
 ): number {
   const p = getPlan(planId);
   const v = p.entitlements[key];

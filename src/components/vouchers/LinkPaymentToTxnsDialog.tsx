@@ -22,7 +22,6 @@ import {
   autoLink as autoLinkUtil,
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
-  getOutstanding,
   getAllocationTotal,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
@@ -34,6 +33,18 @@ const safeToDate = (date: unknown): Date | null => {
     return (date as { toDate: () => Date }).toDate();
   const parsed = new Date(date as string | number);
   return isNaN(parsed.getTime()) ? null : parsed;
+};
+
+// Keep party bill-wise journal linking consistent by deriving party-side debit/credit from journal entries.
+const getJournalPartyAmount = (voucher: any, partyId: string) => {
+  if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+  const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
+  if (!partyEntry) return null;
+  const debit = Number((partyEntry as any)?.debit) || 0;
+  const credit = Number((partyEntry as any)?.credit) || 0;
+  const total = debit > 0 ? debit : credit;
+  if (total <= 0) return null;
+  return { debit, credit, total };
 };
 
 export type LinkPaymentVariant = "payment_in" | "payment_out";
@@ -59,6 +70,10 @@ export interface LinkPaymentToTxnsDialogProps {
   paymentOutDate?: unknown;
   /** Party opening balance, signed: Dr > 0 (show in Payment In), Cr < 0 (show in Payment Out). */
   partyOpeningBalance?: number;
+  /** When set (e.g. from Journal form), use this as dialog title instead of "Link Payment In/Out to Txns". */
+  dialogTitle?: string;
+  /** When true (Journal link dialog): Other Linked = sum from opposite-side vouchers only. Dr rows ← Cr sources; Cr rows ← Dr sources. */
+  isJournalLinkDialog?: boolean;
   /** Called with allocations and the amount (received or paid). */
   onDone: (allocations: Allocation[], amount: number) => void;
 }
@@ -79,9 +94,12 @@ export function LinkPaymentToTxnsDialog({
   paymentOutVoucherNumber,
   paymentOutDate,
   partyOpeningBalance = 0,
+  dialogTitle: dialogTitleOverride,
+  isJournalLinkDialog = false,
   onDone,
 }: LinkPaymentToTxnsDialogProps) {
-  const { vouchers } = useVouchers();
+  const { vouchers, vouchersAll } = useVouchers();
+  const vouchersForAllocations = (vouchersAll && vouchersAll.length > 0) ? vouchersAll : (vouchers || []);
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const isMobile = useIsMobile();
   const effectiveAccountId = accountId ?? null;
@@ -89,27 +107,39 @@ export function LinkPaymentToTxnsDialog({
 
 
   const isOut = variant === "payment_out";
+  // Prevent self-link: when Journal opens this dialog, same voucher must never appear in From list.
+  const currentVoucherIdStr = String(paymentInId ?? paymentOutId ?? "");
 
-  // Total consumed from Opening Balance: (1) Payment In/Out allocations to OB + (2) Sale/Purchase openingBalanceAllocated (same party). So linkable = obAmount - this total.
+  // Total consumed from Opening Balance: (1) Payment In/Out + (2) Sale/Purchase openingBalanceAllocated + (3) Journal allocations to OB (same party). Use vouchersForAllocations so OB Dr/Cr both track correctly.
   const totalConsumedFromOB = useMemo(() => {
-    if (!partyId || !vouchers?.length) return 0;
+    if (!partyId || !vouchersForAllocations?.length) return 0;
     const partyIdStr = String(partyId);
+    const voucherTouchesParty = (v: any) =>
+      String((v as any)?.partyId ?? "") === partyIdStr ||
+      (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === partyIdStr));
     let fromPayments = 0;
     const payType = isOut ? ["payment_out", "direct_expense"] : ["payment_in", "direct_income"];
-    (vouchers as any[]).forEach((v) => {
+    (vouchersForAllocations as any[]).forEach((v) => {
       if (!payType.includes(v.type) || String((v as any).partyId ?? "") !== partyIdStr) return;
       const allocs = (v.allocations as Allocation[] | undefined) || [];
       allocs.forEach((a) => {
-        if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) fromPayments += getAllocationTotal(a);
+        if (String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID) fromPayments += getAllocationTotal(a);
       });
     });
-    const fromBillwise = (vouchers as any[]).reduce((sum, v) => {
+    const fromBillwise = (vouchersForAllocations as any[]).reduce((sum, v) => {
       if (v.type !== "sale" && v.type !== "sale_service" && v.type !== "purchase" && v.type !== "purchase_service") return sum;
       if (String((v as any).partyId ?? "") !== partyIdStr) return sum;
       return sum + (Number((v as any).openingBalanceAllocated) || 0);
     }, 0);
-    return fromPayments + fromBillwise;
-  }, [partyId, isOut, vouchers]);
+    const fromJournals = (vouchersForAllocations as any[]).reduce((sum, v) => {
+      if (v.type !== "journal" || !voucherTouchesParty(v)) return sum;
+      const allocs = (v.allocations as Allocation[] | undefined) || [];
+      return sum + allocs
+        .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID && (!(a as any).linkedAccountId || String((a as any).linkedAccountId) === partyIdStr))
+        .reduce((s, a) => s + getAllocationTotal(a), 0);
+    }, 0);
+    return fromPayments + fromBillwise + fromJournals;
+  }, [partyId, isOut, vouchersForAllocations]);
 
   const partyOB = Number(partyOpeningBalance) || 0;
   const showOBInPaymentIn = partyOB > 0;
@@ -117,36 +147,82 @@ export function LinkPaymentToTxnsDialog({
   const obAmount = partyOB > 0 ? partyOB : Math.abs(partyOB);
   const obOutstandingIn = Math.max(0, obAmount - totalConsumedFromOB);
   const obOutstanding = isOut ? (showOBInPaymentOut ? obOutstandingIn : 0) : (showOBInPaymentIn ? obOutstandingIn : 0);
+  // Current voucher's allocation to OB — exclude from "Other Linked" so edit mode doesn't double-count.
+  const currentVoucherAllocToOB = useMemo(() => {
+    if (!currentVoucherIdStr || !vouchers?.length) return 0;
+    const v = (vouchers as any[]).find((x: any) => String(x?.id ?? "") === currentVoucherIdStr);
+    if (!v) return 0;
+    const allocs = (v.allocations as Allocation[] | undefined) || [];
+    return allocs
+      .filter((a) => a.voucherId === OPENING_BALANCE_VOUCHER_ID)
+      .reduce((s, a) => s + getAllocationTotal(a), 0);
+  }, [currentVoucherIdStr, vouchers]);
+  const obAllocatedToOthers = Math.max(0, totalConsumedFromOB - currentVoucherAllocToOB);
 
   // Payment In links to Sales (same party) and Payment Outs (contra). Show Opening Balance when OB is Dr (> 0).
   const combinedInList = useMemo(() => {
     if (variant !== "payment_in" || !vouchers?.length || !partyId) return [];
-    const paymentInVouchers = (vouchers as any[]).filter(
-      (v) => (v.type === "payment_in" || v.type === "direct_income") && (paymentInId == null || v.id !== paymentInId)
+    // Match party by explicit partyId OR by journal entry account id so manual journals become linkable.
+    const voucherTouchesParty = (v: any) =>
+      String((v as any)?.partyId ?? "") === String(partyId) ||
+      (Array.isArray((v as any)?.entries) &&
+        (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
+    // Reusable guard so current voucher (edit context) never becomes a source row for itself.
+    const isCurrentVoucher = (v: any) => currentVoucherIdStr && String((v as any)?.id ?? "") === currentVoucherIdStr;
+    const paymentInVouchers = (vouchersForAllocations as any[]).filter(
+      (v) => (v.type === "payment_in" || v.type === "direct_income") && !isCurrentVoucher(v)
     );
     const allocatedByPaymentIns = getAllocatedByVoucherId(paymentInVouchers);
-    const allocatedByPurchases = (() => {
+    const allocatedByBillWiseVouchers = (() => {
       const m = new Map<string, number>();
-      for (const v of vouchers as any[]) {
-        if (v.type !== "purchase" && v.type !== "purchase_service") continue;
+      for (const v of vouchersForAllocations as any[]) {
+        if (isCurrentVoucher(v)) continue;
+        if (
+          v.type !== "sale" &&
+          v.type !== "sale_service" &&
+          v.type !== "purchase" &&
+          v.type !== "purchase_service" &&
+          v.type !== "journal"
+        ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
-          if (!a.voucherId) continue;
-          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+          const key = String(a.voucherId ?? "");
+          if (!key) continue;
+          m.set(key, (m.get(key) ?? 0) + getAllocationTotal(a));
         }
       }
       return m;
     })();
-    const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(vid) ?? 0) + (allocatedByPurchases.get(vid) ?? 0);
+    const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(String(vid)) ?? 0) + (allocatedByBillWiseVouchers.get(String(vid)) ?? 0);
+    const getFreshTarget = (v: any) => (vouchersForAllocations as any[]).find((x: any) => String(x?.id ?? "") === String(v?.id ?? "")) ?? v;
+    // Other Linked = target ke allocations ka sum (OB, JRNL, Sale, Pur, etc. sab) — multi-linked amount sahi aaye.
+    const getAllocatedToOthersFromTarget = (targetVoucher: any, vid: string): number => {
+      const fromTarget = (targetVoucher?.allocations as Allocation[] | undefined) || [];
+      const targetSum = fromTarget.reduce((sum, a) => {
+        const srcId = String(a.voucherId ?? "");
+        if (!srcId || srcId === currentVoucherIdStr) return sum;
+        if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) return sum;
+        return sum + getAllocationTotal(a);
+      }, 0);
+      const sourceSum = totalAllocatedTo(vid);
+      const obInAllocations = fromTarget
+        .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID)
+        .reduce((s, a) => s + getAllocationTotal(a), 0);
+      const targetObAlloc = Math.max(0, (Number(targetVoucher?.openingBalanceAllocated) || 0) - obInAllocations);
+      return Math.max(targetSum, sourceSum) + targetObAlloc;
+    };
+    const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
     const salesForParty = (vouchers as any[]).filter(
       (v) =>
+        !isCurrentVoucher(v) &&
         (v.type === "sale" || v.type === "sale_service") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
     const sales = salesForParty.map((v) => {
       const total = Number(v.total ?? v.amount ?? 0);
-      const allocated = totalAllocatedTo(v.id);
-      const outstanding = getOutstanding(total, allocated);
+      const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
+      // Linkable = Amount - Other Linked; table shows (outstanding - linked) where linked includes Current Link
+      const outstanding = Math.max(0, total - allocatedToOthers);
       return {
         id: v.id,
         date: v.date,
@@ -154,20 +230,21 @@ export function LinkPaymentToTxnsDialog({
         refNo: v.invoiceNumber ?? v.voucherNumber ?? "—",
         total,
         outstanding,
-        allocatedToOthers: allocated,
+        allocatedToOthers,
       };
     });
-    const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
+    // Show only linkable (outstanding > 0) or already selected rows.
     const salesFiltered = sales.filter((s) => s.outstanding > 0 || hasExistingAlloc(s.id));
     const paymentOutsForParty = (vouchers as any[]).filter(
       (v) =>
+        !isCurrentVoucher(v) &&
         (v.type === "payment_out" || v.type === "direct_expense") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
     const paymentOuts = paymentOutsForParty.map((v) => {
       const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
-      const allocated = totalAllocatedTo(v.id);
-      const outstanding = getOutstanding(total, allocated);
+      const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
+      const outstanding = Math.max(0, total - allocatedToOthers);
       return {
         id: v.id,
         date: v.date,
@@ -175,10 +252,30 @@ export function LinkPaymentToTxnsDialog({
         refNo: (v as any).voucherNumber ?? "—",
         total,
         outstanding,
-        allocatedToOthers: allocated,
+        allocatedToOthers,
       };
     });
     const paymentOutsFiltered = paymentOuts.filter((p) => p.outstanding > 0 || hasExistingAlloc(p.id));
+    // Payment In should link against Dr-side journals for the same party.
+    const journalDrRows = (vouchers as any[])
+      .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesParty(v))
+      .map((v) => {
+        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        if (!partyAmount || partyAmount.debit <= 0) return null;
+        const allocatedToOthers = getAllocatedToOthersFromTarget(getFreshTarget(v), v.id);
+        const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+        return {
+          id: v.id,
+          date: v.date,
+          type: "Journal (Dr)" as const,
+          refNo: (v as any).voucherNumber ?? "—",
+          total: partyAmount.total,
+          outstanding,
+          allocatedToOthers,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const journalsDrFiltered = journalDrRows.filter((j) => j.outstanding > 0 || hasExistingAlloc(j.id));
     const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
@@ -192,48 +289,88 @@ export function LinkPaymentToTxnsDialog({
       type: "Opening Balance" as const,
       refNo: "—",
       total: obAmount,
-      outstanding: obOutstandingIn,
-      allocatedToOthers: totalConsumedFromOB,
+      outstanding: Math.max(0, obAmount - obAllocatedToOthers),
+      allocatedToOthers: obAllocatedToOthers,
     }] : [];
-    const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered];
+    const combined = [...ob, ...salesFiltered, ...paymentOutsFiltered, ...journalsDrFiltered];
     combined.sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dA - dB;
     });
     return combined;
-  }, [variant, effectiveAccountId, accountIdStr, partyId, paymentInId, vouchers, partyOB, showOBInPaymentIn, obOutstandingIn, totalConsumedFromOB, existingAllocations]);
+  }, [variant, effectiveAccountId, accountIdStr, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentIn, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog]);
 
   // Payment Out links to Purchases (same party) and Payment Ins (contra). Show Opening Balance when OB is Cr (< 0).
   const combinedOutList = useMemo(() => {
     if (variant !== "payment_out" || !vouchers?.length || !partyId) return [];
+    // Match party by explicit partyId OR by journal entry account id so manual journals become linkable.
+    const voucherTouchesParty = (v: any) =>
+      String((v as any)?.partyId ?? "") === String(partyId) ||
+      (Array.isArray((v as any)?.entries) &&
+        (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
+    // Reusable guard so current voucher (edit context) never becomes a source row for itself.
+    const isCurrentVoucher = (v: any) => currentVoucherIdStr && String((v as any)?.id ?? "") === currentVoucherIdStr;
     const hasExistingAllocOut = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
-    const paymentOutVouchers = (vouchers as any[]).filter(
-      (v) => (v.type === "payment_out" || v.type === "direct_expense") && (paymentOutId == null || v.id !== paymentOutId)
+    const paymentOutVouchers = (vouchersForAllocations as any[]).filter(
+      (v) => (v.type === "payment_out" || v.type === "direct_expense") && !isCurrentVoucher(v)
+    );
+    const paymentInVouchersOut = (vouchersForAllocations as any[]).filter(
+      (v) => (v.type === "payment_in" || v.type === "direct_income") && !isCurrentVoucher(v)
     );
     const allocatedByPaymentOuts = getAllocatedByVoucherIdFromPaymentOuts(paymentOutVouchers);
-    const allocatedBySales = (() => {
+    const allocatedByPaymentInsOut = getAllocatedByVoucherId(paymentInVouchersOut);
+    const allocatedByBillWiseVouchers = (() => {
       const m = new Map<string, number>();
-      for (const v of vouchers as any[]) {
-        if (v.type !== "sale" && v.type !== "sale_service") continue;
+      for (const v of vouchersForAllocations as any[]) {
+        if (isCurrentVoucher(v)) continue;
+        if (
+          v.type !== "sale" &&
+          v.type !== "sale_service" &&
+          v.type !== "purchase" &&
+          v.type !== "purchase_service" &&
+          v.type !== "journal"
+        ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
-          if (!a.voucherId) continue;
-          m.set(a.voucherId, (m.get(a.voucherId) ?? 0) + getAllocationTotal(a));
+          const key = String(a.voucherId ?? "");
+          if (!key) continue;
+          m.set(key, (m.get(key) ?? 0) + getAllocationTotal(a));
         }
       }
       return m;
     })();
-    const totalAllocatedToOut = (vid: string) => (allocatedByPaymentOuts.get(vid) ?? 0) + (allocatedBySales.get(vid) ?? 0);
+    const totalAllocatedToOut = (vid: string) =>
+      (allocatedByPaymentOuts.get(String(vid)) ?? 0) +
+      (allocatedByPaymentInsOut.get(String(vid)) ?? 0) +
+      (allocatedByBillWiseVouchers.get(String(vid)) ?? 0);
+    const getFreshTargetOut = (v: any) => (vouchersForAllocations as any[]).find((x: any) => String(x?.id ?? "") === String(v?.id ?? "")) ?? v;
+    // Other Linked = target ke allocations ka sum (OB, JRNL, Sale, Pur, etc. sab) — multi-linked amount sahi aaye.
+    const getAllocatedToOthersFromTargetOut = (targetVoucher: any, vid: string): number => {
+      const fromTarget = (targetVoucher?.allocations as Allocation[] | undefined) || [];
+      const targetSum = fromTarget.reduce((sum, a) => {
+        const srcId = String(a.voucherId ?? "");
+        if (!srcId || srcId === currentVoucherIdStr) return sum;
+        if (partyId && (a as any).linkedAccountId && String((a as any).linkedAccountId) !== String(partyId)) return sum;
+        return sum + getAllocationTotal(a);
+      }, 0);
+      const sourceSum = totalAllocatedToOut(vid);
+      const obInAllocations = fromTarget
+        .filter((a) => String(a?.voucherId ?? "") === OPENING_BALANCE_VOUCHER_ID)
+        .reduce((s, a) => s + getAllocationTotal(a), 0);
+      const targetObAlloc = Math.max(0, (Number(targetVoucher?.openingBalanceAllocated) || 0) - obInAllocations);
+      return Math.max(targetSum, sourceSum) + targetObAlloc;
+    };
     const purchasesForParty = (vouchers as any[]).filter(
       (v) =>
+        !isCurrentVoucher(v) &&
         (v.type === "purchase" || v.type === "purchase_service") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
     const purchases = purchasesForParty.map((v) => {
       const total = Number(v.total ?? v.amount ?? 0);
-      const allocated = totalAllocatedToOut(v.id);
-      const outstanding = getOutstanding(total, allocated);
+      const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
+      const outstanding = Math.max(0, total - allocatedToOthers);
       return {
         id: v.id,
         date: v.date,
@@ -241,19 +378,21 @@ export function LinkPaymentToTxnsDialog({
         refNo: (v as any).invoiceNumber ?? v.voucherNumber ?? "—",
         total,
         outstanding,
-        allocatedToOthers: allocated,
+        allocatedToOthers,
       };
     });
+    // Show only linkable (outstanding > 0) or already selected rows.
     const purchasesFiltered = purchases.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
     const paymentInsForParty = (vouchers as any[]).filter(
       (v) =>
+        !isCurrentVoucher(v) &&
         (v.type === "payment_in" || v.type === "direct_income") &&
         String((v as any).partyId ?? "") === String(partyId)
     );
     const paymentIns = paymentInsForParty.map((v) => {
       const total = Number((v as any).amount ?? (v as any).total ?? 0) || 0;
-      const allocated = totalAllocatedToOut(v.id);
-      const outstanding = getOutstanding(total, allocated);
+      const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
+      const outstanding = Math.max(0, total - allocatedToOthers);
       return {
         id: v.id,
         date: v.date,
@@ -261,10 +400,30 @@ export function LinkPaymentToTxnsDialog({
         refNo: (v as any).voucherNumber ?? "—",
         total,
         outstanding,
-        allocatedToOthers: allocated,
+        allocatedToOthers,
       };
     });
     const paymentInsFiltered = paymentIns.filter((p) => p.outstanding > 0 || hasExistingAllocOut(p.id));
+    // Payment Out should link against Cr-side journals for the same party.
+    const journalCrRows = (vouchers as any[])
+      .filter((v) => !isCurrentVoucher(v) && v.type === "journal" && voucherTouchesParty(v))
+      .map((v) => {
+        const partyAmount = getJournalPartyAmount(v, String(partyId));
+        if (!partyAmount || partyAmount.credit <= 0) return null;
+        const allocatedToOthers = getAllocatedToOthersFromTargetOut(getFreshTargetOut(v), v.id);
+        const outstanding = Math.max(0, partyAmount.total - allocatedToOthers);
+        return {
+          id: v.id,
+          date: v.date,
+          type: "Journal (Cr)" as const,
+          refNo: (v as any).voucherNumber ?? "—",
+          total: partyAmount.total,
+          outstanding,
+          allocatedToOthers,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    const journalsCrFiltered = journalCrRows.filter((j) => j.outstanding > 0 || hasExistingAllocOut(j.id));
     const byDate = (a: { date: unknown }, b: { date: unknown }) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
@@ -278,17 +437,17 @@ export function LinkPaymentToTxnsDialog({
       type: "Opening Balance" as const,
       refNo: "—",
       total: obAmount,
-      outstanding: obOutstandingIn,
-      allocatedToOthers: totalConsumedFromOB,
+      outstanding: Math.max(0, obAmount - obAllocatedToOthers),
+      allocatedToOthers: obAllocatedToOthers,
     }] : [];
-    const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered];
+    const combined = [...ob, ...purchasesFiltered, ...paymentInsFiltered, ...journalsCrFiltered];
     combined.sort((a, b) => {
       const dA = a.date ? new Date((a.date as any)?.toDate?.() ?? a.date).getTime() : 0;
       const dB = b.date ? new Date((b.date as any)?.toDate?.() ?? b.date).getTime() : 0;
       return dA - dB;
     });
     return combined;
-  }, [variant, partyId, paymentOutId, vouchers, partyOB, showOBInPaymentOut, obOutstandingIn, totalConsumedFromOB, existingAllocations]);
+  }, [variant, partyId, vouchers, vouchersForAllocations, partyOB, showOBInPaymentOut, obOutstandingIn, totalConsumedFromOB, obAllocatedToOthers, obAmount, existingAllocations, currentVoucherIdStr, isJournalLinkDialog]);
 
   const targetList = isOut ? combinedOutList : combinedInList;
 
@@ -338,7 +497,9 @@ export function LinkPaymentToTxnsDialog({
     if (!isOpen) return;
     const initial: Record<string, number> = {};
     for (const a of existingAllocations) {
-      if (a.voucherId && typeof a.amount === "number") initial[a.voucherId] = a.amount;
+      if (!a.voucherId) continue;
+      const total = getAllocationTotal(a);
+      if (total > 0) initial[a.voucherId] = total;
     }
     setLinkedAmounts(initial);
   }, [isOpen, existingAllocations]);
@@ -402,10 +563,9 @@ export function LinkPaymentToTxnsDialog({
         hideCloseButton
       >
         <DialogHeader className="flex-shrink-0 space-y-0.5 text-center sm:text-center">
-          {/* Code (1) = Link Payment In/Out to Txns popup — so user can say which popup when reporting */}
           <p className="text-xs text-muted-foreground leading-tight">Link for bill wise (1)</p>
           <DialogTitle className="text-xl leading-tight">
-            {isOut ? "Link Payment Out to Txns" : "Link Payment In to Txns"}
+            {dialogTitleOverride ?? (isOut ? "Link Payment Out to Linkable Cr Txns" : "Link Payment In to Linkable Dr Txns")}
           </DialogTitle>
           <div className="flex flex-wrap items-center justify-center gap-4 text-sm pt-1 hidden md:flex">
             <span className="text-muted-foreground">{isOut ? "Paid" : "Received"}: <strong className="text-foreground">{formatCurrency(received, { noSuffix: true })}</strong></span>

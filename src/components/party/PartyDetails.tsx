@@ -154,6 +154,8 @@ function filterByStatus(txns: any[], statusFilter: StatusFilter): any[] {
   return txns.filter((t) => {
     // Notes have no payment status; always show them regardless of status filter
     if (t.type === "note") return true;
+    // Journal/Contra are non-bill-wise rows; keep visible in party ledger regardless of payment-status filter.
+    if (t.type === "journal" || t.type === "contra") return true;
     if (statusFilter.paid && t.paymentStatus === "paid") return true;
     if (statusFilter.unpaid && t.paymentStatus === "unpaid") return true;
     if (statusFilter.partial && t.paymentStatus === "partially_paid") return true;
@@ -643,7 +645,7 @@ export function PartyDetails({
       userNames: mergedUserNames,
       journalAccountNames: journalAccountNames,
       billWise: variant === "bill_wise",
-      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos }),
+      ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
     }, true);
   };
 

@@ -29,6 +29,22 @@ export function useLinkPaymentToTxnsLinkableCount(
   return useMemo(() => {
     if (!partyId || !vouchers?.length) return 0;
     const isOut = variant === "payment_out";
+    // Match party by explicit partyId OR by journal entry account id so journal rows are counted as linkable.
+    const voucherTouchesParty = (v: any) =>
+      String((v as any)?.partyId ?? "") === String(partyId) ||
+      (Array.isArray((v as any)?.entries) &&
+        (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
+    // Derive bill-wise amount from party-side journal entry (Dr/Cr) for consistent popup/count behavior.
+    const getJournalPartyAmount = (voucher: any) => {
+      if (voucher?.type !== "journal" || !Array.isArray(voucher?.entries)) return null;
+      const partyEntry = voucher.entries.find((e: any) => String(e?.accountId ?? "") === String(partyId));
+      if (!partyEntry) return null;
+      const debit = Number((partyEntry as any)?.debit) || 0;
+      const credit = Number((partyEntry as any)?.credit) || 0;
+      const total = debit > 0 ? debit : credit;
+      if (total <= 0) return null;
+      return { debit, credit, total };
+    };
 
     const partyIdStr = String(partyId);
     const payType = isOut ? ["payment_out", "direct_expense"] : ["payment_in", "direct_income"];
@@ -58,10 +74,17 @@ export function useLinkPaymentToTxnsLinkableCount(
         (v) => (v.type === "payment_in" || v.type === "direct_income") && (paymentInId == null || v.id !== paymentInId)
       );
       const allocatedByPaymentIns = getAllocatedByVoucherId(paymentInVouchers);
-      const allocatedByPurchases = (() => {
+      // Keep outstanding math in sync with popup by including allocations emitted from bill-wise vouchers + journals.
+      const allocatedByBillWiseVouchers = (() => {
         const m = new Map<string, number>();
         for (const v of vouchers as any[]) {
-          if (v.type !== "purchase" && v.type !== "purchase_service") continue;
+          if (
+            v.type !== "sale" &&
+            v.type !== "sale_service" &&
+            v.type !== "purchase" &&
+            v.type !== "purchase_service" &&
+            v.type !== "journal"
+          ) continue;
           const allocations = (v.allocations as Allocation[] | undefined) || [];
           for (const a of allocations) {
             if (!a.voucherId) continue;
@@ -70,7 +93,7 @@ export function useLinkPaymentToTxnsLinkableCount(
         }
         return m;
       })();
-      const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(vid) ?? 0) + (allocatedByPurchases.get(vid) ?? 0);
+      const totalAllocatedTo = (vid: string) => (allocatedByPaymentIns.get(vid) ?? 0) + (allocatedByBillWiseVouchers.get(vid) ?? 0);
       const hasExistingAlloc = (id: string) => existingAllocations.some((a) => a.voucherId === id && getAllocationTotal(a) > 0);
 
       const salesForParty = (vouchers as any[]).filter(
@@ -94,9 +117,18 @@ export function useLinkPaymentToTxnsLinkableCount(
         const outstanding = getOutstanding(total, allocated);
         return outstanding > 0 || hasExistingAlloc(v.id);
       });
+      // Payment In links to Dr-side journals for the selected party.
+      const journalsDrFiltered = (vouchers as any[]).filter((v) => {
+        if (v.type !== "journal" || !voucherTouchesParty(v)) return false;
+        const partyAmount = getJournalPartyAmount(v);
+        if (!partyAmount || partyAmount.debit <= 0) return false;
+        const allocated = totalAllocatedTo(v.id);
+        const outstanding = getOutstanding(partyAmount.total, allocated);
+        return outstanding > 0 || hasExistingAlloc(v.id);
+      });
 
       const ob = showOBInPaymentIn && (obOutstandingIn > 0 || hasExistingAlloc(OPENING_BALANCE_VOUCHER_ID)) ? 1 : 0;
-      return ob + salesFiltered.length + paymentOutsFiltered.length;
+      return ob + salesFiltered.length + paymentOutsFiltered.length + journalsDrFiltered.length;
     }
 
     // variant === "payment_out"
@@ -105,10 +137,17 @@ export function useLinkPaymentToTxnsLinkableCount(
       (v) => (v.type === "payment_out" || v.type === "direct_expense") && (paymentOutId == null || v.id !== paymentOutId)
     );
     const allocatedByPaymentOuts = getAllocatedByVoucherIdFromPaymentOuts(paymentOutVouchers);
-    const allocatedBySales = (() => {
+    // Keep outstanding math in sync with popup by including allocations emitted from bill-wise vouchers + journals.
+    const allocatedByBillWiseVouchers = (() => {
       const m = new Map<string, number>();
       for (const v of vouchers as any[]) {
-        if (v.type !== "sale" && v.type !== "sale_service") continue;
+        if (
+          v.type !== "sale" &&
+          v.type !== "sale_service" &&
+          v.type !== "purchase" &&
+          v.type !== "purchase_service" &&
+          v.type !== "journal"
+        ) continue;
         const allocations = (v.allocations as Allocation[] | undefined) || [];
         for (const a of allocations) {
           if (!a.voucherId) continue;
@@ -117,7 +156,7 @@ export function useLinkPaymentToTxnsLinkableCount(
       }
       return m;
     })();
-    const totalAllocatedToOut = (vid: string) => (allocatedByPaymentOuts.get(vid) ?? 0) + (allocatedBySales.get(vid) ?? 0);
+    const totalAllocatedToOut = (vid: string) => (allocatedByPaymentOuts.get(vid) ?? 0) + (allocatedByBillWiseVouchers.get(vid) ?? 0);
 
     const purchasesForParty = (vouchers as any[]).filter(
       (v) =>
@@ -142,8 +181,17 @@ export function useLinkPaymentToTxnsLinkableCount(
       const outstanding = getOutstanding(total, allocated);
       return outstanding > 0 || hasExistingAllocOut(v.id);
     });
+    // Payment Out links to Cr-side journals for the selected party.
+    const journalsCrFiltered = (vouchers as any[]).filter((v) => {
+      if (v.type !== "journal" || !voucherTouchesParty(v)) return false;
+      const partyAmount = getJournalPartyAmount(v);
+      if (!partyAmount || partyAmount.credit <= 0) return false;
+      const allocated = totalAllocatedToOut(v.id);
+      const outstanding = getOutstanding(partyAmount.total, allocated);
+      return outstanding > 0 || hasExistingAllocOut(v.id);
+    });
 
     const ob = showOBInPaymentOut && (obOutstandingIn > 0 || hasExistingAllocOut(OPENING_BALANCE_VOUCHER_ID)) ? 1 : 0;
-    return ob + purchasesFiltered.length + paymentInsFiltered.length;
+    return ob + purchasesFiltered.length + paymentInsFiltered.length + journalsCrFiltered.length;
   }, [variant, partyId, vouchers, paymentInId, paymentOutId, existingAllocations, partyOpeningBalance]);
 }

@@ -48,7 +48,7 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
-import { collection, onSnapshot, query, where, serverTimestamp, writeBatch, doc, orderBy, updateDoc, arrayRemove, getDoc, deleteDoc, Timestamp } from "firebase/firestore";
+import { collection, onSnapshot, query, where, serverTimestamp, writeBatch, doc, orderBy, updateDoc, arrayRemove, getDoc, getDocs, deleteDoc, Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
 import { compressFile } from "@/lib/compression";
 import { uploadFile, deleteFileFromStorage } from "@/lib/storage";
@@ -111,18 +111,77 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const { companyId } = useCompany();
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const router = useRouter();
+  // Defer Radix Popover/Combobox until client mount to avoid hydration mismatch (aria-controls IDs differ on server vs client).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
+  // Fetch all users (same as Unassigned) so userId resolves by doc id, uid, or userId field.
   useEffect(() => {
-    const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean) as string[]);
-    uids.forEach(async (uid) => {
-      if (!userNames[uid]) {
-        const userDoc = await getDoc(doc(firestore, 'users', uid));
-        if (userDoc.exists()) setUserNames(prev => ({ ...prev, [uid]: userDoc.data().displayName || userDoc.data().email }));
-      }
+    const q = query(collection(firestore, 'users'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const usersData: Record<string, string> = {};
+      snapshot.forEach((userDoc) => {
+        const data = userDoc.data();
+        const label = getUserLabelFromDoc(data) || 'Unknown User';
+        usersData[userDoc.id] = label;
+        const uid = String(data?.uid || data?.userId || "").trim();
+        if (uid) usersData[uid] = label;
+      });
+      setUserNames(usersData);
     });
+    return () => unsubscribe();
+  }, []);
+
+  // Fallback: for voucher userIds still missing, try uid/userId queries (legacy schemas).
+  useEffect(() => {
+    const allUserIds = vouchers.flatMap((t) => [t.userId, (t as any).createdBy, (t as any).createdByUserId, (t as any).changedBy].filter(Boolean) as string[]);
+    const missingIds = Array.from(new Set(allUserIds))
+      .filter((id) => !userNames[id]);
+    if (missingIds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const resolvedMap: Record<string, string> = {};
+      for (const uploaderId of missingIds) {
+        try {
+          const byId = await getDoc(doc(firestore, "users", uploaderId));
+          if (byId.exists()) {
+            const label = getUserLabelFromDoc(byId.data());
+            if (label) { resolvedMap[uploaderId] = label; continue; }
+          }
+          const byUid = await getDocs(query(collection(firestore, "users"), where("uid", "==", uploaderId)));
+          if (!byUid.empty) {
+            const label = getUserLabelFromDoc(byUid.docs[0].data());
+            if (label) { resolvedMap[uploaderId] = label; continue; }
+          }
+          const byUserId = await getDocs(query(collection(firestore, "users"), where("userId", "==", uploaderId)));
+          if (!byUserId.empty) {
+            const label = getUserLabelFromDoc(byUserId.docs[0].data());
+            if (label) resolvedMap[uploaderId] = label;
+          }
+        } catch { /* ignore */ }
+      }
+      if (!cancelled && Object.keys(resolvedMap).length > 0) {
+        setUserNames((prev) => ({ ...prev, ...resolvedMap }));
+      }
+    })();
+    return () => { cancelled = true; };
   }, [vouchers, userNames]);
   
-  const userOptions = useMemo(() => Object.entries(userNames).map(([id, name]) => ({value: id, label: name})), [userNames]);
+  // Dedupe by label: same user has docId and uid in userNames; show once like Unassigned.
+  const userOptions = useMemo(() => {
+    const voucherUserIds = new Set(vouchers.flatMap((v) => [v.userId, (v as any).createdBy, (v as any).createdByUserId, (v as any).changedBy].filter(Boolean) as string[]));
+    const byLabel = new Map<string, string>();
+    for (const [id, name] of Object.entries(userNames)) {
+      if (!name || name === 'Unknown User') continue;
+      const existing = byLabel.get(name);
+      if (!existing) {
+        byLabel.set(name, id);
+      } else if (voucherUserIds.has(id) && !voucherUserIds.has(existing)) {
+        byLabel.set(name, id);
+      }
+    }
+    return Array.from(byLabel.entries()).map(([label, value]) => ({ value, label }));
+  }, [userNames, vouchers]);
 
   const allEntityOptions = useMemo(() => {
     const options = [
@@ -148,7 +207,10 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
 
       // Apply common filters
       if (selectedUserId !== 'all') {
-        itemsToFilter = itemsToFilter.filter(item => item.userId === selectedUserId);
+        itemsToFilter = itemsToFilter.filter(item => {
+          const uid = item.userId || (item as any).createdBy || (item as any).createdByUserId || (item as any).changedBy;
+          return uid === selectedUserId;
+        });
       }
       if (voucherNumberSearch) {
         itemsToFilter = itemsToFilter.filter(item => item.voucherNumber?.toLowerCase().includes(voucherNumberSearch.toLowerCase()));
@@ -246,7 +308,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
       setSelectedAccountType('all');
   };
 
-  const hasFiltersApplied = selectedAccountType !== 'all' || selectedEntityId !== 'all' || (dateRange?.from != null);
+  const hasFiltersApplied = selectedAccountType !== 'all' || selectedEntityId !== 'all' || selectedUserId !== 'all' || (dateRange?.from != null);
 
   return (
     <div className={cn("space-y-6", isMobile && "w-full")}>
@@ -266,19 +328,22 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                 <span className="text-sm text-muted-foreground shrink-0">px</span>
             </div>
             <Button variant={showAvatarsOnly ? "secondary" : "outline"} onClick={() => setShowAvatarsOnly(!showAvatarsOnly)} className={isMobile ? "shrink-0" : ""}>{!isMobile && <UserCircle className="mr-2 h-4 w-4" />}Avatars</Button>
-            {isMobile ? (
+            {mounted && (isMobile ? (
               <div className="flex-1 min-w-0 overflow-hidden">
                 <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} className="w-full min-w-0 truncate" />
               </div>
             ) : (
               <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} />
-            )}
+            ))}
+            {!mounted && <Skeleton className="h-10 w-24 shrink-0" />}
           </div>
         </CardHeader>
         <CardContent className={cn(isMobile && "px-0.5")}>
     <div className={cn(
       isMobile ? "flex flex-row flex-wrap gap-2 items-center" : "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end"
     )}>
+        {mounted ? (
+          <>
         <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
           <Combobox 
             options={[{ id: 'all', label: 'All Accounts' }, ...CATEGORIES].map(c => ({ value: c.id, label: c.label }))} 
@@ -290,11 +355,22 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
           <Combobox options={allEntityOptions} value={selectedEntityId} onChange={setSelectedEntityId} placeholder="Search Account..." />
         </div>
+        <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
+          <Combobox options={[{ value: 'all', label: 'All Users' }, ...userOptions]} value={selectedUserId} onChange={setSelectedUserId} placeholder="Filter by user" />
+        </div>
         {(!isMobile || hasFiltersApplied) && (
           <Button variant="ghost" onClick={handleClearFilters} size={isMobile ? "icon" : "default"} className={cn("h-10 border border-dashed", isMobile && "shrink-0")} title={isMobile ? "Clear filters" : undefined}>
             <XCircle className={cn("h-4 w-4", !isMobile && "mr-2")} />
             {!isMobile && "Clear All"}
           </Button>
+        )}
+          </>
+        ) : (
+          <>
+            <Skeleton className="h-10 flex-1 min-w-[100px]" />
+            <Skeleton className="h-10 flex-1 min-w-[100px]" />
+            <Skeleton className="h-10 flex-1 min-w-[100px]" />
+          </>
         )}
            </div>
         </CardContent>
@@ -308,7 +384,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
             (item.fileUrls || []).map((url: string, index: number) => {
               const cleanFileName = getCleanName(url.split('/').pop()?.split('?')[0] || '');
               const voucherDate = item.date?.toDate ? item.date.toDate() : new Date();
-              const userName = userNames[item.userId] || 'Unknown';
+              const effectiveUserId = item.userId || (item as any).createdBy || (item as any).createdByUserId || (item as any).changedBy;
+              const userName = (effectiveUserId && userNames[effectiveUserId]) || 'Unknown User';
               const accountName = getAccountNameFromVoucher(item);
               
               const displayDate = () => {
@@ -416,11 +493,29 @@ type UploadingFile = {
   size: number;
 };
 
+// Convert an email to the text after '@' for compact fallback labels.
+function getEmailSuffixLabel(value?: string): string | null {
+  if (!value || !value.includes("@")) return null;
+  const parts = value.split("@");
+  const suffix = parts[1]?.trim();
+  return suffix ? suffix : null;
+}
+
+// Build a user label with preference: displayName -> email suffix -> email.
+function getUserLabelFromDoc(data: any): string | null {
+  const displayName = String(data?.displayName || data?.name || "").trim();
+  if (displayName) return displayName;
+  const email = String(data?.email || "").trim();
+  return getEmailSuffixLabel(email) || (email || null);
+}
+
 // --- Sub-Component: Unassigned Documents Tab ---
 function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChange }: { handleAttachToVoucher: any; previewSize: number; onSizeChange: any; }) {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
+  // Render popover-driven controls only after mount to avoid Radix SSR/client id mismatch during hydration.
+  const [isHydrated, setIsHydrated] = useState(false);
   const [unassignedFiles, setUnassignedFiles] = useState<UnassignedFile[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -428,6 +523,11 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const [isDeleting, setIsDeleting] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedUploaderId, setSelectedUploaderId] = useState<string | "all">("all");
+
+  useEffect(() => {
+    // Mark mounted on client so popover ids are generated only client-side for these controls.
+    setIsHydrated(true);
+  }, []);
   
   // Fetch unassigned files
   useEffect(() => {
@@ -445,18 +545,74 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     const q = query(collection(firestore, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const usersData: Record<string, string> = {};
-        snapshot.forEach(doc => {
-            usersData[doc.id] = doc.data().displayName || doc.data().email || 'Unknown';
+        snapshot.forEach((userDoc) => {
+            // Store mapping by both doc id and uid/userId fields so uploadedBy can resolve in all id formats.
+            const data = userDoc.data();
+            const label = getUserLabelFromDoc(data) || "Unknown User";
+            usersData[userDoc.id] = label;
+            const uid = String(data?.uid || data?.userId || "").trim();
+            if (uid) usersData[uid] = label;
         });
         setUserNames(usersData);
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    // Fallback resolver: for any still-missing uploader id, fetch displayName directly from users collection.
+    const missingUploaderIds = Array.from(new Set(unassignedFiles.map((f) => f.uploadedBy).filter(Boolean)))
+      .filter((id) => !userNames[id]);
+    if (missingUploaderIds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const resolvedMap: Record<string, string> = {};
+      for (const uploaderId of missingUploaderIds) {
+        try {
+          // Try direct doc id first (users/{uploadedBy}).
+          const byId = await getDoc(doc(firestore, "users", uploaderId));
+          if (byId.exists()) {
+            const label = getUserLabelFromDoc(byId.data());
+            if (label) {
+              resolvedMap[uploaderId] = label;
+              continue;
+            }
+          }
+          // Then try users.uid == uploadedBy.
+          const byUid = await getDocs(query(collection(firestore, "users"), where("uid", "==", uploaderId)));
+          if (!byUid.empty) {
+            const label = getUserLabelFromDoc(byUid.docs[0].data());
+            if (label) {
+              resolvedMap[uploaderId] = label;
+              continue;
+            }
+          }
+          // Last fallback: users.userId == uploadedBy (legacy schemas).
+          const byUserId = await getDocs(query(collection(firestore, "users"), where("userId", "==", uploaderId)));
+          if (!byUserId.empty) {
+            const label = getUserLabelFromDoc(byUserId.docs[0].data());
+            if (label) resolvedMap[uploaderId] = label;
+          }
+        } catch {
+          // Intentionally ignore per-id failures; UI fallback handles unresolved labels.
+        }
+      }
+      if (!cancelled && Object.keys(resolvedMap).length > 0) {
+        setUserNames((prev) => ({ ...prev, ...resolvedMap }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unassignedFiles, userNames]);
   
   const uploaderOptions = useMemo(() => {
     const uniqueNamesMap = new Map();
     unassignedFiles.forEach(file => {
-      const uploaderName = userNames[file.uploadedBy] || file.uploadedBy;
+      // Fallback priority: resolved name -> email suffix (text after '@') -> unknown.
+      const resolved = userNames[file.uploadedBy];
+      const uploaderName = resolved && resolved !== "Unknown"
+        ? (getEmailSuffixLabel(resolved) || resolved)
+        : (getEmailSuffixLabel(file.uploadedBy) || "Unknown User");
       if (uploaderName && !Array.from(uniqueNamesMap.values()).some((obj: any) => obj.label === uploaderName)) {
         uniqueNamesMap.set(file.uploadedBy, { value: file.uploadedBy, label: uploaderName });
       }
@@ -608,11 +764,26 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
 
   <div className="flex flex-wrap items-center gap-4 w-full bg-muted/30 p-4 rounded-xl border">
     <div className="flex-shrink-0">
-      <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} />
+      {isHydrated ? (
+        <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} />
+      ) : (
+        // Keep SSR/client first paint identical while hydration completes.
+        <Button type="button" variant="outline" className="h-10 w-[190px] justify-start text-muted-foreground" disabled>
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          Pick a date range
+        </Button>
+      )}
     </div>
 
     <div className="flex-1 min-w-[200px] max-w-[300px]">
-      <Combobox options={uploaderOptions} value={selectedUploaderId} onChange={setSelectedUploaderId} placeholder="Filter by user"/>
+      {isHydrated ? (
+        <Combobox options={uploaderOptions} value={selectedUploaderId} onChange={setSelectedUploaderId} placeholder="Filter by user"/>
+      ) : (
+        // Keep SSR/client first paint identical while hydration completes.
+        <Button type="button" variant="outline" className="h-10 w-full justify-start text-muted-foreground" disabled>
+          Filter by user
+        </Button>
+      )}
     </div>
 
     <Button variant="ghost" onClick={() => { setDateRange(undefined); setSelectedUploaderId('all')}} className="hover:text-destructive">
@@ -655,7 +826,11 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
             ))}
             {filteredFiles.map((file) => {
               const uploadDate = file.uploadedAt?.toDate ? file.uploadedAt.toDate() : new Date();
-              const uploaderName = userNames[file.uploadedBy] || 'Unknown';
+              // Keep tooltip/uploader text consistent with dropdown fallback behavior.
+              const resolved = userNames[file.uploadedBy];
+              const uploaderName = resolved && resolved !== "Unknown"
+                ? (getEmailSuffixLabel(resolved) || resolved)
+                : (getEmailSuffixLabel(file.uploadedBy) || "Unknown User");
               const cleanFileName = getCleanName(file.name);
               
               const displayDate = () => {

@@ -175,7 +175,10 @@ export function CreatePaymentOutForm({
   onOpenHistory,
   showHistoryButton,
   defaultTab,
+  defaultVoucherData,
   editingDisabled = false,
+  historyLimitReached = false,
+  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -188,7 +191,10 @@ export function CreatePaymentOutForm({
   onOpenHistory?: () => void;
   showHistoryButton?: boolean;
   defaultTab?: 'payment_out' | 'direct_expense';
+  defaultVoucherData?: any;
   editingDisabled?: boolean;
+  historyLimitReached?: boolean;
+  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -236,6 +242,10 @@ export function CreatePaymentOutForm({
   const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
   const initialAllocationsRef = useRef<{ voucherId: string; amount: number }[]>([]);
+  /** Last voucher id we synced allocations from — avoid overwriting user's Link dialog changes when voucher ref changes (useVouchers refresh). */
+  const lastSyncedVoucherIdRef = useRef<string | null>(null);
+  /** Last voucher id we reset form for — skip reset when same doc updates (liveVoucher) and user has edits. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
 
     useEffect(() => {
         setLoading(vouchersLoading);
@@ -251,7 +261,8 @@ export function CreatePaymentOutForm({
   
   const form = useForm<PaymentOutFormValues>({
     resolver: zodResolver(formSchema) as Resolver<PaymentOutFormValues>,
-    defaultValues: getInitialFormValues(voucher),
+    // Seed form from gallery/default payload so unassigned attachments and defaults hydrate for new voucher.
+    defaultValues: getInitialFormValues(voucher || defaultVoucherData),
   });
   
 const { isDirty: _isFormFieldsDirty } = form.formState;
@@ -342,7 +353,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const totalLinked = useMemo(() => linkedToRows.reduce((s, r) => s + r.amount, 0), [linkedToRows]);
 
-  /** Report effective has-links to dialog so fields lock as soon as user links (bill-wise or spend-wise) in this session. */
+  /** Report effective has-links to dialog: 1 link → fields disabled; all unlink → edit enable. Applies to Party, Staff, Tax, Expense equally. */
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
     const hasLinks = allocations.length > 0 || (linkedPaymentInIds?.length ?? 0) > 0;
@@ -574,6 +585,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (voucher?.id) {
+        const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
+        // Avoid overwriting user's in-progress edits when liveVoucher updates (same doc from Firestore).
+        // Fixes: unlink → change account/amount/files → save (was resetting and losing changes).
+        if (isSameVoucher && isFormDirty) return;
+        lastResetVoucherIdRef.current = voucher.id;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
             initialValues.voucherNumber = "";
@@ -582,12 +598,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setSavedVoucherId(voucher.id);
         setFiles(voucher.fileUrls || []);
         initialFilesRef.current = voucher.fileUrls || [];
-        const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
-        // Hydrate allocation state only when opening a voucher id; avoid re-overwriting local link edits on every parent re-render.
-        setAllocations(allocs);
-        initialAllocationsRef.current = allocs.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        if (lastSyncedVoucherIdRef.current !== voucher.id) {
+          lastSyncedVoucherIdRef.current = voucher.id;
+          const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
+          setAllocations(allocs);
+          initialAllocationsRef.current = allocs.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        }
+    } else if (defaultVoucherData && !voucher?.id) {
+        lastResetVoucherIdRef.current = null;
+        // For Gallery -> Unassigned "Attach to ...", preload selected file URL into local files state.
+        const initialUrls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
+        setFiles(initialUrls);
+        initialFilesRef.current = initialUrls.filter((f: any) => typeof f === 'string');
+        if (lastSyncedVoucherIdRef.current !== "new") {
+          lastSyncedVoucherIdRef.current = "new";
+          const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];
+          setAllocations(allocs);
+          initialAllocationsRef.current = allocs.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        }
     }
-}, [voucher?.id, form, isEditingAndConverting]);
+}, [voucher, defaultVoucherData, form, isEditingAndConverting, isFormDirty]);
 
   
   useEffect(() => {
@@ -606,6 +636,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
+    // block_edit + history full: block everything (no save, no approve)
+    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
+    // hasLinks only: approve-only — user can approve voucher without saving form changes
+    if (options.approveAfterSave && onApprove && editingDisabled) {
+      onApprove();
+      return;
+    }
+    if (editingDisabled) return;
     const enteredAmount = Number(form.getValues("amount")) || 0;
     if (isAmountExceedingSelectedAccount(enteredAmount)) {
       // Stop save when typed amount is higher than currently selected account balance.
@@ -2383,7 +2421,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem className="min-w-0 max-w-full overflow-hidden">
                       <FormLabel>Narration</FormLabel>
                       <FormControl>
-                        <Textarea placeholder="Additional details..." {...field} className="min-w-0 max-w-full w-full resize-none overflow-hidden text-ellipsis" />
+                        <Textarea placeholder="Additional details..." {...field} disabled={historyLimitReached} className="min-w-0 max-w-full w-full resize-none overflow-hidden text-ellipsis" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -2475,7 +2513,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                     <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2512,7 +2550,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                     <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
@@ -2566,12 +2604,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         Save
                       </Button>
                       {voucher?.id ? (
-                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                           {isFormDirty ? "Save & Approve" : "Approve"}
                         </Button>
                       ) : (
-                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           Save & Approve
                         </Button>
@@ -2621,12 +2659,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         Save
                       </Button>
                       {voucher?.id ? (
-                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={!showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                           {isFormDirty ? "Save & Approve" : "Approve"}
                         </Button>
                       ) : (
-                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                        <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={!showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                           {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           Save & Approve
                         </Button>
@@ -2686,6 +2724,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           paymentOutVoucherNumber={form.watch("voucherNumber") || undefined}
           paymentOutDate={form.watch("date")}
           partyOpeningBalance={processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0}
+          dialogTitle="Link Payment Out to Linkable Cr Txns"
           onDone={(allocs, _amount) => {
             // Link save only on local; server save when user clicks Save on voucher
             setAllocations(allocs);

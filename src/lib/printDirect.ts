@@ -10,7 +10,7 @@ import type { ADFormatKey, BSFormatKey } from "@/lib/dateFormatOptions";
 // @ts-ignore - pdfmake types may not be available
 import type { TDocumentDefinitions, Content, TableCell } from "pdfmake/interfaces";
 import type { Item } from "@/components/items/types";
-import { getAllocationTotal } from "@/lib/payment-allocation-utils";
+import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -117,6 +117,8 @@ export type PrintPayload = {
   preserveOrder?: boolean;
   /** Print using spend-wise row values/order (account/bank spend-wise view). */
   spendWise?: boolean;
+  /** Bill-wise: vouchers for allocation amount lookup (voucher details with amount in print). */
+  vouchers?: any[];
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -498,7 +500,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       widths: getColumnWidths(p),
       body: [
         tableHeader,
-        ...(openingBalanceRow ? [openingBalanceRow] : []),
+        ...(openingBalanceRow ?? []),
         ...rows.flatMap(row => buildTableRow(row, p, formatDate, formatDateBS, formatCurrencyForPrint, formatRunning)),
         ...tableFooter,
       ]
@@ -1041,7 +1043,7 @@ function ensureRowLength(row: TableCell[], expectedLength: number): TableCell[] 
   return row;
 }
 
-const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, formatCurrencyForPrint: Function, colSpan: number): TableCell[] | null => {
+const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, formatCurrencyForPrint: Function, colSpan: number): TableCell[][] | null => {
   if (p.context === 'daybook' || p.context === 'sale' || p.context === 'overdue') return null;
   
   const factor = p.context === 'item' && p.stockView === 'qty' ? getConversionFactor(findItem(p.itemsData, p.contextId), p.displayUnit) : 1;
@@ -1078,9 +1080,7 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
   // Keep opening-balance row shape aligned to currently visible print columns.
   const labelColSpan = colSpan - visibleDataCols;
   if (labelColSpan < 1) {
-    return [
-      { text: 'Opening Balance', colSpan, bold: true, alignment: 'left', fontSize: 9, noWrap: true }
-    ];
+    return [[{ text: 'Opening Balance', colSpan, bold: true, alignment: 'left', fontSize: 9, noWrap: true }]];
   }
 
   // Bill-wise: show outstanding in Balance column (0.00 when Paid/Settled)
@@ -1126,30 +1126,60 @@ const buildOpeningBalanceRow = (p: PrintPayload, formatRunning: Function, format
 
   if (isBillWise) {
     const obStatusLabel = obOutstanding <= 0 ? 'Paid' : obOutstanding >= obAmount ? 'Unpaid' : 'Partial';
-    const obStatusDetail = p.openingBalanceLinkedVoucherNos?.length
-      ? (p.openingBalanceLinkedVoucherNos.length > 1 ? "Multi link" : `to ${p.openingBalanceLinkedVoucherNos[0]}`)
-      : "";
-    const statusCell: TableCell = {
-      // Keep opening-balance print status and detail aligned with table UI.
-      stack: [
-        { text: obStatusLabel, color: obStatusLabel === 'Paid' ? 'green' : 'red', fontSize: 9 },
-        ...(p.showNarration && obStatusDetail ? [{ text: obStatusDetail, color: 'black', fontSize: 7 }] : []),
-      ] as any,
-      alignment: 'left',
-      noWrap: false,
+    const obNos = p.openingBalanceLinkedVoucherNos ?? [];
+    const vouchers = p.vouchers ?? [];
+    const partyId = p.contextId ?? "";
+    const getOBAmountForVoucher = (no: string): number => {
+      const v = vouchers.find((x: any) => (x.voucherNumber ?? x.voucher_number ?? "") === no);
+      if (!v) return 0;
+      if (v.type === "sale" || v.type === "sale_service" || v.type === "purchase" || v.type === "purchase_service")
+        return Number((v as any).openingBalanceAllocated) || 0;
+      const allocs = (v.allocations as { voucherId: string; linkedAccountId?: string }[] | undefined) || [];
+      const obAlloc = allocs.find((a: any) => a.voucherId === OPENING_BALANCE_VOUCHER_ID);
+      if (!obAlloc) return 0;
+      if (v.type === "journal" && (obAlloc as any).linkedAccountId && partyId)
+        return String((obAlloc as any).linkedAccountId) === String(partyId) ? getAllocationTotal(obAlloc) : 0;
+      return getAllocationTotal(obAlloc);
     };
-    const row: TableCell[] = [labelCell, ...placeholders];
-    if (showDr) row.push(debitCell);
-    if (showCr) row.push(creditCell);
-    if (showStatus) row.push(statusCell);
-    if (showBalance) row.push(balanceCell);
-    return row;
+    const decimalPlaces = p.company.decimalPlaces ?? 2;
+    const obDetailContent = obNos.length && p.showNarration
+      ? obNos.flatMap((no, i) => {
+          const amt = vouchers.length ? getOBAmountForVoucher(no) : 0;
+          const displayNo = no === "Opening Balance" ? "Opening" : no;
+          const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
+          return [
+            ...(i > 0 ? [{ text: " + ", fontSize: 7 }] : []),
+            { text: label, color: BILLWISE_VOUCHER_COLORS[i % 3], fontSize: 7 },
+          ];
+        })
+      : [];
+    const statusCell: TableCell = {
+      text: obStatusLabel,
+      color: obStatusLabel === 'Paid' ? 'green' : 'red',
+      fontSize: 9,
+      alignment: 'left',
+      noWrap: true,
+    };
+    const mainRow: TableCell[] = [labelCell, ...placeholders];
+    if (showDr) mainRow.push(debitCell);
+    if (showCr) mainRow.push(creditCell);
+    if (showStatus) mainRow.push(statusCell);
+    if (showBalance) mainRow.push(balanceCell);
+    if (obDetailContent.length === 0) return [mainRow];
+    // Sub-row: voucher details status se balance tak span (transaction row jaisa). pdfmake needs placeholder cells for colSpan.
+    const subRow: TableCell[] = [{ text: '', colSpan: labelColSpan, style: 'narrationRow' }];
+    for (let i = 1; i < labelColSpan; i++) subRow.push({ text: '' });
+    if (showDr) subRow.push({ text: '', style: 'narrationRow' });
+    if (showCr) subRow.push({ text: '', style: 'narrationRow' });
+    subRow.push({ text: obDetailContent, colSpan: 2, alignment: 'left', style: 'narrationRow', noWrap: false });
+    subRow.push({ text: '' });
+    return [mainRow, subRow];
   }
   const row: TableCell[] = [labelCell, ...placeholders];
   if (showDr) row.push(debitCell);
   if (showCr) row.push(creditCell);
   if (showBalance) row.push(balanceCell);
-  return row;
+  return [row];
 }
 
 const buildTableHeader = (p: PrintPayload): TableCell[] => {
@@ -1265,8 +1295,25 @@ const getBillStatusLabelForPrint = (t: any, context: Context, isOverdue?: boolea
   return formatBillStatus(t.paymentStatus, false);
 };
 
-// Keep print status-detail text aligned with table UI (to/from voucher no, Multi link).
-const getStatusDetailForPrint = (t: any, opts?: { billWiseOnly?: boolean }): string => {
+// Bill-wise print: cyclical colors like table — Blue, Pink, Green.
+const BILLWISE_VOUCHER_COLORS = ["#2563eb", "#db2777", "#16a34a"] as const; // blue-600, pink-600, green-600
+
+// Voucher detail amount: decimal .00 hide karo, warna dikhao.
+const formatVoucherAmount = (n: number, decimalPlaces = 2): string => {
+  if (typeof n !== "number" || isNaN(n)) return "0";
+  const abs = Math.abs(n);
+  const factor = Math.pow(10, decimalPlaces);
+  const isWhole = Math.round(abs * factor) % factor === 0;
+  if (isWhole) return abs.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return abs.toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: decimalPlaces });
+};
+
+// Build status-detail: VoucherNo) Amount + VoucherNo) Amount format, decimal .00 hide.
+// Returns content for pdfmake: string (simple) or array of { text, color } for multi-color.
+const getStatusDetailForPrint = (
+  t: any,
+  opts?: { billWiseOnly?: boolean; vouchers?: any[]; formatCurrency?: (n: number, o?: any) => string; decimalPlaces?: number }
+): string | Array<{ text: string; color?: string; fontSize?: number }> => {
   const useBillWise =
     opts?.billWiseOnly &&
     (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
@@ -1277,24 +1324,47 @@ const getStatusDetailForPrint = (t: any, opts?: { billWiseOnly?: boolean }): str
     ? (t.linkedToVoucherNosBillWise as string[] | undefined)
     : (t.linkedToVoucherNos as string[] | undefined)) || [];
   if (from.length === 0 && to.length === 0) return "";
-  const isPaymentOrDirect = ["payment_in", "payment_out", "direct_income", "direct_expense"].includes(t.type);
-  const isSaleOrPurchase = t.type === "sale" || t.type === "purchase";
-  const isAddSalary = t.type === "journal" && t.subType === "add_salary";
-  if (isPaymentOrDirect) {
-    if (from.length > 1 || to.length > 1) return "Multi link";
-    if (from.length) return `from ${from[0]}`;
-    return to.length ? `to ${to[0]}` : "";
+  const vouchers = opts?.vouchers ?? [];
+  const decimalPlaces = opts?.decimalPlaces ?? 2;
+  const getAmountForFrom = (voucherNo: string): number => {
+    if (voucherNo === "Opening Balance") return Number((t as any).openingBalanceAllocated) || 0;
+    const v = vouchers.find((x: any) => (x.voucherNumber ?? x.voucher_number ?? "") === voucherNo);
+    if (!v?.allocations) return 0;
+    const a = (v.allocations as any[]).find((a: any) => a.voucherId === t.id);
+    return a ? getAllocationTotal(a) : 0;
+  };
+  const getAmountForTo = (voucherNo: string): number => {
+    if (voucherNo === "Opening Balance") {
+      const allocs = (t.allocations as { voucherId: string; amount?: number }[] | undefined) || [];
+      const a = allocs.find((al: any) => al.voucherId === OPENING_BALANCE_VOUCHER_ID);
+      return a ? getAllocationTotal(a) : 0;
+    }
+    const allocs = (t.allocations as { voucherId: string; amount?: number }[] | undefined) || [];
+    const target = vouchers.find((x: any) => (x.voucherNumber ?? x.voucher_number ?? "") === voucherNo);
+    if (!target) return 0;
+    const a = allocs.find((al: any) => al.voucherId === target.id);
+    return a ? getAllocationTotal(a) : 0;
+  };
+  // Combine from first then to, dedupe (no "from"/"to" prefix in print).
+  const deduped: { no: string; getAmt: (no: string) => number }[] = [];
+  const seen2 = new Set<string>();
+  for (const { no, getAmt } of [...from.map((no) => ({ no, getAmt: getAmountForFrom })), ...to.map((no) => ({ no, getAmt: getAmountForTo }))]) {
+    if (seen2.has(no)) continue;
+    seen2.add(no);
+    deduped.push({ no, getAmt });
   }
-  if (isSaleOrPurchase || isAddSalary) {
-    if (from.length > 1 || to.length > 1) return "Multi link";
-    if (from.length) return `from ${from[0]}`;
-    if (to.length) return `to ${to[0]}`;
-    return "";
-  }
-  if (to.length > 1 || from.length > 1) return "Multi link";
-  if (to.length) return `to ${to[0]}`;
-  if (from.length) return `from ${from[0]}`;
-  return "";
+  if (deduped.length === 0) return "";
+  const fontSize = 7;
+  const content: Array<{ text: string; color?: string; fontSize?: number }> = [];
+  deduped.forEach(({ no, getAmt }, i) => {
+    if (i > 0) content.push({ text: " + ", fontSize });
+    const amt = vouchers.length ? getAmt(no) : 0;
+    const displayNo = no === "Opening Balance" ? "Opening" : no;
+    const label = amt > 0 ? `${displayNo}) ${formatVoucherAmount(amt, decimalPlaces)}` : displayNo;
+    const color = BILLWISE_VOUCHER_COLORS[i % 3];
+    content.push({ text: label, color, fontSize });
+  });
+  return content;
 };
 
 function getOverdueDays(dueDate: any): number {
@@ -1556,7 +1626,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       return "#2563eb"; // blue-600
     })();
 
-    const statusDetailText = isBillWise && p.showNarration ? getStatusDetailForPrint(row, { billWiseOnly: true }) : '';
+    const statusDetailText = isBillWise && p.showNarration ? getStatusDetailForPrint(row, { billWiseOnly: true, vouchers: p.vouchers, decimalPlaces: p.company.decimalPlaces ?? 2 }) : '';
     const mainHasSubRow = Boolean(
       (isBillWise && (p.showNarration && (narration || statusDetailText || overdueDaysText || isOverdueRow))) ||
       (!isBillWise && p.showNarration && narration)
@@ -1578,9 +1648,13 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
         narrationParts.push({ text: 'Narration: ', bold: true, fontSize: 7, color: 'black' });
         narrationParts.push({ text: String(narration), color: 'black', fontSize: 7, italics: true });
       }
-      const statusParts: Array<string | { text: string; bold?: boolean; fontSize?: number; color?: string; italics?: boolean }> = [];
+      const statusParts: Array<string | { text: string | any[]; bold?: boolean; fontSize?: number; color?: string; italics?: boolean }> = [];
       if (p.showNarration && statusDetailText) {
-        statusParts.push({ text: statusDetailText, color: 'black', fontSize: 7 });
+        if (Array.isArray(statusDetailText)) {
+          statusParts.push({ text: statusDetailText });
+        } else {
+          statusParts.push({ text: statusDetailText, color: 'black', fontSize: 7 });
+        }
       }
       if (p.showNarration && (overdueDaysText || isOverdueRow)) {
         const overdueOnly = overdueDaysText || 'Overdue';
@@ -1589,7 +1663,7 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
       }
       const subRow: TableCell[] = [];
       if (isBillWise && isColVisible(p, "status")) {
-        // Keep status-detail text under Status column instead of merging into narration text.
+        // Voucher details: ek hi cell, Status + Balance dono columns span karke — double nahi, width badha ke balance tak.
         const hasBalanceCol = isColVisible(p, "runningBalance");
         const narrationSpan = Math.max(1, mainRow.length - (hasBalanceCol ? 2 : 1));
         subRow.push({
@@ -1600,8 +1674,8 @@ const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDa
           style: 'narrationRow',
         });
         for (let i = 1; i < narrationSpan; i++) subRow.push({});
-        subRow.push({ text: statusParts.length > 0 ? (statusParts as any) : '', alignment: 'left', style: 'narrationRow' });
-        if (hasBalanceCol) subRow.push({ text: '', style: 'narrationRow' });
+        const voucherDetailColSpan = hasBalanceCol ? 2 : 1;
+        subRow.push({ text: statusParts.length > 0 ? (statusParts as any) : '', colSpan: voucherDetailColSpan, alignment: 'left', style: 'narrationRow', noWrap: false });
       } else {
         subRow.push({
           text: narrationParts.length > 0 ? (narrationParts as any) : '',

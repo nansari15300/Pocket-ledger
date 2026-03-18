@@ -84,6 +84,8 @@ export function CreateContraForm({
   onOpenHistory,
   showHistoryButton,
   editingDisabled = false,
+  historyLimitReached = false,
+  onSaveBlockedByHistoryLimit,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
   showSaveAndApproveOnCreate = false,
@@ -95,6 +97,8 @@ export function CreateContraForm({
   onOpenHistory?: () => void;
   showHistoryButton?: boolean;
   editingDisabled?: boolean;
+  historyLimitReached?: boolean;
+  onSaveBlockedByHistoryLimit?: () => void;
   deleteDisabledWhenLinked?: boolean;
   showApproveButton?: boolean;
   showSaveAndApproveOnCreate?: boolean;
@@ -131,6 +135,8 @@ export function CreateContraForm({
   // Track last valid amount so invalid keystroke can be reverted immediately.
   const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
+  /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
+  const lastResetVoucherIdRef = useRef<string | null>(null);
 
   const transactionDates = useMemo(() => {
     if (!allVouchers?.length) return [];
@@ -570,6 +576,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   useEffect(() => {
     if (voucher) {
+      const vid = voucher.id;
+      const isSameVoucher = lastResetVoucherIdRef.current === vid;
+      if (vid && isSameVoucher && isFormDirty) return;
+      if (vid) lastResetVoucherIdRef.current = vid;
       const initialValues: any = { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
       if (isEditingAndConverting) {
           initialValues.voucherNumber = "";
@@ -589,8 +599,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       setSavedVoucherId(voucher.id);
       setFiles(voucher.fileUrls || []);
       initialFilesRef.current = voucher.fileUrls || [];
+    } else {
+      lastResetVoucherIdRef.current = null;
     }
-}, [voucher, form, isEditingAndConverting, company?.voucherPrefixes]);
+}, [voucher, form, isEditingAndConverting, company?.voucherPrefixes, isFormDirty]);
 
   
   useEffect(() => {
@@ -618,6 +630,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
     e?.preventDefault?.();
+    // block_edit + history full: block everything (no save, no approve)
+    if (historyLimitReached) { onSaveBlockedByHistoryLimit?.(); return; }
+    // hasLinks only: approve-only — user can approve voucher without saving form changes
+    if (options.approveAfterSave && onApprove && editingDisabled) {
+      onApprove();
+      return;
+    }
+    if (editingDisabled) return;
     const enteredAmount = Number(form.getValues("amount")) || 0;
     if (isAmountExceedingSelectedFromAccount(enteredAmount)) {
       // Stop save when typed amount is higher than selected from-account balance.
@@ -631,7 +651,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     onVoucherAction?.('saved', options.saveAndNew);
     await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
-  }, [form, onVoucherAction, isAmountExceedingSelectedFromAccount]);
+  }, [form, onVoucherAction, isAmountExceedingSelectedFromAccount, editingDisabled, historyLimitReached, onSaveBlockedByHistoryLimit]);
   
   async function processAndSave(data: ContraFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -1619,7 +1639,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {voucher?.id ? (
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}
                   </Button>
                 ) : showSaveAndApproveOnCreate ? (
@@ -1685,12 +1705,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     Save
                   </Button>
                   {voucher?.id ? (
-                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || !showApproveButton || !onApprove || isApproving || historyLimitReached || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                       {isFormDirty ? "Save & Approve" : "Approve"}
                     </Button>
                   ) : (
-                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                    <Button type="button" onClick={(e) => handleFormSubmit(e, { approveAfterSave: true })} disabled={linkPayOthersDisabled || !showSaveAndApproveOnCreate || isLoading || (editingDisabled && !historyLimitReached)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & Approve
                     </Button>

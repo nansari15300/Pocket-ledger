@@ -33,6 +33,15 @@ import { CheckCircle } from "lucide-react";
 import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -89,6 +98,8 @@ function VoucherDialogContent({
   onOpenHistory,
   showHistoryButton,
   editingDisabled = false,
+  historyLimitReached = false,
+  onSaveBlockedByHistoryLimit,
   restrictConvertWhenLinked = false,
   deleteDisabledWhenLinked = false,
   showApproveButton = false,
@@ -105,6 +116,8 @@ function VoucherDialogContent({
   onOpenHistory?: () => void,
   showHistoryButton?: boolean,
   editingDisabled?: boolean,
+  historyLimitReached?: boolean,
+  onSaveBlockedByHistoryLimit?: () => void,
   restrictConvertWhenLinked?: boolean,
   deleteDisabledWhenLinked?: boolean,
   showApproveButton?: boolean,
@@ -209,7 +222,11 @@ function VoucherDialogContent({
         )}
       </div>
 
-      <div className={cn("w-full min-w-0 max-w-full pl-[2px] pr-[2px] pt-6 flex-1 flex flex-col min-h-0 overflow-x-hidden box-border", isMobile ? "pb-0" : "pb-6 md:p-6")}>
+      {/* Scrollable form area — history message in fixed footer below */}
+      <div className={cn(
+        "w-full min-w-0 max-w-full pl-[2px] pr-[2px] pt-6 flex-1 flex flex-col min-h-0 overflow-x-hidden box-border",
+        isMobile ? "pb-0" : historyLimitReached ? "pb-0 md:px-6" : "pb-6 md:p-6"
+      )}>
         <Suspense fallback={<div className="p-10 text-center"><Loader2 className="animate-spin mx-auto" /></div>}>
           {ActiveForm ? (
             <ActiveForm 
@@ -222,16 +239,27 @@ function VoucherDialogContent({
               defaultTab={activeTab === 'direct_income' ? 'direct_income' : activeTab === 'direct_expense' ? 'direct_expense' : undefined}
               defaultVoucherData={initialVoucherData}
               editingDisabled={editingDisabled}
+              historyLimitReached={historyLimitReached}
+              onSaveBlockedByHistoryLimit={onSaveBlockedByHistoryLimit}
               deleteDisabledWhenLinked={deleteDisabledWhenLinked}
               showApproveButton={showApproveButton}
               showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
               onApprove={onApprove}
               isApproving={isApproving}
               onEffectiveLinksChange={activeTab === 'sale' || activeTab === 'purchase' || activeTab === 'payment_in' || activeTab === 'direct_income' || activeTab === 'payment_out' || activeTab === 'direct_expense' || activeTab === 'add_salary' ? onEffectiveLinksChange : undefined}
+              initialFocusSide={activeTab === 'journal' ? (initialVoucherData as any)?._journalFocusSide : undefined}
             />
           ) : null}
         </Suspense>
       </div>
+      {/* Fixed footer — does not scroll; red pill-style message */}
+      {historyLimitReached && (
+        <div className="shrink-0 border-t px-4 py-2 flex justify-center">
+          <span className="text-xs font-medium text-white bg-red-500 rounded-full px-4 py-1.5">
+            History limit reached, cannot edit.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -254,6 +282,7 @@ export function AddVoucherDialog(props: any) {
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [isApproving, setIsApproving] = useState(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
+  const [showHistoryLimitInfo, setShowHistoryLimitInfo] = useState(false);
   const [editingDisabled, setEditingDisabled] = useState(false);
   /** When sale/purchase form has pending link changes (e.g. user unlinked in dialog), form reports effective state so we enable edit locally. */
   const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
@@ -411,7 +440,14 @@ export function AddVoucherDialog(props: any) {
   /** Use form-reported effective state when set (local unlink); else server-based hasLinks so banner/fields follow local changes. */
   const hasLinks = effectiveHasLinksFromForm ?? (hasBillWiseLinks || hasSpendWise);
 
+  // History full + block_edit: edit disabled until admin clears history (allow_edit_delete_last = overwrite oldest on save)
+  const historyLimit = Math.max(1, Math.min(100, Number(company?.voucherHistoryLimit) || 10));
+  const historyFullBehavior = (company as any)?.voucherHistoryFullBehavior || 'allow_edit_delete_last';
+  const historyLen = Array.isArray(effectiveVoucher?.history) ? effectiveVoucher.history.length : 0;
+  const historyFullAndBlock = !!effectiveVoucher?.id && historyFullBehavior === 'block_edit' && historyLen >= historyLimit;
+
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
+  // Also disable when history is full and company uses block_edit (user must clear history or use delete-last flow)
   useEffect(() => {
     if (!effectiveVoucher?.id) {
       setEditingDisabled(false);
@@ -432,11 +468,11 @@ export function AddVoucherDialog(props: any) {
     ).then((isOwnRecord) => {
       if (!cancelled) {
         const canEdit = canEditRecord(isOwnRecord, effectiveVoucher);
-        setEditingDisabled(!canEdit);
+        setEditingDisabled(!canEdit || historyFullAndBlock);
       }
     });
     return () => { cancelled = true; };
-  }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, companyId, user?.uid, vouchers, canEditRecord]);
+  }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, effectiveVoucher?.history, companyId, company?.voucherHistoryLimit, (company as any)?.voucherHistoryFullBehavior, user?.uid, vouchers, canEditRecord, historyFullAndBlock]);
 
   // Show Approve / Save & Approve for any existing voucher if user can approve (approved voucher: enable when form has changes)
   const showApproveButton =
@@ -529,8 +565,19 @@ export function AddVoucherDialog(props: any) {
           </p>
         </div>
       )}
+      {/* When history is full and block_edit: user must clear history (Settings or History dialog) to edit */}
+      {historyFullAndBlock && !hasLinks && (
+        <div className="w-fit max-w-full mx-auto mt-3 bg-amber-600/80 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
+          <p className="text-base md:text-xl font-semibold text-center text-white m-0">
+            Edit disabled — Voucher history is full. Clear history in History dialog to edit.
+          </p>
+        </div>
+      )}
     </DialogHeader>
   );
+
+  // Effective disable: permission OR history full + block_edit OR has links — apply immediately (no async delay)
+  const effectiveEditingDisabled = editingDisabled || historyFullAndBlock || hasLinks;
 
   const bodyBlock = (
     <>
@@ -541,7 +588,9 @@ export function AddVoucherDialog(props: any) {
         onVoucherAction={handleAction}
         onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
         showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
-        editingDisabled={editingDisabled}
+        editingDisabled={effectiveEditingDisabled}
+        historyLimitReached={historyFullAndBlock}
+        onSaveBlockedByHistoryLimit={() => setShowHistoryLimitInfo(true)}
         restrictConvertWhenLinked={hasLinks}
         deleteDisabledWhenLinked={hasLinks}
         showApproveButton={showApproveButton}
@@ -556,6 +605,20 @@ export function AddVoucherDialog(props: any) {
         onOpenChange={(open) => !open && setHistoryVoucher(null)}
         onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
       />
+      {/* Info dialog when user clicks Save/Save & Approve but history limit reached */}
+      <AlertDialog open={showHistoryLimitInfo} onOpenChange={setShowHistoryLimitInfo}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>History limit reached</AlertDialogTitle>
+            <AlertDialogDescription>
+              Voucher history is full. Clear history in History dialog to edit and save changes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 

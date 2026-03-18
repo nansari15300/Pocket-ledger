@@ -570,7 +570,7 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
   const [deletedMs, setDeletedMs] = useState<Set<number>>(new Set());
   const { processedParties, processedAccounts, processedStaff, processedTaxes, processedItems, expenseAccounts, userNames: vouchersUserNames, vouchers } = useVouchers();
   const { can } = usePermissions();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const highlightRef = useRef<HTMLDivElement | null>(null);
 
@@ -725,6 +725,11 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
 
   const canReset = can("reset_voucher_history") && (voucher?.history?.length ?? 0) > 0;
 
+  // When history is full and block_edit: show message that user can delete oldest entry to enable edit
+  const historyLimit = Math.max(1, Math.min(100, Number(company?.voucherHistoryLimit) || 10));
+  const historyFullBehavior = (company as any)?.voucherHistoryFullBehavior || 'allow_edit_delete_last';
+  const historyFullAndBlock = historyFullBehavior === 'block_edit' && history.length >= historyLimit;
+
   /** Map voucher id → voucher number for link/unlink history display (From V. No. X to V. No. Y). */
   const idToVoucherNo = useMemo(() => {
     const m = new Map<string, string>();
@@ -856,6 +861,13 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
               : 'No modifications recorded.'}
           </DialogDescription>
         </DialogHeader>
+
+        {/* When history full + block_edit: prompt user to delete oldest entry to enable edit */}
+        {historyFullAndBlock && (
+          <div className="rounded-md bg-amber-600/80 text-white px-4 py-3 text-sm font-medium">
+            History is full. Edit is disabled. Delete the oldest entry below to enable editing again.
+          </div>
+        )}
 
         {/* Single scroll container: horizontal + vertical so small screens get scrollbar and no overlap */}
         <div className="flex-1 min-h-0 overflow-auto">
