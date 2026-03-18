@@ -2,7 +2,7 @@
  * Shared helper to get effective voucher history settings (company + plan).
  * Used by both client (voucherActionsClient) and server (voucher-actions, actions).
  */
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, getDocFromServer } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { getPlan, type PlanId } from "@/config/plans";
 
@@ -12,7 +12,7 @@ export async function getEffectiveHistorySettings(companyId: string): Promise<{ 
   // Prefer server read so live settings (from Voucher Settings) apply immediately; fallback to cache if offline
   let companySnap;
   try {
-    companySnap = await getDoc(doc(firestore, "companies", companyId), { source: "server" });
+    companySnap = await getDocFromServer(doc(firestore, "companies", companyId));
   } catch {
     companySnap = await getDoc(doc(firestore, "companies", companyId));
   }
