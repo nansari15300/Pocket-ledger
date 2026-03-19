@@ -678,7 +678,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
-        setFiles(voucher.fileUrls || []);
+        const urls = voucher.fileUrls || [];
+        setFiles(urls);
+        initialFilesRef.current = urls; // Track initial so _isFileDirty detects user remove/add
         if (lastSyncedVoucherIdRef.current !== voucher.id) {
           lastSyncedVoucherIdRef.current = voucher.id;
           const allocs = Array.isArray(voucher.allocations) ? voucher.allocations : [];
@@ -686,7 +688,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
         }
     } else if (defaultVoucherData && !voucher?.id) {
-        setFiles(defaultVoucherData.fileUrls || []);
+        const urls = defaultVoucherData.fileUrls || [];
+        setFiles(urls);
+        initialFilesRef.current = urls;
         if (lastSyncedVoucherIdRef.current !== "new") {
           lastSyncedVoucherIdRef.current = "new";
           const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];

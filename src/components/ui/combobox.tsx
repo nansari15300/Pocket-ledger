@@ -187,8 +187,8 @@ export function Combobox({
               {filteredOptions.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.label}
-                  // Respect per-option disabled state so user cannot pick blocked accounts.
+                  value={option.value}
+                  // Use option.value (id) so cmdk passes correct value; option.label can break selection.
                   disabled={option.disabled}
                   onSelect={() => {
                     if (option.disabled) return;

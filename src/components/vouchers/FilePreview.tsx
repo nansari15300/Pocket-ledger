@@ -30,6 +30,8 @@ interface FilePreviewProps {
   disabled?: boolean; // Make preview non-clickable
   /** Firebase Storage path (e.g. companies/xxx/unassigned/yyy.pdf). When set, PDF thumbnail is loaded via SDK to avoid CORS/fetch failures. */
   storagePath?: string;
+  /** object-contain = full image visible at best quality; object-cover = crop to fill (default). */
+  objectFit?: "cover" | "contain";
 }
 
 const getCleanName = (name: string) => {
@@ -50,6 +52,7 @@ export function FilePreview({
   className,
   disabled = false,
   storagePath,
+  objectFit = "cover",
 }: FilePreviewProps) {
   
   const [fileInfo, setFileInfo] = useState<{
@@ -241,7 +244,7 @@ export function FilePreview({
             alt={fileInfo.name} 
             fill 
             sizes={`${size}px`} 
-            className="object-cover" 
+            className={objectFit === "contain" ? "object-contain" : "object-cover"} 
             unoptimized 
           />
         );
@@ -254,7 +257,7 @@ export function FilePreview({
               alt={fileInfo.name} 
               fill 
               sizes={`${size}px`} 
-              className="object-cover" 
+              className={objectFit === "contain" ? "object-contain" : "object-cover"} 
               unoptimized 
             />
           );
@@ -295,7 +298,8 @@ export function FilePreview({
                   e.stopPropagation();
                   onRemove();
                 }}
-                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+                onPointerDown={(e) => e.stopPropagation()}
+                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1.5 shadow-lg z-[100] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-auto min-w-[28px] min-h-[28px] flex items-center justify-center"
             >
                 <Trash2 className="h-3.5 w-3.5" />
             </button>

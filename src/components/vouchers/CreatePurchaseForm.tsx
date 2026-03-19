@@ -107,7 +107,8 @@ const fileSchema = z.object({
 
 const lineItemSchema = z.object({
   type: z.enum(["item", "service"]),
-  itemId: z.string().min(1, "Item/Service is required."),
+  // itemId optional: user can save with just Qty + Rate (free-form line)
+  itemId: z.string().optional(),
   quantity: z.coerce.number().min(0, "Quantity must be positive."),
   rate: z.coerce.number().min(0, "Rate must be positive."),
   unit: z.string().optional(),
@@ -335,6 +336,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         .map((p: any) => ({ value: p.id, label: p.name })),
     [expenseAccounts, expenseGroupIds]
   );
+  // All unique units from all items – used when no item selected (creatable unit dropdown)
+  const allCompanyUnits = useMemo(() => {
+    const units = new Set<string>();
+    (items || []).forEach((item: any) => {
+      const convs = (item.unitConversions || []) as { fromUnit?: string; toUnit?: string }[];
+      convs.forEach((uc) => {
+        if (uc.fromUnit) units.add(uc.fromUnit);
+        if (uc.toUnit) units.add(uc.toUnit);
+      });
+      const ob = item.openingBalanceUnit;
+      if (ob) units.add(ob);
+    });
+    return Array.from(units).sort();
+  }, [items]);
 
   const voucherIdForLinks = voucher?.id ?? savedVoucherId;
   // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
@@ -514,17 +529,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     };
   }, [companyId]);
 
+  // Voucher reset: only reset when editing existing (voucher.id); new voucher must NOT reset on type (isFormDirty)
   useEffect(() => {
-    if (voucher) {
-      const vid = voucher.id;
-      const isSameVoucher = lastResetVoucherIdRef.current === vid;
-      if (vid && isSameVoucher && isFormDirty) return;
-      if (vid) lastResetVoucherIdRef.current = vid;
+    if (voucher?.id) {
+      const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
+      if (isSameVoucher && isFormDirty) return;
+      lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
+      }
+    } else if (voucher) {
+      // New voucher with initial data – don't reset (would wipe user input on every keystroke)
+      lastResetVoucherIdRef.current = null;
+      setSavedVoucherId(null);
+      if (voucher.partyId != null) form.setValue("partyId", voucher.partyId);
+      if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
+      const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+      if (Array.isArray(urlsToSet)) {
+        setFiles(urlsToSet);
+        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
       }
     } else {
       lastResetVoucherIdRef.current = null;
@@ -1555,12 +1581,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                       );
 
+                      // When item selected: use item's units; else use all company units (creatable)
                       const unitOptions =
-                        (selectedItem?.unitConversions as any[])?.flatMap((uc) => [
-                          uc.fromUnit,
-                          uc.toUnit,
-                        ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
-                        const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
+                        selectedItem
+                          ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
+                          : allCompanyUnits;
+                        // New voucher: never lock item fields; existing: lock when payment linked
+                        const itemFieldsDisabled = (voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false;
 
                       return (
                         <div key={line.id} className="border-t px-[2px] py-2 space-y-2">
@@ -1662,31 +1689,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               render={({ field }: any) => (
                                 <FormItem>
                                   <FormLabel className="text-xs">Unit</FormLabel>
-                                  <Select
-                                    onValueChange={(value) => {
-                                      field.onChange(value);
-                                      const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
-                                      if (sel) {
-                                        const newRate = getUnitBasedPrice(sel, value, 'purchase');
-                                        form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
-                                      }
-                                    }}
-                                    value={field.value}
-                                    disabled={itemFieldsDisabled}
-                                  >
-                                    <FormControl>
-                                      <SelectTrigger className="h-9 text-xs">
-                                        <SelectValue placeholder="Unit" />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      {unitOptions.map((u) => (
-                                        <SelectItem key={u} value={u}>
-                                          {u}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                  <FormControl>
+                                    <div className="[&_button]:h-9 [&_button]:text-xs">
+                                      <Combobox
+                                        options={[
+                                          ...unitOptions.map((u) => ({ value: u, label: u })),
+                                          ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                        ]}
+                                        value={field.value}
+                                        disabled={itemFieldsDisabled}
+                                        onChange={(val, newName) => {
+                                          const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                          field.onChange(unitVal);
+                                          const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
+                                          if (sel && unitVal) {
+                                            const newRate = getUnitBasedPrice(sel, unitVal, 'purchase');
+                                            form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
+                                          }
+                                        }}
+                                        placeholder="Unit"
+                                        addNewLabel="+ Add unit"
+                                      />
+                                    </div>
+                                  </FormControl>
                                 </FormItem>
                               )}
                             />
@@ -1809,7 +1834,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={hasItemEditLock || deleteDisabledWhenLinked}
+                        disabled={(voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false}
                         onClick={() =>
                           append({
                             type: itemType,
@@ -1860,13 +1885,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         const selectedItem = allProcessedItems.find(
                           (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                         );
-
+                        // When item selected: use item's units; else use all company units (creatable)
                         const unitOptions =
-                          (selectedItem?.unitConversions as any[])?.flatMap((uc) => [
-                            uc.fromUnit,
-                            uc.toUnit,
-                          ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
-                        const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
+                          selectedItem
+                            ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
+                            : allCompanyUnits;
+                        // New voucher: never lock item fields; existing: lock when payment linked
+                        const itemFieldsDisabled = (voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false;
 
                         return (
                           <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
@@ -1929,31 +1954,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.unit`}
                             render={({ field }: any) => (
                               <FormItem className="w-full">
-                                <Select
-                                  onValueChange={(value) => {
-                                    field.onChange(value);
-                                     const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
-                                      if (sel) {
-                                        const newRate = getUnitBasedPrice(sel, value, 'purchase');
-                                        form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
-                                      }
-                                  }}
-                                  value={field.value}
-                                  disabled={itemFieldsDisabled}
-                                >
-                                  <FormControl>
-                                    <SelectTrigger className={FLAT_SELECT_TRIGGER}>
-                                      <SelectValue placeholder="Unit" />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    {unitOptions.map((u) => (
-                                      <SelectItem key={u} value={u}>
-                                        {u}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                <FormControl>
+                                  <div className="[&_button]:h-9 [&_button]:text-xs">
+                                    <Combobox
+                                      options={[
+                                        ...unitOptions.map((u) => ({ value: u, label: u })),
+                                        ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                      ]}
+                                      value={field.value}
+                                      disabled={itemFieldsDisabled}
+                                      onChange={(val, newName) => {
+                                        const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                        field.onChange(unitVal);
+                                        const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
+                                        if (sel && unitVal) {
+                                          const newRate = getUnitBasedPrice(sel, unitVal, 'purchase');
+                                          form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
+                                        }
+                                      }}
+                                      placeholder="Unit"
+                                      addNewLabel="+ Add unit"
+                                    />
+                                  </div>
+                                </FormControl>
                               </FormItem>
                             )}
                           />
@@ -2095,7 +2118,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           type="button"
                           variant="outline"
                           size="sm"
-                          disabled={hasItemEditLock}
+                          disabled={(voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false}
                           onClick={() =>
                             append({
                               type: itemType,
@@ -2219,13 +2242,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem>
                       <FormLabel className="text-sm">Attach Files</FormLabel>
                       <RestrictedFileUploader>
-                        {/* When linked: add/remove disabled; existing files stay clickable to open */}
+                        {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="grid grid-cols-3 gap-2 px-[2px]">
                           {files.map((file, index) => (
                             <FilePreview 
-                              key={index} 
+                              key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
-                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
                                 "h-16"
@@ -2478,13 +2501,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       <RestrictedFileUploader>
-                        {/* When linked: add/remove disabled; existing files stay clickable to open */}
+                        {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
                             <FilePreview 
-                              key={index} 
+                              key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
-                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />
                           ))}

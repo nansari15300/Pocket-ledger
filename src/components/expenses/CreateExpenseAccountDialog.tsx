@@ -43,11 +43,14 @@ export function CreateExpenseAccountDialog({
   children,
   isOpen,
   onOpenChange,
+  defaultGroupType,
 }: {
   onExpenseAccountCreated: (id: string) => void;
   children?: React.ReactNode;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** When "income", default to first Income group (for Sale form Sales Account). */
+  defaultGroupType?: "income" | "expense";
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -77,20 +80,44 @@ export function CreateExpenseAccountDialog({
     return () => unsubscribe();
   }, [companyId, open]);
 
+  // Default group: when defaultGroupType=income (Sale form), use first Income group; else Ungrouped
+  const incomeGroupIds = useMemo(() => {
+    const isIncome = (g: any) => {
+      const id = String(g?.id || "").toLowerCase();
+      const parentId = String(g?.parentId || "").toLowerCase();
+      const type = String(g?.type || "").toLowerCase();
+      return parentId === "income" || type === "income" || id === "income" || id === "direct_income" || id === "indirect_income";
+    };
+    const groupMap = new Map(groups.map((g: any) => [g.id, g]));
+    const hasIncomeAncestor = (g: any, visited = new Set<string>()): boolean => {
+      if (!g || visited.has(g.id)) return false;
+      visited.add(g.id);
+      if (isIncome(g)) return true;
+      if (g.parentId && groupMap.has(g.parentId)) return hasIncomeAncestor(groupMap.get(g.parentId), visited);
+      return false;
+    };
+    return new Set(groups.filter((g: any) => hasIncomeAncestor(g)).map((g: any) => g.id));
+  }, [groups]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
       if (!companyId || !user?.uid || !open) return;
-      // Keep Income/Expense account create default on canonical Ungrouped bucket.
+      const current = form.getValues("groupId");
+      if (current) return;
+      if (defaultGroupType === "income" && incomeGroupIds.size > 0) {
+        const firstIncomeId = Array.from(incomeGroupIds)[0];
+        if (alive && firstIncomeId) form.setValue("groupId", firstIncomeId, { shouldDirty: false });
+        return;
+      }
       const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "expense");
       if (!alive) return;
-      const current = form.getValues("groupId");
-      if (!current) form.setValue("groupId", ungroupedId, { shouldDirty: false });
+      form.setValue("groupId", ungroupedId, { shouldDirty: false });
     })();
     return () => {
       alive = false;
     };
-  }, [companyId, user?.uid, open, form]);
+  }, [companyId, user?.uid, open, form, defaultGroupType, incomeGroupIds]);
 
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
@@ -163,7 +190,8 @@ export function CreateExpenseAccountDialog({
       const resolvedGroupId =
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "expense"));
       const selectedGroup = groups.find(g => g.id === resolvedGroupId);
-      const accountType = (selectedGroup as any)?.type || 'Expense'; // Default to Expense if not found
+      // Income group → type Income (for Sale form); else Expense
+      const accountType = (selectedGroup as any)?.type || (incomeGroupIds.has(resolvedGroupId) ? 'Income' : 'Expense');
 
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_accounts`), {
         name: values.name.trim(),
@@ -263,9 +291,11 @@ export function CreateExpenseAccountDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Create Expense Account</DialogTitle>
+          <DialogTitle>{defaultGroupType === "income" ? "Create Income Account" : "Create Expense Account"}</DialogTitle>
           <DialogDescription>
-            Add a new category for your expenses, like "Office Rent" or "Utilities".
+            {defaultGroupType === "income"
+              ? "Add a new income/sales account, like \"Sales\" or \"Service Income\"."
+              : "Add a new category for your expenses, like \"Office Rent\" or \"Utilities\"."}
           </DialogDescription>
         </DialogHeader>
         {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}

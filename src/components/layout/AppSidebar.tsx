@@ -47,6 +47,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -377,22 +378,33 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader>
         <div className="flex items-center gap-2">
-            {/* App icon: pocket + notebook/pen; zoomed so pic bada dikhe, white border kam */}
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/20">
-                <img
-                  src="/app-icon.png"
-                  alt="Pocket Ledger"
-                  className="h-full w-full scale-125 object-cover"
-                  onError={(e) => {
-                    e.currentTarget.style.display = "none";
-                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                    if (fallback) fallback.style.display = "flex";
-                  }}
-                />
-                <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-                  <Flame />
-                </span>
-            </div>
+            {/* App icon: hover pe full-size preview */}
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="shrink-0 rounded-lg border border-black cursor-pointer">
+                    <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md border-2 border-white bg-primary/20">
+                      <img
+                        src="/app-icon.png"
+                        alt="Pocket Ledger"
+                        className="h-full w-full scale-125 object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                          if (fallback) fallback.style.display = "flex";
+                        }}
+                      />
+                      <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+                        <Flame />
+                      </span>
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8} className="p-0 border overflow-hidden rounded-lg">
+                  <img src="/app-icon.png" alt="Pocket Ledger" className="block w-[512px] h-[512px] object-cover rounded-lg" />
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             {isOpen && <h1 className="font-headline text-xl font-semibold">Pocket Ledger</h1>}
         </div>
       </SidebarHeader>

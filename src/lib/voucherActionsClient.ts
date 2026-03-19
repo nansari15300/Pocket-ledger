@@ -310,7 +310,8 @@ export async function saveVoucher(
 
   const { enabled: historyEnabled, limit: historyLimit, fullBehavior } = await getEffectiveHistorySettings(companyId);
   const existingHistory = Array.isArray((oldData as any)?.history) ? (oldData as any).history : [];
-  if (fullBehavior === 'block_edit' && existingHistory.length >= historyLimit) {
+  // When history disabled: no restriction; when enabled + block_edit: block if at limit
+  if (historyEnabled && fullBehavior === 'block_edit' && existingHistory.length >= historyLimit) {
     throw new Error("Voucher history is full. Clear history in History dialog to edit and save changes.");
   }
   const now = new Date();

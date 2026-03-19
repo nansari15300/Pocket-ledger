@@ -107,7 +107,8 @@ const fileSchema = z.object({
 
 const lineItemSchema = z.object({
   type: z.enum(["item", "service"]),
-  itemId: z.string().min(1, "Item/Service is required."),
+  // itemId optional: user can save with just Qty + Rate (free-form line)
+  itemId: z.string().optional(),
   quantity: z.coerce.number().min(0, "Quantity must be positive."),
   rate: z.coerce.number().min(0, "Rate must be positive."),
   unit: z.string().optional(),
@@ -315,26 +316,53 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [partyId, processedParties]);
   
   const selectedTax = useMemo(() => processedTaxes.find((t) => t.id === lineItemTaxId), [lineItemTaxId, processedTaxes]);
+  // Income group IDs: groups under Income (traverse parentId chain up to income)
   const incomeGroupIds = useMemo(() => {
-    // Use group hierarchy (not account.type) so Sales Account list always maps to Income groups.
-    return new Set(
-      (processedExpenseGroups || [])
-        .filter((g: any) => {
-          const id = String(g.id || "").toLowerCase();
-          const parentId = String(g.parentId || "").toLowerCase();
-          const type = String(g.type || "").toLowerCase();
-          return parentId === "income" || type === "income" || id === "direct_income" || id === "indirect_income";
-        })
-        .map((g: any) => g.id)
-    );
+    const groups = processedExpenseGroups || [];
+    const groupMap = new Map(groups.map((g: any) => [g.id, g]));
+    const ids = new Set<string>();
+    const isIncomeRoot = (id: string) => {
+      const s = String(id || "").toLowerCase();
+      return s === "income" || s === "direct_income" || s === "indirect_income";
+    };
+    const hasIncomeAncestor = (g: any, visited = new Set<string>()): boolean => {
+      if (!g || visited.has(g.id)) return false;
+      visited.add(g.id);
+      const parentId = String(g.parentId || "").toLowerCase();
+      const type = String(g.type || "").toLowerCase();
+      if (isIncomeRoot(g.id) || parentId === "income" || type === "income") return true;
+      if (g.parentId && groupMap.has(g.parentId)) return hasIncomeAncestor(groupMap.get(g.parentId), visited);
+      return false;
+    };
+    groups.forEach((g: any) => {
+      if (hasIncomeAncestor(g)) ids.add(g.id);
+    });
+    return ids;
   }, [processedExpenseGroups]);
-  const salesAccountOptions = useMemo(
-    () =>
-      expenseAccounts
-        .filter((a: any) => incomeGroupIds.has(a.groupId))
-        .map((p: any) => ({ value: p.id, label: p.name })),
-    [expenseAccounts, incomeGroupIds]
-  );
+  const salesAccountOptions = useMemo(() => {
+    const opts = expenseAccounts
+      .filter((a: any) => incomeGroupIds.has(a.groupId) || (a as any).type === "Income")
+      .map((p: any) => ({ value: p.id, label: p.name }));
+    // Only add sales_account fallback when list is empty (no income accounts yet)
+    if (opts.length === 0) {
+      return [{ value: "sales_account", label: "Sales Account" }];
+    }
+    return opts;
+  }, [expenseAccounts, incomeGroupIds]);
+  // All unique units from all items – used when no item selected (creatable unit dropdown)
+  const allCompanyUnits = useMemo(() => {
+    const units = new Set<string>();
+    (items || []).forEach((item: any) => {
+      const convs = (item.unitConversions || []) as { fromUnit?: string; toUnit?: string }[];
+      convs.forEach((uc) => {
+        if (uc.fromUnit) units.add(uc.fromUnit);
+        if (uc.toUnit) units.add(uc.toUnit);
+      });
+      const ob = item.openingBalanceUnit;
+      if (ob) units.add(ob);
+    });
+    return Array.from(units).sort();
+  }, [items]);
 
   const voucherIdForLinks = voucher?.id ?? savedVoucherId;
   // Incoming: who allocated to us. Outgoing: we allocated to Purchase (sale return). When pending is set, show only pending so unlink reflects immediately.
@@ -1562,11 +1590,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                   );
 
+                  // When item selected: use item's units; else use all company units (creatable)
                   const unitOptions =
-                    (selectedItem?.unitConversions as any[])?.flatMap((uc) => [
-                      uc.fromUnit,
-                      uc.toUnit,
-                    ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
+                    selectedItem
+                      ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
+                      : allCompanyUnits;
                   const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 
                   return (
@@ -1671,31 +1699,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               render={({ field }: any) => (
                                 <FormItem>
                                   <FormLabel className="text-xs">Unit</FormLabel>
-                                  <Select
-                                    onValueChange={(value) => {
-                                      field.onChange(value);
-                                      const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
-                                      if (sel) {
-                                        const newRate = getUnitBasedPrice(sel, value, 'sale');
-                                        form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
-                                      }
-                                    }}
-                                    value={field.value}
-                                    disabled={itemFieldsDisabled}
-                                  >
-                                    <FormControl>
-                                      <SelectTrigger className="h-9 text-xs">
-                                        <SelectValue placeholder="Unit" />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      {unitOptions?.map((u: string) => (
-                                        <SelectItem key={u} value={u}>
-                                          {u}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                  <FormControl>
+                                    <div className="[&_button]:h-9 [&_button]:text-xs">
+                                      <Combobox
+                                        options={[
+                                          ...unitOptions.map((u) => ({ value: u, label: u })),
+                                          ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                        ]}
+                                        value={field.value}
+                                        disabled={itemFieldsDisabled}
+                                        onChange={(val, newName) => {
+                                          const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                          field.onChange(unitVal);
+                                          const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
+                                          if (sel && unitVal) {
+                                            const newRate = getUnitBasedPrice(sel, unitVal, 'sale');
+                                            form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
+                                          }
+                                        }}
+                                        placeholder="Unit"
+                                        addNewLabel="+ Add unit"
+                                      />
+                                    </div>
+                                  </FormControl>
                                 </FormItem>
                               )}
                             />
@@ -1872,31 +1898,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.unit`}
                             render={({ field }: any) => (
                               <FormItem className="w-full">
-                                <Select
-                                  onValueChange={(value) => {
-                                    field.onChange(value);
-                                     const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
-                                      if (sel) {
-                                        const newRate = getUnitBasedPrice(sel, value, 'sale');
-                                        form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
-                                      }
-                                  }}
-                                  value={field.value}
-                                  disabled={itemFieldsDisabled}
-                                >
-                                  <FormControl>
-                                    <SelectTrigger className={FLAT_SELECT_TRIGGER}>
-                                      <SelectValue placeholder="Unit" />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    {unitOptions.map((u) => (
-                                      <SelectItem key={u} value={u}>
-                                        {u}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                <FormControl>
+                                  <div className="[&_button]:h-9 [&_button]:text-xs">
+                                    <Combobox
+                                      options={[
+                                        ...unitOptions.map((u) => ({ value: u, label: u })),
+                                        ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                      ]}
+                                      value={field.value}
+                                      disabled={itemFieldsDisabled}
+                                      onChange={(val, newName) => {
+                                        const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                        field.onChange(unitVal);
+                                        const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
+                                        if (sel && unitVal) {
+                                          const newRate = getUnitBasedPrice(sel, unitVal, 'sale');
+                                          form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
+                                        }
+                                      }}
+                                      placeholder="Unit"
+                                      addNewLabel="+ Add unit"
+                                    />
+                                  </div>
+                                </FormControl>
                               </FormItem>
                             )}
                           />
@@ -2090,12 +2114,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         const selectedItem = allProcessedItems.find(
                           (i) => i.id === form.getValues(`lineItems.${index}.itemId`)
                         );
-
+                        // When item selected: use item's units; else use all company units (creatable)
                         const unitOptions =
-                          (selectedItem?.unitConversions as any[])?.flatMap((uc) => [
-                            uc.fromUnit,
-                            uc.toUnit,
-                          ])?.filter((v, i, a) => a.indexOf(v) === i && v) || [];
+                          selectedItem
+                            ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
+                            : allCompanyUnits;
                         // When payment linked, lock all item row fields (Item, Qty, Unit, Rate, Tax) in this desktop table view too.
                         const itemFieldsDisabled = hasItemEditLock || deleteDisabledWhenLinked;
 
@@ -2160,31 +2183,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 name={`lineItems.${index}.unit`}
                                 render={({ field }: any) => (
                                   <FormItem className="w-full">
-                                    <Select
-                                      onValueChange={(value) => {
-                                        field.onChange(value);
-                                         const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
-                                          if (sel) {
-                                            const newRate = getUnitBasedPrice(sel, value, 'sale');
-                                            form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
-                                          }
-                                      }}
-                                      value={field.value}
-                                      disabled={itemFieldsDisabled}
-                                    >
-                                      <FormControl>
-                                        <SelectTrigger className={FLAT_SELECT_TRIGGER}>
-                                          <SelectValue placeholder="Unit" />
-                                        </SelectTrigger>
-                                      </FormControl>
-                                      <SelectContent>
-                                        {unitOptions.map((u) => (
-                                          <SelectItem key={u} value={u}>
-                                            {u}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                    <FormControl>
+                                      <div className="[&_button]:h-9 [&_button]:text-xs">
+                                        <Combobox
+                                          options={[
+                                            ...unitOptions.map((u) => ({ value: u, label: u })),
+                                            ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                          ]}
+                                          value={field.value}
+                                          disabled={itemFieldsDisabled}
+                                          onChange={(val, newName) => {
+                                            const unitVal = val === "add-new" ? (newName || "").trim() : val;
+                                            field.onChange(unitVal);
+                                            const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
+                                            if (sel && unitVal) {
+                                              const newRate = getUnitBasedPrice(sel, unitVal, 'sale');
+                                              form.setValue(`lineItems.${index}.rate`, newRate, { shouldDirty: true });
+                                            }
+                                          }}
+                                          placeholder="Unit"
+                                          addNewLabel="+ Add unit"
+                                        />
+                                      </div>
+                                    </FormControl>
                                   </FormItem>
                                 )}
                               />
@@ -3011,6 +3032,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onExpenseAccountCreated={(id) => form.setValue("salesAccountId", id)}
         isOpen={isCreateExpenseAccountOpen}
         onOpenChange={setIsCreateExpenseAccountOpen}
+        defaultGroupType="income"
       />
       {partyId && (
         <LinkAdvancesToVoucherDialog

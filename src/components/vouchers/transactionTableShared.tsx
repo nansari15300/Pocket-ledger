@@ -11,6 +11,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { FilePreview } from "@/components/vouchers/FilePreview";
 import { differenceInDays } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
@@ -638,9 +645,47 @@ export const TransactionRow = React.memo(
         )}
         {showCol("user") && context !== "note" && <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined}>{displayName}</TableCell>}
         {showFileColumn && (
-          <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")}>
+          <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
-              <CheckCircle className="h-4 w-4 text-green-600 inline" aria-label="Has attachment" />
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex cursor-help">
+                      <CheckCircle className="h-4 w-4 text-green-600" aria-label="Has attachment" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8} className="p-0 border bg-background shadow-lg z-[9999]">
+                    <div className="max-h-[85vh] overflow-y-auto rounded-lg bg-background">
+                      <div className="flex flex-col gap-3 p-2">
+                        {(transaction.fileUrls as string[]).map((url, idx) => {
+                          const cleanUrl = String(url).split("?")[0].toLowerCase();
+                          const isImage = cleanUrl.match(/\.(jpe?g|png|gif|webp|bmp|svg)$/) || String(url).startsWith("data:image/");
+                          // Both image and PDF clickable – open in new tab; PDF was disabled before (cursor-not-allowed)
+                          const openInNewTab = () => window.open(url, "_blank", "noopener,noreferrer");
+                          return (
+                            <div key={idx} className="flex-shrink-0 w-[800px] min-h-[400px] rounded-lg overflow-hidden border bg-background flex items-center justify-center">
+                              {isImage ? (
+                                <img
+                                  src={url}
+                                  alt=""
+                                  className="max-w-full max-h-[75vh] w-auto h-auto object-contain cursor-pointer"
+                                  loading="eager"
+                                  onClick={openInNewTab}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(e) => e.key === "Enter" && openInNewTab()}
+                                />
+                              ) : (
+                                <FilePreview file={url} size={800} disabled={false} objectFit="contain" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ) : (
               "-"
             )}
@@ -905,6 +950,7 @@ export const TransactionRow = React.memo(
         }
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
         onClick={() => onRowSelect?.(transaction)}
+        onDoubleClick={() => onRowClick?.(transaction)}
         className={cn(
           "transaction-main-row min-h-[28px] cursor-pointer",
           isSpendWiseChild && "pl-6 text-sm [&>td]:py-1",
@@ -973,6 +1019,7 @@ export const TransactionRow = React.memo(
         role="button"
         tabIndex={-1}
         onClick={() => onRowSelect?.(transaction)}
+        onDoubleClick={() => onRowClick?.(transaction)}
         className={cn(
           "narration-row border-b cursor-pointer",
           isBillWise && "-mt-1.5",

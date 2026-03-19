@@ -32,6 +32,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Calendar as CalendarIcon, XCircle, UploadCloud, UserCircle, MoreVertical, Loader2, Trash2, Ruler, Search, Edit } from "lucide-react";
@@ -108,7 +109,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [selectedUserId, setSelectedUserId] = useState<string | "all">("all");
   const [selectedAccountType, setSelectedAccountType] = useState<string>("all");
   const [showAvatarsOnly, setShowAvatarsOnly] = useState(false);
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const router = useRouter();
   // Defer Radix Popover/Combobox until client mount to avoid hydration mismatch (aria-controls IDs differ on server vs client).
@@ -167,12 +168,21 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     return () => { cancelled = true; };
   }, [vouchers, userNames]);
   
-  // Dedupe by label: same user has docId and uid in userNames; show once like Unassigned.
+  // Company users only: owner + shared users (for dropdown filter).
+  const companyUserIds = useMemo(() => {
+    if (!company) return new Set<string>();
+    const ids = [company.ownerId, ...(company.sharedWith || []).map((u: any) => u?.uid).filter(Boolean)];
+    return new Set(ids);
+  }, [company]);
+
+  // Dedupe by label; show only company users in dropdown (not all signed-up users).
   const userOptions = useMemo(() => {
     const voucherUserIds = new Set(vouchers.flatMap((v) => [v.userId, (v as any).createdBy, (v as any).createdByUserId, (v as any).changedBy].filter(Boolean) as string[]));
     const byLabel = new Map<string, string>();
     for (const [id, name] of Object.entries(userNames)) {
       if (!name || name === 'Unknown User') continue;
+      // Include only company users (owner + shared) in dropdown
+      if (companyUserIds.size > 0 && !companyUserIds.has(id)) continue;
       const existing = byLabel.get(name);
       if (!existing) {
         byLabel.set(name, id);
@@ -181,7 +191,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
       }
     }
     return Array.from(byLabel.entries()).map(([label, value]) => ({ value, label }));
-  }, [userNames, vouchers]);
+  }, [userNames, vouchers, companyUserIds]);
 
   const allEntityOptions = useMemo(() => {
     const options = [
@@ -513,6 +523,11 @@ function getUserLabelFromDoc(data: any): string | null {
 function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChange }: { handleAttachToVoucher: any; previewSize: number; onSizeChange: any; }) {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  // Company users only: owner + shared (for user filter dropdown)
+  const companyUserIds = useMemo(() => {
+    if (!company) return new Set<string>();
+    return new Set([company.ownerId, ...(company.sharedWith || []).map((u: any) => u?.uid).filter(Boolean)]);
+  }, [company]);
   const { dateSystem, formatDate, formatDateBS } = useDate();
   // Render popover-driven controls only after mount to avoid Radix SSR/client id mismatch during hydration.
   const [isHydrated, setIsHydrated] = useState(false);
@@ -521,6 +536,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [fileToDelete, setFileToDelete] = useState<UnassignedFile | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [fileToRename, setFileToRename] = useState<UnassignedFile | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedUploaderId, setSelectedUploaderId] = useState<string | "all">("all");
 
@@ -608,6 +626,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const uploaderOptions = useMemo(() => {
     const uniqueNamesMap = new Map();
     unassignedFiles.forEach(file => {
+      // Include only company users (owner + shared) in dropdown
+      if (companyUserIds.size > 0 && !companyUserIds.has(file.uploadedBy)) return;
       // Fallback priority: resolved name -> email suffix (text after '@') -> unknown.
       const resolved = userNames[file.uploadedBy];
       const uploaderName = resolved && resolved !== "Unknown"
@@ -618,10 +638,19 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       }
     });
     return Array.from(uniqueNamesMap.values());
-  }, [unassignedFiles, userNames]);
+  }, [unassignedFiles, userNames, companyUserIds]);
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (!companyId || !user) return;
+  const onDrop = useCallback(async (acceptedFiles: File[], rejectedFiles?: any[]) => {
+    if (!companyId || !user) {
+      toast.error("Cannot upload", { description: "Please select a company and ensure you are signed in." });
+      return;
+    }
+    if (!acceptedFiles?.length) {
+      if (rejectedFiles?.length) {
+        toast.error("Invalid files", { description: "Some files could not be accepted. Try images or PDFs." });
+      }
+      return;
+    }
 
     const newUploadingFiles: UploadingFile[] = acceptedFiles.map(file => ({
       id: `${file.name}-${file.size}-${Math.random()}`,
@@ -645,6 +674,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       }
     } catch (e) {
       setUploadingFiles(prev => prev.filter(p => !newUploadingFiles.some(n => n.id === p.id)));
+      toast.error("Upload failed", { description: "Could not process files. Please try again." });
       return;
     }
 
@@ -678,6 +708,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
             size: compressedFile.size, uploadedAt: serverTimestamp(), uploadedBy: user.uid, status: 'FREE'
           });
           batchOperationsCount++;
+        } else {
+          toast.error(`Upload failed: ${uploadingFile.name}`, { description: (uploadResult as any).error || "Upload failed." });
         }
       } catch (error) {
         const message = error instanceof Error && error.message?.includes("fetch")
@@ -698,11 +730,38 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       } else {
         toast.success("Upload complete", { description: `${batchOperationsCount} file(s) uploaded.` });
       }
+    } else if (newUploadingFiles.length > 0) {
+      toast.error("Upload failed", { description: "Could not upload files. Check your connection and try again." });
     }
   }, [companyId, user, company?.name, company?.planId]);
   
   const { getRootProps, getInputProps } = useDropzone({ onDrop });
   
+  useEffect(() => {
+    if (fileToRename) setRenameValue(getCleanName(fileToRename.name));
+    else setRenameValue("");
+  }, [fileToRename]);
+
+  const handleRenameFile = async () => {
+    if (!fileToRename || !companyId || !renameValue.trim()) return;
+    const newName = renameValue.trim();
+    if (newName === getCleanName(fileToRename.name)) {
+      setFileToRename(null);
+      return;
+    }
+    setIsRenaming(true);
+    try {
+      await updateDoc(doc(firestore, `companies/${companyId}/unassigned_documents`, fileToRename.id), { name: newName });
+      toast.success("File renamed successfully");
+      setFileToRename(null);
+    } catch (error) {
+      console.error("Error renaming file:", error);
+      toast.error("Failed to rename file");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
   const handleDeleteFile = async () => {
     if (!fileToDelete || !companyId) return;
     setIsDeleting(true);
@@ -777,7 +836,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
 
     <div className="flex-1 min-w-[200px] max-w-[300px]">
       {isHydrated ? (
-        <Combobox options={uploaderOptions} value={selectedUploaderId} onChange={setSelectedUploaderId} placeholder="Filter by user"/>
+        <Combobox options={[{ value: 'all', label: 'All Users' }, ...uploaderOptions]} value={selectedUploaderId} onChange={setSelectedUploaderId} placeholder="Filter by user"/>
       ) : (
         // Keep SSR/client first paint identical while hydration completes.
         <Button type="button" variant="outline" className="h-10 w-full justify-start text-muted-foreground" disabled>
@@ -858,6 +917,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                                     </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onClick={() => setFileToRename(file)}>
+                                        <Edit className="h-3.5 w-3.5 mr-2" /> Rename
+                                    </DropdownMenuItem>
                                     {ATTACHABLE_VOUCHER_TYPES.map((type) => (
                                         <DropdownMenuItem key={type.id} onClick={() => handleAttachToVoucher(type.id, file)}>Attach to {type.label}</DropdownMenuItem>
                                     ))}
@@ -896,6 +958,29 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog open={!!fileToRename} onOpenChange={(open) => !open && setFileToRename(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Rename file</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <Input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                placeholder="Enter new file name"
+                onKeyDown={(e) => e.key === "Enter" && handleRenameFile()}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setFileToRename(null)} disabled={isRenaming}>Cancel</Button>
+              <Button onClick={handleRenameFile} disabled={isRenaming || !renameValue.trim()}>
+                {isRenaming ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     </div>
   );
 }
@@ -910,9 +995,10 @@ function getCleanName(name: string) {
 const GALLERY_TABS = ['company-files', 'unassigned'] as const;
 type GalleryTab = (typeof GALLERY_TABS)[number];
 
+// Default unassigned when no tab in URL (app open, sidebar nav); refresh keeps current tab from URL
 function getTabFromSearchParams(searchParams: URLSearchParams): GalleryTab {
   const tab = searchParams.get('tab');
-  return tab === 'unassigned' ? 'unassigned' : 'company-files';
+  return tab === 'company-files' ? 'company-files' : 'unassigned';
 }
 
 function GalleryPageContent() {

@@ -331,6 +331,7 @@ function HeaderActions() {
   const [openPurchase, setOpenPurchase] = useState(false);
   const [openPaymentIn, setOpenPaymentIn] = useState(false);
   const [openPaymentOut, setOpenPaymentOut] = useState(false);
+  const [openJournal, setOpenJournal] = useState(false);
   const [openSalary, setOpenSalary] = useState(false);
 
   const buttonClass = "whitespace-nowrap flex-grow min-w-fit";
@@ -367,6 +368,13 @@ function HeaderActions() {
       <AddVoucherDialog defaultTab="payment_out" voucher={undefined} isOpen={openPaymentOut} onOpenChange={setOpenPaymentOut}>
         <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentOut(true)} data-theme-btn="payment-out">
           <ArrowLeft className="mr-1 h-4 w-4" /> Payment Out
+        </PermissionButton>
+      </AddVoucherDialog>
+
+      {/* Journal – opens AddVoucherDialog with journal tab */}
+      <AddVoucherDialog defaultTab="journal" voucher={undefined} isOpen={openJournal} onOpenChange={setOpenJournal}>
+        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenJournal(true)}>
+          <FileText className="mr-1 h-4 w-4" /> Journal
         </PermissionButton>
       </AddVoucherDialog>
 

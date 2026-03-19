@@ -95,8 +95,19 @@ import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAll
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
+// Entity filter: left of Account; All = show all, else filter account list by entity type
+const ENTITY_OPTIONS = [
+  { value: "", label: "All" },
+  { value: "party", label: "Party" },
+  { value: "staff", label: "Staff" },
+  { value: "account", label: "Bank/Cash" },
+  { value: "expense", label: "Expense" },
+  { value: "tax", label: "Tax" },
+] as const;
+
 const lineSchema = z.object({
   accountId: z.string().min(1, "Select an account"),
+  entityType: z.string().optional(), // UI filter: party|staff|account|expense|tax; empty = show all
   type: z.enum(["debit", "credit"]),
   amount: z.coerce.number().min(0, "Amount must be positive."),
   isAutoLine: z.boolean().optional(),
@@ -128,8 +139,8 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
             date: startOfDay(new Date()),
             narration: "",
             lines: [
-                { accountId: "", type: "debit" as const, amount: 0, isAutoLine: false },
-                { accountId: "", type: "credit" as const, amount: 0, isAutoLine: true },
+                { accountId: "", entityType: "", type: "debit" as const, amount: 0, isAutoLine: false },
+                { accountId: "", entityType: "", type: "credit" as const, amount: 0, isAutoLine: true },
             ],
             total: 0,
             files: [],
@@ -138,14 +149,15 @@ function getInitialFormValues(voucher?: any): JournalFormValues {
 
     const lines = (voucher.entries || []).map((entry: any, index: number) => ({
         accountId: entry.accountId,
+        entityType: "", // Will be derived from accountId when form loads
         type: entry.debit > 0 ? "debit" : "credit",
         amount: entry.debit > 0 ? entry.debit : entry.credit,
         isAutoLine: index === (voucher.entries || []).length - 1,
     }));
     
     if (lines.length < 2) {
-        lines.push({ accountId: "", type: "debit" as const, amount: 0, isAutoLine: false });
-        lines.push({ accountId: "", type: "credit" as const, amount: 0, isAutoLine: true });
+        lines.push({ accountId: "", entityType: "", type: "debit" as const, amount: 0, isAutoLine: false });
+        lines.push({ accountId: "", entityType: "", type: "credit" as const, amount: 0, isAutoLine: true });
     }
 
     return {
@@ -297,8 +309,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } catch (error) { console.error(error); }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
- useEffect(() => {
-    if (voucher) {
+  // Journal line options: Party, Staff, Bank/Cash, Expense, Tax – label=full, nameOnly=for dropdown when entity selected & trigger display
+  const allAccountsWithEntity = useMemo(() => {
+    const parts: { value: string; label: string; nameOnly: string; balance?: number; entityType: string }[] = [];
+    (processedPartiesForSelection || []).forEach((p: any) => parts.push({ value: p.id, label: `${p.name} (Party)`, nameOnly: p.name, balance: p.balance, entityType: "party" }));
+    (processedStaff || []).forEach((s: any) => parts.push({ value: s.id, label: `${s.name} (Staff)`, nameOnly: s.name, balance: s.balance, entityType: "staff" }));
+    (processedAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.accountName || a.name || "Account"} (Account)`, nameOnly: a.accountName || a.name || "Account", balance: a.balance, entityType: "account" }));
+    (expenseAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.name || "Expense"} (Expense)`, nameOnly: a.name || "Expense", balance: (a as any).balance, entityType: "expense" }));
+    (processedTaxes || []).forEach((t: any) => parts.push({ value: t.id, label: `${t.name || "Tax"} (Tax)`, nameOnly: t.name || "Tax", balance: (t as any).balance, entityType: "tax" }));
+    return parts.sort((a, b) => a.label.localeCompare(b.label));
+  }, [processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes]);
+  const allAccounts = useMemo(() => allAccountsWithEntity.map(({ value, label, balance }) => ({ value, label, balance })), [allAccountsWithEntity]);
+
+  useEffect(() => {
+    // Only reset form when editing an existing voucher (voucher.id exists). Add-new passes voucher with id: undefined – don't reset or we wipe user's account selection.
+    if (voucher?.id) {
         const vid = voucher.id;
         const isSameVoucher = lastResetVoucherIdRef.current === vid;
         if (vid && isSameVoucher && isFormDirty) return;
@@ -308,6 +333,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             initialValues.voucherNumber = "";
         }
         form.reset(initialValues);
+        // Derive entityType from accountId for each line (so Entity box shows correct value when account is pre-selected)
+        const lines = initialValues.lines || [];
+        lines.forEach((line: any, idx: number) => {
+          const accId = String(line?.accountId ?? "");
+          if (accId) {
+            const acc = allAccountsWithEntity.find((a) => a.value === accId);
+            if (acc?.entityType) {
+              form.setValue(`lines.${idx}.entityType`, acc.entityType, { shouldDirty: false });
+            }
+          }
+        });
         setSavedVoucherId(voucher.id);
         if(voucher.fileUrls) { setFiles(voucher.fileUrls); initialFilesRef.current = voucher.fileUrls; }
         if(voucher.unassignedFile) {
@@ -333,22 +369,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         setJournalAllocationsBySide({ debit: [], credit: [] });
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
     }
-}, [voucher, form, isEditingAndConverting, isFormDirty]);
+}, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
-  
   useEffect(() => {
     if (!isEditing || isEditingAndConverting) {
       fetchVoucherNumber();
     }
   }, [isEditing, isEditingAndConverting, fetchVoucherNumber, company]);
-
-  const allAccounts = useMemo(() => {
-    if (!processedPartiesForSelection || !processedStaff) return [];
-    return [
-      ...processedPartiesForSelection.map(p => ({ value: p.id, label: `${p.name} (Party)`, balance: p.balance })),
-      ...processedStaff.map(s => ({ value: s.id, label: `${s.name} (Staff)`, balance: s.balance })),
-    ].sort((a,b) => a.label.localeCompare(b.label));
-}, [processedPartiesForSelection, processedStaff]);
   // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -1608,6 +1635,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="space-y-4 px-[2px]">
                     {fields.map((line, index) => {
                       const accountId = form.watch(`lines.${index}.accountId`);
+                      const entityType = form.watch(`lines.${index}.entityType`) || "";
+                      // Entity=All: dropdown shows "Name (Entity)"; Entity selected: dropdown shows name only. Trigger always shows name only.
+                      const filteredAccounts = entityType
+                        ? allAccountsWithEntity.filter((a) => a.entityType === entityType).map((a) => ({ value: a.value, label: a.nameOnly, triggerLabel: a.nameOnly }))
+                        : allAccountsWithEntity.map((a) => ({ value: a.value, label: a.label, triggerLabel: a.nameOnly }));
                       const balance = allAccounts.find(a => a.value === accountId)?.balance;
                       const isLastRow = index === fields.length - 1;
                       const lineType = form.watch(`lines.${index}.type`);
@@ -1616,12 +1648,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div
                           key={line.id}
                           className={cn(
-                            "flex gap-[2px] items-start border px-[2px] py-2 rounded-md",
+                            "flex flex-wrap gap-[2px] items-start border px-[2px] py-2 rounded-md",
                             linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
                             selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
                           )}
                         >
-                          {/* Account */}
+                          {/* Entity – filter for Account; when account selected, entity auto-updates */}
+                          <FormField
+                            control={form.control}
+                            name={`lines.${index}.entityType`}
+                            render={({ field: entityField }: any) => (
+                              <FormItem className="w-[100px] min-w-0 shrink-0">
+                                <Select
+                                  value={entityField.value || "__all__"}
+                                  onValueChange={(v) => {
+                                    const val = v === "__all__" ? "" : v;
+                                    entityField.onChange(val);
+                                    const accId = form.getValues(`lines.${index}.accountId`);
+                                    if (accId && val) {
+                                      const acc = allAccountsWithEntity.find((a) => a.value === accId);
+                                      if (acc && acc.entityType !== val) form.setValue(`lines.${index}.accountId`, "", { shouldDirty: true });
+                                    }
+                                  }}
+                                  disabled={!isFormEditing || deleteDisabledWhenLinked}
+                                >
+                                  <FormControl>
+                                    <SelectTrigger className="h-9 text-xs">
+                                      <SelectValue placeholder="Entity" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    {ENTITY_OPTIONS.map((o) => (
+                                      <SelectItem key={o.value || "all"} value={o.value || "__all__"}>{o.label}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </FormItem>
+                            )}
+                          />
+                          {/* Account – filtered by Entity; on select, entity auto-updates */}
                           <FormField
                             control={form.control}
                             name={`lines.${index}.accountId`}
@@ -1629,25 +1694,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               <FormItem className="flex-1 min-w-0 overflow-hidden">
                                 <div className="min-w-0 w-full overflow-hidden [&_button]:h-9 [&_button]:text-xs">
                                   <Combobox
-                                    // Match row color: debit=dim green, credit=dim pink.
                                     triggerClassName={cn(
                                       "w-full min-w-0 h-9",
                                       linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
                                     )}
-                                    options={allAccounts.map(a => ({ value: a.value, label: a.label }))}
+                                    options={filteredAccounts}
                                     value={field.value}
                                     onChange={(value, newName) => {
                                       if (value === "add-new-party") {
-                                        // Remember source row so newly created party binds here, not as extra row.
                                         setPendingCreateLineIndex(index);
                                         handleCreateNew("party", newName);
                                       }
                                       else if (value === "add-new-staff") {
-                                        // Remember source row so newly created staff binds here, not as extra row.
                                         setPendingCreateLineIndex(index);
                                         handleCreateNew("staff", newName);
                                       }
-                                      else field.onChange(value);
+                                      else {
+                                        field.onChange(value);
+                                        const acc = allAccountsWithEntity.find((a) => a.value === value);
+                                        if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
+                                      }
                                     }}
                                     placeholder="Select account"
                                     addNewLabels={[
@@ -1750,7 +1816,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <>
                   {/* Desktop: Journal Lines */}
                   <div className="space-y-4">
-                    <div className="grid grid-cols-[2fr_auto_auto_1fr_48px] gap-2 items-end">
+                    <div className="grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-end">
+                      <FormLabel>Entity</FormLabel>
                       <FormLabel>Account</FormLabel>
                       <div></div>
                       <div></div>
@@ -1760,6 +1827,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
                     {fields.map((line, index) => {
                       const accountId = form.watch(`lines.${index}.accountId`);
+                      const entityType = form.watch(`lines.${index}.entityType`) || "";
+                      // Entity=All: dropdown shows "Name (Entity)"; Entity selected: dropdown shows name only. Trigger always shows name only.
+                      const filteredAccounts = entityType
+                        ? allAccountsWithEntity.filter((a) => a.entityType === entityType).map((a) => ({ value: a.value, label: a.nameOnly, triggerLabel: a.nameOnly }))
+                        : allAccountsWithEntity.map((a) => ({ value: a.value, label: a.label, triggerLabel: a.nameOnly }));
                       const balance = allAccounts.find(a => a.value === accountId)?.balance;
                       const isLastRow = index === fields.length - 1;
                       const lineType = form.watch(`lines.${index}.type`);
@@ -1768,12 +1840,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div
                           key={line.id}
                           className={cn(
-                            "grid grid-cols-[2fr_auto_auto_1fr_48px] gap-2 items-start border p-2 rounded-md",
+                            "grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-start border p-2 rounded-md",
                             linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
                             selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
                           )}
                         >
-                          {/* Account */}
+                          {/* Entity – filter for Account; when account selected, entity auto-updates */}
+                          <FormField
+                            control={form.control}
+                            name={`lines.${index}.entityType`}
+                            render={({ field: entityField }: any) => (
+                              <FormItem>
+                                <Select
+                                  value={entityField.value || "__all__"}
+                                  onValueChange={(v) => {
+                                    const val = v === "__all__" ? "" : v;
+                                    entityField.onChange(val);
+                                    const accId = form.getValues(`lines.${index}.accountId`);
+                                    if (accId && val) {
+                                      const acc = allAccountsWithEntity.find((a) => a.value === accId);
+                                      if (acc && acc.entityType !== val) form.setValue(`lines.${index}.accountId`, "", { shouldDirty: true });
+                                    }
+                                  }}
+                                  disabled={!isFormEditing || deleteDisabledWhenLinked}
+                                >
+                                  <FormControl>
+                                    <SelectTrigger className="h-9">
+                                      <SelectValue placeholder="Entity" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    {ENTITY_OPTIONS.map((o) => (
+                                      <SelectItem key={o.value || "all"} value={o.value || "__all__"}>{o.label}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </FormItem>
+                            )}
+                          />
+                          {/* Account – filtered by Entity; on select, entity auto-updates */}
                           <FormField
                             control={form.control}
                             name={`lines.${index}.accountId`}
@@ -1784,20 +1889,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     "h-9",
                                     linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
                                   )}
-                                  options={allAccounts.map(a => ({ value: a.value, label: a.label }))}
+                                  options={filteredAccounts}
                                   value={field.value}
                                   onChange={(value, newName) => {
                                     if (value === "add-new-party") {
-                                      // Remember source row so newly created party binds here, not as extra row.
                                       setPendingCreateLineIndex(index);
                                       handleCreateNew("party", newName);
                                     }
                                     else if (value === "add-new-staff") {
-                                      // Remember source row so newly created staff binds here, not as extra row.
                                       setPendingCreateLineIndex(index);
                                       handleCreateNew("staff", newName);
                                     }
-                                    else field.onChange(value);
+                                    else {
+                                      field.onChange(value);
+                                      const acc = allAccountsWithEntity.find((a) => a.value === value);
+                                      if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
+                                    }
                                   }}
                                   placeholder="Select account"
                                   addNewLabels={[
