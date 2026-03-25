@@ -1,0 +1,8 @@
+kind: "AppHostingYaml"
+schemaVersion: "v1"
+
+environmentVariables:
+  - variable: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+    availability: ["BUILD", "RUNTIME"]
+  - variable: STRIPE_SECRET_KEY
+    availability: ["RUNTIME"]
