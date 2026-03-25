@@ -301,6 +301,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
   const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
+  // Effect deps mein isFormDirty mat rakho — file/field dirty hote hi effect dubara chal kar naye voucher template ka khali partyId set kar deta tha
+  const isFormDirtyRef = useRef(isFormDirty);
+  isFormDirtyRef.current = isFormDirty;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -544,7 +547,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     if (voucher?.id) {
       const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
-      if (isSameVoucher && isFormDirty) return;
+      if (isSameVoucher && isFormDirtyRef.current) return;
       lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
@@ -556,7 +559,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else if (voucher) {
       lastResetVoucherIdRef.current = null;
       setSavedVoucherId(null);
-      if (voucher.partyId != null) form.setValue("partyId", voucher.partyId);
+      // Sirf real prefill — template ka partyId "" hai; warna har dirty pe customer clear ho jata tha
+      if (voucher.partyId != null && String(voucher.partyId).trim() !== "") {
+        form.setValue("partyId", voucher.partyId);
+      }
       if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
@@ -566,7 +572,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else {
       lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form, isFormDirty]);
+  }, [voucher, form]);
 
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 
@@ -1247,7 +1253,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     <>
       <Form {...form}>
         <form onSubmit={handleFormSubmit} className="h-full flex flex-col min-w-0 w-full max-w-full">
-          <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
+          <ScrollArea className={cn("flex-1 min-h-0 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
             <div className={cn(
               "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               "px-0"

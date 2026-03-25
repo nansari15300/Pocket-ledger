@@ -15,6 +15,8 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { ItemGroup } from "@/components/items/types";
@@ -39,6 +41,7 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId } = useCompany();
+  const isMobile = useIsMobile();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -134,7 +137,7 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className={cnStaticMobileFullscreenDialog(isMobile, "flex flex-col sm:max-w-md")}>
           <DialogHeader>
             <DialogTitle>Create a New Item Group</DialogTitle>
             <DialogDescription>Add a new group to categorize your items.</DialogDescription>

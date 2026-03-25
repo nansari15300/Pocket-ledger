@@ -12,6 +12,7 @@ import { PrintLogoPreloader } from "@/components/PrintLogoPreloader";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
+import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 
 function PresenceManager() {
     usePresence();
@@ -24,6 +25,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AuthProvider>
             <FirebaseErrorListener />
             <CompanyProvider>
+                <CapacitorAndroidBackButton />
                 <PresenceManager />
                 <PrintLogoPreloader />
                 <DateProvider>

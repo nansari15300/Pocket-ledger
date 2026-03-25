@@ -27,11 +27,15 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc, collection, query, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { isSystemParentGroup } from "@/lib/system-groups";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
-import { isSystemParentGroup } from "@/lib/system-groups";
 
 function TaxPageContent() {
   const { user } = useAuth();
@@ -75,10 +79,17 @@ function TaxPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
-  
+  const useQueryNav = useMasterDetailQueryNav();
+
   const [activeView, setActiveView] = useState("taxes");
   const { selected, setSelected } = useResponsiveListLayout<Tax | TaxGroup>(`tax_view_${activeView}`);
   const isInitialMount = useRef(true);
+
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("tax"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -89,10 +100,17 @@ function TaxPageContent() {
 
   const selectedTax = activeView === 'taxes' ? selected as Tax : null;
   const selectedGroup = activeView === 'groups' ? selected as TaxGroup : null;
+  useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroup?.id ?? null);
   
   const processedTaxGroups = useMemo(() => {
-    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
-    const baseGroups = initialProcessedTaxGroups.filter((g) => (g as any).isAutoUngrouped !== true);
+    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
+    const baseGroups = initialProcessedTaxGroups.filter((g) => {
+      const anyG = g as any;
+      if (anyG.isAutoUngrouped === true) return false;
+      if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
+      if (isSystemParentGroup("tax_groups", anyG.id)) return false;
+      return true;
+    });
     // Show Ungrouped row only when at least one tax is in the Ungrouped bucket.
     const ungrouped = processedTaxes.filter((p: any) => !p.groupId || p.groupId === "ungrouped_tax");
     if (ungrouped.length > 0) {
@@ -206,16 +224,13 @@ function TaxPageContent() {
   }, [activeView, processedTaxes, processedTaxGroups]);
 
   const handleSelect = (item: Tax | TaxGroup) => {
-    if (isMobile) {
+    if (useQueryNav) {
+      // Static export ke liye query params – /tax/[id] path refresh/redirect de sakta hai
       if ('rate' in item) {
-        router.push(`/tax/${item.id}`);
-      } else if (item.id === 'ungrouped') {
-        router.push('/tax?view=groups');
-      } else {
-        router.push(`/tax/group/${item.id}`);
-      }
+        router.push(`/tax?selected=${item.id}`);
+      } else router.push(`/tax?view=groups&selected=${item.id}`);
     } else {
-      setSelected(item);
+        setSelected(item);
     }
   };
 
@@ -230,7 +245,11 @@ function TaxPageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (taxItem) setActiveView("taxes");
     if (item) setSelected(item);
-    router.replace("/tax", { scroll: false });
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/tax?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/tax?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedTaxes, processedTaxGroups, setSelected, setActiveView, router]);
 
   const taxesForSelectedGroup = useMemo(() => {
@@ -300,7 +319,7 @@ function TaxPageContent() {
                 <span>Tax ({processedTaxes.length})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxList taxes={processedTaxes} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} />
+                <TaxList taxes={processedTaxes} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
               </div>
             </>
         ) : (
@@ -310,7 +329,7 @@ function TaxPageContent() {
                 <span>Groups ({filteredGroupCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxGroupList groups={processedTaxGroups} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByTaxGroupId} />
+                <TaxGroupList groups={processedTaxGroups} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByTaxGroupId} getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined} />
               </div>
             </>
         )}
@@ -352,6 +371,8 @@ function TaxPageContent() {
       detailView={detailView}
       isMobile={isMobile}
       mobileListOnly={true}
+      hasSelectedItem={!!selected}
+      onBackToList={onBackToList}
     />
   );
 }

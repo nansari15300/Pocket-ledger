@@ -1,12 +1,12 @@
 
-'use server';
+/* No 'use server' - static export compatible */
 
 /**
  * @fileOverview Securely manages payment gateway API keys using Firebase Firestore.
+ * Plain async helpers (no Genkit) so admin UI and API routes can import without bundling Node-only AI SDK code in the browser.
  */
 
-import { ai } from '@/ai/genkit';
-import { z } from 'genkit';
+import { z } from 'zod';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { firestore } from '@/lib/firebase';
 
@@ -21,31 +21,19 @@ export type GatewayKeys = z.infer<typeof GatewayKeysSchema>;
 
 const keysDocRef = doc(firestore, 'app_settings', 'payment_gateways');
 
-export const getGatewayKeys = ai.defineFlow(
-  {
-    name: 'getGatewayKeys',
-    outputSchema: GatewayKeysSchema,
-  },
-  async (): Promise<GatewayKeys> => {
-    try {
-        const docSnap = await getDoc(keysDocRef);
-        if (docSnap.exists()) {
-            return docSnap.data() as GatewayKeys;
-        }
-        return {};
-    } catch (e) {
-        console.error("Error fetching gateway keys:", e);
-        return {};
+export async function getGatewayKeys(): Promise<GatewayKeys> {
+  try {
+    const docSnap = await getDoc(keysDocRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as GatewayKeys;
     }
+    return {};
+  } catch (e) {
+    console.error('Error fetching gateway keys:', e);
+    return {};
   }
-);
+}
 
-export const updateGatewayKeys = ai.defineFlow(
-  {
-    name: 'updateGatewayKeys',
-    inputSchema: GatewayKeysSchema,
-  },
-  async (keys: GatewayKeys): Promise<void> => {
-    await setDoc(keysDocRef, keys, { merge: true });
-  }
-);
+export async function updateGatewayKeys(keys: GatewayKeys): Promise<void> {
+  await setDoc(keysDocRef, keys, { merge: true });
+}

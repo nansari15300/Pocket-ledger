@@ -1,0 +1,110 @@
+/**
+ * Static build for Capacitor APK.
+ * Temporarily removes app/api so Next.js static export succeeds
+ * (API routes are not supported with output: 'export').
+ */
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+
+const root = path.join(__dirname, "..");
+const apiPath = path.join(root, "src", "app", "api");
+const apiBakPath = path.join(root, ".build-static-bak", "api");
+const adminPath = path.join(root, "src", "app", "(admin)");
+const adminBakPath = path.join(root, ".build-static-bak", "admin");
+const adminComponentsPath = path.join(root, "src", "components", "admin");
+const adminComponentsBakPath = path.join(root, ".build-static-bak", "admin-components");
+const deleteCompanyPath = path.join(root, "src", "lib", "actions", "deleteCompanyAction.ts");
+const deleteCompanyBakPath = path.join(root, ".build-static-bak", "deleteCompanyAction.ts");
+
+function copyDir(src, dest) {
+  if (!fs.existsSync(src)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const name of fs.readdirSync(src)) {
+    const s = path.join(src, name);
+    const d = path.join(dest, name);
+    if (fs.statSync(s).isDirectory()) copyDir(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+function rmDir(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name);
+    if (fs.statSync(p).isDirectory()) rmDir(p);
+    else fs.unlinkSync(p);
+  }
+  fs.rmdirSync(dir);
+}
+
+try {
+  if (fs.existsSync(apiPath)) {
+    fs.mkdirSync(path.dirname(apiBakPath), { recursive: true });
+    copyDir(apiPath, apiBakPath);
+    rmDir(apiPath);
+    console.log("[build-static] Removed api (backup in .build-static-bak)");
+  }
+  if (fs.existsSync(adminPath)) {
+    fs.mkdirSync(path.dirname(adminBakPath), { recursive: true });
+    copyDir(adminPath, adminBakPath);
+    rmDir(adminPath);
+    console.log("[build-static] Removed (admin) (backup in .build-static-bak)");
+  }
+  if (fs.existsSync(adminComponentsPath)) {
+    fs.mkdirSync(path.dirname(adminComponentsBakPath), { recursive: true });
+    copyDir(adminComponentsPath, adminComponentsBakPath);
+    rmDir(adminComponentsPath);
+    console.log("[build-static] Removed components/admin (backup in .build-static-bak)");
+  }
+  if (fs.existsSync(deleteCompanyPath)) {
+    fs.mkdirSync(path.dirname(deleteCompanyBakPath), { recursive: true });
+    fs.copyFileSync(deleteCompanyPath, deleteCompanyBakPath);
+    fs.writeFileSync(deleteCompanyPath, `export * from "./deleteCompanyActionStub";\n`);
+    console.log("[build-static] Replaced deleteCompanyAction with stub");
+  }
+
+  execSync("node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack", {
+    cwd: root,
+    stdio: "inherit",
+    // NEXT_PUBLIC_* inlined into client bundle so static APK/Electron use query-based master-detail + Report header
+    env: { ...process.env, STATIC_BUILD: "1", NEXT_PUBLIC_STATIC_BUILD: "1" },
+  });
+
+  // Capacitor / some static hosts: unknown path → 404.html; SPA bootstrap se app wapas load
+  const outDir = path.join(root, "out");
+  const indexHtml = path.join(outDir, "index.html");
+  const notFoundHtml = path.join(outDir, "404.html");
+  if (fs.existsSync(indexHtml)) {
+    fs.copyFileSync(indexHtml, notFoundHtml);
+    console.log("[build-static] out/404.html copied from index.html (fallback refresh)");
+  }
+} finally {
+  if (fs.existsSync(apiBakPath)) {
+    fs.mkdirSync(path.dirname(apiPath), { recursive: true });
+    copyDir(apiBakPath, apiPath);
+    rmDir(apiBakPath);
+    console.log("[build-static] Restored api");
+  }
+  if (fs.existsSync(adminBakPath)) {
+    fs.mkdirSync(path.dirname(adminPath), { recursive: true });
+    copyDir(adminBakPath, adminPath);
+    rmDir(adminBakPath);
+    console.log("[build-static] Restored (admin)");
+  }
+  if (fs.existsSync(adminComponentsBakPath)) {
+    fs.mkdirSync(path.dirname(adminComponentsPath), { recursive: true });
+    copyDir(adminComponentsBakPath, adminComponentsPath);
+    rmDir(adminComponentsBakPath);
+    console.log("[build-static] Restored components/admin");
+  }
+  if (fs.existsSync(deleteCompanyBakPath)) {
+    fs.copyFileSync(deleteCompanyBakPath, deleteCompanyPath);
+    fs.unlinkSync(deleteCompanyBakPath);
+    console.log("[build-static] Restored deleteCompanyAction");
+  }
+  const bakDir = path.join(root, ".build-static-bak");
+  if (fs.existsSync(bakDir) && fs.readdirSync(bakDir).length === 0) {
+    fs.rmdirSync(bakDir);
+  }
+}

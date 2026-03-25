@@ -1,5 +1,7 @@
-"use server";
-
+/**
+ * Google Drive auth. No "use server" for static export.
+ * Note: In static/APK build, this runs in browser - googleapis may not work.
+ */
 import { google } from "googleapis";
 
 type ActionState = {

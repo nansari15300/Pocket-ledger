@@ -29,11 +29,14 @@ import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog, IS_STATIC_APK } from "@/lib/staticMobileFullscreenDialog";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
@@ -88,7 +91,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { can } = usePermissions();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-
+  const isMobile = useIsMobile();
+  const staticMobileFullscreen = IS_STATIC_APK && isMobile;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
@@ -289,11 +293,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     if (!e.target.files) return;
     const inputFile = e.target.files[0];
 
-    if (inputFile.size > 5 * 1024 * 1024) { // 5MB pre-check
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
         variant: "destructive",
         title: "File too large",
-        description: `Please select a file smaller than 5MB to compress.`,
+        description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
       return;
     }
@@ -335,7 +339,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className="sm:max-w-2xl z-50"
+            className={cnStaticMobileFullscreenDialog(isMobile, "sm:max-w-2xl z-50", staticMobileFullscreen && "flex flex-col")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
@@ -346,7 +350,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             <DialogDescription>Update the details for {account.accountName}.</DialogDescription>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
+            <form
+              onSubmit={form.handleSubmit(onSubmit)}
+              className={cn(
+                "space-y-4 py-4 overflow-y-auto pr-2",
+                staticMobileFullscreen ? "min-h-0 flex-1 max-h-none" : "max-h-[70vh]"
+              )}
+            >
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                     control={form.control}

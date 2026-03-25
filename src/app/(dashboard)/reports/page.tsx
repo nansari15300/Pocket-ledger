@@ -19,6 +19,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 
 export default function ReportsPage() {
   return (
@@ -106,6 +107,14 @@ function ReportsPageContent() {
 
   const { reportListOpen, setReportListOpen } = useReportList();
 
+  const openReportListSheet = useCallback(() => setReportListOpen(true), [setReportListOpen]);
+  /** Mobile report detail: daen kinara se swipe left → list Sheet (header icon jaisa) */
+  const reportListEdgeSwipe = useEdgeSwipeTrigger(
+    Boolean(isMobile && selectedReport),
+    "right",
+    openReportListSheet
+  );
+
   useEffect(() => {
     setLoading(false); 
   }, []);
@@ -174,7 +183,11 @@ function ReportsPageContent() {
         ) : (
           // Details full page (no duplicate header - report component has its own header)
           <ReportPageProvider onBackToReportList={() => setSelectedReportWithUrl(null)}>
-            <div className="h-full w-full overflow-hidden bg-background flex flex-col">
+            <div
+              className="h-full w-full overflow-hidden bg-background flex flex-col"
+              onTouchStart={reportListEdgeSwipe.onTouchStart}
+              onTouchEnd={reportListEdgeSwipe.onTouchEnd}
+            >
               <div className="flex-1 min-h-0 overflow-hidden">{detailView}</div>
             </div>
           </ReportPageProvider>

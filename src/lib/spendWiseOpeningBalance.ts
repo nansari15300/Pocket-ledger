@@ -2,6 +2,9 @@
 // Firestore map keys cannot start/end with "__", so keep this key plain-safe.
 export const SPEND_WISE_OPENING_BALANCE_ID = "spend_wise_opening_balance";
 
+/** History / daybook jahan Dr/Cr side fix nahi: synthetic id ko voucher number ki jagah yeh dikhao (#spend_wi jaisa truncate na ho). */
+export const SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL = "Opening Balance (spend wise)";
+
 export type OpeningBalanceSide = "dr" | "cr";
 
 export function getOpeningBalanceBaseAmount(openingBalance: number, side: OpeningBalanceSide): number {

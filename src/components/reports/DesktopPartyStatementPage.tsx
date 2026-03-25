@@ -13,14 +13,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdCalendar from "@/components/ui/ad-calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, Share2, Layers, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, Layers, BarChart2, X } from "lucide-react";
 import type { Party, Group } from "@/components/party/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
-import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
+import { openPrintDirect } from "@/lib/printDirect";
+import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
@@ -78,6 +79,8 @@ export default function DesktopPartyStatementPage() {
     const [mobileSearchTerm, setMobileSearchTerm] = useState("");
     const [isDateSearchMode, setIsDateSearchMode] = useState(false);
     const [view, setView] = useState<'list' | 'chart'>('list');
+    // Same preference as Party Details: Statement vs Bill wise (running balance vs per-voucher status).
+    const { balanceMode, setBalanceMode } = useBalanceMode();
 
     const [selectedParty, setSelectedParty] = useState<Party | null>(null);
     const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
@@ -206,11 +209,15 @@ export default function DesktopPartyStatementPage() {
     const activeEntity = selectedParty || (selectedGroup ? { ...selectedGroup, items: processedParties.filter(p => p.groupId === selectedGroup.id) } : null);
     const activeContext = selectedParty ? 'party' : 'group';
 
-    const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
-        activeEntity as any,
-        activeContext,
-        dateRange
-    );
+    const {
+        processedTransactions,
+        openingBalanceForPeriod,
+        periodDr,
+        periodCr,
+        closingBalance,
+        openingBalanceOutstanding,
+        openingBalanceLinkedVoucherNos,
+    } = useTransactions(activeEntity as any, activeContext, dateRange);
 
     // Same as Party Details: when no date filter show last 10 only; when filter applied show all in range
     const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
@@ -279,7 +286,7 @@ export default function DesktopPartyStatementPage() {
 
     const handlePrint = () => {
         if (!activeEntity || !company) return;
-        
+
         let dateRangeText = "All Time";
         if (dateRange?.from) {
             const from = dateRange.from;
@@ -289,24 +296,45 @@ export default function DesktopPartyStatementPage() {
             const fromAD = formatDate(from);
             const toAD = formatDate(to);
 
-            if (dateSystem === 'AD') dateRangeText = `AD: ${fromAD}${to !== from ? ' to ' + toAD : ''}`;
-            else if (dateSystem === 'BS') dateRangeText = `BS: ${fromBS}${to !== from ? ' to ' + toBS : ''}`;
+            if (dateSystem === "AD") dateRangeText = `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
+            else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
             else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
         }
 
-        openPrintDirect({
-            company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-            title: `${selectedParty ? 'Party' : 'Group'} Statement: ${activeEntity.name}`,
-            context: activeContext,
-            contextId: activeEntity.id,
-            dateSystem: dateSystem,
-            dateRangeText,
-            vouchersCount: processedTransactions.length,
-            openingBalance: openingBalanceForPeriod,
-            transactions: processedTransactions,
-            showNarration: true,
-        }, true);
-    }
+        const isBillWise = balanceMode === "bill_wise";
+        const baseTitle = `${selectedParty ? "Party" : "Group"} Statement: ${activeEntity.name}`;
+        openPrintDirect(
+            {
+                company: {
+                    name: company.name,
+                    pan: company.pan,
+                    phone: company.phone,
+                    address: company.address,
+                    decimalPlaces: company.decimalPlaces,
+                    showDrCr: company.showDrCr,
+                    showCurrencySymbol: company.showCurrencySymbol,
+                    logoUrl: company.logoUrl,
+                },
+                title: isBillWise ? `Bill Wise ${baseTitle}` : baseTitle,
+                context: activeContext,
+                contextId: activeEntity.id,
+                dateSystem: dateSystem,
+                dateRangeText,
+                vouchersCount: processedTransactions.length,
+                openingBalance: openingBalanceForPeriod,
+                transactions: processedTransactions.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
+                showNarration: true,
+                visibleColumns: isBillWise ? { status: true } : undefined,
+                billWise: isBillWise,
+                ...(isBillWise && {
+                    openingBalanceOutstanding,
+                    openingBalanceLinkedVoucherNos,
+                    vouchers,
+                }),
+            },
+            true
+        );
+    };
     
     const handleExcel = () => {
         if (!activeEntity) return;
@@ -341,56 +369,6 @@ export default function DesktopPartyStatementPage() {
         XLSX.writeFile(workbook, `${activeEntity.name}_statement.xlsx`);
     };
     
-
-    const handleShare = async () => {
-        if (!navigator.share) {
-            alert("Web Share API not supported in your browser.");
-            return;
-        }
-        if (!activeEntity || !company) return;
-        const entityName = activeEntity.name;
-        const title = `Statement for ${entityName}`;
-        const text = `Here is the financial statement for ${entityName}.`;
-        try {
-            let dateRangeText = "All Time";
-            if (dateRange?.from) {
-                const from = dateRange.from;
-                const to = dateRange.to || from;
-                const fromBS = formatDateBS(from);
-                const toBS = formatDateBS(to);
-                const fromAD = formatDate(from);
-                const toAD = formatDate(to);
-                if (dateSystem === "AD") dateRangeText = `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
-                else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
-                else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-            }
-            const payload = {
-                company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-                title: `${selectedParty ? "Party" : "Group"} Statement: ${entityName}`,
-                context: activeContext as Context,
-                contextId: activeEntity.id,
-                dateSystem: dateSystem,
-                dateRangeText,
-                vouchersCount: processedTransactions.length,
-                openingBalance: openingBalanceForPeriod,
-                transactions: processedTransactions,
-                showNarration: true,
-            };
-            const blob = await getPdfBlob(payload);
-            if (blob) {
-                const file = new (globalThis as any).File([blob], `${entityName.replace(/\s+/g, "_")}_statement.pdf`, { type: "application/pdf" });
-                if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                    await navigator.share({ title, text, url: window.location.href, files: [file] });
-                } else {
-                    await navigator.share({ title, text, url: window.location.href });
-                }
-            } else {
-                await navigator.share({ title, text, url: window.location.href });
-            }
-        } catch (err) {
-            if (err instanceof Error && err.name !== "AbortError") console.error("Share failed:", err);
-        }
-    }
 
     const dateRangeLabel = useMemo(() => {
         if (!hasDateFilter) return "Last 10 Txns";
@@ -561,10 +539,15 @@ export default function DesktopPartyStatementPage() {
                                         context={activeContext}
                                         contextId={activeEntity?.id}
                                         openingBalance={openingBalanceForPeriod}
+                                        openingBalanceOutstanding={openingBalanceOutstanding}
+                                        openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                                         userNames={userNames}
                                         journalAccountNames={journalAccountNames}
                                         onRowClick={handleEditVoucher}
                                         openingBalanceLabel="Opening"
+                                        forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                                        groupEntityType={activeContext === "group" ? "party" : undefined}
+                                        visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
                                         openingBalanceSearch={
                                             <Input
                                                 placeholder="Search..."
@@ -581,10 +564,15 @@ export default function DesktopPartyStatementPage() {
                                     context={activeContext}
                                     contextId={activeEntity?.id}
                                     openingBalance={openingBalanceForPeriod}
+                                    openingBalanceOutstanding={openingBalanceOutstanding}
+                                    openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                                     userNames={userNames}
                                     journalAccountNames={journalAccountNames}
                                     onRowClick={handleEditVoucher}
                                     openingBalanceLabel="Opening"
+                                    forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+                                    groupEntityType={activeContext === "group" ? "party" : undefined}
+                                    visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
                                     openingBalanceSearch={
                                         <Input
                                             placeholder="Search..."
@@ -607,8 +595,16 @@ export default function DesktopPartyStatementPage() {
                 <PermissionButton permission="export_data" className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-yellow-500 hover:bg-yellow-600 text-white rounded-md" onClick={handleExcel}>
                     <File className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Excel</span>
                 </PermissionButton>
-                <Button className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-indigo-500 hover:bg-indigo-600 text-white rounded-md" onClick={handleShare}>
-                    <Share2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Share</span>
+                {/* Bill wise / Statement: same UX as Party Details & Bank Statement/Spend wise toggle position */}
+                <Button
+                    type="button"
+                    className={cn(
+                        "flex-1 flex flex-col items-center justify-center py-1 min-w-0 rounded-md text-white",
+                        balanceMode === "bill_wise" ? "bg-orange-500 hover:bg-orange-600" : "bg-violet-500 hover:bg-violet-600"
+                    )}
+                    onClick={() => setBalanceMode(balanceMode === "bill_wise" ? "statement" : "bill_wise")}
+                >
+                    <span className="text-[10px] leading-tight text-center px-0.5">{balanceMode === "bill_wise" ? "Statement" : "Bill wise"}</span>
                 </Button>
                 <Button className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-slate-500 hover:bg-slate-600 text-white rounded-md" onClick={() => { openingModalRef.current = true; setIsCalendarOpen(true); openModalInUrl(); }}>
                     <CalendarIcon className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Date</span>

@@ -147,7 +147,7 @@ export function ItemGroupDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -357,10 +357,10 @@ export function ItemGroupDetails({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
@@ -612,7 +612,11 @@ export function ItemGroupDetails({
               </div>
             </div>
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
               {openingBalanceForPeriod !== 0 && (
                 <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
@@ -997,7 +1001,7 @@ export function ItemGroupDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-item-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-item-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-item-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>

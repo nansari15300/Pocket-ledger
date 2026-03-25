@@ -1,6 +1,7 @@
-
-"use server";
-
+/**
+ * Firebase Storage helpers. No "use server" - works in browser for static export.
+ * Buffer.from replaced with Uint8Array for client compatibility.
+ */
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { storage } from "./firebase";
 import { format } from "date-fns";
@@ -120,7 +121,7 @@ export const uploadFile = async (
     }
 
     const fileRef = ref(storage, fullPath);
-    const buffer = Buffer.from(fileData.arrayBuffer);
+    const buffer = typeof Buffer !== "undefined" ? Buffer.from(fileData.arrayBuffer) : new Uint8Array(fileData.arrayBuffer);
     await uploadBytes(fileRef, buffer, { contentType: fileData.type });
     const downloadURL = await getDownloadURL(fileRef);
 

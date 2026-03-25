@@ -1,4 +1,4 @@
-'use server';
+/* No 'use server' - static export compatible */
 
 /**
  * @fileOverview An AI agent for suggesting optimal groupings of Parties based on transaction history and metadata.

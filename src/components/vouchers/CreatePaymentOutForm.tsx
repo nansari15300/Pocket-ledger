@@ -65,6 +65,7 @@ import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 import { usePaymentOutAllocations } from "@/hooks/usePaymentAllocations";
 import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
+import { printPaymentVoucherReceipt } from "@/lib/printPaymentVoucherReceipt";
 import { Zap } from "lucide-react";
 
 const fileSchema = z.object({
@@ -286,11 +287,31 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const accountId = form.watch("accountId");
   const { displayBalance: accountBalance } = useAccountBalance(accountId);
   const accountOpeningBalance = Number(processedAccounts.find((a: any) => a.id === accountId)?.openingBalance ?? 0) || 0;
-  const isAmountExceedingSelectedAccount = useCallback((enteredAmount: number) => {
-    if (!accountId) return false;
-    const selectedBalance = Number(accountBalance) || 0;
-    return enteredAmount > selectedBalance;
-  }, [accountId, accountBalance]);
+  /** Edit par ledger balance is voucher ka outflow pehle se ghata chuka hota hai — same bank par is amount ko wapas jod kar limit nikalo (naya voucher = 0). */
+  const bookedPayFromAmountCreditBack = useMemo(() => {
+    if (!voucher?.id) return 0;
+    if (voucher.type !== "payment_out" && voucher.type !== "direct_expense") return 0;
+    const savedPayFromId = (voucher as any).accountId || (voucher as any).fromAccountId;
+    if (!savedPayFromId || savedPayFromId !== accountId) return 0;
+    return Number((voucher as any).total ?? (voucher as any).amount ?? 0) || 0;
+  }, [
+    voucher?.id,
+    voucher?.type,
+    accountId,
+    (voucher as any)?.accountId,
+    (voucher as any)?.fromAccountId,
+    (voucher as any)?.total,
+    (voucher as any)?.amount,
+  ]);
+  const isAmountExceedingSelectedAccount = useCallback(
+    (enteredAmount: number) => {
+      if (!accountId) return false;
+      const selectedBalance = Number(accountBalance) || 0;
+      const effectiveAvailable = selectedBalance + bookedPayFromAmountCreditBack;
+      return enteredAmount > effectiveAvailable;
+    },
+    [accountId, accountBalance, bookedPayFromAmountCreditBack]
+  );
 
   const expenseAccountId = form.watch("expenseAccountId");
   const toAccountId = form.watch("toAccountId");
@@ -979,8 +1000,50 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
-        if (print && (savedVoucherId || voucher?.id)) {
-            window.open(`/payment-out/receipt/${savedVoucherId || voucher?.id}`, "_blank");
+        if (print && savedDoc?.id && company) {
+          // Same in-app PDF preview as Payment In / reports (mobile WebView fix)
+          const payeeLabel =
+            data.payeeType === "party"
+              ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
+              : data.payeeType === "staff"
+                ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
+                : data.payeeType === "tax"
+                  ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
+                  : data.payeeType === "expense"
+                    ? expenseAccounts.find((e) => e.id === data.expenseAccountId)?.name ?? "—"
+                    : processedAccounts.find((a) => a.id === data.toAccountId)?.accountName ?? "—";
+          const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
+          try {
+            await printPaymentVoucherReceipt({
+              company: {
+                name: company.name,
+                pan: company.pan,
+                phone: company.phone,
+                address: company.address,
+                decimalPlaces: company.decimalPlaces,
+                showDrCr: company.showDrCr,
+                showCurrencySymbol: company.showCurrencySymbol,
+                logoUrl: company.logoUrl,
+              },
+              dateSystem,
+              formatDate,
+              formatDateBS,
+              formatCurrencyForPrint,
+              voucherId: savedDoc.id,
+              voucherType,
+              date: data.date instanceof Date ? data.date : new Date(data.date),
+              voucherNumber: data.voucherNumber,
+              amount: cleanAmount,
+              narration: data.narration,
+              payeeLabel,
+              accountLabel,
+            });
+          } catch (printErr) {
+            console.error(printErr);
+            sonnerToast.error("Print preview failed", {
+              description: printErr instanceof Error ? printErr.message : "Please try again.",
+            });
+          }
         }
 
         if (saveAndNew) {
@@ -1959,6 +2022,53 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   );
                 }}
               />
+              {/* File pehle — link cards ke upar; warna link ke baad attach band ho jata hai */}
+              <FormItem>
+                <FormLabel>Attach Files (Optional)</FormLabel>
+                <RestrictedFileUploader>
+                  {/* When linked: no add/remove; existing files view-only (click to open still works). */}
+                  <div className={cn("flex flex-wrap gap-4", deleteDisabledWhenLinked && "rounded-md bg-muted/20 p-2")}>
+                    {files.map((file, index) => (
+                      <FilePreview
+                        key={index}
+                        file={file}
+                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                      />
+                    ))}
+                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      <div
+                        className={cn(
+                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                            ? "text-muted-foreground hover:border-primary cursor-pointer"
+                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                        )}
+                        onClick={() => {
+                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                            fileInputRef.current?.click();
+                          }
+                        }}
+                      >
+                        <PlusCircle className="h-6 w-6" />
+                        <span className="text-xs mt-1">Add File</span>
+                        <Input
+                          type="file"
+                          className="hidden"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept={[
+                            fileAttachmentLimits.allowImage ? "image/*" : "",
+                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                          multiple={fileAttachmentLimits.maxFileCount > 1}
+                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </RestrictedFileUploader>
+              </FormItem>
               {(showSpendWiseSection || showLinkedSection) && (
                 <>
                 <div className={cn(
@@ -2400,8 +2510,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </div>
                 </>
               )}
-              <div className="grid gap-4 min-w-0 max-w-full grid-cols-1 md:grid-cols-2">
-                {/* When payment linked: only Narration and Link section stay editable; all other fields locked, attach files read-only. */}
+              <div className="grid gap-4 min-w-0 max-w-full grid-cols-1">
+                {/* When payment linked: only Narration and Link section stay editable; all other fields locked, attach files read-only (attach block upar hai). */}
                 <FormField
                   control={form.control}
                   name="narration"
@@ -2415,52 +2525,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </FormItem>
                   )}
                 />
-                <FormItem>
-                  <FormLabel>Attach Files (Optional)</FormLabel>
-                  <RestrictedFileUploader>
-                    {/* When linked: no add/remove; existing files view-only (click to open still works). */}
-                    <div className={cn("flex flex-wrap gap-4", deleteDisabledWhenLinked && "rounded-md bg-muted/20 p-2")}>
-                    {files.map((file, index) => (
-                      <FilePreview 
-                        key={index} 
-                        file={file} 
-                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                      />
-                    ))}
-                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <div 
-                        className={cn(
-                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                        )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
-                          }
-                        }}
-                      >
-                         <PlusCircle className="h-6 w-6" />
-                        <span className="text-xs mt-1">Add File</span>
-                        <Input 
-                          type="file" 
-                          className="hidden"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept={[
-                            fileAttachmentLimits.allowImage ? "image/*" : "",
-                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                          multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                        />
-                      </div>
-                    )}
-                    </div>
-                  </RestrictedFileUploader>
-                </FormItem>
               </div>
             </div>
           </ScrollArea>

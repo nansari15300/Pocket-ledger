@@ -44,6 +44,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { pushIncomeExpenseGroupSwitch } from "@/lib/incomeExpenseDetailNav";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -102,7 +103,7 @@ export function ExpenseGroupDetails({
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
   const accountsInGroup = useMemo(() => {
@@ -399,7 +400,7 @@ export function ExpenseGroupDetails({
       openingBalance: openingBalanceForPeriod, 
       transactions: processedTransactions,
       showNarration: showNarration,
-      includeNotes: showNotes,
+      includeNotes: includeNotesInTable,
       visibleColumns: printVisibleColumns,
       billWise: balanceMode === "bill_wise",
       userNames: userNames,
@@ -450,7 +451,8 @@ export function ExpenseGroupDetails({
                     options={groupDropdownOptions}
                     value={group.id}
                     onChange={(value) => {
-                      if (value && value !== group.id) router.push(`${pathname.replace(/\/[^/]+$/, "")}/${value}`);
+                      // `/incomes` + query-nav: segment-replace se galat URL; account jaisa hi group ke liye helper
+                      if (value && value !== group.id) pushIncomeExpenseGroupSwitch(router, pathname || "", value);
                     }}
                     placeholder="Select group"
                   />
@@ -483,7 +485,11 @@ export function ExpenseGroupDetails({
               </div>
             </div>
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             <TransactionsTable
               transactions={mobileTransactions}
@@ -652,10 +658,10 @@ export function ExpenseGroupDetails({
 
   return (
     <>
-      <div className="h-full">
-        <div className="h-full flex flex-col overflow-hidden">
+      {/* min-h-0 + flex-1 ScrollArea: flex item ko shrink dena zaroori — warna table height expand ho kar scroll band */}
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
+        <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
               {onBack && (
@@ -776,7 +782,7 @@ export function ExpenseGroupDetails({
             </div>
           </div>
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="py-4">
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -806,7 +812,7 @@ export function ExpenseGroupDetails({
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
+        <div className="flex-shrink-0 border-t py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
               <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
@@ -850,7 +856,7 @@ export function ExpenseGroupDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-expense-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-expense-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-expense-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>
@@ -919,7 +925,6 @@ export function ExpenseGroupDetails({
               </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
       <Dialog open={isNoteOpen} onOpenChange={setIsNoteOpen}>

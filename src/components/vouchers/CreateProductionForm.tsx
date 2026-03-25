@@ -647,7 +647,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col h-full min-w-0 w-full max-w-full">
-        <ScrollArea className="flex-1 overflow-x-hidden min-w-0 w-full px-6 py-4">
+        <ScrollArea className="flex-1 min-h-0 overflow-x-hidden min-w-0 w-full px-6 py-4">
           <div className="space-y-4 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full">
             <div className="grid grid-cols-2 gap-4">
               <FormField

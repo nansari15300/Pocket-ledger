@@ -93,6 +93,7 @@ import { useTransactions } from "@/hooks/use-transactions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { pushIncomeExpenseAccountSwitch } from "@/lib/incomeExpenseDetailNav";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -147,7 +148,7 @@ export function ExpenseAccountDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -277,10 +278,10 @@ export function ExpenseAccountDetails({
     setIsVoucherDialogOpen(true);
   };
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
@@ -342,7 +343,7 @@ export function ExpenseAccountDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
-      includeNotes: showNotes,
+      includeNotes: includeNotesInTable,
       visibleColumns: printVisibleColumns,
       billWise: balanceMode === "bill_wise",
     }, true);
@@ -493,9 +494,9 @@ export function ExpenseAccountDetails({
     }
 
     return (
-     <div className="h-full flex flex-col">
+     <div className="flex h-full min-h-0 flex-col overflow-hidden">
         {/* Header: Part 1 (name→balance) and Part 2 (date→print) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
+        <div className="flex-shrink-0 border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
               {isMobile && onBack && (
@@ -610,8 +611,8 @@ export function ExpenseAccountDetails({
           </div>
         </div>
 
-        {/* TABLE AREA */}
-        <ScrollArea className="flex-1">
+        {/* TABLE AREA — min-h-0: flex-1 ScrollArea shrink ho kar vertical scroll */}
+        <ScrollArea className="min-h-0 flex-1">
           <div className="py-4">
             <TransactionsTable
               transactions={paginatedTransactions}
@@ -635,7 +636,7 @@ export function ExpenseAccountDetails({
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
         {/* Footer: Part 1 (count, narration) and Part 2 (rows per page, pagination) side by side; Part 2 wraps to bottom on small; parts never wrap internally; scroll if needed */}
-        <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
+        <div className="flex-shrink-0 border-t py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
               <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
@@ -679,7 +680,7 @@ export function ExpenseAccountDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-expense-account" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-expense-account" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-expense-account" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>
@@ -800,7 +801,8 @@ export function ExpenseAccountDetails({
                     options={accountDropdownOptions}
                     value={account.id}
                     onChange={(value) => {
-                      if (value && value !== account.id) router.push(`${pathname.replace(/\/[^/]+$/, "")}/${value}`);
+                      // `/incomes` par last-segment trick empty path banata tha → /company redirect
+                      if (value && value !== account.id) pushIncomeExpenseAccountSwitch(router, pathname || "", value);
                     }}
                     placeholder="Select account"
                   />
@@ -833,7 +835,11 @@ export function ExpenseAccountDetails({
             </div>
           </div>
           {/* Transaction list - extends to footer line */}
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             <TransactionsTable
               transactions={mobileTransactions}

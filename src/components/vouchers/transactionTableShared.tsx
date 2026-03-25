@@ -18,6 +18,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { FilePreview } from "@/components/vouchers/FilePreview";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { differenceInDays } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
@@ -89,6 +91,13 @@ const getDisplayType = (t: any) => {
   return t.type.replace(/_/g, " ");
 };
 
+/** Note voucher: Firestore par entityName + entityId — Daybook Accounts column ke liye */
+export const getNoteLinkedEntityLabel = (t: any, names: Record<string, string> = {}) => {
+  const fromDoc = typeof t.entityName === "string" && t.entityName.trim() ? t.entityName.trim() : "";
+  const fromMap = t.entityId ? names[t.entityId] : "";
+  return fromDoc || fromMap || (t.entityId ? String(t.entityId) : "") || "N/A";
+};
+
 export const getParticularsText = (t: any, names: Record<string, string> = {}) => {
   const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
   if (t.type === "sale") {
@@ -128,7 +137,7 @@ export const getParticularsText = (t: any, names: Record<string, string> = {}) =
     const cr = t.entries.filter((e: any) => e.credit > 0).map((e: any) => `Cr: ${getName(e.accountId)}`);
     return [...dr, ...cr].join(", ");
   }
-  if (t.type === "note") return `Note for: ${getName(t.entityId)}`;
+  if (t.type === "note") return `Note for: ${getNoteLinkedEntityLabel(t, names)}`;
   return t.narration || "";
 };
 
@@ -151,7 +160,7 @@ export const getOppositeAccountLabel = (
   }
   if (context === "item" && t.type === "note") {
     // Item details note row should display linked item/entity name in Party column.
-    return t.entityName || getName(t.entityId);
+    return getNoteLinkedEntityLabel(t, names);
   }
   // Party context: show opposite/counter account (bank, expense, etc.) not the current party
   if (context === "party" && contextId) {
@@ -173,7 +182,7 @@ export const getOppositeAccountLabel = (
         if (anyOther?.accountId) return getName(anyOther.accountId);
         return "Journal";
       }
-      if (t.type === "note") return getName(t.entityId);
+      if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
     }
   }
   // Tax group: sale/purchase show party (opposite of tax), not Sales/Purchase account
@@ -186,7 +195,7 @@ export const getOppositeAccountLabel = (
   }
   if (context === "group" && groupEntityType === "item" && t.type === "note") {
     // Item-group note rows should display linked item/entity name in Party column.
-    return t.entityName || getName(t.entityId);
+    return getNoteLinkedEntityLabel(t, names);
   }
   // Group context: sale/purchase show Sales/Purchase account (party group, etc.)
   if (context === "group" && (t.type === "sale" || t.type === "purchase")) {
@@ -310,7 +319,7 @@ export const getOppositeAccountLabel = (
     const parts = t.entries.slice(0, 2).map((e: any) => getName(e.accountId));
     return parts.join(", ") || "Journal";
   }
-  if (t.type === "note") return getName(t.entityId);
+  if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
   return t.narration || "";
 };
 
@@ -660,24 +669,43 @@ export const TransactionRow = React.memo(
                         {(transaction.fileUrls as string[]).map((url, idx) => {
                           const cleanUrl = String(url).split("?")[0].toLowerCase();
                           const isImage = cleanUrl.match(/\.(jpe?g|png|gif|webp|bmp|svg)$/) || String(url).startsWith("data:image/");
-                          // Both image and PDF clickable – open in new tab; PDF was disabled before (cursor-not-allowed)
-                          const openInNewTab = () => window.open(url, "_blank", "noopener,noreferrer");
+                          const isPdf =
+                            cleanUrl.endsWith(".pdf") ||
+                            String(url).toLowerCase().includes(".pdf") ||
+                            String(url).startsWith("data:application/pdf");
+                          // APK/static/mobile: app ke andar preview; desktop: nayi tab
+                          const openAtt = () =>
+                            void openAttachmentInApp(url, {
+                              kind: isImage ? "image" : isPdf ? "pdf" : "other",
+                            });
                           return (
-                            <div key={idx} className="flex-shrink-0 w-[800px] min-h-[400px] rounded-lg overflow-hidden border bg-background flex items-center justify-center">
-                              {isImage ? (
-                                <img
-                                  src={url}
-                                  alt=""
-                                  className="max-w-full max-h-[75vh] w-auto h-auto object-contain cursor-pointer"
-                                  loading="eager"
-                                  onClick={openInNewTab}
-                                  role="button"
-                                  tabIndex={0}
-                                  onKeyDown={(e) => e.key === "Enter" && openInNewTab()}
-                                />
-                              ) : (
-                                <FilePreview file={url} size={800} disabled={false} objectFit="contain" />
-                              )}
+                            <div key={idx} className="flex w-[800px] flex-shrink-0 flex-col gap-1">
+                              <div className="flex min-h-[400px] items-center justify-center overflow-hidden rounded-lg border bg-background">
+                                {isImage ? (
+                                  <img
+                                    src={url}
+                                    alt=""
+                                    className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
+                                    loading="eager"
+                                    onClick={openAtt}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => e.key === "Enter" && openAtt()}
+                                  />
+                                ) : (
+                                  <FilePreview
+                                    file={url}
+                                    size={800}
+                                    disabled={false}
+                                    objectFit="contain"
+                                    enableHoverFullPreview={false}
+                                    showFormatBadge={false}
+                                  />
+                                )}
+                              </div>
+                              <p className="text-center text-[10px] font-semibold text-muted-foreground">
+                                {getAttachmentFormatLabel(url)}
+                              </p>
                             </div>
                           );
                         })}

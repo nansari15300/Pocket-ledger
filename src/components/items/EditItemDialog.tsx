@@ -48,6 +48,8 @@ import {
 } from "../ui/alert-dialog";
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -203,7 +205,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const [taxFieldToApply, setTaxFieldToApply] = useState<"purchaseTaxId" | "saleTaxId" | "openingBalanceTaxId" | null>(null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const { dateSystem, formatDate } = useDate();
-
+  const isMobile = useIsMobile();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
@@ -594,7 +596,10 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
+            className={cnStaticMobileFullscreenDialog(
+              isMobile,
+              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
+            )}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >

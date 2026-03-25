@@ -21,6 +21,7 @@ export function AccountList({
   onSelectAccount,
   searchTerm,
   pendingApprovalByAccountId = {},
+  getItemHref,
 }: {
   accounts: Account[];
   selectedAccount: Account | null;
@@ -28,6 +29,8 @@ export function AccountList({
   searchTerm: string;
   /** Pending approval count per account id (only when approve notifications on list). */
   pendingApprovalByAccountId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+  getItemHref?: (account: Account) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { can } = usePermissions();
@@ -49,76 +52,91 @@ export function AccountList({
 
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="flex-1 min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
         <ul className="p-2 space-y-1">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedAccounts.map((account) => {
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
-              
-              return (
-                <motion.li
-                    key={account.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                >
-                  <Card
-                      className={cn(
-                        "p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                        isSelected
-                          ? "border-primary bg-secondary shadow-sm"
-                          : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+              const href = getItemHref?.(account);
+              const cardClassName = cn(
+                "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
+                isSelected
+                  ? "border-primary bg-secondary shadow-sm"
+                  : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+              );
+              const cardContent = (
+                <div className="pl-master-list-row">
+                  <div className="pl-master-list-row-leading">
+                    <div className="relative flex-shrink-0">
+                      <Avatar className="h-8 w-8 text-xs">
+                        <AvatarImage src={account.fileUrl} />
+                        <AvatarFallback className="bg-muted text-muted-foreground">
+                          {isSpecial ? <Crown className="h-4 w-4 text-amber-500"/> : <Landmark className="h-4 w-4" />}
+                        </AvatarFallback>
+                      </Avatar>
+                      {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
+                        <span
+                          className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
+                          style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                          aria-label={`${pendingApprovalByAccountId[account.id]} pending approval`}
+                        >
+                          <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByAccountId[account.id]}</span>
+                        </span>
                       )}
-                      onClick={() => onSelectAccount(account)}
-                    >
-                      <div className="flex items-center justify-between w-full gap-2">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <div className="relative flex-shrink-0">
-                            <Avatar className="h-8 w-8 text-xs">
-                              <AvatarImage src={account.fileUrl} />
-                              <AvatarFallback className="bg-muted text-muted-foreground">
-                                {isSpecial ? <Crown className="h-4 w-4 text-amber-500"/> : <Landmark className="h-4 w-4" />}
-                              </AvatarFallback>
-                            </Avatar>
-                            {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
-                              <span
-                                className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
-                                style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
-                                aria-label={`${pendingApprovalByAccountId[account.id]} pending approval`}
-                              >
-                                <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByAccountId[account.id]}</span>
-                              </span>
-                            )}
-                          </div>
-                          <Tooltip>
-                            <TooltipTrigger className={cn("text-sm font-medium whitespace-nowrap truncate flex-1 min-w-0 text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none", isSpecial && "text-amber-600")}>
-                              {account.accountName}
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>{account.accountName}</p>
-                              {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
-                                <p className="text-xs text-muted-foreground">{pendingApprovalByAccountId[account.id]} pending approval</p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                        <p
+                    </div>
+                    <Tooltip>
+                      {/* asChild: truncate flex child ma kaam garcha */}
+                      <TooltipTrigger asChild>
+                        <span
                           className={cn(
-                            "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
-                            account.balance >= 0 ? "text-green-600" : "text-red-600",
-                            isSelected &&
-                              (account.balance >= 0
-                                ? "text-green-800"
-                                : "text-red-800")
+                            "pl-master-list-row-name cursor-default",
+                            isSpecial && "text-amber-600"
                           )}
                         >
-                          {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(account.balance, { showDrCr: true })}
-                        </p>
-                      </div>
+                          {account.accountName}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{account.accountName}</p>
+                        {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
+                          <p className="text-xs text-muted-foreground">{pendingApprovalByAccountId[account.id]} pending approval</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <p
+                    className={cn(
+                      "pl-master-list-row-amount ml-2",
+                      account.balance >= 0 ? "text-green-600" : "text-red-600",
+                      isSelected &&
+                        (account.balance >= 0
+                          ? "text-green-800"
+                          : "text-red-800")
+                    )}
+                  >
+                    {(isSpecial && !canViewSpecialBalance) ? '*****' : formatCurrency(account.balance, { showDrCr: true })}
+                  </p>
+                </div>
+              );
+              return (
+                <motion.li
+                  key={account.id}
+                  layout
+                  initial={false}
+                  exit={{ transition: { duration: 0 } }}
+                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                >
+                  {href ? (
+                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      <Card className={cardClassName}>{cardContent}</Card>
+                    </Link>
+                  ) : (
+                    <Card className={cardClassName} onClick={() => onSelectAccount(account)}>
+                      {cardContent}
                     </Card>
+                  )}
                 </motion.li>
               );
             })}

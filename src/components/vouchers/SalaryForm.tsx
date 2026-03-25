@@ -1410,7 +1410,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
     <>
       <Form {...form}>
         <form onSubmit={(e) => handleFormSubmit(e)} className="h-full flex flex-col min-w-0 w-full max-w-full">
-          <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
+          <ScrollArea className={cn("flex-1 min-h-0 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
             <div className={cn(
               "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               isMobile ? "" : "px-[2px]"

@@ -150,7 +150,7 @@ export function TaxDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
@@ -302,10 +302,10 @@ export function TaxDetails({
     setIsVoucherDialogOpen(true);
   }, [openModalInUrl]);
 
-  // When showNotes is off, hide note-type transactions; tick = show notes (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const statusFilteredTransactions = useMemo(
     () => filterByStatus(displayTransactions, statusFilter),
@@ -437,7 +437,7 @@ export function TaxDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: processedTransactions,
       showNarration: showNarration,
-      includeNotes: showNotes,
+      includeNotes: includeNotesInTable,
       visibleColumns: printVisibleColumns,
       billWise: billWise,
     }, true);
@@ -548,7 +548,11 @@ export function TaxDetails({
               </div>
             </div>
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             <TransactionsTable
               transactions={mobileTransactions}
@@ -899,7 +903,7 @@ export function TaxDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-tax" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-tax" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-tax" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>

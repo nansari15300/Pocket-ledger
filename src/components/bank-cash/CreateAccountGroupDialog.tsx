@@ -29,6 +29,8 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
@@ -69,7 +71,8 @@ export function CreateAccountGroupDialog({
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId } = useCompany();
-  
+  const isMobile = useIsMobile();
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -181,7 +184,10 @@ export function CreateAccountGroupDialog({
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent
-        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
+        className={cnStaticMobileFullscreenDialog(
+          isMobile,
+          "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-md sm:grid sm:flex-none sm:px-6"
+        )}
         onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <DialogHeader>

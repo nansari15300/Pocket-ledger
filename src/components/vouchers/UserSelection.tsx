@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "../ui/scroll-area";
-import type { AppUser } from "@/app/(admin)/admin/users/page";
+import type { AppUser } from "@/types/admin";
 
 type User = {
     id: string;

@@ -2,7 +2,7 @@
 
 "use client";
 
-import React, { Suspense, useState, useMemo, useCallback, useEffect } from "react";
+import React, { Suspense, useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   Card,
   CardHeader,
@@ -35,14 +35,22 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Calendar as CalendarIcon, XCircle, UploadCloud, UserCircle, MoreVertical, Loader2, Trash2, Ruler, Search, Edit } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Calendar as CalendarIcon, XCircle, UploadCloud, UserCircle, MoreVertical, Loader2, Trash2, Ruler, Search, Edit, ChevronLeft, ChevronRight, Eye, EyeOff } from "lucide-react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, subDays } from "date-fns";
-import { FilePreview } from "@/components/vouchers/FilePreview";
+import { FilePreview, prewarmPdfThumbnailsForGallery } from "@/components/vouchers/FilePreview";
+import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { Combobox } from "@/components/ui/combobox";
 import { useDropzone } from "react-dropzone";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -52,7 +60,7 @@ import { firestore } from "@/lib/firebase";
 import { collection, onSnapshot, query, where, serverTimestamp, writeBatch, doc, orderBy, updateDoc, arrayRemove, getDoc, getDocs, deleteDoc, Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
 import { compressFile } from "@/lib/compression";
-import { uploadFile, deleteFileFromStorage } from "@/lib/storage";
+import { uploadFileClient, deleteFileFromStorageClient } from "@/lib/storageClient";
 import { checkStorageLimit, incrementCompanyStorage, decrementCompanyStorage } from "@/lib/storageUsageClient";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -60,6 +68,8 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 
 
 const ATTACHABLE_VOUCHER_TYPES = [
@@ -92,6 +102,61 @@ const CATEGORIES = [
 
 export type FileData = { id: string; url: string; name: string; type: 'pdf' | 'image' | 'other'; path?: string; };
 
+/** Gallery full-hover preview: 600×700px fix (sirf is page par) */
+const GALLERY_HOVER_PREVIEW_BOX = { width: 600, height: 700 } as const;
+
+/** Pagination: kitni file tiles ek page par — company + unassigned dono tabs */
+const GALLERY_FILES_PER_PAGE_OPTIONS = [20, 30, 40, 50] as const;
+const DEFAULT_GALLERY_FILES_PER_PAGE = 20;
+
+function isValidGalleryPageSize(n: number): n is (typeof GALLERY_FILES_PER_PAGE_OPTIONS)[number] {
+  return (GALLERY_FILES_PER_PAGE_OPTIONS as readonly number[]).includes(n);
+}
+
+/** Footer card ke andar, Per page ke niche — chhota pager taaki poora footer patla rahe */
+function GalleryPagerInCard({
+  page,
+  totalPages,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (p: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="mt-0.5 flex w-full flex-col gap-1 border-t border-border/40 pt-1 sm:w-auto sm:items-end">
+      <div className="flex items-center justify-end gap-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-7 w-7 shrink-0"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          aria-label="Previous page"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </Button>
+        <span className="min-w-[3rem] text-center text-[10px] tabular-nums text-muted-foreground">
+          {page} / {totalPages}
+        </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-7 w-7 shrink-0"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          aria-label="Next page"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // --- Sub-Component: Company Files Tab ---
 function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { previewSize: number, onSizeChange: (size: string | number) => void, onEditVoucher: (voucher: any) => void }) {
   const isMobile = useIsMobile();
@@ -109,12 +174,59 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [selectedUserId, setSelectedUserId] = useState<string | "all">("all");
   const [selectedAccountType, setSelectedAccountType] = useState<string>("all");
   const [showAvatarsOnly, setShowAvatarsOnly] = useState(false);
+  // Desktop hover: refresh ke baad pehle false jab tak PDF prewarm na ho; phir localStorage (default on)
+  const [fullHoverPreview, setFullHoverPreview] = useState(false);
+  // Is page ke PDF preload chal raha — is waqt hover preview band + button par spinner
+  const [pdfPrewarmLoading, setPdfPrewarmLoading] = useState(false);
+  const fullPreviewBootstrapDoneRef = useRef(false);
   const { companyId, company } = useCompany();
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const router = useRouter();
   // Defer Radix Popover/Combobox until client mount to avoid hydration mismatch (aria-controls IDs differ on server vs client).
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  const [companyFilesPerPage, setCompanyFilesPerPage] = useState(DEFAULT_GALLERY_FILES_PER_PAGE);
+  const [companyFilesPage, setCompanyFilesPage] = useState(1);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("galleryCompanyFilesPerPage");
+      const n = raw ? parseInt(raw, 10) : NaN;
+      if (isValidGalleryPageSize(n)) setCompanyFilesPerPage(n);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("galleryCompanyFilesPerPage", String(companyFilesPerPage));
+    } catch {
+      /* ignore */
+    }
+  }, [companyFilesPerPage]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("galleryCompanyFullHoverPreview", fullHoverPreview ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [fullHoverPreview]);
+
+  useEffect(() => {
+    setCompanyFilesPage(1);
+  }, [
+    selectedEntityId,
+    selectedUserId,
+    selectedAccountType,
+    voucherNumberSearch,
+    showAvatarsOnly,
+    dateRange?.from?.getTime(),
+    dateRange?.to?.getTime(),
+    selectedVoucherTypes.join(","),
+  ]);
 
   // Fetch all users (same as Unassigned) so userId resolves by doc id, uid, or userId field.
   useEffect(() => {
@@ -285,6 +397,74 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     return displayItems.reduce((acc, v) => acc + (v.fileUrls?.length || 0), 0);
   }, [displayItems]);
 
+  // Har tile ek row — pagination flat list (voucher × fileUrls)
+  const companyFlatRows = useMemo(() => {
+    const rows: { item: (typeof displayItems)[number]; url: string; fileIndex: number }[] = [];
+    for (const item of displayItems) {
+      const urls = item.fileUrls || [];
+      for (let fileIndex = 0; fileIndex < urls.length; fileIndex++) {
+        rows.push({ item, url: urls[fileIndex], fileIndex });
+      }
+    }
+    return rows;
+  }, [displayItems]);
+
+  const companyTotalPages = Math.max(1, Math.ceil(companyFlatRows.length / companyFilesPerPage));
+  const companyPageClamped = Math.min(Math.max(1, companyFilesPage), companyTotalPages);
+  const companySliceStart = (companyPageClamped - 1) * companyFilesPerPage;
+  const paginatedCompanyRows = useMemo(
+    () => companyFlatRows.slice(companySliceStart, companySliceStart + companyFilesPerPage),
+    [companyFlatRows, companySliceStart, companyFilesPerPage]
+  );
+
+  useEffect(() => {
+    if (companyFilesPage !== companyPageClamped) setCompanyFilesPage(companyPageClamped);
+  }, [companyFilesPage, companyPageClamped]);
+
+  // Har page par PDF prewarm: pehli baar khatam hone par full preview localStorage se on (default on); har bar loading dikhana
+  const companyPdfPrewarmKey = useMemo(
+    () => paginatedCompanyRows.map(({ url }) => url).join("\0"),
+    [paginatedCompanyRows]
+  );
+  const hasPdfToPrewarmOnPage = useMemo(
+    () =>
+      paginatedCompanyRows.some(({ url }) => {
+        const u = String(url).split("?")[0].toLowerCase();
+        return u.endsWith(".pdf") || String(url).startsWith("data:application/pdf");
+      }),
+    [paginatedCompanyRows]
+  );
+  useEffect(() => {
+    if (!mounted) return;
+    const ac = new AbortController();
+    const entries = paginatedCompanyRows.map(({ url }) => ({
+      url,
+      storagePath: tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined,
+    }));
+
+    void (async () => {
+      if (hasPdfToPrewarmOnPage) setPdfPrewarmLoading(true);
+      try {
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal);
+      } finally {
+        setPdfPrewarmLoading(false);
+        if (ac.signal.aborted) return;
+        // Sirf pehli dafa (refresh): prewarm ke baad hi full preview on/off localStorage se
+        if (!fullPreviewBootstrapDoneRef.current) {
+          fullPreviewBootstrapDoneRef.current = true;
+          try {
+            const v = localStorage.getItem("galleryCompanyFullHoverPreview");
+            setFullHoverPreview(v !== "0");
+          } catch {
+            setFullHoverPreview(true);
+          }
+        }
+      }
+    })();
+
+    return () => ac.abort();
+  }, [mounted, companyPdfPrewarmKey, hasPdfToPrewarmOnPage]);
+
  const getAccountNameFromVoucher = (voucher: any) => {
     if (voucher.isAvatar) return voucher.name;
     if (voucher.type === 'journal' && voucher.subType === 'add_salary') {
@@ -316,82 +496,45 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
       setDateRange(undefined);
       setSelectedUserId('all');
       setSelectedAccountType('all');
+      setShowAvatarsOnly(false);
   };
 
-  const hasFiltersApplied = selectedAccountType !== 'all' || selectedEntityId !== 'all' || selectedUserId !== 'all' || (dateRange?.from != null);
+  // Pehli baar jo default 30-day range load hoti hai usse match = "no filter"; tabhi Clear All chhupa rahein
+  const baselineDateRangeRef = useRef<{ from: number; to: number } | null>(null);
+  useEffect(() => {
+    if (baselineDateRangeRef.current === null && dateRange?.from && dateRange?.to) {
+      baselineDateRangeRef.current = { from: dateRange.from.getTime(), to: dateRange.to.getTime() };
+    }
+  }, [dateRange]);
+  const isDateRangeDeviated =
+    dateRange?.from != null &&
+    dateRange?.to != null &&
+    baselineDateRangeRef.current != null &&
+    (dateRange.from.getTime() !== baselineDateRangeRef.current.from ||
+      dateRange.to.getTime() !== baselineDateRangeRef.current.to);
+
+  const hasFiltersApplied =
+    selectedAccountType !== "all" ||
+    selectedEntityId !== "all" ||
+    selectedUserId !== "all" ||
+    showAvatarsOnly ||
+    voucherNumberSearch.trim() !== "" ||
+    selectedVoucherTypes.length !== 1 ||
+    selectedVoucherTypes[0] !== "all" ||
+    isDateRangeDeviated;
 
   return (
-    <div className={cn("space-y-6", isMobile && "w-full")}>
-      <Card className={cn(isMobile && "w-full")}>
-        <CardHeader className={cn("flex flex-row flex-wrap items-center justify-between gap-4", isMobile && "flex-col items-stretch gap-4 px-0.5")}>
-          <div className="flex items-center justify-between gap-4 w-full">
-            <div>
-              <CardTitle className="text-lg">{showAvatarsOnly ? "Account Avatars" : "Company File Gallery"}</CardTitle>
-              <CardDescription className="text-xs">{showAvatarsOnly ? "Profile pictures for parties, staff, etc." : "All transaction documents."}</CardDescription>
-            </div>
-            <Badge variant="secondary" className="text-[10px] px-2 py-0 shrink-0">Showing {filteredFilesCount} of {allFilesCount} files</Badge>
-          </div>
-          <div className={cn("flex items-center gap-2 flex-wrap", isMobile && "flex flex-row w-full gap-1.5 flex-nowrap min-w-0")}>
-            <div className={cn("flex h-10 items-center gap-0.5 border rounded-md shrink-0", isMobile ? "w-16 px-1" : "px-2")}>
-                {!isMobile && <Ruler className="h-4 w-4 text-muted-foreground shrink-0" />}
-                <Input type="text" value={previewSize} onChange={(e) => onSizeChange(e.target.value.replace(/[^0-9]/g, ''))} className={cn("h-8 border-0 focus-visible:ring-0", isMobile ? "w-9 p-0 text-center text-sm" : "w-20")} placeholder="Size" />
-                <span className="text-sm text-muted-foreground shrink-0">px</span>
-            </div>
-            <Button variant={showAvatarsOnly ? "secondary" : "outline"} onClick={() => setShowAvatarsOnly(!showAvatarsOnly)} className={isMobile ? "shrink-0" : ""}>{!isMobile && <UserCircle className="mr-2 h-4 w-4" />}Avatars</Button>
-            {mounted && (isMobile ? (
-              <div className="flex-1 min-w-0 overflow-hidden">
-                <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} className="w-full min-w-0 truncate" />
-              </div>
-            ) : (
-              <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} />
-            ))}
-            {!mounted && <Skeleton className="h-10 w-24 shrink-0" />}
-          </div>
-        </CardHeader>
-        <CardContent className={cn(isMobile && "px-0.5")}>
-    <div className={cn(
-      isMobile ? "flex flex-row flex-wrap gap-2 items-center" : "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 items-end"
-    )}>
-        {mounted ? (
-          <>
-        <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
-          <Combobox 
-            options={[{ id: 'all', label: 'All Accounts' }, ...CATEGORIES].map(c => ({ value: c.id, label: c.label }))} 
-            value={selectedAccountType} 
-            onChange={setSelectedAccountType} 
-            placeholder="Account Type" 
-          />
-        </div>
-        <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
-          <Combobox options={allEntityOptions} value={selectedEntityId} onChange={setSelectedEntityId} placeholder="Search Account..." />
-        </div>
-        <div className={cn(isMobile && "flex-1 min-w-[100px]")}>
-          <Combobox options={[{ value: 'all', label: 'All Users' }, ...userOptions]} value={selectedUserId} onChange={setSelectedUserId} placeholder="Filter by user" />
-        </div>
-        {(!isMobile || hasFiltersApplied) && (
-          <Button variant="ghost" onClick={handleClearFilters} size={isMobile ? "icon" : "default"} className={cn("h-10 border border-dashed", isMobile && "shrink-0")} title={isMobile ? "Clear filters" : undefined}>
-            <XCircle className={cn("h-4 w-4", !isMobile && "mr-2")} />
-            {!isMobile && "Clear All"}
-          </Button>
-        )}
-          </>
-        ) : (
-          <>
-            <Skeleton className="h-10 flex-1 min-w-[100px]" />
-            <Skeleton className="h-10 flex-1 min-w-[100px]" />
-            <Skeleton className="h-10 flex-1 min-w-[100px]" />
-          </>
-        )}
-           </div>
-        </CardContent>
-      </Card>
-
-      <div 
-        className="grid gap-x-8 gap-y-12" 
-        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}
+    <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", isMobile && "w-full")}>
+      {/* Sirf file grid yahan scroll — header/tab neeche wale footer card me fixed */}
+      <div
+        className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain", isMobile && "px-0.5")}
       >
-        {displayItems.map((item) => (
-            (item.fileUrls || []).map((url: string, index: number) => {
+        <TooltipProvider delayDuration={100}>
+        <div
+          className="grid gap-x-8 gap-y-12 pb-4"
+          style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}
+        >
+        {paginatedCompanyRows.map(({ item, url, fileIndex: index }) => {
               const cleanFileName = getCleanName(url.split('/').pop()?.split('?')[0] || '');
               const voucherDate = item.date?.toDate ? item.date.toDate() : new Date();
               const effectiveUserId = item.userId || (item as any).createdBy || (item as any).createdByUserId || (item as any).changedBy;
@@ -405,24 +548,22 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                 return `${formatDate(voucherDate)} (${formatDateBS(voucherDate)})`;
               };
 
-              return (
-                <TooltipProvider key={`${item.id}-${index}`} delayDuration={100}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+              const tileEl = (
                        <div className="relative group w-full flex flex-col gap-2 no-underline">
                          <div
                             className="relative w-full aspect-square border-2 border-transparent group-hover:border-primary group-hover:shadow-lg transition-all rounded-lg overflow-hidden bg-muted/30 cursor-pointer"
                             style={{ width: `${previewSize}px`, height: `${previewSize}px` }}
                             onClick={() => {
-                                const newMetadata = { contentType: url.includes('.pdf') ? 'application/pdf' : 'image/jpeg', contentDisposition: 'inline' };
-                                fetch(url).then(res => res.blob()).then(blob => {
-                                    const file = new File([blob], cleanFileName, { type: newMetadata.contentType });
-                                    const fileURL = URL.createObjectURL(file);
-                                    window.open(fileURL, '_blank');
+                                // Gallery tile: PDF/image app ke andar (static/APK/mobile); desktop par nayi tab
+                                const isPdf = String(url).toLowerCase().includes(".pdf");
+                                void openAttachmentInApp(url, {
+                                  title: cleanFileName,
+                                  kind: isPdf ? "pdf" : "image",
                                 });
                             }}
                          >
-                            <FilePreview file={url} size={Number(previewSize)} />
+                            {/* Gallery tile pe bahar wala tooltip hi bada preview dikhata hai — nested hover off */}
+                            <FilePreview file={url} size={Number(previewSize)} enableHoverFullPreview={false} />
                             {!item.isAvatar && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
@@ -456,30 +597,288 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                          <p className="text-[10px] text-center truncate px-2 text-muted-foreground">
                             {cleanFileName}
                          </p>
+                         <p className="text-[9px] text-center font-semibold uppercase tracking-wide text-muted-foreground">
+                            {getAttachmentFormatLabel(url)}
+                         </p>
                       </div>
+              );
+
+              // Prewarm chalta hue hover preview band — PDF tooltip turant na khule
+              const hoverPreviewActive = fullHoverPreview && !pdfPrewarmLoading;
+              if (isMobile || !hoverPreviewActive) {
+                return (
+                  <div key={`${item.id}-${index}`}>
+                    {tileEl}
+                  </div>
+                );
+              }
+
+              return (
+                <Tooltip key={`${item.id}-${index}`}>
+                    <TooltipTrigger asChild>
+                      {tileEl}
                     </TooltipTrigger>
-                    {!isMobile && (
-                      <TooltipContent className="text-xs p-2">
-                        <div className="space-y-1">
-                          <p><span className="font-semibold">Voucher No:</span> {item.voucherNumber}</p>
-                          <p className="max-w-xs"><span className="font-semibold">Account:</span> {accountName}</p>
-                          <p><span className="font-semibold">Date:</span> {displayDate()}</p>
-                          <p><span className="font-semibold">Time:</span> {format(voucherDate, "h:mm a")}</p>
-                          <p><span className="font-semibold">By:</span> {userName}</p>
-                        </div>
-                        {!item.isAvatar && (
-                          <Button variant="link" size="sm" className="p-0 h-auto text-xs mt-2" onClick={() => onEditVoucher(item)}>
-                            <Edit className="h-3 w-3 mr-1" /> Edit Voucher
-                          </Button>
+                      <TooltipContent
+                        side="right"
+                        align="center"
+                        sideOffset={10}
+                        collisionPadding={12}
+                        avoidCollisions
+                        className={cn(
+                          "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] border bg-background p-0 shadow-lg",
+                          "overflow-x-hidden overflow-y-auto"
                         )}
+                      >
+                        {/* flip: right ↔ left; andar preview 600×700 fix */}
+                        <div className="flex w-full min-w-0 max-w-full flex-col">
+                          <div
+                            className="flex shrink-0 items-center justify-center overflow-auto border-b bg-muted/20 p-2"
+                            style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
+                          >
+                            {(() => {
+                              const cleanU = String(url).split("?")[0].toLowerCase();
+                              const isImage =
+                                /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(url).startsWith("data:image/");
+                              const openAtt = () =>
+                                void openAttachmentInApp(url, {
+                                  title: cleanFileName,
+                                  kind: isImage ? "image" : String(url).toLowerCase().includes(".pdf") ? "pdf" : "other",
+                                });
+                              return isImage ? (
+                                // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
+                                <img
+                                  src={url}
+                                  alt=""
+                                  className="h-auto max-h-full w-full max-w-full cursor-pointer object-contain"
+                                  onClick={openAtt}
+                                />
+                              ) : (
+                                <FilePreview
+                                  file={url}
+                                  size={700}
+                                  previewBox={GALLERY_HOVER_PREVIEW_BOX}
+                                  objectFit="contain"
+                                  enableHoverFullPreview={false}
+                                  showFormatBadge={false}
+                                />
+                              );
+                            })()}
+                          </div>
+                          <p className="border-b px-2 py-1 text-center text-[10px] font-bold text-muted-foreground">
+                            {getAttachmentFormatLabel(url)}
+                          </p>
+                          <div className="space-y-1 p-2 text-xs">
+                            <p><span className="font-semibold">Voucher No:</span> {item.voucherNumber}</p>
+                            <p className="max-w-xs"><span className="font-semibold">Account:</span> {accountName}</p>
+                            <p><span className="font-semibold">Date:</span> {displayDate()}</p>
+                            <p><span className="font-semibold">Time:</span> {format(voucherDate, "h:mm a")}</p>
+                            <p><span className="font-semibold">By:</span> {userName}</p>
+                          </div>
+                          {!item.isAvatar && (
+                            <div className="border-t p-2">
+                              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => onEditVoucher(item)}>
+                                <Edit className="mr-1 h-3 w-3" /> Edit Voucher
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-              )
-            })
-        ))}
+                </Tooltip>
+              );
+        })}
+        </div>
+        </TooltipProvider>
       </div>
+
+      <Card
+        className={cn(
+          // Halka neela footer + clear card border (charon taraf)
+          "shrink-0 rounded-b-none border-2 border-blue-300/90 bg-blue-100/90 shadow-[0_-4px_12px_-4px_rgba(30,58,138,0.12)] sm:rounded-b-lg dark:border-blue-800/70 dark:bg-blue-950/45",
+          isMobile && "w-full"
+        )}
+      >
+        <CardHeader
+          className={cn(
+            // Default CardHeader p-6 hatake ~40% kam vertical: p-3 + chhota gap
+            "flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 !p-3 bg-transparent sm:gap-2",
+            isMobile && "flex-col items-stretch gap-2 px-0.5"
+          )}
+        >
+          <div className="flex w-full items-center justify-between gap-2">
+            <div className="min-w-0">
+              <CardTitle className="text-base font-semibold leading-tight">
+                {showAvatarsOnly ? "Account Avatars" : "Company File Gallery"}
+              </CardTitle>
+              <CardDescription className="text-[11px] leading-snug">
+                {showAvatarsOnly ? "Profile pictures for parties, staff, etc." : "All transaction documents."}
+              </CardDescription>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-start sm:gap-2">
+              <Badge
+                variant="secondary"
+                className="max-w-[min(100%,280px)] px-2 py-0 text-center text-[10px] sm:max-w-none sm:text-right"
+              >
+                {companyFlatRows.length === 0
+                  ? `Showing 0 of ${allFilesCount} files`
+                  : `Showing ${companySliceStart + 1}–${Math.min(companySliceStart + companyFilesPerPage, companyFlatRows.length)} of ${filteredFilesCount} files (${allFilesCount} in company)`}
+              </Badge>
+              {/* Per page ke niche page prev/next — same card */}
+              <div className="flex flex-col items-end gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="whitespace-nowrap text-[10px] text-muted-foreground">Per page</span>
+                  {/* Radix Select SSR par random aria-controls; mount ke baad hi render = hydration mismatch avoid */}
+                  {mounted ? (
+                    <Select
+                      value={String(companyFilesPerPage)}
+                      onValueChange={(v) => {
+                        setCompanyFilesPerPage(Number(v));
+                        setCompanyFilesPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="h-9 w-[76px] text-xs" aria-label="Files per page">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GALLERY_FILES_PER_PAGE_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Skeleton className="h-9 w-[76px] rounded-md" />
+                  )}
+                </div>
+                <GalleryPagerInCard
+                  page={companyPageClamped}
+                  totalPages={companyTotalPages}
+                  onPageChange={setCompanyFilesPage}
+                />
+              </div>
+            </div>
+          </div>
+          <div className={cn("flex flex-wrap items-center gap-1.5", isMobile && "flex min-w-0 w-full flex-row flex-nowrap gap-1.5")}>
+            <div className={cn("flex h-9 shrink-0 items-center gap-0.5 rounded-md border bg-background", isMobile ? "w-16 px-1" : "px-2")}>
+              {!isMobile && <Ruler className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              <Input
+                type="text"
+                value={previewSize}
+                onChange={(e) => onSizeChange(e.target.value.replace(/[^0-9]/g, ""))}
+                className={cn("h-9 border-0 p-0 text-xs focus-visible:ring-0", isMobile ? "w-9 text-center" : "w-20")}
+                placeholder="Size"
+              />
+              <span className="shrink-0 text-xs text-muted-foreground">px</span>
+            </div>
+            <Button
+              variant={showAvatarsOnly ? "secondary" : "outline"}
+              onClick={() => setShowAvatarsOnly(!showAvatarsOnly)}
+              className={cn("h-9 shrink-0 px-2.5 text-xs", isMobile && "shrink-0")}
+            >
+              {!isMobile && <UserCircle className="mr-1.5 h-3.5 w-3.5" />}
+              Avatars
+            </Button>
+            {mounted &&
+              (isMobile ? (
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <BsDatePicker
+                    valueAD={dateRange}
+                    onChangeAD={setDateRange as any}
+                    className="h-9 min-h-9 w-full min-w-0 px-2 text-xs"
+                  />
+                </div>
+              ) : (
+                <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} className="h-9 min-h-9 px-2 text-xs" />
+              ))}
+            {!mounted && <Skeleton className="h-9 w-[180px] shrink-0 rounded-md" />}
+          </div>
+        </CardHeader>
+        <CardContent className={cn("bg-transparent px-3 pb-2.5 pt-0", isMobile && "px-0.5")}>
+          <div
+            className={cn(
+              isMobile ? "flex flex-row flex-wrap items-center gap-1.5" : "grid grid-cols-2 items-center gap-2 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-7"
+            )}
+          >
+            {mounted ? (
+              <>
+                <div className={cn(isMobile && "min-w-[100px] flex-1")}>
+                  <Combobox
+                    options={[{ id: "all", label: "All Accounts" }, ...CATEGORIES].map((c) => ({ value: c.id, label: c.label }))}
+                    value={selectedAccountType}
+                    onChange={setSelectedAccountType}
+                    placeholder="Account Type"
+                    triggerClassName="h-9 text-xs"
+                  />
+                </div>
+                <div className={cn(isMobile && "min-w-[100px] flex-1")}>
+                  <Combobox
+                    options={allEntityOptions}
+                    value={selectedEntityId}
+                    onChange={setSelectedEntityId}
+                    placeholder="Search Account..."
+                    triggerClassName="h-9 text-xs"
+                  />
+                </div>
+                <div className={cn(isMobile && "min-w-[100px] flex-1")}>
+                  <Combobox
+                    options={[{ value: "all", label: "All Users" }, ...userOptions]}
+                    value={selectedUserId}
+                    onChange={setSelectedUserId}
+                    placeholder="Filter by user"
+                    triggerClassName="h-9 text-xs"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant={fullHoverPreview ? "secondary" : "outline"}
+                  className={cn("inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-xs", isMobile && "min-w-[100px] flex-1")}
+                  disabled={pdfPrewarmLoading}
+                  onClick={() => setFullHoverPreview((v) => !v)}
+                  aria-pressed={fullHoverPreview}
+                  aria-busy={pdfPrewarmLoading}
+                  title={
+                    pdfPrewarmLoading
+                      ? "PDF preview load ho raha hai…"
+                      : fullHoverPreview
+                        ? "Hover preview on"
+                        : "Hover preview off"
+                  }
+                >
+                  {pdfPrewarmLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                  ) : fullHoverPreview ? (
+                    <Eye className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <EyeOff className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  Full preview
+                </Button>
+                {hasFiltersApplied && (
+                  <Button
+                    variant="ghost"
+                    onClick={handleClearFilters}
+                    size={isMobile ? "icon" : "sm"}
+                    className={cn(
+                      "h-9 border border-dashed border-blue-400/70 px-2.5 text-xs dark:border-blue-600/70",
+                      isMobile && "w-9 shrink-0 p-0"
+                    )}
+                    title={isMobile ? "Clear filters" : undefined}
+                  >
+                    <XCircle className={cn("h-3.5 w-3.5", !isMobile && "mr-1.5")} />
+                    {!isMobile && "Clear All"}
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                <Skeleton className="h-9 min-w-[100px] flex-1 rounded-md" />
+                <Skeleton className="h-9 min-w-[100px] flex-1 rounded-md" />
+                <Skeleton className="h-9 min-w-[100px] flex-1 rounded-md" />
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -541,6 +940,30 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const [isRenaming, setIsRenaming] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedUploaderId, setSelectedUploaderId] = useState<string | "all">("all");
+  const [unassignedFilesPerPage, setUnassignedFilesPerPage] = useState(DEFAULT_GALLERY_FILES_PER_PAGE);
+  const [unassignedFilesPage, setUnassignedFilesPage] = useState(1);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("galleryUnassignedFilesPerPage");
+      const n = raw ? parseInt(raw, 10) : NaN;
+      if (isValidGalleryPageSize(n)) setUnassignedFilesPerPage(n);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("galleryUnassignedFilesPerPage", String(unassignedFilesPerPage));
+    } catch {
+      /* ignore */
+    }
+  }, [unassignedFilesPerPage]);
+
+  useEffect(() => {
+    setUnassignedFilesPage(1);
+  }, [selectedUploaderId, dateRange?.from?.getTime(), dateRange?.to?.getTime()]);
 
   useEffect(() => {
     // Mark mounted on client so popover ids are generated only client-side for these controls.
@@ -686,14 +1109,10 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       const compressedFile = idx >= 0 ? compressedFiles[idx] : null;
       if (!compressedFile) return;
       try {
-        const uploadResult = await uploadFile(
+        const uploadResult = await uploadFileClient(
           { name: compressedFile.name, type: compressedFile.type, arrayBuffer: await compressedFile.arrayBuffer() },
           companyId!,
           company?.name,
-          "unassigned",
-          undefined,
-          undefined,
-          undefined,
           new Date()
         );
         if (uploadResult.success) {
@@ -766,7 +1185,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     if (!fileToDelete || !companyId) return;
     setIsDeleting(true);
     try {
-        await deleteFileFromStorage(fileToDelete.path);
+        await deleteFileFromStorageClient(fileToDelete.path);
         await decrementCompanyStorage(companyId, {
           attachmentsBytes: fileToDelete.size,
           storageBytes: fileToDelete.size,
@@ -800,6 +1219,18 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     return filtered;
   }, [unassignedFiles, selectedUploaderId, dateRange]);
 
+  const unassignedTotalPages = Math.max(1, Math.ceil(filteredFiles.length / unassignedFilesPerPage));
+  const unassignedPageClamped = Math.min(Math.max(1, unassignedFilesPage), unassignedTotalPages);
+  const unassignedSliceStart = (unassignedPageClamped - 1) * unassignedFilesPerPage;
+  const paginatedUnassignedFiles = useMemo(
+    () => filteredFiles.slice(unassignedSliceStart, unassignedSliceStart + unassignedFilesPerPage),
+    [filteredFiles, unassignedSliceStart, unassignedFilesPerPage]
+  );
+
+  useEffect(() => {
+    if (unassignedFilesPage !== unassignedPageClamped) setUnassignedFilesPage(unassignedPageClamped);
+  }, [unassignedFilesPage, unassignedPageClamped]);
+
   const formatBytes = (bytes: number, decimals = 2) => {
     if (!bytes || bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -810,67 +1241,18 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   };
 
   return (
-    <div className="space-y-6">
-        <Card>
-        <CardHeader className="space-y-6">
-  <div className="flex items-center justify-between">
-    <div>
-      <CardTitle className="text-lg font-bold">Unassigned Documents</CardTitle>
-      <CardDescription className="text-xs">Drag or click to upload. Attach them to vouchers later.</CardDescription>
-    </div>
-    <Badge variant="secondary" className="text-[10px] px-2 py-0 shrink-0">Showing {filteredFiles.length} of {unassignedFiles.length} files</Badge>
-  </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {/* Upload + tiles scroll; filters/title footer me fix (company tab jaisa) */}
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden overscroll-contain pb-2">
+        <div
+          {...getRootProps()}
+          className="cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors hover:bg-slate-50"
+        >
+          <input {...getInputProps()} />
+          <UploadCloud className="mx-auto h-10 w-10 text-slate-400" />
+          <p className="mt-2 text-sm text-slate-500">Drag or click to upload</p>
+        </div>
 
-  <div className="flex flex-wrap items-center gap-4 w-full bg-muted/30 p-4 rounded-xl border">
-    <div className="flex-shrink-0">
-      {isHydrated ? (
-        <BsDatePicker valueAD={dateRange} onChangeAD={setDateRange as any} />
-      ) : (
-        // Keep SSR/client first paint identical while hydration completes.
-        <Button type="button" variant="outline" className="h-10 w-[190px] justify-start text-muted-foreground" disabled>
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          Pick a date range
-        </Button>
-      )}
-    </div>
-
-    <div className="flex-1 min-w-[200px] max-w-[300px]">
-      {isHydrated ? (
-        <Combobox options={[{ value: 'all', label: 'All Users' }, ...uploaderOptions]} value={selectedUploaderId} onChange={setSelectedUploaderId} placeholder="Filter by user"/>
-      ) : (
-        // Keep SSR/client first paint identical while hydration completes.
-        <Button type="button" variant="outline" className="h-10 w-full justify-start text-muted-foreground" disabled>
-          Filter by user
-        </Button>
-      )}
-    </div>
-
-    <Button variant="ghost" onClick={() => { setDateRange(undefined); setSelectedUploaderId('all')}} className="hover:text-destructive">
-      <XCircle className="mr-2 h-4 w-4"/>Clear
-    </Button>
-
-    <div className="flex items-center gap-3 bg-background border-2 border-primary/20 rounded-lg px-3 h-11 ml-auto shadow-sm">
-      <Ruler className="h-4 w-4 text-primary" />
-      <div className="flex items-center">
-        <Input 
-          type="text" 
-          value={previewSize} 
-          onChange={(e) => onSizeChange(e.target.value.replace(/[^0-9]/g, ''))} 
-          className="w-16 h-8 border-0 focus-visible:ring-0 text-center font-bold p-0" 
-        />
-        <span className="text-xs font-bold text-muted-foreground ml-1">px</span>
-      </div>
-    </div>
-  </div>
-</CardHeader>
-            <CardContent>
-                <div {...getRootProps()} className="border-2 border-dashed rounded-lg p-10 text-center cursor-pointer hover:bg-slate-50 transition-colors">
-                    <input {...getInputProps()} /><UploadCloud className="mx-auto h-10 w-10 text-slate-400" />
-                    <p className="mt-2 text-sm text-slate-500">Drag or click to upload</p>
-                </div>
-            </CardContent>
-        </Card>
-        
         <div className="grid gap-x-8 gap-y-12" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}>
             {uploadingFiles.map((file) => (
               <div key={file.id} className="relative w-full flex flex-col gap-2">
@@ -883,7 +1265,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                   <p className="text-[10px] text-center truncate px-2 text-muted-foreground">{file.name}</p>
               </div>
             ))}
-            {filteredFiles.map((file) => {
+            {paginatedUnassignedFiles.map((file) => {
               const uploadDate = file.uploadedAt?.toDate ? file.uploadedAt.toDate() : new Date();
               // Keep tooltip/uploader text consistent with dropdown fallback behavior.
               const resolved = userNames[file.uploadedBy];
@@ -904,7 +1286,13 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                     <TooltipTrigger asChild>
                        <div className="relative group w-full flex flex-col gap-2">
                             <div className="relative w-full aspect-square border-2 border-transparent group-hover:border-primary group-hover:shadow-lg transition-all rounded-lg overflow-hidden bg-muted/30" style={{ width: `${previewSize}px`, height: `${previewSize}px` }}>
-                                <FilePreview file={file.url} size={Number(previewSize)} fileSize={file.size} storagePath={file.path} />
+                                <FilePreview
+                                  file={file.url}
+                                  size={Number(previewSize)}
+                                  fileSize={file.size}
+                                  storagePath={file.path}
+                                  enableHoverFullPreview={false}
+                                />
                                 <div className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <Button variant="destructive" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setFileToDelete(file); }}>
                                         <Trash2 className="h-4 w-4"/>
@@ -927,19 +1315,182 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                                 </DropdownMenu>
                             </div>
                             <p className="text-[10px] text-center truncate px-2 text-muted-foreground">{cleanFileName}</p>
+                            <p className="text-[9px] text-center font-semibold uppercase tracking-wide text-muted-foreground">
+                              {getAttachmentFormatLabel(file.url)}
+                            </p>
                         </div>
                     </TooltipTrigger>
-                    <TooltipContent className="text-xs space-y-1 p-2">
-                        <p><span className="font-semibold">File:</span> {cleanFileName}</p>
-                        {file.size && <p><span className="font-semibold">Size:</span> {formatBytes(file.size)}</p>}
-                        <p><span className="font-semibold">Date:</span> {displayDate()}</p>
-                        <p><span className="font-semibold">Time:</span> {format(uploadDate, "h:mm a")}</p>
-                        <p><span className="font-semibold">By:</span> {uploaderName}</p>
+                    <TooltipContent
+                      side="right"
+                      align="center"
+                      sideOffset={10}
+                      collisionPadding={12}
+                      avoidCollisions
+                      className={cn(
+                        "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] border bg-background p-0 shadow-lg",
+                        "overflow-x-hidden overflow-y-auto"
+                      )}
+                    >
+                      <div className="flex w-full min-w-0 max-w-full flex-col">
+                        <div
+                          className="flex shrink-0 items-center justify-center overflow-auto border-b bg-muted/20 p-2"
+                          style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
+                        >
+                          {(() => {
+                            const cleanU = String(file.url).split("?")[0].toLowerCase();
+                            const isImage =
+                              /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/");
+                            return isImage ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={file.url}
+                                alt=""
+                                className="h-auto max-h-full w-full max-w-full object-contain"
+                              />
+                            ) : (
+                              <FilePreview
+                                file={file.url}
+                                storagePath={file.path}
+                                size={700}
+                                previewBox={GALLERY_HOVER_PREVIEW_BOX}
+                                objectFit="contain"
+                                enableHoverFullPreview={false}
+                                showFormatBadge={false}
+                                fileSize={file.size}
+                              />
+                            );
+                          })()}
+                        </div>
+                        <p className="border-b px-2 py-1 text-center text-[10px] font-bold text-muted-foreground">
+                          {getAttachmentFormatLabel(file.url)}
+                        </p>
+                        <div className="space-y-1 p-2 text-xs">
+                          <p><span className="font-semibold">File:</span> {cleanFileName}</p>
+                          {file.size ? <p><span className="font-semibold">Size:</span> {formatBytes(file.size)}</p> : null}
+                          <p><span className="font-semibold">Date:</span> {displayDate()}</p>
+                          <p><span className="font-semibold">Time:</span> {format(uploadDate, "h:mm a")}</p>
+                          <p><span className="font-semibold">By:</span> {uploaderName}</p>
+                        </div>
+                      </div>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
             )})}
         </div>
+      </div>
+
+      <Card className="shrink-0 rounded-b-none border-b-0 shadow-[0_-4px_12px_-4px_rgba(0,0,0,0.08)] sm:rounded-b-lg sm:border-b">
+        <CardHeader className="space-y-0 !p-3 pb-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <CardTitle className="text-base font-bold leading-tight">Unassigned Documents</CardTitle>
+              <CardDescription className="text-[11px] leading-snug">
+                Drag or click to upload. Attach them to vouchers later.
+              </CardDescription>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-start sm:gap-2">
+              <Badge
+                variant="secondary"
+                className="max-w-[min(100%,280px)] px-2 py-0 text-center text-[10px] sm:max-w-none sm:text-right"
+              >
+                {filteredFiles.length === 0
+                  ? `Showing 0 of ${unassignedFiles.length} files`
+                  : `Showing ${unassignedSliceStart + 1}–${Math.min(unassignedSliceStart + unassignedFilesPerPage, filteredFiles.length)} of ${filteredFiles.length} files (${unassignedFiles.length} total)`}
+              </Badge>
+              <div className="flex flex-col items-end gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="whitespace-nowrap text-[10px] text-muted-foreground">Per page</span>
+                  {isHydrated ? (
+                    <Select
+                      value={String(unassignedFilesPerPage)}
+                      onValueChange={(v) => {
+                        setUnassignedFilesPerPage(Number(v));
+                        setUnassignedFilesPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="h-9 w-[76px] text-xs" aria-label="Files per page">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GALLERY_FILES_PER_PAGE_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Skeleton className="h-9 w-[76px] rounded-md" />
+                  )}
+                </div>
+                <GalleryPagerInCard
+                  page={unassignedPageClamped}
+                  totalPages={unassignedTotalPages}
+                  onPageChange={setUnassignedFilesPage}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex w-full flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2">
+            <div className="flex-shrink-0">
+              {isHydrated ? (
+                <BsDatePicker
+                  valueAD={dateRange}
+                  onChangeAD={setDateRange as any}
+                  className="h-9 min-h-9 px-2 text-xs"
+                />
+              ) : (
+                <Button type="button" variant="outline" className="h-9 w-[190px] justify-start text-xs text-muted-foreground" disabled>
+                  <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+                  Pick a date range
+                </Button>
+              )}
+            </div>
+
+            <div className="min-w-[200px] max-w-[300px] flex-1">
+              {isHydrated ? (
+                <Combobox
+                  options={[{ value: "all", label: "All Users" }, ...uploaderOptions]}
+                  value={selectedUploaderId}
+                  onChange={setSelectedUploaderId}
+                  placeholder="Filter by user"
+                  triggerClassName="h-9 text-xs"
+                />
+              ) : (
+                <Button type="button" variant="outline" className="h-9 w-full justify-start text-xs text-muted-foreground" disabled>
+                  Filter by user
+                </Button>
+              )}
+            </div>
+
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setDateRange(undefined);
+                setSelectedUploaderId("all");
+              }}
+              className="h-9 px-2.5 text-xs hover:text-destructive"
+            >
+              <XCircle className="mr-1.5 h-3.5 w-3.5" />
+              Clear
+            </Button>
+
+            <div className="ml-auto flex h-9 items-center gap-2 rounded-md border-2 border-primary/20 bg-background px-2 shadow-sm">
+              <Ruler className="h-3.5 w-3.5 text-primary" />
+              <div className="flex items-center">
+                <Input
+                  type="text"
+                  value={previewSize}
+                  onChange={(e) => onSizeChange(e.target.value.replace(/[^0-9]/g, ""))}
+                  className="h-9 w-14 border-0 p-0 text-center text-xs font-bold focus-visible:ring-0"
+                />
+                <span className="ml-0.5 text-[11px] font-bold text-muted-foreground">px</span>
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
 
         <AlertDialog open={!!fileToDelete} onOpenChange={(open) => !open && setFileToDelete(null)}>
             <AlertDialogContent>
@@ -1035,6 +1586,13 @@ function GalleryPageContent() {
     localStorage.setItem('galleryPreviewSize', String(previewSize));
   }, [previewSize]);
 
+  // PDF hover pe pdf.js pehli baar ~few sec — gallery open hote hi chunk load karke pehle PDF thoda jaldi
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    void import("pdfjs-dist");
+    void import("@/lib/pdfToImage");
+  }, []);
+
   // Sync tab from URL (e.g. browser back/forward or direct link)
   useEffect(() => {
     setActiveTab(getTabFromSearchParams(searchParams));
@@ -1093,8 +1651,8 @@ function GalleryPageContent() {
   }, [isEditVoucherOpen]);
 
   return (
-    <div className="px-0.5 py-4 sm:p-6 md:p-8 h-full flex flex-col">
-       <div className="grid grid-cols-2 gap-4 mb-6">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden px-0.5 py-4 sm:p-6 md:p-8">
+       <div className="mb-6 grid shrink-0 grid-cols-2 gap-4">
           <Button
             onClick={() => setGalleryTab('company-files')}
             className={cn(
@@ -1119,12 +1677,15 @@ function GalleryPageContent() {
           </Button>
         </div>
 
+        {/* min-h-0: dashboard main ke andar sirf yahan grid scroll, tab row + footer card fixed */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {activeTab === 'company-files' && (
            <CompanyFilesTab previewSize={Number(previewSize)} onSizeChange={setPreviewSize} onEditVoucher={handleEditVoucherClick} />
         )}
         {activeTab === 'unassigned' && (
            <UnassignedDocumentsTab handleAttachToVoucher={handleAttachToVoucher} previewSize={Number(previewSize)} onSizeChange={setPreviewSize} />
         )}
+        </div>
 
         {/* Dialog for creating new voucher from unassigned */}
         <AddVoucherDialog 

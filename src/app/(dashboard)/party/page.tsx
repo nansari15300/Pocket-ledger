@@ -45,6 +45,10 @@ import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
@@ -96,6 +100,15 @@ function PartyPageContent() {
 
   const [activeView, setActiveView] = useState("parties");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Party | Group>(`party_view_${activeView}`);
+  // APK / static Electron: wide window par bhi ?selected= rakho taaki header Report button ko id mile
+  const useQueryNav = useMasterDetailQueryNav();
+
+  // List farkina: replace (push jasto double history hoina) + hardware back ma pani (Capacitor) yahi logic
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("party"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -127,6 +140,8 @@ function PartyPageContent() {
 
   const selectedParty = activeView === 'parties' ? selected as Party : null;
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
+  // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
+  useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
 
   const overdueVirtualParty = useMemo((): Party | null => {
     if (!hasOverdueTransactions || overdueTransactions.length === 0) return null;
@@ -264,7 +279,8 @@ function PartyPageContent() {
     if (selectedIdFromUrl === OVERDUE_ACCOUNT_ID && overdueVirtualParty) {
       setActiveView("parties");
       setSelected(overdueVirtualParty);
-      router.replace("/party", { scroll: false });
+      // ?selected= rakho taaki header / refresh par state URL se align rahe (bare /party se flicker kam)
+      router.replace(`/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`, { scroll: false });
       return;
     }
     const groupItem = processedGroups.find((i) => i.id === selectedIdFromUrl);
@@ -273,7 +289,12 @@ function PartyPageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (partyItem) setActiveView("parties");
     if (item) setSelected(item);
-    router.replace("/party", { scroll: false });
+    // URL me ?selected= / view=groups rakhna: router.replace("/party") se hataane par header Report + static build break ho jata tha
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/party?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/party?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -364,10 +385,11 @@ function PartyPageContent() {
   }, [activeView, processedParties, processedGroups]);
 
   const handleSelect = (item: Party | Group) => {
-    if (isMobile) {
+    if (useQueryNav) {
+        // Static export ke liye query params use karte hain – /party/[id] path 404 de sakta hai
         const path = item.id === OVERDUE_ACCOUNT_ID
           ? `/party?selected=${OVERDUE_ACCOUNT_ID}`
-          : 'pan' in item ? `/party/${item.id}` : (item.id === 'ungrouped' ? '/party?view=groups' : `/party/group/${item.id}`);
+          : 'pan' in item ? `/party?selected=${item.id}` : `/party?view=groups&selected=${item.id}`;
         router.push(path);
     } else {
         setSelected(item);
@@ -462,11 +484,20 @@ function PartyPageContent() {
                 topPartyId={hasOverdueTransactions ? OVERDUE_ACCOUNT_ID : undefined}
                 overdueVoucherCount={hasOverdueTransactions ? overdueTransactions.length : undefined}
                 pendingApprovalByPartyId={pendingApprovalByPartyId}
+                getItemHref={useQueryNav ? (p) => (p.id === OVERDUE_ACCOUNT_ID ? undefined : `/party?selected=${p.id}`) : undefined}
               />
               </div>
             </>
         ) : (
-            <PartyGroupList groups={processedGroups} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} pendingApprovalByGroupId={pendingApprovalByGroupId} />
+            <PartyGroupList
+              groups={processedGroups}
+              onSelectGroup={handleSelect}
+              selectedGroup={selectedGroup}
+              searchTerm={searchTerm}
+              collapsible={false}
+              pendingApprovalByGroupId={pendingApprovalByGroupId}
+              getItemHref={useQueryNav ? (g) => `/party?view=groups&selected=${g.id}` : undefined}
+            />
         )}
     </div>
   );
@@ -558,8 +589,11 @@ function PartyPageContent() {
               </div>
             </div>
           </div>
-          {/* Transaction list – mobile cards (Statement / Bill wise from context) */}
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <TransactionsTable
               transactions={mobileFilteredOverdue}
               context="party"
@@ -683,6 +717,8 @@ function PartyPageContent() {
         detailView={detailView}
         isMobile={isMobile}
         mobileListOnly={true}
+        hasSelectedItem={!!selected}
+        onBackToList={onBackToList}
       />
       <AddVoucherDialog
         isOpen={!!overdueVoucherToEdit}

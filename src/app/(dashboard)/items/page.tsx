@@ -32,6 +32,10 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
@@ -76,11 +80,18 @@ function ItemsPageContent() {
     return map;
   }, [processedItems, pendingApprovalByItemId, showApproveOnList]);
   const isMobile = useIsMobile();
+  const useQueryNav = useMasterDetailQueryNav();
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [activeView, setActiveView] = useState("items");
   const { selected, setSelected } = useResponsiveListLayout<Item | ItemGroup>(`items_view_${activeView}`);
+
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("items"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [stockView, setStockView] = useState<StockView>("amount");
@@ -102,10 +113,17 @@ function ItemsPageContent() {
 
   const selectedItem = activeView === "items" ? (selected as Item) : null;
   const selectedItemGroup = activeView === "groups" ? (selected as ItemGroup) : null;
+  useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroup?.id ?? null);
 
   const processedItemGroups = useMemo(() => {
-    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
-    const baseGroups = initialProcessedItemGroups.filter((g) => (g as any).isAutoUngrouped !== true);
+    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
+    const baseGroups = initialProcessedItemGroups.filter((g) => {
+      const anyG = g as any;
+      if (anyG.isAutoUngrouped === true) return false;
+      if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
+      if (isSystemParentGroup("item_groups", anyG.id)) return false;
+      return true;
+    });
     // Show Ungrouped row only when at least one item is in the Ungrouped bucket.
     const ungrouped = processedItems.filter((p: any) => !p.groupId || p.groupId === "ungrouped_item");
     if (ungrouped.length > 0) {
@@ -155,7 +173,11 @@ function ItemsPageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (itemFromList) setActiveView("items");
     if (item) setSelected(item);
-    router.replace("/items", { scroll: false });
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/items?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/items?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, allItems, processedItemGroups, setSelected, setActiveView, router]);
 
   const storageKey = `itemDisplayUnits_${user?.uid}`;
@@ -268,11 +290,12 @@ function ItemsPageContent() {
   }, [processedItemGroups, searchTerm]);
 
   const handleSelect = (item: Item | ItemGroup) => {
-    if (isMobile) {
+    if (useQueryNav) {
+      // Static export ke liye query params – /items/[id] path refresh/redirect de sakta hai
       if ("type" in item) {
-        router.push(`/items/${item.id}`);
+        router.push(`/items?selected=${item.id}`);
       } else if (item.id !== "ungrouped") {
-        router.push(`/items/group/${item.id}`);
+        router.push(`/items?view=groups&selected=${item.id}`);
       } else {
         setSelected(item);
       }
@@ -354,6 +377,7 @@ function ItemsPageContent() {
               stockView={stockView}
               itemDisplayUnits={itemDisplayUnits}
               pendingApprovalByItemId={pendingApprovalByItemId}
+              getItemHref={useQueryNav ? (i) => `/items?selected=${i.id}` : undefined}
             />
           </div>
         </>
@@ -370,6 +394,7 @@ function ItemsPageContent() {
               selectedGroup={selectedItemGroup}
               searchTerm={searchTerm}
               pendingApprovalByGroupId={pendingApprovalByItemGroupId}
+              getItemHref={useQueryNav ? (g) => `/items?view=groups&selected=${g.id}` : undefined}
             />
           </div>
         </>
@@ -445,6 +470,8 @@ function ItemsPageContent() {
       detailView={detailView}
       isMobile={isMobile}
       mobileListOnly={true}
+      hasSelectedItem={!!selected}
+      onBackToList={onBackToList}
     />
   );
 }

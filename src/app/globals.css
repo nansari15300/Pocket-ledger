@@ -3,6 +3,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Master–detail lists: grid → dayaan amount (auto width) poora, baayaan naam minmax(0,1fr) + truncate */
+@layer components {
+  .pl-master-list-row {
+    @apply grid w-full max-w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 overflow-hidden;
+  }
+  .pl-master-list-row-leading {
+    @apply flex min-w-0 items-center gap-2 overflow-hidden;
+  }
+  .pl-master-list-row-name {
+    @apply min-w-0 flex-1 truncate text-left text-sm font-medium;
+  }
+  .pl-master-list-row-name-strong {
+    @apply min-w-0 flex-1 truncate text-left text-sm font-semibold;
+  }
+  /* Amount: grid col auto — Rs. xxxx Dr/Cr kabhi clip nahin; naam pehle ghatcha */
+  .pl-master-list-row-amount {
+    @apply justify-self-end text-right text-sm font-medium whitespace-nowrap tabular-nums;
+  }
+  .pl-master-list-row-amount-xs {
+    @apply justify-self-end text-right text-xs font-bold whitespace-nowrap tabular-nums;
+  }
+}
+
 /* Spend-wise group balance: one visible blink per second when balance !== 0 */
 @keyframes spend-wise-balance-blink {
   0%, 100% { opacity: 1; }
@@ -854,6 +877,17 @@ button.day_selected.is-today.has-transactions {
   }
   .scrollbar-slim-dim::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.35);
+  }
+
+  /* Touch-friendly scroll for Capacitor/Android WebView – APK mein details/group details pages pe scroll kaam kare */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: scroll !important;
+    overflow-x: auto;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    /* Android WebView: scroll container ko explicit height constraint */
+    min-height: 0;
   }
 
   /* Extra thin, dim scrollbar */

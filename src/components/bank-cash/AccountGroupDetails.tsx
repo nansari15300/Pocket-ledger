@@ -152,7 +152,7 @@ export function AccountGroupDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
@@ -191,11 +191,11 @@ export function AccountGroupDetails({
       closingBalance = periodDr - periodCr;
   }
 
-  // Spend Wise: never show notes. Statement view: show/hide notes by showNotes (localStorage).
+  // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
     if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
-    return showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
-  }, [processedTransactions, spendWiseView, showNotes]);
+    return includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+  }, [processedTransactions, spendWiseView, includeNotesInTable]);
   const displayTransactions = useMemo(() => {
     if (!spendWiseView || !vouchers?.length) return baseTransactions;
     // Date range overwrite: if any transaction in a group is in range, show full group (all linked rows)
@@ -791,7 +791,7 @@ export function AccountGroupDetails({
         openingBalance: isBalanceMasked ? 0 : openingBalanceForPeriod, 
         transactions: printTransactions,
         showNarration: showNarration,
-        includeNotes: showNotes,
+        includeNotes: includeNotesInTable,
         visibleColumns: visibleColumns,
         preserveOrder: spendWiseView,
         spendWise: Boolean(spendWiseView),
@@ -883,7 +883,11 @@ export function AccountGroupDetails({
               </div>
             </div>
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <TransactionsTable
@@ -1221,7 +1225,8 @@ export function AccountGroupDetails({
             </div>
           </div>
         </div>
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim">
+        {/* scroll-touch for APK/WebView touch scroll */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-auto scrollbar-slim-dim scroll-touch">
           <div className={cn("py-4 min-w-0", spendWiseView && "p-[2px]")}>
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <TransactionsTable
@@ -1312,7 +1317,7 @@ export function AccountGroupDetails({
               </DropdownMenu>
               {!spendWiseView && (
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <Checkbox id="show-notes-account-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                  <Checkbox id="show-notes-account-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                   <label htmlFor="show-notes-account-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
                 </div>
               )}

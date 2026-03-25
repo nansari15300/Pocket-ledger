@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -25,6 +26,7 @@ export const PartyList = React.memo(({
   topPartyId,
   overdueVoucherCount,
   pendingApprovalByPartyId = {},
+  getItemHref,
 }: {
   parties: Party[];
   selectedParty: Party | null;
@@ -36,6 +38,8 @@ export const PartyList = React.memo(({
   overdueVoucherCount?: number;
   /** Pending approval count per party id (only passed when approve notifications on list). */
   pendingApprovalByPartyId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – ensures details page opens reliably */
+  getItemHref?: (party: Party) => string | undefined;
 }) => {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -69,33 +73,18 @@ export const PartyList = React.memo(({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
-        <ScrollArea className="flex-1 min-h-0">
+      {/* min-w-0: grid 25% column bhitra ScrollArea overflow — lamba naam failaaundaina */}
+      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
           <ul className="p-2 space-y-1">
             <AnimatePresence mode="popLayout">
               {filteredAndSortedParties.map((party) => {
                 const isSelected = selectedParty?.id === party.id;
-
-                return (
-                  <motion.li
-                    key={party.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                  >
-                    <Card
-                      className={cn(
-                        "p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                        isSelected
-                          ? "border-primary bg-secondary shadow-sm"
-                          : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                      )}
-                      onClick={() => onSelectParty(party)}
-                    >
-                      <div className="flex items-center justify-between w-full gap-2 min-w-0">
-                        {/* बायाँ भाग: avatar र नाम */}
-                        <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                const href = getItemHref?.(party);
+                const cardContent = (
+                  <div className="pl-master-list-row">
+                        {/* बायाँ: avatar + naam (flex-1 truncate — mobile ma amount clip hundaina) */}
+                        <div className="pl-master-list-row-leading">
                           <div className="relative flex-shrink-0">
                             <Avatar className="h-8 w-8 text-xs border">
                               <AvatarImage src={party.fileUrl} alt={party.name} />
@@ -115,11 +104,12 @@ export const PartyList = React.memo(({
                           </div>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="text-sm font-medium whitespace-nowrap truncate min-w-0 text-left cursor-default">
+                              <span className="pl-master-list-row-name cursor-default">
                                 {party.name}
                               </span>
                             </TooltipTrigger>
-                            <TooltipContent side="right">
+                            {/* Narrow list column: tooltip niche — amount column se overlap kam */}
+                            <TooltipContent side="bottom" align="start">
                               <p className="font-medium">{party.name}</p>
                               {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
                                 <p className="text-xs text-muted-foreground">{pendingApprovalByPartyId[party.id]} pending approval</p>
@@ -133,7 +123,7 @@ export const PartyList = React.memo(({
                           <TooltipTrigger asChild>
                             <div
                               className={cn(
-                                "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
+                                "pl-master-list-row-amount ml-2",
                                 topPartyId && party.id === topPartyId && overdueVoucherCount != null
                                   ? "text-muted-foreground"
                                   : party.balance >= 0 ? "text-green-600" : "text-red-600",
@@ -154,7 +144,30 @@ export const PartyList = React.memo(({
                           </TooltipContent>
                         </Tooltip>
                       </div>
-                    </Card>
+                );
+                const cardClassName = cn(
+                  "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
+                  isSelected
+                    ? "border-primary bg-secondary shadow-sm"
+                    : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+                );
+                return (
+                  <motion.li
+                    key={party.id}
+                    layout
+                    initial={false}
+                    exit={{ transition: { duration: 0 } }}
+                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                  >
+                    {href ? (
+                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                        <Card className={cardClassName}>{cardContent}</Card>
+                      </Link>
+                    ) : (
+                      <Card className={cardClassName} onClick={() => onSelectParty(party)}>
+                        {cardContent}
+                      </Card>
+                    )}
                   </motion.li>
                 );
               })}

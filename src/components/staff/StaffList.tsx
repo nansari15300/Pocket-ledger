@@ -12,6 +12,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Briefcase } from "lucide-react";
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -28,6 +29,7 @@ export function StaffList({
   onSelectStaff,
   searchTerm,
   pendingApprovalByStaffId = {},
+  getItemHref,
 }: {
   staff: Staff[];
   selectedStaff: Staff | null;
@@ -35,6 +37,8 @@ export function StaffList({
   searchTerm: string;
   /** Pending approval count per staff id (only when approve notifications on list). */
   pendingApprovalByStaffId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) */
+  getItemHref?: (staff: Staff) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -54,12 +58,60 @@ export function StaffList({
 
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="flex-1 min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
         <ul className="p-2 space-y-1">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedStaff.map((staffMember) => {
               const isSelected = selectedStaff?.id === staffMember.id;
+              const href = getItemHref?.(staffMember);
+              const cardClassName = cn(
+                "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
+                isSelected
+                  ? "border-primary bg-secondary shadow-sm"
+                  : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+              );
+              const cardContent = (
+                <div className="pl-master-list-row">
+                  <div className="pl-master-list-row-leading">
+                    <div className="relative flex-shrink-0">
+                      <Avatar className="h-8 w-8 text-xs">
+                        <AvatarImage src={staffMember.fileUrl} />
+                        <AvatarFallback className="bg-muted text-muted-foreground">
+                          <Briefcase className="h-4 w-4" />
+                        </AvatarFallback>
+                      </Avatar>
+                      {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
+                        <span
+                          className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
+                          style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                          aria-label={`${pendingApprovalByStaffId[staffMember.id]} pending approval`}
+                        >
+                          <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByStaffId[staffMember.id]}</span>
+                        </span>
+                      )}
+                    </div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="pl-master-list-row-name cursor-default">{staffMember.name}</span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{staffMember.name}</p>
+                        {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
+                          <p className="text-xs text-muted-foreground">{pendingApprovalByStaffId[staffMember.id]} pending approval</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <p className={cn(
+                    "pl-master-list-row-amount ml-2",
+                    staffMember.balance >= 0 ? "text-green-600" : "text-red-600",
+                    isSelected && (staffMember.balance >= 0 ? "text-green-800" : "text-red-800")
+                  )}>
+                    {formatCurrency(staffMember.balance, { showDrCr: true, context: 'list' })}
+                  </p>
+                </div>
+              );
               return (
                 <motion.li
                   key={staffMember.id}
@@ -68,55 +120,15 @@ export function StaffList({
                   exit={{ transition: { duration: 0 } }}
                   transition={{ duration: isRowAnimationEnabled ? rowAnimationDuration : 0, ease: "easeInOut" }}
                 >
-                  <Card
-                    className={cn(
-                      "p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                      isSelected
-                        ? "border-primary bg-secondary shadow-sm"
-                        : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                    )}
-                    onClick={() => onSelectStaff(staffMember)}
-                  >
-                    <div className="flex items-center justify-between w-full gap-2">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <div className="relative flex-shrink-0">
-                          <Avatar className="h-8 w-8 text-xs">
-                            <AvatarImage src={staffMember.fileUrl} />
-                            <AvatarFallback className="bg-muted text-muted-foreground">
-                              <Briefcase className="h-4 w-4" />
-                            </AvatarFallback>
-                          </Avatar>
-                          {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
-                            <span
-                              className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
-                              style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
-                              aria-label={`${pendingApprovalByStaffId[staffMember.id]} pending approval`}
-                            >
-                              <span style={{ transform: "rotate(-45deg)" }}>{pendingApprovalByStaffId[staffMember.id]}</span>
-                            </span>
-                          )}
-                        </div>
-                        <Tooltip>
-                          <TooltipTrigger className="text-sm font-medium whitespace-nowrap truncate flex-1 min-w-0 text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none">
-                            {staffMember.name}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{staffMember.name}</p>
-                            {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
-                              <p className="text-xs text-muted-foreground">{pendingApprovalByStaffId[staffMember.id]} pending approval</p>
-                            )}
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <p className={cn(
-                          "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
-                          staffMember.balance >= 0 ? "text-green-600" : "text-red-600",
-                          isSelected && (staffMember.balance >= 0 ? "text-green-800" : "text-red-800")
-                        )}>
-                          {formatCurrency(staffMember.balance, { showDrCr: true, context: 'list' })}
-                        </p>
-                    </div>
-                  </Card>
+                  {href ? (
+                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      <Card className={cardClassName}>{cardContent}</Card>
+                    </Link>
+                  ) : (
+                    <Card className={cardClassName} onClick={() => onSelectStaff(staffMember)}>
+                      {cardContent}
+                    </Card>
+                  )}
                 </motion.li>
               );
             })}

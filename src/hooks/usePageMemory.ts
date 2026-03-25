@@ -36,7 +36,8 @@ export function usePageMemory<T extends { id: string }>(
           // URL wins whenever a view id is in the URL (e.g. ?view=devices); don't require it in currentItems
           // so that permission-loaded list doesn't cause localStorage to overwrite the URL tab
           const urlWins = urlSelectedId != null && urlSelectedId !== "";
-          if (!urlWins && parsed.activeView && parsed.activeView !== activeView) {
+          // disableAutoSelect: mobile settings list-first — localStorage se purana tab mat lao
+          if (!urlWins && !disableAutoSelect && parsed.activeView && parsed.activeView !== activeView) {
             setActiveView(parsed.activeView);
           }
         } catch (e) {
@@ -45,7 +46,7 @@ export function usePageMemory<T extends { id: string }>(
       }
       isInitialized.current = true;
     }
-  }, [isLoading, storageKey, activeView, setActiveView, urlSelectedId, currentItems]);
+  }, [isLoading, storageKey, activeView, setActiveView, urlSelectedId, currentItems, disableAutoSelect]);
 
   // 2. VIEW CHANGE RESTORE & AUTO-SELECT
   // यो इफेक्ट तब मात्र चल्नुपर्छ जब activeView (ट्याब) परिवर्तन हुन्छ वा डाटा लोड हुन्छ।

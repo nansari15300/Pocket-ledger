@@ -1,14 +1,15 @@
 
 "use client";
 
-import { Suspense, useState, useEffect, useMemo } from "react";
+import { Suspense, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Wrench, Loader2, PlusCircle, X, Hash, Eye, Palette, FileDigit, GitCommit, Hand, Zap, Building, ShieldAlert, Bell, Smartphone } from "lucide-react";
+import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
 import { VoucherSettings } from "@/components/settings/VoucherSettings";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
@@ -24,6 +25,10 @@ import { ManageDevices } from "@/components/settings/ManageDevices";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useSettingsList } from "@/contexts/SettingsListContext";
+import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
@@ -41,66 +46,84 @@ const settingsNavItems = [
 
 const SETTINGS_STORAGE_KEY = "settingsPageState";
 
-function getInitialSettingsTab(): string {
-    if (typeof window === "undefined") return "company";
-    try {
-        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-        if (!raw) return "company";
-        const parsed = JSON.parse(raw);
-        const tab = parsed?.activeView ?? parsed?.selections?.main ?? "company";
-        return settingsNavItems.some((item) => item.id === tab) ? tab : "company";
-    } catch {
-        return "company";
-    }
+/** Narrow viewport: isMobile hook se pehle bhi URL push na ho + list-first UX */
+function useLayoutNarrow767(): boolean {
+    const [narrow, setNarrow] = useState(() =>
+        typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches
+    );
+    useEffect(() => {
+        const mq = window.matchMedia("(max-width: 767px)");
+        const fn = () => setNarrow(mq.matches);
+        mq.addEventListener("change", fn);
+        return () => mq.removeEventListener("change", fn);
+    }, []);
+    return narrow;
 }
 
 function SettingsPageContent() {
     const { can } = usePermissions();
-    const { company, companyId } = useCompany();
+    const { user, loading: authLoading } = useAuth();
+    const { company, companyId, loading: companiesLoading } = useCompany();
     const searchParams = useSearchParams();
     const router = useRouter();
     const pathname = usePathname();
+    const isMobile = useIsMobile();
+    const layoutNarrow = useLayoutNarrow767();
+    /** Mobile-style settings: sidebar Sheet + list pehle — forced mobile ya chhoti width */
+    const mobileSettingsUx = isMobile || layoutNarrow;
+    const { settingsListOpen, setSettingsListOpen } = useSettingsList();
 
     const viewFromUrl = searchParams.get("view");
-    // Only use URL to decide tab; when no ?view= (e.g. opened from nav or another page), use first tab so we don't open Danger Zone from old localStorage
-    const initialView = viewFromUrl && settingsNavItems.some((item) => item.id === viewFromUrl)
-        ? viewFromUrl
-        : "company";
-    const [activeView, setActiveView] = useState(initialView);
+
+    const [activeView, setActiveView] = useState<string>("company");
 
     const availableNavItems = useMemo(() => settingsNavItems.filter(item => can(item.permission)), [can]);
 
-    // URL is source of truth: whenever ?view= is set and differs from activeView, sync (fixes overwrite by usePageMemory when searchParams wasn't ready on first paint)
-    useEffect(() => {
-        if (viewFromUrl && viewFromUrl !== activeView && settingsNavItems.some((item) => item.id === viewFromUrl)) {
+    // URL ↔ state: paint se pehle sync — mobile par bina ?view= list-only (company detail flash na ho)
+    useLayoutEffect(() => {
+        if (viewFromUrl && availableNavItems.some((item) => item.id === viewFromUrl)) {
             setActiveView(viewFromUrl);
+            return;
         }
-    }, [viewFromUrl, activeView]);
-
-    // Keep URL in sync with active tab so refresh and share link work
-    const setActiveViewWithUrl = (id: string) => {
-        setActiveView(id);
-        const next = `${pathname}?view=${encodeURIComponent(id)}`;
-        if (searchParams.get("view") !== id) {
-            router.replace(next, { scroll: false });
+        if (mobileSettingsUx && !viewFromUrl) {
+            setActiveView("");
+            return;
         }
-    };
+        if (!mobileSettingsUx && !viewFromUrl) {
+            setActiveView((prev) => (prev === "" ? "company" : prev));
+        }
+    }, [viewFromUrl, availableNavItems, mobileSettingsUx]);
 
-    // Sync URL only when there is no ?view= (e.g. restored from localStorage). Tab click already updates URL via setActiveViewWithUrl.
+    const setActiveViewWithUrl = useCallback(
+        (id: string) => {
+            setActiveView(id);
+            const next = `${pathname}?view=${encodeURIComponent(id)}`;
+            if (searchParams.get("view") !== id) {
+                router.replace(next, { scroll: false });
+            }
+        },
+        [pathname, router, searchParams]
+    );
+
+    const backToSettingsListOnly = useCallback(() => {
+        setActiveView("");
+        setSettingsListOpen(false);
+        router.replace(pathname, { scroll: false });
+    }, [pathname, router, setSettingsListOpen]);
+
+    // Desktop: URL me default ?view= taaki share/refresh — mobile par mat inject karo (sirf list)
     useEffect(() => {
+        if (mobileSettingsUx) return;
         const viewParam = searchParams.get("view");
         if (!viewParam && activeView && availableNavItems.some((item) => item.id === activeView)) {
             router.replace(`${pathname}?view=${encodeURIComponent(activeView)}`, { scroll: false });
         }
-    }, [activeView, pathname, searchParams, router, availableNavItems]);
-    
-    // Derived selected object for memory hook (current tab = "selected" for usePageMemory)
+    }, [mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems]);
+
     const selectedSetting = useMemo(() => {
         return availableNavItems.find(item => item.id === activeView) || null;
     }, [activeView, availableNavItems]);
 
-    // ========== MEMORY LOGIC: restore active tab on refresh ==========
-    // When URL has ?view=..., don't overwrite with localStorage so refresh opens same tab
     usePageMemory(
         SETTINGS_STORAGE_KEY,
         activeView,
@@ -111,10 +134,51 @@ function SettingsPageContent() {
         },
         availableNavItems,
         false,
-        undefined,
+        mobileSettingsUx,
         viewFromUrl
     );
-    // ==================================
+
+    const openSettingsListSheet = useCallback(() => setSettingsListOpen(true), [setSettingsListOpen]);
+    // Daen kinara se swipe LEFT → sirf settings list (baen kinara + swipe RIGHT sirf app sidebar — dono alag)
+    const settingsListSwipe = useEdgeSwipeTrigger(
+        mobileSettingsUx && Boolean(activeView),
+        "right",
+        openSettingsListSheet
+    );
+
+    const renderNavButtons = (onPick?: () => void) => (
+        <div className="flex flex-col gap-1 p-2">
+            {availableNavItems.map((item) => (
+                <Button
+                    key={item.id}
+                    variant={activeView === item.id ? "secondary" : "ghost"}
+                    className={cn(
+                        "justify-start gap-3 w-full px-4",
+                        activeView === item.id && "bg-secondary font-medium",
+                        item.isDanger && "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    )}
+                    onClick={() => {
+                        setActiveViewWithUrl(item.id);
+                        onPick?.();
+                    }}
+                >
+                    <item.icon className="h-5 w-5 shrink-0" />
+                    <span>{item.title}</span>
+                </Button>
+            ))}
+        </div>
+    );
+
+    if (companyId && !company) {
+        return (
+            <div className="flex min-h-[40vh] items-center justify-center p-4">
+                <p className="flex items-center gap-2 text-muted-foreground text-sm">
+                    <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                    Loading company…
+                </p>
+            </div>
+        );
+    }
 
     const renderActiveView = () => {
         switch (activeView) {
@@ -147,21 +211,35 @@ function SettingsPageContent() {
             default:
                 return null;
         }
-    }
+    };
 
     if (availableNavItems.length === 0) {
-      const loadingCompany = companyId && !company;
+      let storedCompanyIdPending = false;
+      try {
+        const s = typeof window !== "undefined" ? localStorage.getItem("companyId")?.trim() : "";
+        storedCompanyIdPending = Boolean(s && !companyId && user);
+      } catch {
+        /* ignore */
+      }
+      const resolvingCompany =
+        authLoading ||
+        companiesLoading ||
+        (Boolean(companyId) && !company) ||
+        storedCompanyIdPending;
       return (
         <div className="p-8 text-center">
           <Card className="w-full max-w-lg mx-auto">
             <CardHeader>
               <CardTitle>
-                {loadingCompany ? "Loading…" : company ? "Permission Denied" : "Select a Company"}
+                {resolvingCompany ? "Loading…" : company ? "Permission Denied" : "Select a Company"}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {loadingCompany ? (
-                <p>Loading company…</p>
+              {resolvingCompany ? (
+                <p className="flex items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin shrink-0" />
+                  Loading company and permissions…
+                </p>
               ) : company ? (
                 <p>You do not have permission to access any settings. Please contact your company owner or an administrator.</p>
               ) : (
@@ -176,6 +254,74 @@ function SettingsPageContent() {
           </Card>
         </div>
       )
+    }
+
+    // Mobile / narrow: pehle sirf list; item → detail full + Sheet se list
+    if (mobileSettingsUx) {
+        if (!activeView) {
+            return (
+                <div className="h-full flex flex-col overflow-hidden min-h-0">
+                    <div className="flex-shrink-0 border-b px-4 py-3">
+                        <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                        <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                    </div>
+                    <ScrollArea className="flex-1 min-h-0">
+                        {renderNavButtons()}
+                    </ScrollArea>
+                </div>
+            );
+        }
+
+        return (
+            <>
+                <div
+                    className={cn("h-full flex flex-col overflow-hidden min-h-0 touch-pan-y")}
+                    onTouchStart={settingsListSwipe.onTouchStart}
+                    onTouchEnd={settingsListSwipe.onTouchEnd}
+                >
+                    <div className="flex-shrink-0 border-b px-2 py-2 flex items-center gap-2 min-h-[48px]">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="shrink-0"
+                            onClick={backToSettingsListOnly}
+                            title="Back to settings list"
+                            aria-label="Back to settings list"
+                        >
+                            <ChevronLeft className="h-5 w-5" />
+                        </Button>
+                        <span className="font-medium truncate flex-1 min-w-0">
+                            {selectedSetting?.title ?? "Settings"}
+                        </span>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="shrink-0 h-9 w-9"
+                            onClick={() => setSettingsListOpen(true)}
+                            title="Open settings list"
+                            aria-label="Open settings list"
+                        >
+                            <PanelRight className="h-4 w-4" />
+                        </Button>
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                        {renderActiveView()}
+                    </div>
+                </div>
+                <Sheet open={settingsListOpen} onOpenChange={setSettingsListOpen}>
+                    <SheetContent side="right" className="w-[min(100vw-3rem,280px)] p-0 sm:max-w-[280px]">
+                        <SheetHeader className="p-4 pb-2 border-b">
+                            <SheetTitle>Settings</SheetTitle>
+                        </SheetHeader>
+                        <ScrollArea className="h-[calc(100dvh-5rem)]">
+                            {renderNavButtons(() => setSettingsListOpen(false))}
+                        </ScrollArea>
+                    </SheetContent>
+                </Sheet>
+            </>
+        );
     }
 
     return (
@@ -231,7 +377,6 @@ function SettingsPageLoading() {
 
 export default function SettingsPage() {
   return (
-    // Keep useSearchParams consumer behind Suspense for Next.js static prerender compatibility.
     <Suspense fallback={<SettingsPageLoading />}>
       <SettingsPageContent />
     </Suspense>

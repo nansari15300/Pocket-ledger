@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { DisclaimerDialog } from "@/components/layout/DisclaimerDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
@@ -20,6 +20,9 @@ import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton } from "@/components/layout/MobileFloatingButton";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
+import { SettingsListProvider } from "@/contexts/SettingsListContext";
+import { useSidebar } from "@/components/ui/sidebar";
+import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
@@ -579,14 +582,37 @@ function DeviceLimitOverlay() {
   );
 }
 
+/** Mobile: left edge se swipe right → app sidebar Sheet khule (menu) */
+function DashboardMainWithEdgeSwipe({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const { isMobile, isOpen, setIsOpen } = useSidebar();
+  const openMenu = useCallback(() => setIsOpen(true), [setIsOpen]);
+  const swipe = useEdgeSwipeTrigger(Boolean(isMobile && !isOpen), "left", openMenu);
+  return (
+    <main
+      // touch-pan-y: horizontal swipe JS ko mile, vertical scroll page par rahe
+      className={cn(isMobile && "touch-pan-y", className)}
+      onTouchStart={swipe.onTouchStart}
+      onTouchEnd={swipe.onTouchEnd}
+    >
+      {children}
+    </main>
+  );
+}
+
 function LayoutContent({ children }: { children: React.ReactNode }) {
     const isMobile = useIsMobile();
     const pathname = usePathname();
     const { user, loading } = useAuth();
 
-    // Settings page: hide body/html scroll so only list + details scroll independently
+    // Settings / gallery: body scroll bandho — andar list ya grid khud scroll kare
     useEffect(() => {
-        if (pathname?.startsWith("/settings")) {
+        if (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) {
             document.documentElement.style.overflow = "hidden";
             document.body.style.overflow = "hidden";
             return () => {
@@ -737,19 +763,36 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
             <DisclaimerDialog isOpen={showDisclaimer} onClose={handleDisclaimerClose} />
             <AlarmPopup />
             <ReportListProvider>
+              <SettingsListProvider>
               <ReportPartyViewProvider>
                 <DeviceLimitProvider>
-                  <div id="app-container" className={cn("relative flex h-screen bg-background", pathname?.startsWith("/settings") && "overflow-hidden")}>
+                  <div
+                    id="app-container"
+                    className={cn(
+                      "relative flex h-screen bg-background",
+                      (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) && "overflow-hidden"
+                    )}
+                  >
                     <AppSidebar />
                     <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l app-main-border")}>
                       <AppHeader />
-                      <main className={cn("flex-1 min-h-0", pathname?.startsWith("/settings") ? "overflow-hidden" : "overflow-y-auto")}>{children}</main>
+                      <DashboardMainWithEdgeSwipe
+                        className={cn(
+                          "flex-1 min-h-0",
+                          pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")
+                            ? "overflow-hidden"
+                            : "overflow-y-auto"
+                        )}
+                      >
+                        {children}
+                      </DashboardMainWithEdgeSwipe>
                       <MobileFloatingButton />
                     </div>
                     <DeviceLimitOverlay />
                   </div>
                 </DeviceLimitProvider>
               </ReportPartyViewProvider>
+              </SettingsListProvider>
             </ReportListProvider>
         </>
     )

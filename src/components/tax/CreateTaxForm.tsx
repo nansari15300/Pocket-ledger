@@ -22,6 +22,7 @@ import { Combobox } from "../ui/combobox";
 import Image from "next/image";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { FilePreview } from "../vouchers/FilePreview";
 import { useDate } from "@/hooks/useDate";
@@ -103,7 +104,7 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
       toast({
         variant: "destructive",
         title: "File too large",
-        description: `Please select a file smaller than 5MB to compress.`,
+        description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
       return;
     }

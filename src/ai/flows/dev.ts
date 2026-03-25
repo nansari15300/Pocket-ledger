@@ -1,2 +1,2 @@
 import '@/ai/flows/intelligent-party-grouping.ts';
-import '@/ai/flows/gateway-keys.ts';
+/* gateway-keys: plain Firestore helpers — no Genkit flow registration needed here */

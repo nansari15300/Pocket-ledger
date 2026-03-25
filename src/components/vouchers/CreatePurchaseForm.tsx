@@ -301,6 +301,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
   const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
+  const isFormDirtyRef = useRef(isFormDirty);
+  isFormDirtyRef.current = isFormDirty;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -529,23 +531,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     };
   }, [companyId]);
 
-  // Voucher reset: only reset when editing existing (voucher.id); new voucher must NOT reset on type (isFormDirty)
+  // Voucher reset: isFormDirty deps mat — file add se dirty → effect → party "" set hone se bug (sale jaisa)
   useEffect(() => {
     if (voucher?.id) {
       const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
-      if (isSameVoucher && isFormDirty) return;
+      if (isSameVoucher && isFormDirtyRef.current) return;
       lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
+        initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
       }
     } else if (voucher) {
-      // New voucher with initial data – don't reset (would wipe user input on every keystroke)
       lastResetVoucherIdRef.current = null;
       setSavedVoucherId(null);
-      if (voucher.partyId != null) form.setValue("partyId", voucher.partyId);
+      if (voucher.partyId != null && String(voucher.partyId).trim() !== "") {
+        form.setValue("partyId", voucher.partyId);
+      }
       if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
@@ -555,7 +559,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else {
       lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form, isFormDirty]);
+  }, [voucher, form]);
 
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 

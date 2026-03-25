@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import type { VisibleColumns, TransactionColumnKey } from "./TransactionsTable";
 
 export const COLUMN_VISIBILITY_KEY = "transactionVisibleColumns";
@@ -55,17 +56,20 @@ export function useTransactionVisibleColumns() {
   return { visibleColumns, handleColumnVisibilityChange };
 }
 
-/** Show notes in transaction tables: persisted in localStorage, default false (untick = hide notes). Shared across all details/group pages. */
+/** Show notes in transaction tables: localStorage; PC par default tick (sirf explicit "false" par hide). Mobile par hamesha notes dikhao — checkbox lock. */
 export const SHOW_NOTES_KEY = "transactionShowNotes";
 
 export function useShowNotes() {
+  const isMobile = useIsMobile();
   const [showNotes, setShowNotesState] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
+    // SSR / pehla paint: default on (PC jaisa); client par localStorage se override
+    if (typeof window === "undefined") return true;
     try {
       const saved = localStorage.getItem(SHOW_NOTES_KEY);
-      return saved === "true";
+      if (saved === "false") return false;
+      return true;
     } catch {
-      return false;
+      return true;
     }
   });
 
@@ -79,7 +83,11 @@ export function useShowNotes() {
     });
   }, []);
 
-  return { showNotes, setShowNotes };
+  // Mobile: filter/print hamesha notes ke saath; PC: showNotes preference
+  const includeNotesInTable = isMobile || showNotes;
+  const notesPreferenceLockedOnMobile = isMobile;
+
+  return { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile };
 }
 
 /** Spend-wise balance blink modes. Multi-select persisted in localStorage as JSON array. */

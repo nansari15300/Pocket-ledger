@@ -217,7 +217,7 @@ export function PayeeDetails({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = 
     useTransactions(party, entityType, dateRange, undefined, allParties, passedTransactions, context, filters, undefined, undefined, userNames);
 
@@ -234,10 +234,10 @@ export function PayeeDetails({
     setFilters({});
   };
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -504,7 +504,7 @@ export function PayeeDetails({
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <Checkbox id="show-notes-payee" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+              <Checkbox id="show-notes-payee" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
               <label htmlFor="show-notes-payee" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
             </div>
           </div>

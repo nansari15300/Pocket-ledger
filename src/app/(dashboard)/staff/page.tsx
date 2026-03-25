@@ -25,7 +25,10 @@ import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import type { Staff, StaffGroup } from "@/components/staff/types";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -81,6 +84,13 @@ function StaffPageContent() {
   
   const [activeView, setActiveView] = useState("staff");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Staff | StaffGroup>(`staff_view_${activeView}`);
+
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("staff"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+  const useQueryNav = useMasterDetailQueryNav();
   
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -91,12 +101,19 @@ function StaffPageContent() {
 
   const selectedStaff = activeView === 'staff' ? selected as Staff : null;
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
+  useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroup?.id ?? null);
 
   const processedStaffGroups = useMemo(() => {
     // Show Ungrouped row only when at least one staff is in the Ungrouped bucket.
     const ungrouped = processedStaff.filter((p: any) => !p.groupId || p.groupId === "ungrouped_staff");
-    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
-    const baseGroups = initialProcessedStaffGroups.filter((g) => (g as any).isAutoUngrouped !== true);
+    // Hide auto-created Ungrouped base doc; system groups sirf Reports me – list pages pe nahi
+    const baseGroups = initialProcessedStaffGroups.filter((g) => {
+      const anyG = g as any;
+      if (anyG.isAutoUngrouped === true) return false;
+      if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
+      if (isSystemParentGroup("staff_groups", anyG.id)) return false;
+      return true;
+    });
     if (ungrouped.length > 0) {
       const ungroupedBalance = ungrouped.reduce((sum, p) => sum + p.balance, 0);
       const ungroupedGroup: StaffGroup = {
@@ -141,7 +158,11 @@ function StaffPageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (staffItem) setActiveView("staff");
     if (item) setSelected(item);
-    router.replace("/staff", { scroll: false });
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/staff?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/staff?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, setSelected, setActiveView, router]);
 
   const openVoucherDialog = (mode: 'add_salary' | 'payment_out') => {
@@ -184,11 +205,12 @@ function StaffPageContent() {
   }, [processedStaffGroups, searchTerm]);
 
   const handleSelect = (item: Staff | StaffGroup) => {
-    if(isMobile) {
+    if (useQueryNav) {
+        // Static export ke liye query params use karte hain – /staff/[id] path 404 de sakta hai
         if ('salary' in item) {
-            router.push(`/staff/${item.id}`);
+            router.push(`/staff?selected=${item.id}`);
         } else {
-            router.push(`/staff/group/${item.id}`);
+            router.push(`/staff?view=groups&selected=${item.id}`);
         }
     } else {
         setSelected(item);
@@ -272,6 +294,7 @@ function StaffPageContent() {
                 selectedStaff={selectedStaff}
                 searchTerm={searchTerm}
                 pendingApprovalByStaffId={pendingApprovalByStaffId}
+                getItemHref={useQueryNav ? (s) => `/staff?selected=${s.id}` : undefined}
               />
             </div>
           </>
@@ -288,6 +311,7 @@ function StaffPageContent() {
                 selectedGroup={selectedGroup}
                 searchTerm={searchTerm}
                 pendingApprovalByGroupId={pendingApprovalByStaffGroupId}
+                getItemHref={useQueryNav ? (g) => `/staff?view=groups&selected=${g.id}` : undefined}
               />
             </div>
           </>
@@ -351,6 +375,8 @@ function StaffPageContent() {
       detailView={detailView}
       isMobile={isMobile}
       mobileListOnly={true}
+      hasSelectedItem={!!selected}
+      onBackToList={onBackToList}
     />
     <AddVoucherDialog
         isOpen={isVoucherDialogOpen}

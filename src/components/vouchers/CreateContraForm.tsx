@@ -1353,6 +1353,53 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   setIsAmountMoreThanAccountOpen(true);
                 }
               }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
+              {/* File pehle — link cards ke upar; warna link ke baad attach band ho jata hai */}
+              <FormItem>
+                <FormLabel>Attach Files (Optional)</FormLabel>
+                <RestrictedFileUploader>
+                  {/* When linked: add/remove disabled; existing files remain clickable to open */}
+                  <div className="flex flex-wrap gap-4">
+                    {files.map((file, index) => (
+                      <FilePreview
+                        key={index}
+                        file={file}
+                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                      />
+                    ))}
+                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      <div
+                        className={cn(
+                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                            ? "text-muted-foreground hover:border-primary cursor-pointer"
+                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                        )}
+                        onClick={() => {
+                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                            fileInputRef.current?.click();
+                          }
+                        }}
+                      >
+                        <PlusCircle className="h-6 w-6" />
+                        <span className="text-xs mt-1">Add File</span>
+                        <Input
+                          type="file"
+                          className="hidden"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept={[
+                            fileAttachmentLimits.allowImage ? "image/*" : "",
+                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                          multiple={fileAttachmentLimits.maxFileCount > 1}
+                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </RestrictedFileUploader>
+              </FormItem>
               {showSpendWiseSection && (
                 <div className="space-y-4 min-w-0 w-full">
                   {/* Upper row: single main container for To Voucher + To Voucher (current) */}
@@ -1538,54 +1585,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <FormField control={form.control} name="narration" render={({ field }: any) => (<FormItem><FormLabel>Narration</FormLabel><FormControl><Textarea placeholder="e.g., Cash deposited to bank" {...field} /></FormControl><FormMessage /></FormItem>)}/>
-                <FormItem>
-                  <FormLabel>Attach Files (Optional)</FormLabel>
-                  <RestrictedFileUploader>
-                    {/* When linked: add/remove disabled; existing files remain clickable to open */}
-                    <div className="flex flex-wrap gap-4">
-                    {files.map((file, index) => (
-                      <FilePreview 
-                        key={index} 
-                        file={file} 
-                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                      />
-                    ))}
-                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <div 
-                        className={cn(
-                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                        )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
-                          }
-                        }}
-                      >
-                         <PlusCircle className="h-6 w-6" />
-                        <span className="text-xs mt-1">Add File</span>
-                        <Input 
-                          type="file" 
-                          className="hidden"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept={[
-                            fileAttachmentLimits.allowImage ? "image/*" : "",
-                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                          multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                        />
-                      </div>
-                    )}
-                    </div>
-                  </RestrictedFileUploader>
-                </FormItem>
               </div>
             </div>
           </ScrollArea>

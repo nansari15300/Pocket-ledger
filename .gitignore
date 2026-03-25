@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# static build temp
+.build-static-bak/
+
 <<<<<<< HEAD
 # Electron EXE build
 /electron/node_modules/

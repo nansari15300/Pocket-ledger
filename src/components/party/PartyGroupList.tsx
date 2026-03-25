@@ -31,6 +31,7 @@ export function PartyGroupList({
   onSelectGroup,
   collapsible = true,
   pendingApprovalByGroupId = {},
+  getItemHref,
 }: {
   groups: Group[];
   searchTerm: string;
@@ -40,6 +41,8 @@ export function PartyGroupList({
   collapsible?: boolean;
   /** Pending approval count per group id (only passed when approve notifications on list). */
   pendingApprovalByGroupId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – ensures details page opens reliably */
+  getItemHref?: (group: Group) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -130,8 +133,8 @@ export function PartyGroupList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col h-full min-h-0 w-full rounded-b-lg border-t-0 bg-background">
-        <ScrollArea className="flex-1 min-h-0 w-full">
+      <div className="flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background">
+        <ScrollArea className="min-h-0 min-w-0 w-full flex-1">
           <div className="px-3 pt-0 pb-2 space-y-2 w-full">
           <AnimatePresence mode="popLayout">
             {categories.map((category) => {
@@ -189,26 +192,29 @@ export function PartyGroupList({
                               ease: "easeInOut"
                             }}
                           >
-                            <Card
-                              className={cn(
-                                "w-full p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
+                            {(() => {
+                              const href = getItemHref?.(group);
+                              const cardClassName = cn(
+                                "w-full min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
                                 isSelected
                                   ? "border-primary bg-secondary shadow-sm"
                                   : "border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
-                              )}
-                              onClick={() => onSelectGroup(group)}
-                            >
-                              <div className="flex items-center justify-between w-full gap-2 min-w-0">
-                                <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                              );
+                              const cardContent = (
+                              <div className="pl-master-list-row">
+                                <div className="pl-master-list-row-leading">
                                   <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground flex-shrink-0">
                                     {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
                                   </div>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <span className="font-semibold text-sm whitespace-nowrap truncate min-w-0 cursor-default flex items-center gap-1">
-                                          {group.name}
+                                        {/* naam truncate, badge shrink-0 — row overflow nahin */}
+                                        <span className="flex min-w-0 flex-1 cursor-default items-center gap-1 overflow-hidden">
+                                          <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
+                                            {group.name}
+                                          </span>
                                           {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                            <span className="inline-flex items-center justify-center rounded-full bg-pink-100 text-pink-700 dark:bg-pink-950/60 dark:text-pink-200 text-[10px] font-semibold h-4 min-w-[1rem] px-1 flex-shrink-0">
+                                            <span className="inline-flex h-4 min-w-[1rem] flex-shrink-0 items-center justify-center rounded-full bg-pink-100 px-1 text-[10px] font-semibold text-pink-700 dark:bg-pink-950/60 dark:text-pink-200">
                                               {pendingApprovalByGroupId[group.id]}
                                             </span>
                                           )}
@@ -226,7 +232,7 @@ export function PartyGroupList({
                                   <TooltipTrigger asChild>
                                     <p
                                       className={cn(
-                                        "font-bold text-xs whitespace-nowrap flex-shrink-0 ml-1 px-1 rounded",
+                                        "pl-master-list-row-amount-xs ml-1 rounded px-1",
                                         group.balance >= 0 ? "text-green-600" : "text-red-600"
                                       )}
                                     >
@@ -238,7 +244,17 @@ export function PartyGroupList({
                                   </TooltipContent>
                                 </Tooltip>
                               </div>
-                            </Card>
+                              );
+                              return href ? (
+                                <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                                  <Card className={cardClassName}>{cardContent}</Card>
+                                </Link>
+                              ) : (
+                                <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                                  {cardContent}
+                                </Card>
+                              );
+                            })()}
                           </motion.li>
                         );
                       })}

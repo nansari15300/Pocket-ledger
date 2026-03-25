@@ -148,7 +148,7 @@ export function AccountDetails({
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [blinkInfoOpen, setBlinkInfoOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -310,11 +310,11 @@ export function AccountDetails({
   }
 
   const spendWiseEnabled = (company as any)?.spendWiseEnabled === true;
-  // Spend Wise: never show notes. Statement view: show/hide notes by showNotes (localStorage).
+  // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
     if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
-    return showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
-  }, [processedTransactions, spendWiseView, showNotes]);
+    return includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+  }, [processedTransactions, spendWiseView, includeNotesInTable]);
   const displayTransactions = useMemo(() => {
     if (!spendWiseView || !vouchers?.length) return baseTransactions;
     const byId = new Map(baseTransactions.map((t: any) => [t.id, t]));
@@ -674,7 +674,7 @@ export function AccountDetails({
         openingBalance: openingBalanceForPeriod,
         transactions: printTransactions,
         showNarration: showNarration,
-        includeNotes: showNotes,
+        includeNotes: includeNotesInTable,
         visibleColumns: printVisibleColumns,
         userNames: userNames,
         preserveOrder: spendWiseView,
@@ -716,7 +716,7 @@ export function AccountDetails({
         openingBalance: openingBalanceForPeriod,
         transactions: printTransactions,
         showNarration: showNarration,
-        includeNotes: showNotes,
+        includeNotes: includeNotesInTable,
         visibleColumns: printVisibleColumns,
         userNames: userNames,
         preserveOrder: spendWiseView,
@@ -965,7 +965,11 @@ export function AccountDetails({
         </div>
       </div>
       {/* Transaction list - fills to footer line; inner pb-24 so last row scrolls above fixed footer */}
-      <div className={cn("flex-1 min-h-0 overflow-auto", spendWiseView && "p-[2px]")}>
+      {/* scroll-touch + inline style for APK/WebView touch scroll */}
+      <div
+        className={cn("flex-1 min-h-0 overflow-auto scroll-touch", spendWiseView && "p-[2px]")}
+        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+      >
         <div className="pb-24">
           {/* Bank/Cash pages use their own Statement/Spend-wise toggle, so keep the shared bill-wise mode from taking over here. */}
           <TransactionsTable
@@ -1303,7 +1307,7 @@ export function AccountDetails({
               </DropdownMenu>
               {!spendWiseView && (
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <Checkbox id="show-notes-account" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                  <Checkbox id="show-notes-account" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                   <label htmlFor="show-notes-account" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
                 </div>
               )}

@@ -12,6 +12,7 @@ import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from "../ui/
 import { Card } from "@/components/ui/card";
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 
 export function TaxList({ 
     taxes, 
@@ -19,6 +20,7 @@ export function TaxList({
     onSelectTax, 
     searchTerm,
     pendingApprovalByTaxId = {},
+    getItemHref,
 }: { 
     taxes: Tax[], 
     selectedTax: Tax | null,
@@ -26,6 +28,8 @@ export function TaxList({
     searchTerm: string,
     /** Pending approval count per tax id (only when approve notifications on list). */
     pendingApprovalByTaxId?: Record<string, number>;
+    /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+    getItemHref?: (tax: Tax) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -50,31 +54,22 @@ export function TaxList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background">
-        <ScrollArea className="flex-1 min-h-0">
+      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
           <ul className="p-2 space-y-1">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedTaxes.map(tax => {
                 const isSelected = selectedTax?.id === tax.id;
-                return (
-                <motion.li
-                  key={tax.id}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                >
-                    <Card
-                        onClick={() => onSelectTax(tax)}
-                        className={cn(
-                            "p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                            isSelected
-                                ? "border-primary bg-secondary shadow-sm"
-                                : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                        )}
-                    >
-                        <div className="flex items-center justify-between w-full gap-2 min-w-0">
-                            <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                const href = getItemHref?.(tax);
+                const cardClassName = cn(
+                    "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
+                    isSelected
+                        ? "border-primary bg-secondary shadow-sm"
+                        : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+                );
+                const cardContent = (
+                        <div className="pl-master-list-row">
+                            <div className="pl-master-list-row-leading">
                             <div className="relative flex-shrink-0">
                               <Avatar className="h-8 w-8 text-sm bg-muted text-muted-foreground">
                                 <AvatarImage src={tax.fileUrl} alt={tax.name} />
@@ -94,7 +89,7 @@ export function TaxList({
                             </div>
                             <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="text-sm font-medium whitespace-nowrap truncate min-w-0 text-left cursor-default">
+                            <span className="pl-master-list-row-name cursor-default">
                               {tax.name}
                             </span>
                           </TooltipTrigger>
@@ -111,7 +106,7 @@ export function TaxList({
                         <TooltipTrigger asChild>
                           <div
                             className={cn(
-                              "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
+                              "pl-master-list-row-amount ml-2",
                               tax.balance >= 0 ? "text-green-600" : "text-red-600",
                               isSelected && (tax.balance >= 0 ? "text-green-700" : "text-red-700")
                             )}
@@ -124,9 +119,27 @@ export function TaxList({
                         </TooltipContent>
                       </Tooltip>
                         </div>
-                    </Card>
-                </motion.li>
-            )})}
+                );
+                return (
+                  <motion.li
+                    key={tax.id}
+                    layout
+                    initial={false}
+                    exit={{ transition: { duration: 0 } }}
+                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                  >
+                    {href ? (
+                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                        <Card className={cardClassName}>{cardContent}</Card>
+                      </Link>
+                    ) : (
+                      <Card className={cardClassName} onClick={() => onSelectTax(tax)}>
+                        {cardContent}
+                      </Card>
+                    )}
+                  </motion.li>
+                );
+            })}
           </AnimatePresence>
         </ul>
       </ScrollArea>
