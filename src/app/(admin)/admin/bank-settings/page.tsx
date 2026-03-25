@@ -6,14 +6,19 @@ import { useAdminAccess } from '@/hooks/useAdminAccess';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { getGatewayKeys, updateGatewayKeys, type GatewayKeys } from '@/ai/flows/gateway-keys';
+import {
+  getGatewayKeys,
+  updateGatewayKeys,
+  ESEWA_UAT_MERCHANT_CODE,
+  ESEWA_UAT_SECRET_KEY,
+  type GatewayKeys,
+} from '@/ai/flows/gateway-keys';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
-import { Separator } from '@/components/ui/separator';
 
 const formSchema = z.object({
   stripeSecretKey: z.string().optional(),
@@ -21,6 +26,18 @@ const formSchema = z.object({
   esewaMerchantCode: z.string().optional(),
   esewaSecretKey: z.string().optional(),
 });
+
+type GatewayFormValues = z.infer<typeof formSchema>;
+
+/** Firestore / spread `keys` can omit keys → `undefined`; `<Input {...field} />` must always get string (controlled). */
+function toGatewayFormDefaults(raw: Partial<GatewayKeys>): GatewayFormValues {
+  return {
+    stripeSecretKey: typeof raw.stripeSecretKey === 'string' ? raw.stripeSecretKey : '',
+    khaltiPublicKey: typeof raw.khaltiPublicKey === 'string' ? raw.khaltiPublicKey : '',
+    esewaMerchantCode: typeof raw.esewaMerchantCode === 'string' ? raw.esewaMerchantCode : '',
+    esewaSecretKey: typeof raw.esewaSecretKey === 'string' ? raw.esewaSecretKey : '',
+  };
+}
 
 export default function BankSettingsPage() {
   useAdminAccess(['SuperAdmin']);
@@ -41,7 +58,16 @@ export default function BankSettingsPage() {
     async function fetchKeys() {
       try {
         const keys = await getGatewayKeys();
-        form.reset(keys);
+        const base = toGatewayFormDefaults(keys);
+        // `next dev`: pre-fill official eSewa UAT fields when Firestore is empty so you can save once or pay without saving.
+        const devPrefill =
+          process.env.NODE_ENV === 'development'
+            ? {
+                esewaMerchantCode: base.esewaMerchantCode.trim() || ESEWA_UAT_MERCHANT_CODE,
+                esewaSecretKey: base.esewaSecretKey.trim() || ESEWA_UAT_SECRET_KEY,
+              }
+            : {};
+        form.reset({ ...base, ...devPrefill });
       } catch (error) {
         console.error("Failed to fetch gateway keys:", error);
         toast({ variant: 'destructive', title: 'Error', description: 'Could not load existing keys.' });
@@ -55,7 +81,8 @@ export default function BankSettingsPage() {
   const onSubmit = async (data: z.infer<typeof formSchema>) => {
     setIsSaving(true);
     try {
-      await updateGatewayKeys(data);
+      // SuperAdmin / RHF can pass `undefined` for untouched optional fields — Firestore setDoc rejects undefined.
+      await updateGatewayKeys(toGatewayFormDefaults(data));
       toast({ title: 'Success', description: 'Gateway keys have been updated.' });
     } catch (error) {
       console.error("Failed to update gateway keys:", error);
@@ -74,7 +101,11 @@ export default function BankSettingsPage() {
         <Card>
             <CardHeader>
                 <CardTitle>Payment Gateway Settings</CardTitle>
-                <CardDescription>Manage API keys for Stripe, Khalti, and eSewa. These are stored securely on the server.</CardDescription>
+                <CardDescription>
+                  Manage API keys for Stripe, Khalti, and eSewa (stored in Firestore). In development, eSewa UAT
+                  (EPAYTEST) is suggested when fields are empty; Stripe/Khalti still need your own test keys or{' '}
+                  <code className="text-xs">.env.local</code> — see <code className="text-xs">.env.example</code>.
+                </CardDescription>
             </CardHeader>
         </Card>
         <Form {...form}>
@@ -91,7 +122,12 @@ export default function BankSettingsPage() {
                                 <FormItem>
                                 <FormLabel>Stripe Secret Key</FormLabel>
                                 <FormControl>
-                                    <Input type="password" placeholder="sk_live_..." {...field} />
+                                    <Input
+                                      type="password"
+                                      placeholder="sk_test_... or sk_live_..."
+                                      {...field}
+                                      value={field.value ?? ''}
+                                    />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>
@@ -112,7 +148,7 @@ export default function BankSettingsPage() {
                                 <FormItem>
                                 <FormLabel>Khalti Public Key</FormLabel>
                                 <FormControl>
-                                    <Input placeholder="live_public_key_..." {...field} />
+                                    <Input placeholder="live_public_key_..." {...field} value={field.value ?? ''} />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>
@@ -133,7 +169,7 @@ export default function BankSettingsPage() {
                                 <FormItem>
                                 <FormLabel>eSewa Merchant Code</FormLabel>
                                 <FormControl>
-                                    <Input placeholder="e.g., EPAYTEST" {...field} />
+                                    <Input placeholder="e.g., EPAYTEST" {...field} value={field.value ?? ''} />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>
@@ -146,7 +182,12 @@ export default function BankSettingsPage() {
                                 <FormItem>
                                 <FormLabel>eSewa Secret Key</FormLabel>
                                 <FormControl>
-                                    <Input type="password" placeholder="8gBmPxtryL2mUplJd4E9I4A6u4y7SgC5" {...field} />
+                                    <Input
+                                      type="password"
+                                      placeholder="8gBmPxtryL2mUplJd4E9I4A6u4y7SgC5"
+                                      {...field}
+                                      value={field.value ?? ''}
+                                    />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>

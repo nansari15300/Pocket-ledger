@@ -3,10 +3,10 @@
 
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
-import NepaliDate from 'nepali-date-converter';
 import { format as formatDateFns } from "date-fns";
 import { AD_DATE_FORMATS, BS_DATE_FORMATS } from "@/lib/dateFormatOptions";
 import type { ADFormatKey, BSFormatKey } from "@/lib/dateFormatOptions";
+import { formatBsFromAD } from "@/lib/bs-date";
 // @ts-ignore - pdfmake types may not be available
 import type { TDocumentDefinitions, Content, TableCell } from "pdfmake/interfaces";
 import type { Item } from "@/components/items/types";
@@ -1025,14 +1025,9 @@ const getFormatters = (p: PrintPayload) => {
 
     const formatDateBS = (date: Date): string => {
       if (!(date instanceof Date) || isNaN(date.getTime())) return '';
-      try {
-        const nepaliDate = new NepaliDate(date);
-        return nepaliDate.format(dateFormatBS);
-      } catch {
-        const nepaliDate = new NepaliDate(date);
-        return nepaliDate.format(DEFAULT_BS_FORMAT);
-      }
-    }
+      const bs = formatBsFromAD(date, dateFormatBS);
+      return bs !== "" ? bs : formatDate(date);
+    };
 
     const formatCurrencyForPrint = (n: number, opts?: { noSuffix?: boolean}) => {
         if (typeof n !== 'number' || isNaN(n)) return '-';

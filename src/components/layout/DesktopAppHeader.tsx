@@ -541,6 +541,7 @@ function BalanceModeSwitcher() {
 }
 
 function UserProfileButton() {
+  const router = useRouter();
   const { user } = useAuth();
   const { company, allCompanies } = useCompany();
   const { isOnline } = useOnlineStatus();
@@ -549,6 +550,38 @@ function UserProfileButton() {
   const [dailyUsed, setDailyUsed] = useState<number | null>(null);
   const [monthlyUsed, setMonthlyUsed] = useState<number | null>(null);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
+  /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
+  const profileHoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearProfileHoverClose = useCallback(() => {
+    if (profileHoverCloseTimerRef.current != null) {
+      clearTimeout(profileHoverCloseTimerRef.current);
+      profileHoverCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleProfileHoverClose = useCallback(() => {
+    clearProfileHoverClose();
+    profileHoverCloseTimerRef.current = setTimeout(() => {
+      profileHoverCloseTimerRef.current = null;
+      setProfileOpen(false);
+    }, 220);
+  }, [clearProfileHoverClose]);
+
+  const openProfileFromHover = useCallback(() => {
+    clearProfileHoverClose();
+    setProfileOpen(true);
+  }, [clearProfileHoverClose]);
+
+  const handleProfileOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) clearProfileHoverClose();
+      setProfileOpen(open);
+    },
+    [clearProfileHoverClose]
+  );
+
+  useEffect(() => () => clearProfileHoverClose(), [clearProfileHoverClose]);
 
   const getInitials = (name: string | null | undefined) => {
     if (!name) return "U";
@@ -629,9 +662,14 @@ function UserProfileButton() {
 
   return (
     <>
-      <DropdownMenu open={profileOpen} onOpenChange={setProfileOpen}>
+      <DropdownMenu open={profileOpen} onOpenChange={handleProfileOpenChange}>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="relative h-9 w-9 rounded-full p-0 touch-manipulation">
+          <Button
+            variant="ghost"
+            className="relative h-9 w-9 rounded-full p-0 touch-manipulation"
+            onMouseEnter={openProfileFromHover}
+            onMouseLeave={scheduleProfileHoverClose}
+          >
             <div className={cn(
               "relative h-9 w-9 rounded-full",
               isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
@@ -651,6 +689,8 @@ function UserProfileButton() {
           align="end"
           sideOffset={8}
           forceMount
+          onMouseEnter={openProfileFromHover}
+          onMouseLeave={scheduleProfileHoverClose}
         >
           <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
             <div className="flex flex-col space-y-0.5">
@@ -663,13 +703,25 @@ function UserProfileButton() {
             <>
               <DropdownMenuSeparator />
               <div className="px-3 py-2 space-y-3">
+                {/* Plan / upgrade: owner-only — shared company users must not see paid-plan or billing CTAs */}
+                {company.isOwned === true && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">Current Plan</div>
                   <div className="flex items-center justify-between gap-2">
                     <Badge variant="secondary" className="shrink-0">{planName}</Badge>
-                    <Link href="/billing">
-                      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0">Upgrade</Button>
-                    </Link>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs shrink-0"
+                      onClick={() => {
+                        clearProfileHoverClose();
+                        setProfileOpen(false);
+                        router.push("/billing");
+                      }}
+                    >
+                      Upgrade
+                    </Button>
                   </div>
                   {company?.planExpiry && (() => {
                     const raw = company.planExpiry;
@@ -693,6 +745,7 @@ function UserProfileButton() {
                     );
                   })()}
                 </div>
+                )}
 
                 <div className="text-xs space-y-2 pt-2 border-t">
                   {(dailyLimit > 0 || monthlyLimit > 0) && (

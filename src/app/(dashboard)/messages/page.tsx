@@ -70,14 +70,16 @@ type Alarm = {
 const findUserByParticipantId = (users: any[], participantId: string) =>
   users.find((u: any) => u.id === participantId || u.uid === participantId);
 
+/** Valid tab values — keep in sync with TabsTrigger `value` props. */
+const MESSAGES_TAB_VALUES = ["alerts", "chat", "alarms"] as const;
+type MessagesTabValue = (typeof MESSAGES_TAB_VALUES)[number];
+const MESSAGES_TAB_STORAGE_KEY = "messagesActiveTab";
 
 export default function MessagesPage() {
-  const [activeTab, setActiveTab] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem('messagesActiveTab') || "chat";
-    }
-    return "chat";
-  });
+  // Same default on server + first client paint; restore from localStorage after mount only (avoids hydration mismatch).
+  const [activeTab, setActiveTab] = useState<MessagesTabValue>("chat");
+  // Radix Tabs + nested dialogs use React useId(); SSR and client can assign different prefixes in Next dev — render tabs only after mount.
+  const [messagesRadixMounted, setMessagesRadixMounted] = useState(false);
 
   const { company, companyId, setCompanyId, allCompanies: userCompanies } = useCompany();
   const { user, customUser } = useAuth();
@@ -93,7 +95,7 @@ export default function MessagesPage() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [selectedConversation, setSelectedConversation] = useState<any | null>(null);
   const userSelectedConversationIdRef = useRef<string | null>(null);
-  const activeTabRef = useRef<string>("chat");
+  const activeTabRef = useRef<MessagesTabValue>("chat");
   const isMobile = useIsMobile();
   const [mobileChatView, setMobileChatView] = useState<"list" | "chat">("list");
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
@@ -111,8 +113,26 @@ export default function MessagesPage() {
   }, [user?.uid, customUser?.userDocId]);
 
 
+  const skipInitialTabPersist = useRef(true);
+
   useEffect(() => {
-    localStorage.setItem('messagesActiveTab', activeTab);
+    const raw = localStorage.getItem(MESSAGES_TAB_STORAGE_KEY);
+    if (raw && (MESSAGES_TAB_VALUES as readonly string[]).includes(raw)) {
+      setActiveTab(raw as MessagesTabValue);
+    }
+  }, []);
+
+  useEffect(() => {
+    setMessagesRadixMounted(true);
+  }, []);
+
+  useEffect(() => {
+    // First run is right after hydration; avoid clobbering stored tab with default "chat" before restore effect applies.
+    if (skipInitialTabPersist.current) {
+      skipInitialTabPersist.current = false;
+      return;
+    }
+    localStorage.setItem(MESSAGES_TAB_STORAGE_KEY, activeTab);
   }, [activeTab]);
   
   useEffect(() => {
@@ -194,8 +214,10 @@ export default function MessagesPage() {
   }, [companyId, user, allAppUsers, company]);
 
   const handleTabChange = (value: string) => {
-    activeTabRef.current = value;
-    setActiveTab(value);
+    if (!(MESSAGES_TAB_VALUES as readonly string[]).includes(value)) return;
+    const v = value as MessagesTabValue;
+    activeTabRef.current = v;
+    setActiveTab(v);
   };
   
   useEffect(() => {
@@ -664,73 +686,90 @@ export default function MessagesPage() {
 
   return (
     <div className="px-[2px] py-4 sm:py-6 md:py-8 flex flex-col h-full w-full max-w-full">
-        <div className="flex flex-col gap-2 w-full">
-            <Tabs value={activeTab} onValueChange={handleTabChange}>
-                <TabsList className="mb-0 w-full sm:w-auto">
-                    <TabsTrigger value="alerts" className="flex items-center gap-2">
-                        <Bell className="h-4 w-4"/>Alerts 
-                        {unreadAlerts > 0 && (company?.notificationSettings?.transactionAlerts?.onTabs !== false) && (
-                          <Badge className="ml-2">{unreadAlerts}</Badge>
-                        )}
-                    </TabsTrigger>
-                    <TabsTrigger value="chat" className="flex items-center gap-2">
-                        <MessageSquare className="h-4 w-4"/>Chat 
-                        {unreadMessages > 0 && <Badge className="ml-2">{unreadMessages}</Badge>}
-                    </TabsTrigger>
-                    <TabsTrigger value="alarms" className="flex items-center gap-2">
-                        <AlarmPlus className="h-4 w-4"/>Alarms
-                    </TabsTrigger>
-                </TabsList>
+        {!messagesRadixMounted ? (
+          <div
+            className="flex flex-1 flex-col min-h-0 w-full gap-2"
+            aria-busy="true"
+            aria-label="Loading messages"
+          >
+            <div className="h-10 w-full max-w-md rounded-md bg-muted animate-pulse" />
+            <div className="h-4 w-56 rounded bg-muted/70 animate-pulse sm:ml-0 ml-auto" />
+            <div className="flex-1 min-h-[240px] rounded-md border border-border/40 bg-muted/15" />
+          </div>
+        ) : (
+          <>
+            {/* Single Tabs root: tablist + tabpanels share one Radix context. */}
+            <Tabs
+              value={activeTab}
+              onValueChange={handleTabChange}
+              className="flex flex-1 flex-col min-h-0 w-full"
+            >
+                <div className="flex flex-col gap-2 w-full">
+                    <TabsList className="mb-0 w-full sm:w-auto">
+                        <TabsTrigger value="alerts" className="flex items-center gap-2">
+                            <Bell className="h-4 w-4"/>Alerts 
+                            {unreadAlerts > 0 && (company?.notificationSettings?.transactionAlerts?.onTabs !== false) && (
+                              <Badge className="ml-2">{unreadAlerts}</Badge>
+                            )}
+                        </TabsTrigger>
+                        <TabsTrigger value="chat" className="flex items-center gap-2">
+                            <MessageSquare className="h-4 w-4"/>Chat 
+                            {unreadMessages > 0 && <Badge className="ml-2">{unreadMessages}</Badge>}
+                        </TabsTrigger>
+                        <TabsTrigger value="alarms" className="flex items-center gap-2">
+                            <AlarmPlus className="h-4 w-4"/>Alarms
+                        </TabsTrigger>
+                    </TabsList>
+                    <CardDescription className="text-green-500 whitespace-nowrap text-right sm:text-left">Online from: <span className="font-semibold text-foreground">{company?.name || 'Personal Account'}</span></CardDescription>
+                </div>
+                <TabsContent value="alerts" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
+                    <AlertsTab onStartChat={handleStartChatFromAlert} onOpenVoucher={handleOpenVoucherFromAlert} onOpenHistory={handleOpenHistoryFromAlert} />
+                </TabsContent>
+                <TabsContent value="chat" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
+                     <ChatTab 
+                        conversations={conversations}
+                        allPotentialContacts={allPotentialContacts}
+                        onConversationSelect={handleConversationSelect}
+                        selectedConversation={selectedConversation}
+                        allAppUsers={allAppUsers}
+                        messages={selectedMessages}
+                        unreadCounts={unreadCounts}
+                        handleSendInvite={handleSendInvite}
+                        statuses={statuses}
+                        unreadAlertsCount={unreadAlerts}
+                        showAlertsOnList={company?.notificationSettings?.transactionAlerts?.on !== false && company?.notificationSettings?.transactionAlerts?.onList !== false}
+                        onMobileViewChange={setMobileChatView}
+                     />
+                </TabsContent>
+                <TabsContent value="alarms" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
+                    <AlarmsTab />
+                </TabsContent>
             </Tabs>
-            <CardDescription className="text-green-500 whitespace-nowrap text-right sm:text-left">Online from: <span className="font-semibold text-foreground">{company?.name || 'Personal Account'}</span></CardDescription>
-        </div>
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col min-h-0 w-full">
-            <TabsContent value="alerts" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
-                <AlertsTab onStartChat={handleStartChatFromAlert} onOpenVoucher={handleOpenVoucherFromAlert} onOpenHistory={handleOpenHistoryFromAlert} />
-            </TabsContent>
-            <TabsContent value="chat" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
-                 <ChatTab 
-                    conversations={conversations}
-                    allPotentialContacts={allPotentialContacts}
-                    onConversationSelect={handleConversationSelect}
-                    selectedConversation={selectedConversation}
-                    allAppUsers={allAppUsers}
-                    messages={selectedMessages}
-                    unreadCounts={unreadCounts}
-                    handleSendInvite={handleSendInvite}
-                    statuses={statuses}
-                    unreadAlertsCount={unreadAlerts}
-                    showAlertsOnList={company?.notificationSettings?.transactionAlerts?.on !== false && company?.notificationSettings?.transactionAlerts?.onList !== false}
-                    onMobileViewChange={setMobileChatView}
-                 />
-            </TabsContent>
-            <TabsContent value="alarms" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
-                <AlarmsTab />
-            </TabsContent>
-        </Tabs>
-        <AddVoucherDialog
-          isOpen={voucherDialogOpen}
-          onOpenChange={setVoucherDialogOpen}
-          voucher={voucherToEdit}
-          onVoucherAction={() => {
-            setVoucherToEdit(null);
-            setVoucherDialogOpen(false);
-          }}
-        />
-        <HistoryDialog
-          voucher={historyVoucher}
-          isOpen={!!historyVoucher}
-          onOpenChange={(open) => {
-            if (!open) {
-              setHistoryVoucher(null);
-              setHistoryHighlightTimestamp(null);
-              setHistoryHighlightUid(undefined);
-            }
-          }}
-          onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
-          highlightTimestamp={historyHighlightTimestamp}
-          highlightUid={historyHighlightUid}
-        />
+            <AddVoucherDialog
+              isOpen={voucherDialogOpen}
+              onOpenChange={setVoucherDialogOpen}
+              voucher={voucherToEdit}
+              onVoucherAction={() => {
+                setVoucherToEdit(null);
+                setVoucherDialogOpen(false);
+              }}
+            />
+            <HistoryDialog
+              voucher={historyVoucher}
+              isOpen={!!historyVoucher}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setHistoryVoucher(null);
+                  setHistoryHighlightTimestamp(null);
+                  setHistoryHighlightUid(undefined);
+                }
+              }}
+              onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+              highlightTimestamp={historyHighlightTimestamp}
+              highlightUid={historyHighlightUid}
+            />
+          </>
+        )}
     </div>
   );
 }

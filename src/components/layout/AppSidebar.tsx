@@ -348,16 +348,21 @@ export function AppSidebar() {
     return filterByPermission(byFeature, can);
   }, [featureConfig, can]);
 
+  // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
   const visibleBottomMenuItems = React.useMemo(() => {
-    if (!featureConfig) return bottomMenuItems;
-    const byFeature = bottomMenuItems.filter((item) => {
+    const hideBilling = company != null && company.isOwned === false;
+    const stripBilling = (items: typeof bottomMenuItems) =>
+      hideBilling ? items.filter((item) => item.id !== "billing") : items;
+
+    if (!featureConfig) return filterByPermission(stripBilling(bottomMenuItems), can);
+    const byFeature = stripBilling(bottomMenuItems).filter((item) => {
       if (item.id === "distributor-signup" && customUser?.role === "Distributor") {
         return false;
       }
       return featureConfig[item.id] !== false;
     });
     return filterByPermission(byFeature, can);
-  }, [featureConfig, customUser, can]);
+  }, [featureConfig, customUser, can, company]);
   
   const userProfileSection = (
       <div className={cn("flex items-center gap-3", isMobile ? "p-4 border-t" : "mt-4")}>

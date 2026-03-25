@@ -87,6 +87,8 @@ export type Company = {
     isOwned?: boolean;
     planId?: string;
     planExpiry?: Timestamp;
+    /** Set when a paid plan is applied (Stripe fulfill); good proxy for “joined” paid subscription date. */
+    planUpgradedAt?: Timestamp;
     settings?: Record<string, boolean>;
     allowAttachments?: boolean;
     isDeleted?: boolean; 

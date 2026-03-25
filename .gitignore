@@ -20,7 +20,6 @@
 # static build temp
 .build-static-bak/
 
-<<<<<<< HEAD
 # Electron EXE build
 /electron/node_modules/
 /electron/dist/
@@ -29,8 +28,6 @@
 # /android/
 # /ios/
 
-=======
->>>>>>> 6a1ec26 (Animation Fixed)
 # production
 /build
 
@@ -46,6 +43,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel

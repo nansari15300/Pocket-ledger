@@ -1,15 +1,21 @@
 
 "use client";
 import * as React from "react";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { Calendar as Icon } from "lucide-react";
-import { adToBs, bsToAd, type BSDate, sameBSDay, NEPALI_MONTHS, NEPALI_WEEKDAYS_SHORT } from "@/lib/bs-date";
-import type { DayPicker, SelectSingleEventHandler } from "react-day-picker";
+import {
+  adToBs,
+  bsToAd,
+  type BSDate,
+  sameBSDay,
+  NEPALI_MONTHS,
+  NEPALI_WEEKDAYS_SHORT,
+  canConvertAdDateToBs,
+  BS_CALENDAR_MIN_YEAR,
+  BS_CALENDAR_MAX_YEAR,
+} from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
-import { useDate } from "@/hooks/useDate";
-import { format, isSameDay, startOfDay } from "date-fns";
+import { isSameDay, startOfDay } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -23,16 +29,10 @@ type NepaliCalendarProps = {
   disabled?: boolean,
 };
 
-const MIN_VALID_AD_YEAR = 1944;
-const MAX_VALID_AD_YEAR = 2033;
-
-function isValidForBS(date?: Date | null): boolean {
-    if (!date) return false;
-    if (!(date instanceof Date)) return false;
-    const time = date.getTime();
-    if (isNaN(time)) return false;
-    const year = date.getFullYear();
-    return year >= MIN_VALID_AD_YEAR && year <= MAX_VALID_AD_YEAR;
+/** AD → BS for initial view: same rules as formatDateBS / BsDatePicker (nepali + datex-bs). */
+function isInitialAdInBsRange(date?: Date | null): boolean {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return false;
+  return canConvertAdDateToBs(date);
 }
 
 export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, transactionDates = [], isRange: isRangeProp, disabled = false }: NepaliCalendarProps) {
@@ -49,33 +49,60 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
     } else if (valueAD && 'from' in (valueAD as object) && (valueAD as DateRange).from) {
       dateToConvert = (valueAD as DateRange).from!;
     }
-    return isValidForBS(dateToConvert) ? adToBs(dateToConvert) : todayBS;
+    return isInitialAdInBsRange(dateToConvert) ? adToBs(dateToConvert) : todayBS;
   }, [valueAD, todayAD, todayBS]);
 
   const [current, setCurrent] = React.useState<Pick<BSDate, "y" | "m">>({ y: initialDate.y, m: initialDate.m });
 
   const [secondMonth, setSecondMonth] = React.useState<Pick<BSDate, "y" | "m">>(() => {
-    return initialDate.m === 12 ? { y: initialDate.y + 1, m: 1 } : { y: initialDate.y, m: initialDate.m + 1 };
+    let ny = initialDate.y;
+    let nm = initialDate.m + 1;
+    if (initialDate.m === 12) {
+      ny = initialDate.y + 1;
+      nm = 1;
+    }
+    if (ny > BS_CALENDAR_MAX_YEAR) {
+      ny = BS_CALENDAR_MAX_YEAR;
+      nm = 12;
+    }
+    return { y: ny, m: nm };
   });
 
   React.useEffect(() => {
     setSecondMonth((prev) => {
-      const next = current.m === 12 ? { y: current.y + 1, m: 1 } : { y: current.y, m: current.m + 1 };
+      let next = current.m === 12 ? { y: current.y + 1, m: 1 } : { y: current.y, m: current.m + 1 };
+      if (next.y > BS_CALENDAR_MAX_YEAR) {
+        next = { y: BS_CALENDAR_MAX_YEAR, m: 12 };
+      }
       if (prev.y === next.y && prev.m === next.m) return prev;
       return next;
     });
   }, [current.y, current.m]);
 
+  const bsYearOptions = React.useMemo(
+    () =>
+      Array.from(
+        { length: BS_CALENDAR_MAX_YEAR - BS_CALENDAR_MIN_YEAR + 1 },
+        (_, i) => BS_CALENDAR_MIN_YEAR + i
+      ),
+    []
+  );
+
+  /** Month grid — BS years from datex-bs only (replaces old 2000–2090 cap). */
   function getMonthDays(y: number, m: number) {
-    if (y < 2000 || y > 2090) return { firstW: 0, days: [] as BSDate[] };
-    const firstAD = bsToAd({ y, m, d: 1 });
-    const next = m === 12 ? { y: y + 1, m: 1, d: 1 } : { y, m: m + 1, d: 1 };
-    const nextAD = bsToAd(next);
-    const MS_DAY = 24 * 60 * 60 * 1000;
-    const daysInMonth = Math.round((toUtcNoon(nextAD).getTime() - toUtcNoon(firstAD).getTime()) / MS_DAY);
-    const firstW = firstAD.getDay();
-    const days: BSDate[] = Array.from({ length: daysInMonth }, (_, i) => ({ y, m, d: i + 1 }));
-    return { firstW, days };
+    if (y < BS_CALENDAR_MIN_YEAR || y > BS_CALENDAR_MAX_YEAR) return { firstW: 0, days: [] as BSDate[] };
+    try {
+      const firstAD = bsToAd({ y, m, d: 1 });
+      const next = m === 12 ? { y: y + 1, m: 1, d: 1 } : { y, m: m + 1, d: 1 };
+      const nextAD = bsToAd(next);
+      const MS_DAY = 24 * 60 * 60 * 1000;
+      const daysInMonth = Math.round((toUtcNoon(nextAD).getTime() - toUtcNoon(firstAD).getTime()) / MS_DAY);
+      const firstW = firstAD.getDay();
+      const days: BSDate[] = Array.from({ length: daysInMonth }, (_, i) => ({ y, m, d: i + 1 }));
+      return { firstW, days };
+    } catch {
+      return { firstW: 0, days: [] as BSDate[] };
+    }
   }
 
   function toUtcNoon(d: Date) {
@@ -98,12 +125,24 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
     return (
       <div className="flex-1">
         <div className="text-center font-semibold mb-2 flex justify-between items-center px-1">
-            <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => setMonth((v) => (v.m === 1 ? { y: v.y - 1, m: 12 } : { y: v.y, m: v.m - 1 }))}><ChevronLeft className="h-4 w-4" /></Button>
+            <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => setMonth((v) => {
+              if (v.m === 1) {
+                if (v.y <= BS_CALENDAR_MIN_YEAR) return v;
+                return { y: v.y - 1, m: 12 };
+              }
+              return { y: v.y, m: v.m - 1 };
+            })}><ChevronLeft className="h-4 w-4" /></Button>
             <div className="flex gap-2">
                 <Select value={String(m)} onValueChange={(newMonth) => setMonth(prev => ({...prev, m: Number(newMonth)}))}><SelectTrigger className="w-[120px] h-8 text-sm"><SelectValue /></SelectTrigger><SelectContent>{NEPALI_MONTHS.map((month, index) => (<SelectItem key={month} value={String(index + 1)}>{month}</SelectItem>))}</SelectContent></Select>
-                <Select value={String(y)} onValueChange={(newYear) => setMonth(prev => ({...prev, y: Number(newYear)}))}><SelectTrigger className="w-[90px] h-8 text-sm"><SelectValue /></SelectTrigger><SelectContent>{Array.from({ length: 91 }, (_, i) => 2000 + i).map((year) => (<SelectItem key={year} value={String(year)}>{year}</SelectItem>))}</SelectContent></Select>
+                <Select value={String(y)} onValueChange={(newYear) => setMonth(prev => ({...prev, y: Number(newYear)}))}><SelectTrigger className="w-[90px] h-8 text-sm"><SelectValue /></SelectTrigger><SelectContent>{bsYearOptions.map((year) => (<SelectItem key={year} value={String(year)}>{year}</SelectItem>))}</SelectContent></Select>
             </div>
-            <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => setMonth((v) => (v.m === 12 ? { y: v.y + 1, m: 1 } : { y: v.y, m: v.m + 1 }))}><ChevronRight className="h-4 w-4" /></Button>
+            <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => setMonth((v) => {
+              if (v.m === 12) {
+                if (v.y >= BS_CALENDAR_MAX_YEAR) return v;
+                return { y: v.y + 1, m: 1 };
+              }
+              return { y: v.y, m: v.m + 1 };
+            })}><ChevronRight className="h-4 w-4" /></Button>
         </div>
 
         <div className="grid grid-cols-7 text-xs text-gray-500">{NEPALI_WEEKDAYS_SHORT.map((w, i) => (<div key={`weekday-${i}`} className="h-7 flex items-center justify-center">{w}</div>))}</div>
