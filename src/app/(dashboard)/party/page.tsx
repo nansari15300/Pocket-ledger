@@ -57,6 +57,8 @@ import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
+import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 function PartyPageContent() {
   const { user } = useAuth();
@@ -64,12 +66,10 @@ function PartyPageContent() {
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames } = useVouchers();
   const { can } = usePermissions();
-  const showApproveOnList =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onList !== false;
+  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
+  const canApproveTransactions = can("approve_transactions");
   const pendingApprovalByPartyId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
@@ -78,9 +78,9 @@ function PartyPageContent() {
       }
     });
     return map;
-  }, [vouchers, showApproveOnList]);
+  }, [vouchers, canApproveTransactions]);
   const pendingApprovalByGroupId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length || !processedParties?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length || !processedParties?.length) return {} as Record<string, number>;
     const byParty: Record<string, number> = {};
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
@@ -92,7 +92,7 @@ function PartyPageContent() {
       byGroup[p.groupId] = (byGroup[p.groupId] || 0) + (byParty[p.id] || 0);
     });
     return byGroup;
-  }, [vouchers, processedParties, showApproveOnList]);
+  }, [vouchers, processedParties, canApproveTransactions]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -111,6 +111,8 @@ function PartyPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
+  /** Sirf un parties jin par pending approval vouchers hon — group list par lagta nahi */
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -226,6 +228,10 @@ function PartyPageContent() {
   }, [mobileFilteredOverdue]);
 
   const partiesForList = processedPartiesForSelection;
+  const partiesForListFiltered = useMemo(
+    () => filterByPendingApproval(partiesForList, pendingApprovalByPartyId, unapprovedOnly),
+    [partiesForList, pendingApprovalByPartyId, unapprovedOnly]
+  );
   
    const processedGroups = useMemo(() => {
     // Show Ungrouped row only when at least one party is in the Ungrouped bucket.
@@ -265,7 +271,7 @@ function PartyPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'parties' ? partiesForList : processedGroups, 
+    activeView === 'parties' ? partiesForListFiltered : processedGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -355,6 +361,7 @@ function PartyPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
+    setUnapprovedOnly(false);
   }, [companyId]);
 
   // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
@@ -374,15 +381,17 @@ function PartyPageContent() {
   
   const totalBalance = useMemo(() => {
     if (activeView === 'parties') {
-        // Exclude system accounts from total balance
-        return processedParties
-            .filter(p => !(p as any).isSystemAccount)
-            .reduce((acc, party) => acc + party.balance, 0);
+        // Exclude system accounts; unapproved filter on = sirf un parties ka balance jahan pending approval
+        let list = processedParties.filter((p) => !(p as any).isSystemAccount);
+        if (unapprovedOnly) {
+          list = filterByPendingApproval(list, pendingApprovalByPartyId, true);
+        }
+        return list.reduce((acc, party) => acc + party.balance, 0);
     }
     // Groups view: sum only user-defined + synthetic groups (processedGroups already excludes system parents)
     return processedGroups
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedParties, processedGroups]);
+  }, [activeView, processedParties, processedGroups, unapprovedOnly, pendingApprovalByPartyId]);
 
   const handleSelect = (item: Party | Group) => {
     if (useQueryNav) {
@@ -407,13 +416,13 @@ function PartyPageContent() {
   // Filtered count for party list (matches PartyList logic: search + exclude system accounts)
   const filteredPartyCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return (partiesForList || []).filter((p) => {
+    return (partiesForListFiltered || []).filter((p) => {
       if (!p.name) return false;
       const isSystemAccount = (p as any).isSystemAccount === true;
       const matchesSearch = searchLower ? p.name.toLowerCase().includes(searchLower) : true;
       return matchesSearch && !isSystemAccount;
     }).length;
-  }, [partiesForList, searchTerm]);
+  }, [partiesForListFiltered, searchTerm]);
 
 
   if (vouchersLoading) {
@@ -442,6 +451,9 @@ function PartyPageContent() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={activeView === 'parties' ? 'Search parties...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
+        {activeView === "parties" && canApproveTransactions && (
+          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
+        )}
         {activeView === "parties" ? (
           <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreatePartyOpen(true)}>
@@ -477,7 +489,7 @@ function PartyPageContent() {
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
                 <PartyList
-                parties={partiesForList}
+                parties={partiesForListFiltered}
                 onSelectParty={handleSelect}
                 selectedParty={selectedParty}
                 searchTerm={searchTerm}

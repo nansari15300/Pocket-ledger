@@ -46,6 +46,8 @@ import { CreateExpenseGroupDialog } from "@/components/expenses/CreateExpenseGro
 import { PermissionButton } from "@/components/permission";
 import usePermissions from "@/hooks/usePermissions";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
+import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -57,12 +59,10 @@ function IncomeExpensePageContent() {
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedExpenseAccounts, processedExpenseGroups: initialProcessedExpenseGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  const showApproveOnList =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onList !== false;
+  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
+  const canApproveTransactions = can("approve_transactions");
   const pendingApprovalByExpenseAccountId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     const expenseAccountIdSet = new Set((processedExpenseAccounts || []).map((a: any) => a.id));
     vouchers.forEach((v: any) => {
@@ -79,16 +79,16 @@ function IncomeExpensePageContent() {
       });
     });
     return map;
-  }, [vouchers, processedExpenseAccounts, showApproveOnList]);
+  }, [vouchers, processedExpenseAccounts, canApproveTransactions]);
   const pendingApprovalByExpenseGroupId = useMemo(() => {
-    if (!showApproveOnList) return {} as Record<string, number>;
+    if (!canApproveTransactions) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedExpenseAccounts.forEach((account: any) => {
       const groupId = account.groupId || "ungrouped";
       map[groupId] = (map[groupId] || 0) + (pendingApprovalByExpenseAccountId[account.id] || 0);
     });
     return map;
-  }, [processedExpenseAccounts, pendingApprovalByExpenseAccountId, showApproveOnList]);
+  }, [processedExpenseAccounts, pendingApprovalByExpenseAccountId, canApproveTransactions]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -104,6 +104,7 @@ function IncomeExpensePageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -160,6 +161,11 @@ function IncomeExpensePageContent() {
     return normalized;
   }, [processedExpenseAccounts, initialProcessedExpenseGroups, companyId, CORE_EXPENSE_GROUP_IDS]);
 
+  const expenseAccountsForListDisplay = useMemo(
+    () => filterByPendingApproval(processedExpenseAccounts, pendingApprovalByExpenseAccountId, unapprovedOnly),
+    [processedExpenseAccounts, pendingApprovalByExpenseAccountId, unapprovedOnly]
+  );
+
   useEffect(() => {
     if (!companyId) return;
     const ids = Array.from(CORE_EXPENSE_GROUP_IDS);
@@ -201,7 +207,7 @@ function IncomeExpensePageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'accounts' ? processedExpenseAccounts : processedExpenseGroups, 
+    activeView === 'accounts' ? expenseAccountsForListDisplay : processedExpenseGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -209,6 +215,7 @@ function IncomeExpensePageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
+    setUnapprovedOnly(false);
   }, [companyId]);
 
   // Restore selection when returning from details (e.g. /incomes?selected=xyz or /incomes?view=groups&selected=xyz)
@@ -303,12 +310,16 @@ function IncomeExpensePageContent() {
   }, []);
   
   const totalBalance = useMemo(() => {
-    return activeView === 'accounts'
-      ? processedExpenseAccounts.reduce((acc, account) => acc + account.balance, 0)
-      : processedExpenseGroups
-          .filter((g) => !['income', 'expenses'].includes((g.id || '').toLowerCase()))
-          .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedExpenseAccounts, processedExpenseGroups]);
+    if (activeView === "accounts") {
+      const list = unapprovedOnly
+        ? filterByPendingApproval(processedExpenseAccounts, pendingApprovalByExpenseAccountId, true)
+        : processedExpenseAccounts;
+      return list.reduce((acc, account) => acc + account.balance, 0);
+    }
+    return processedExpenseGroups
+      .filter((g) => !["income", "expenses"].includes((g.id || "").toLowerCase()))
+      .reduce((acc, group) => acc + group.balance, 0);
+  }, [activeView, processedExpenseAccounts, processedExpenseGroups, unapprovedOnly, pendingApprovalByExpenseAccountId]);
 
   const handleSelect = (item: ExpenseAccount | ExpenseGroup, view?: 'accounts' | 'groups') => {
     const isGroup = view === 'groups';
@@ -351,6 +362,13 @@ function IncomeExpensePageContent() {
     return groupAccounts;
   }, [selectedGroup, processedExpenseAccounts]);
 
+  const filteredExpenseAccountCount = useMemo(() => {
+    const q = (searchTerm || "").toLowerCase();
+    return expenseAccountsForListDisplay.filter(
+      (a) => a.name && a.name.toLowerCase().includes(q)
+    ).length;
+  }, [expenseAccountsForListDisplay, searchTerm]);
+
   const openVoucherDialog = (type: 'direct_income' | 'direct_expense' | 'add_salary') => {
     setDefaultTab(type);
     setIsVoucherOpen(true);
@@ -383,6 +401,9 @@ function IncomeExpensePageContent() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
             </div>
+            {activeView === "accounts" && canApproveTransactions && (
+              <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
+            )}
             {activeView === "accounts" ? (
               <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
                 <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
@@ -415,10 +436,10 @@ function IncomeExpensePageContent() {
             <>
               <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
                 <DollarSign className="h-4 w-4" />
-                <span>Account ({processedExpenseAccounts.length})</span>
+                <span>Account ({filteredExpenseAccountCount})</span>
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <ExpenseAccountList accounts={processedExpenseAccounts} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
+                <ExpenseAccountList accounts={expenseAccountsForListDisplay} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
               </div>
             </>
         ) : (

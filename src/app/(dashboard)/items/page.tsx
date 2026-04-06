@@ -42,6 +42,8 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
+import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 type DisplayUnitState = Record<string, string>;
 
@@ -51,12 +53,10 @@ function ItemsPageContent() {
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedItems, processedItemGroups: initialProcessedItemGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  const showApproveOnList =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onList !== false;
+  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
+  const canApproveTransactions = can("approve_transactions");
   const pendingApprovalByItemId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
@@ -69,16 +69,16 @@ function ItemsPageContent() {
       });
     });
     return map;
-  }, [vouchers, showApproveOnList]);
+  }, [vouchers, canApproveTransactions]);
   const pendingApprovalByItemGroupId = useMemo(() => {
-    if (!showApproveOnList) return {} as Record<string, number>;
+    if (!canApproveTransactions) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedItems.forEach((item: any) => {
       const groupId = item.groupId || "ungrouped";
       map[groupId] = (map[groupId] || 0) + (pendingApprovalByItemId[item.id] || 0);
     });
     return map;
-  }, [processedItems, pendingApprovalByItemId, showApproveOnList]);
+  }, [processedItems, pendingApprovalByItemId, canApproveTransactions]);
   const isMobile = useIsMobile();
   const useQueryNav = useMasterDetailQueryNav();
   const router = useRouter();
@@ -94,6 +94,7 @@ function ItemsPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [stockView, setStockView] = useState<StockView>("amount");
   const [itemDisplayUnits, setItemDisplayUnits] = useState<DisplayUnitState>({});
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
@@ -146,19 +147,25 @@ function ItemsPageContent() {
     [processedItems]
   );
 
+  const itemsForListDisplay = useMemo(
+    () => filterByPendingApproval(allItems, pendingApprovalByItemId, unapprovedOnly),
+    [allItems, pendingApprovalByItemId, unapprovedOnly]
+  );
+
   usePageMemory(
     "itemsPageState",
     activeView,
     setActiveView,
     selected,
     setSelected,
-    activeView === "items" ? allItems : processedItemGroups,
+    activeView === "items" ? itemsForListDisplay : processedItemGroups,
     vouchersLoading
   );
 
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
+    setUnapprovedOnly(false);
   }, [companyId]);
 
   // Restore selection when returning from details (e.g. /items?selected=xyz or /items?view=groups&selected=xyz)
@@ -264,10 +271,13 @@ function ItemsPageContent() {
 
   const totalBalance = useMemo(() => {
     if (activeView === "items") {
-      return allItems.reduce((acc, item) => acc + item.balance, 0);
+      const list = unapprovedOnly
+        ? filterByPendingApproval(allItems, pendingApprovalByItemId, true)
+        : allItems;
+      return list.reduce((acc, item) => acc + item.balance, 0);
     }
     return processedItemGroups.reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, allItems, processedItemGroups]);
+  }, [activeView, allItems, processedItemGroups, unapprovedOnly, pendingApprovalByItemId]);
 
   const selectedGroupItems = useMemo(() => {
     if (!selectedItemGroup) return [];
@@ -278,6 +288,11 @@ function ItemsPageContent() {
   }, [selectedItemGroup, processedItems]);
 
   // Filtered group count (matches ItemGroupList: exclude report-only + system groups; apply search)
+  const filteredItemCount = useMemo(() => {
+    const q = (searchTerm || "").toLowerCase();
+    return itemsForListDisplay.filter((i) => i.name && i.name.toLowerCase().includes(q)).length;
+  }, [itemsForListDisplay, searchTerm]);
+
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedItemGroups || []).filter((g) => {
@@ -330,6 +345,9 @@ function ItemsPageContent() {
             autoComplete="off"
           />
         </div>
+        {activeView === "items" && canApproveTransactions && (
+          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
+        )}
         {activeView === "items" ? (
           <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateItemOpen(true)}>
@@ -357,7 +375,7 @@ function ItemsPageContent() {
         <>
           <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
             <Package className="h-4 w-4" />
-            <span>Item ({allItems.length})</span>
+            <span>Item ({filteredItemCount})</span>
             <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
               <SelectTrigger className="w-[100px] h-7 ml-auto">
                 <SelectValue />
@@ -370,7 +388,7 @@ function ItemsPageContent() {
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             <ItemList
-              items={allItems}
+              items={itemsForListDisplay}
               onSelectItem={(i) => handleSelect(i)}
               selectedItem={selectedItem}
               searchTerm={searchTerm}

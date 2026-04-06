@@ -33,6 +33,8 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
+import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -43,12 +45,10 @@ function TaxPageContent() {
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedTaxes, processedTaxGroups: initialProcessedTaxGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  const showApproveOnList =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onList !== false;
+  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
+  const canApproveTransactions = can("approve_transactions");
   const pendingApprovalByTaxId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     const taxIdSet = new Set((processedTaxes || []).map((t: any) => t.id));
     vouchers.forEach((v: any) => {
@@ -66,16 +66,16 @@ function TaxPageContent() {
       });
     });
     return map;
-  }, [vouchers, processedTaxes, showApproveOnList]);
+  }, [vouchers, processedTaxes, canApproveTransactions]);
   const pendingApprovalByTaxGroupId = useMemo(() => {
-    if (!showApproveOnList) return {} as Record<string, number>;
+    if (!canApproveTransactions) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedTaxes.forEach((tax: any) => {
       const groupId = tax.groupId || "ungrouped";
       map[groupId] = (map[groupId] || 0) + (pendingApprovalByTaxId[tax.id] || 0);
     });
     return map;
-  }, [processedTaxes, pendingApprovalByTaxId, showApproveOnList]);
+  }, [processedTaxes, pendingApprovalByTaxId, canApproveTransactions]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
@@ -92,6 +92,7 @@ function TaxPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -128,6 +129,11 @@ function TaxPageContent() {
     return baseGroups;
   }, [processedTaxes, initialProcessedTaxGroups, companyId]);
 
+  const taxesForListDisplay = useMemo(
+    () => filterByPendingApproval(processedTaxes, pendingApprovalByTaxId, unapprovedOnly),
+    [processedTaxes, pendingApprovalByTaxId, unapprovedOnly]
+  );
+
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "taxPageState", 
@@ -135,7 +141,7 @@ function TaxPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'taxes' ? processedTaxes : processedTaxGroups, 
+    activeView === 'taxes' ? taxesForListDisplay : processedTaxGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -143,6 +149,7 @@ function TaxPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
+    setUnapprovedOnly(false);
   }, [companyId]);
   
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -218,10 +225,14 @@ function TaxPageContent() {
   }, []);
 
   const totalBalance = useMemo(() => {
-    return activeView === 'taxes'
-      ? processedTaxes.reduce((acc, tax) => acc + tax.balance, 0)
-      : processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedTaxes, processedTaxGroups]);
+    if (activeView === "taxes") {
+      const list = unapprovedOnly
+        ? filterByPendingApproval(processedTaxes, pendingApprovalByTaxId, true)
+        : processedTaxes;
+      return list.reduce((acc, tax) => acc + tax.balance, 0);
+    }
+    return processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
+  }, [activeView, processedTaxes, processedTaxGroups, unapprovedOnly, pendingApprovalByTaxId]);
 
   const handleSelect = (item: Tax | TaxGroup) => {
     if (useQueryNav) {
@@ -261,6 +272,11 @@ function TaxPageContent() {
   }, [selectedGroup, processedTaxes]);
 
   // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
+  const filteredTaxCount = useMemo(() => {
+    const q = (searchTerm || "").toLowerCase();
+    return taxesForListDisplay.filter((t) => t.name && t.name.toLowerCase().includes(q)).length;
+  }, [taxesForListDisplay, searchTerm]);
+
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedTaxGroups || []).filter((g) => {
@@ -298,6 +314,9 @@ function TaxPageContent() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
+        {activeView === "taxes" && canApproveTransactions && (
+          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
+        )}
         {activeView === "taxes" ? (
           <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateTaxOpen(true)}>
@@ -316,10 +335,10 @@ function TaxPageContent() {
             <>
               <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
                 <Receipt className="h-4 w-4" />
-                <span>Tax ({processedTaxes.length})</span>
+                <span>Tax ({filteredTaxCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxList taxes={processedTaxes} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
+                <TaxList taxes={taxesForListDisplay} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
               </div>
             </>
         ) : (

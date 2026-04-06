@@ -37,6 +37,8 @@ import { cn } from "@/lib/utils";
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
+import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 function StaffPageContent() {
   const { user } = useAuth();
@@ -44,12 +46,10 @@ function StaffPageContent() {
   const { formatCurrency, formatRunning } = useDate();
   const { vouchers, loading: vouchersLoading, processedStaff, processedStaffGroups: initialProcessedStaffGroups, userNames } = useVouchers();
   const { can } = usePermissions();
-  const showApproveOnList =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onList !== false;
+  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
+  const canApproveTransactions = can("approve_transactions");
   const pendingApprovalByStaffId = useMemo(() => {
-    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
+    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
@@ -68,16 +68,16 @@ function StaffPageContent() {
       }
     });
     return map;
-  }, [vouchers, showApproveOnList]);
+  }, [vouchers, canApproveTransactions]);
   const pendingApprovalByStaffGroupId = useMemo(() => {
-    if (!showApproveOnList) return {} as Record<string, number>;
+    if (!canApproveTransactions) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedStaff.forEach((s: any) => {
       const groupId = s.groupId || "ungrouped";
       map[groupId] = (map[groupId] || 0) + (pendingApprovalByStaffId[s.id] || 0);
     });
     return map;
-  }, [processedStaff, pendingApprovalByStaffId, showApproveOnList]);
+  }, [processedStaff, pendingApprovalByStaffId, canApproveTransactions]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -93,6 +93,7 @@ function StaffPageContent() {
   const useQueryNav = useMasterDetailQueryNav();
   
   const [searchTerm, setSearchTerm] = useState("");
+  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -129,6 +130,11 @@ function StaffPageContent() {
     return baseGroups;
   }, [processedStaff, initialProcessedStaffGroups, companyId]);
 
+  const staffForListDisplay = useMemo(
+    () => filterByPendingApproval(processedStaff, pendingApprovalByStaffId, unapprovedOnly),
+    [processedStaff, pendingApprovalByStaffId, unapprovedOnly]
+  );
+
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "staffPageState", 
@@ -136,7 +142,7 @@ function StaffPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'staff' ? processedStaff : processedStaffGroups, 
+    activeView === 'staff' ? staffForListDisplay : processedStaffGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -144,6 +150,7 @@ function StaffPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
+    setUnapprovedOnly(false);
   }, [companyId]);
 
   // Restore selection when returning from details (e.g. /staff?selected=xyz or /staff?view=groups&selected=xyz)
@@ -179,7 +186,10 @@ function StaffPageContent() {
 
   const totalBalance = useMemo(() => {
     if (activeView === 'staff') {
-      return processedStaff.reduce((acc, staff) => acc + staff.balance, 0);
+      const list = unapprovedOnly
+        ? filterByPendingApproval(processedStaff, pendingApprovalByStaffId, true)
+        : processedStaff;
+      return list.reduce((acc, staff) => acc + staff.balance, 0);
     }
     // Groups view: exclude system parent groups so balances are not double-counted
     return processedStaffGroups
@@ -191,9 +201,14 @@ function StaffPageContent() {
         return !isSystem;
       })
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedStaff, processedStaffGroups]);
+  }, [activeView, processedStaff, processedStaffGroups, unapprovedOnly, pendingApprovalByStaffId]);
 
   // Filtered group count (matches StaffGroupList: exclude system/report-only + search)
+  const filteredStaffCount = useMemo(() => {
+    const q = (searchTerm || "").toLowerCase();
+    return staffForListDisplay.filter((s) => s.name && s.name.toLowerCase().includes(q)).length;
+  }, [staffForListDisplay, searchTerm]);
+
   const filteredStaffGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedStaffGroups || []).filter((g) => {
@@ -257,6 +272,9 @@ function StaffPageContent() {
                     autoComplete="off"
                 />
             </div>
+            {activeView === "staff" && canApproveTransactions && (
+              <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
+            )}
             {activeView === "staff" ? (
                 <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
                     <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateStaffOpen(true)}>
@@ -285,11 +303,11 @@ function StaffPageContent() {
           <>
             <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
               <Briefcase className="h-4 w-4" />
-              <span>Staff ({processedStaff.length})</span>
+              <span>Staff ({filteredStaffCount})</span>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
               <StaffList
-                staff={processedStaff}
+                staff={staffForListDisplay}
                 onSelectStaff={handleSelect as any}
                 selectedStaff={selectedStaff}
                 searchTerm={searchTerm}
