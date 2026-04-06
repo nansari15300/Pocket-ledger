@@ -562,25 +562,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       const nextNum = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum));
-      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum));
-      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum));
+      // shouldDirty: false so auto numbers are not treated as user edits (otherwise hydration effect re-runs and can fight file uploads).
+      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum), { shouldDirty: false });
+      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum), { shouldDirty: false });
+      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum), { shouldDirty: false });
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
   useEffect(() => {
-    if (voucher) {
-      const vid = voucher.id;
-      const isSameVoucher = lastResetVoucherIdRef.current === vid;
-      if (vid && isSameVoucher && isFormDirty) return;
-      if (vid) lastResetVoucherIdRef.current = vid;
-      const initialValues: any = { ...voucher, files:[], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+    const buildInitialValues = () => {
+      const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
       if (isEditingAndConverting) {
-          initialValues.voucherNumber = "";
+        initialValues.voucherNumber = "";
       }
-      // Contra Out/In: use stored values or derive from voucherNumber for old vouchers
       const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
       const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
       if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
@@ -591,10 +587,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
         initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
       }
-      form.reset(initialValues);
+      return initialValues;
+    };
+
+    if (voucher?.id) {
+      const vid = voucher.id;
+      const isSameVoucher = lastResetVoucherIdRef.current === vid;
+      if (isSameVoucher && isFormDirty) return;
+      lastResetVoucherIdRef.current = vid;
+      form.reset(buildInitialValues());
       setSavedVoucherId(voucher.id);
       setFiles(voucher.fileUrls || []);
       initialFilesRef.current = voucher.fileUrls || [];
+    } else if (voucher) {
+      // New contra (Add dialog always passes an object; id is undefined). Never re-reset while user is editing or files are pending — same failure mode as SalaryForm.
+      lastResetVoucherIdRef.current = null;
+      if (isFormDirty) return;
+      form.reset(buildInitialValues());
+      setSavedVoucherId(null);
+      const urls = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+      setFiles(urls);
+      initialFilesRef.current = (urls || []).filter((u: any) => typeof u === "string");
     } else {
       lastResetVoucherIdRef.current = null;
     }
@@ -609,7 +622,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const handleAccountCreated = (newAccountId: string) => {
     if (targetFieldForNewAccount) {
-      form.setValue(targetFieldForNewAccount, newAccountId);
+      form.setValue(targetFieldForNewAccount, newAccountId, { shouldDirty: true });
     }
     setTimeout(() => setIsCreateAccountOpen(false), 50);
   };
@@ -1072,8 +1085,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       } catch (error) {
         console.error("Compression error:", error);
+        toast({
+          variant: "destructive",
+          title: "File not added",
+          description:
+            error instanceof Error ? error.message : "Could not process this file. Try another image/PDF or smaller size.",
+        });
       }
     }
+    e.target.value = "";
   };
   
   const isOwner = user?.uid === company?.ownerId;

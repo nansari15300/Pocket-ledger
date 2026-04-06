@@ -609,7 +609,8 @@ export function AddVoucherDialog(props: any) {
             }}
           >
             {headerBlock}
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+            {/* Inset body from window edges so resize hit-zones (esp. right/bottom strips + corners) do not steal clicks from controls like “Add File” on salary forms. */}
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden pr-4 pb-4">
               {bodyBlock}
             </div>
             {/* Resize handle - top edge */}

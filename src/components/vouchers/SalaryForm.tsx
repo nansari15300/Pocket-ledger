@@ -316,6 +316,9 @@ export function SalaryForm({
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseOpen, setIsCreateExpenseOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  // Latest files for hydration effect: listing `files` in that effect’s deps re-ran after every upload and reset state from defaultVoucherData (wiping new File rows).
+  const filesRef = useRef<(File | string)[]>(files);
+  filesRef.current = files;
   const initialFilesRef = useRef<string[]>([]);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -414,14 +417,15 @@ export function SalaryForm({
 
 
     useEffect(() => {
+        const filesNow = filesRef.current;
         const isEditingExisting = !!voucher?.id;
         if (isEditingExisting) {
             const vid = voucher.id;
             const isSameVoucher = lastResetVoucherIdRef.current === vid;
             const _formDirty = form.formState.isDirty;
             const _fileDirty = (() => {
-                const currentUrls = files.filter(f => typeof f === 'string') as string[];
-                const newFiles = files.filter(f => f instanceof File);
+                const currentUrls = filesNow.filter(f => typeof f === 'string') as string[];
+                const newFiles = filesNow.filter(f => f instanceof File);
                 if (newFiles.length > 0) return true;
                 const init = initialFilesRef.current;
                 return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
@@ -444,19 +448,40 @@ export function SalaryForm({
         }
         lastResetVoucherIdRef.current = null;
         if (defaultVoucherData) {
-            // Gallery -> Unassigned "Attach to Add Salary": preload file URL and defaults for new salary voucher.
-            const initialValues = getInitialFormValues(defaultVoucherData, processedStaff, processedTaxes);
-            form.reset(initialValues);
-            const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
-            setFiles(urls);
-            initialFilesRef.current = urls.filter((f: any) => typeof f === 'string');
-            // Converted / default salary should also seed OB allocation locally.
-            setLatestOBAllocated(Number((defaultVoucherData as any)?.openingBalanceAllocated) || 0);
-            // Fresh voucher load should start without pending local draft overrides.
-            setHasLocalBillWiseDraftEdits(false);
+            const v = form.getValues();
+            const hasPendingLocalFiles = filesRef.current.some((f) => f instanceof File);
+            const billWiseTouched =
+              !areSalaryLinkMapsEqual(localSalaryLinkMap, initialSalaryLinkMapRef.current) ||
+              latestOBAllocated !== initialOBAllocatedRef.current;
+            // processedStaff / processedTaxes / Firestore refresh after inline "Add New" must not call form.reset — same pattern as CreatePurchaseForm for new vouchers.
+            const hasStartedNewSalaryDraft =
+              form.formState.isDirty ||
+              hasPendingLocalFiles ||
+              billWiseTouched ||
+              !!v.debitAccountId ||
+              !!v.accountId ||
+              !!(v.narration || "").trim() ||
+              (v.lineItems || []).some(
+                (row: any) =>
+                  !!(row.staffId && String(row.staffId).trim()) ||
+                  Number(row.salary) !== 0 ||
+                  !!(row.narration || "").trim() ||
+                  !!(row.taxAccountId && String(row.taxAccountId).trim())
+              );
+
+            if (!hasStartedNewSalaryDraft) {
+              // Gallery -> Unassigned "Attach to Add Salary": preload file URL and defaults for new salary voucher.
+              const initialValues = getInitialFormValues(defaultVoucherData, processedStaff, processedTaxes);
+              form.reset(initialValues);
+              const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
+              setFiles(urls);
+              initialFilesRef.current = urls.filter((f: any) => typeof f === 'string');
+              setLatestOBAllocated(Number((defaultVoucherData as any)?.openingBalanceAllocated) || 0);
+              setHasLocalBillWiseDraftEdits(false);
+            }
         }
-    // Rehydrate only when source voucher/default payload changes; avoid resetting local draft on background refresh.
-    }, [voucher?.id, defaultVoucherData, processedStaff, processedTaxes, form, files, localSalaryLinkMap, latestOBAllocated]);
+    // Do not depend on `files`: uploads would retrigger and clear attachments (see hasPendingLocalFiles / filesRef).
+    }, [voucher?.id, defaultVoucherData, processedStaff, processedTaxes, form, localSalaryLinkMap, latestOBAllocated]);
 
   const prevLinkDialogOpenRef = useRef(false);
 
@@ -491,7 +516,7 @@ export function SalaryForm({
   
   const handleTaxCreated = (newTaxId: string) => {
     if(activeLineIndex !== null) {
-      form.setValue(`lineItems.${activeLineIndex}.taxAccountId`, newTaxId);
+      form.setValue(`lineItems.${activeLineIndex}.taxAccountId`, newTaxId, { shouldDirty: true });
     }
     setIsCreateTaxOpen(false);
   }
@@ -510,7 +535,8 @@ export function SalaryForm({
   };
   
    const handleExpenseAccountCreated = (newAccountId: string) => {
-    form.setValue("debitAccountId", newAccountId);
+    // shouldDirty: true so hydration effect treats the form as edited and does not form.reset after lists refresh.
+    form.setValue("debitAccountId", newAccountId, { shouldDirty: true });
     setIsCreateExpenseOpen(false);
   };
 
@@ -1383,8 +1409,18 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         }
       } catch (error) {
         console.error("Compression error:", error);
+        toast({
+          variant: "destructive",
+          title: "File not added",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not process this file. Try another image/PDF or a smaller file.",
+        });
       }
     }
+    // Allow picking the same file again on next open (input value reset).
+    e.target.value = "";
   };
 
   const handleCreateNew = (type: 'party' | 'account' | 'staff' | 'expense' | 'tax', newName?: string) => {
@@ -2023,45 +2059,49 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       <FormItem className="order-1 md:order-2">
                         <FormLabel>Attach Files (Optional)</FormLabel>
                         <RestrictedFileUploader>
-                          {/* Mobile: Attach Files appears above bill-wise. Desktop: it stays to the right of bill-wise. */}
+                          {/* Same pattern as CreatePurchaseForm: FormControl + div onClick + hidden Input (label/htmlFor wiring works with FormItem id). */}
                           <div className="flex flex-wrap gap-4">
                             {files.map((file, index) => (
-                              <FilePreview 
-                                key={index} 
-                                file={file} 
-                                onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                              <FilePreview
+                                key={typeof file === "string" ? file : `file-${index}`}
+                                file={file}
+                                onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles((prev) => prev.filter((f) => f !== file)) : undefined}
                                 className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                               />
                             ))}
                             {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                              <div 
-                                className={cn(
-                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                )}
-                                onClick={() => {
-                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                    fileInputRef.current?.click();
-                                  }
-                                }}
-                              >
-                                <PlusCircle className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <input 
-                                  type="file" 
-                                  className="hidden"
-                                  ref={fileInputRef}
-                                  onChange={handleFileChange}
-                                  accept={[
-                                    fileAttachmentLimits.allowImage ? "image/*" : "",
-                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                                  multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                                />
-                              </div>
+                              <FormControl>
+                                <div
+                                  className={cn(
+                                    "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                  )}
+                                  onClick={() => {
+                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                      fileInputRef.current?.click();
+                                    }
+                                  }}
+                                >
+                                  <Upload className="h-6 w-6" />
+                                  <span className="text-xs mt-1">Add File</span>
+                                  <Input
+                                    type="file"
+                                    className="hidden"
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    accept={[
+                                      fileAttachmentLimits.allowImage ? "image/*" : "",
+                                      fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(",") || "image/*,application/pdf"}
+                                    multiple={fileAttachmentLimits.maxFileCount > 1}
+                                    disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  />
+                                </div>
+                              </FormControl>
                             )}
                           </div>
                         </RestrictedFileUploader>
@@ -2196,45 +2236,48 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       <RestrictedFileUploader>
-                        {/* Payment mode keeps file upload full width because bill-wise section is salary-only. */}
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
-                            <FilePreview 
-                              key={index} 
-                              file={file} 
-                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                            <FilePreview
+                              key={typeof file === "string" ? file : `file-${index}`}
+                              file={file}
+                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles((prev) => prev.filter((f) => f !== file)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />
                           ))}
                           {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <div 
-                              className={cn(
-                                "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                  ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                  : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                              )}
-                              onClick={() => {
-                                if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                  fileInputRef.current?.click();
-                                }
-                              }}
-                            >
-                              <PlusCircle className="h-6 w-6" />
-                              <span className="text-xs mt-1">Add File</span>
-                              <input 
-                                type="file" 
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept={[
-                                  fileAttachmentLimits.allowImage ? "image/*" : "",
-                                  fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                                multiple={fileAttachmentLimits.maxFileCount > 1}
-                                disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                              />
-                            </div>
+                            <FormControl>
+                              <div
+                                className={cn(
+                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                )}
+                                onClick={() => {
+                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                    fileInputRef.current?.click();
+                                  }
+                                }}
+                              >
+                                <Upload className="h-6 w-6" />
+                                <span className="text-xs mt-1">Add File</span>
+                                <Input
+                                  type="file"
+                                  className="hidden"
+                                  ref={fileInputRef}
+                                  onChange={handleFileChange}
+                                  accept={[
+                                    fileAttachmentLimits.allowImage ? "image/*" : "",
+                                    fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(",") || "image/*,application/pdf"}
+                                  multiple={fileAttachmentLimits.maxFileCount > 1}
+                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                />
+                              </div>
+                            </FormControl>
                           )}
                         </div>
                       </RestrictedFileUploader>

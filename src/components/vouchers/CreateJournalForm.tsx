@@ -221,6 +221,9 @@ export function CreateJournalForm({
   const [isCreateTaxOpen, setIsCreateTaxOpen] = React.useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  // Read latest files inside hydration effect without listing `files` in deps (avoids stale closure when accounts list refreshes).
+  const filesRef = useRef<(File | string)[]>(files);
+  filesRef.current = files;
   const initialFilesRef = useRef<string[]>([]);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
@@ -305,7 +308,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
       
       const nextVoucherNumber = maxNum + 1;
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
+      // shouldDirty: false so gallery-attach hydration is not blocked by auto-number being treated as an edit.
+      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber), { shouldDirty: false });
     } catch (error) { console.error(error); }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
@@ -368,6 +372,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         lastResetVoucherIdRef.current = null;
         setJournalAllocationsBySide({ debit: [], credit: [] });
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
+        // Gallery "Attach to Journal": voucher has no id but carries unassignedFile / fileUrls — mirror edit branch so the attach strip shows the image.
+        if (voucher && !voucher.id) {
+          const urlsFromPayload = voucher.unassignedFile?.url
+            ? [voucher.unassignedFile.url]
+            : (voucher.fileUrls || []);
+          const hasLocalFilePicks = filesRef.current.some((f) => f instanceof File);
+          // Fill attach strip once from payload; require isFormDirty false so removing a preview is not immediately undone.
+          const shouldSeedGalleryFiles =
+            !hasLocalFilePicks &&
+            filesRef.current.length === 0 &&
+            !isFormDirty;
+          if (Array.isArray(urlsFromPayload) && urlsFromPayload.length > 0 && shouldSeedGalleryFiles) {
+            setFiles(urlsFromPayload);
+            initialFilesRef.current = urlsFromPayload.filter((u: any) => typeof u === 'string');
+          }
+          if (voucher.unassignedFile) {
+            form.setValue('unassignedFile', voucher.unassignedFile, { shouldDirty: false });
+          }
+        }
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
