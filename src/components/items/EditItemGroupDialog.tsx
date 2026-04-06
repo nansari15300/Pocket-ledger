@@ -18,6 +18,7 @@ import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { ItemGroup } from "@/components/items/types";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { toast as sonnerToast } from "sonner";
@@ -40,6 +41,7 @@ export function EditItemGroupDialog({ group, allGroups, onGroupUpdated, onGroupD
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
   const isMobile = useIsMobile();
 
@@ -99,6 +101,7 @@ export function EditItemGroupDialog({ group, allGroups, onGroupUpdated, onGroupD
         await updateDoc(doc(firestore, `companies/${companyId}/item_groups`, group.id), {
             isDeleted: true,
             deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
         onGroupDeleted();

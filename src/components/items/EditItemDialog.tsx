@@ -232,6 +232,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const watchedSaleTaxId = useWatch({ control: form.control, name: 'saleTaxId' });
   const openingStockQty = form.watch('openingBalance') || 0;
   const openingStockRate = form.watch('openingBalanceRate') || 0;
+  const { user } = useAuth();
   const { companyId, triggerSync, company } = useCompany();
   const { canAddAvatar } = usePermissions();
 
@@ -408,7 +409,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/items`, item.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.`});
         onItemDeleted();

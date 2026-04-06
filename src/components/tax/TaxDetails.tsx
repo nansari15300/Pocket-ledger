@@ -57,7 +57,11 @@ import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -313,7 +317,8 @@ export function TaxDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

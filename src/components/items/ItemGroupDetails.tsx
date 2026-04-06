@@ -33,7 +33,11 @@ import {
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -363,7 +367,8 @@ export function ItemGroupDetails({
     [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

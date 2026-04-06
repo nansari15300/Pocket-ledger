@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { ExpenseGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
 
@@ -38,6 +39,7 @@ export function EditExpenseGroupDialog({ group, allGroups, onGroupUpdated, onGro
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
   // Use the latest group snapshot by id so parent selection doesn't reopen with stale value.
   const liveGroup = useMemo(
@@ -102,7 +104,8 @@ export function EditExpenseGroupDialog({ group, allGroups, onGroupUpdated, onGro
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/expense_groups`, group.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
         onGroupDeleted();

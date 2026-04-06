@@ -6,7 +6,11 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -446,7 +450,8 @@ export default function ItemDetails({
     [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

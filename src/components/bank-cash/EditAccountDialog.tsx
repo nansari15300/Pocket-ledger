@@ -72,6 +72,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   onOpenChange?: (open: boolean) => void;
 }) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const { company, companyId, triggerSync } = useCompany();
   const { dateSystem } = useDate();
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -271,7 +272,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/bank_accounts`, account.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Account Moved to Bin", description: `"${account.accountName}" has been moved to the recycle bin.`});
         onAccountDeleted(account.id);

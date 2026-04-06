@@ -80,7 +80,11 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -241,7 +245,8 @@ export function PayeeDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

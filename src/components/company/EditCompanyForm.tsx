@@ -331,6 +331,7 @@ export function EditCompanyForm() {
       await updateDoc(doc(firestore, `companies/${companyId}`), {
         isDeleted: true,
         deletedAt: serverTimestamp(),
+        deletedBy: user?.uid || "",
       });
       toast({ title: "Company Moved to Bin", description: `"${company?.name}" has been moved.` });
       clearCompanyId();

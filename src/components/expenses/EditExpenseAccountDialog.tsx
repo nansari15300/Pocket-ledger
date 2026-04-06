@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { CreateExpenseGroupDialog } from "./CreateExpenseGroupDialog";
 import { Combobox } from "../ui/combobox";
@@ -45,6 +46,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId, triggerSync } = useCompany();
   const [groups, setGroups] = useState<ExpenseGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -143,7 +145,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/expense_accounts`, account.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Account Moved to Bin", description: `"${account.name}" has been moved to the recycle bin.`});
         onAccountDeleted(account.id);

@@ -18,6 +18,7 @@ import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { toast as sonnerToast } from "sonner";
 
 const formSchema = z.object({
@@ -38,6 +39,7 @@ export function EditAccountGroupDialog({ group, allGroups, onGroupUpdated, onGro
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -96,6 +98,7 @@ export function EditAccountGroupDialog({ group, allGroups, onGroupUpdated, onGro
         await updateDoc(doc(firestore, `companies/${companyId}/account_groups`, group.id), {
             isDeleted: true,
             deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
         onGroupDeleted();

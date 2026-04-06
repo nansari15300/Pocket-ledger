@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { Party } from "@/components/party/types";
 
 export function DeletePartyDialog({
@@ -33,6 +34,7 @@ export function DeletePartyDialog({
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
 
   const handleDelete = async () => {
@@ -45,6 +47,7 @@ export function DeletePartyDialog({
       await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
         isDeleted: true,
         deletedAt: serverTimestamp(),
+        deletedBy: user?.uid || "",
       });
       toast({
         title: "Party Moved to Bin",

@@ -83,6 +83,7 @@ export function DangerZone() {
         isDeleted: true,
         deletedAt: serverTimestamp(),
         movedToAdminRecycleAt: deleteField(),
+        deletedBy: user?.uid || "",
       });
       toast({
         title: "Company Moved to Bin",

@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -70,6 +71,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const setDialogOpen = onOpenChange ?? setInternalIsOpen;
 
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId, triggerSync, company } = useCompany();
   const { canAddAvatar } = usePermissions();
   const { dateSystem } = useDate();
@@ -211,7 +213,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/staff`, staff.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Staff Member Moved to Bin", description: `"${staff.name}" has been moved.`});
         onStaffDeleted();

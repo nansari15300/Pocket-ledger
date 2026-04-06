@@ -10,7 +10,11 @@ import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLe
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -298,7 +302,8 @@ export function TaxGroupDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

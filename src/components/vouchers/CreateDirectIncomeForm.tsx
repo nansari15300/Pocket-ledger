@@ -373,6 +373,7 @@ export function CreatePaymentInForm({
                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
+                deletedBy: user?.uid || "",
                 convertedToType: voucherType,
                 convertedToVoucherNumber: submissionData.voucherNumber,
             });

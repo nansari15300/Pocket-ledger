@@ -62,6 +62,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   hasTransactions: boolean;
 }) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId, triggerSync, company } = useCompany();
   const { canAddAvatar } = usePermissions();
   const { dateSystem } = useDate();
@@ -213,7 +214,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
         onPartyDeleted(party.id);

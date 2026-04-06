@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useAdminAccess } from "@/hooks/useAdminAccess";
-import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, getDoc, serverTimestamp, deleteField } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -47,6 +47,8 @@ export default function AdminRecycleBinPage() {
     const [autoDeleteAfterDaysCompanyAdmin, setAutoDeleteAfterDaysCompanyAdmin] = useState(90);
     const [countdownTick, setCountdownTick] = useState(0);
     const [userEmails, setUserEmails] = useState<Record<string, string>>({});
+    /** users/{uid} se displayName — "Deleted by" ke liye (company delete karne wala user) */
+    const [deletedByUserNamesMap, setDeletedByUserNamesMap] = useState<Record<string, string>>({});
 
     // Fetch user login emails for company owners (for super admin list)
     useEffect(() => {
@@ -71,6 +73,35 @@ export default function AdminRecycleBinPage() {
         })();
         return () => { cancelled = true; };
     }, [deletedItems]);
+
+    // Super admin list: deletedBy uid → display name (recycle bin "Deleted by")
+    useEffect(() => {
+        const fetchDeleterNames = async () => {
+            const userIds = new Set<string>();
+            deletedItems.forEach((item) => {
+                if (item.deletedBy) userIds.add(item.deletedBy);
+            });
+            const newNames: Record<string, string> = {};
+            for (const uid of userIds) {
+                if (deletedByUserNamesMap[uid]) continue;
+                try {
+                    const userDoc = await getDoc(doc(firestore, "users", uid));
+                    if (userDoc.exists()) {
+                        const userData = userDoc.data();
+                        newNames[uid] = userData.displayName || userData.email || "Unknown";
+                    } else {
+                        newNames[uid] = "Unknown";
+                    }
+                } catch {
+                    newNames[uid] = "Unknown";
+                }
+            }
+            if (Object.keys(newNames).length > 0) {
+                setDeletedByUserNamesMap((prev) => ({ ...prev, ...newNames }));
+            }
+        };
+        if (deletedItems.length > 0) fetchDeleterNames();
+    }, [deletedItems, deletedByUserNamesMap]);
 
     // Update countdown every second when remaining time < 1 day
     useEffect(() => {
@@ -102,6 +133,7 @@ export default function AdminRecycleBinPage() {
                         type: coll.type,
                         deletedAt: d.deletedAt?.toDate(),
                         collectionPath: coll.path,
+                        deletedBy: d.deletedBy,
                         allowCompanyAdminRecycleBin: d.settings?.allowCompanyAdminRecycleBin !== false,
                         pan: d.pan,
                         phone: d.phone,
@@ -245,6 +277,7 @@ export default function AdminRecycleBinPage() {
                  await updateDoc(doc(firestore, `companies/${companyId}/${item.collectionPath}`, item.id), {
                     isDeleted: false,
                     deletedAt: null,
+                    deletedBy: deleteField(),
                 });
             }
             toast({ title: "Restored!", description: `"${item.name}" has been restored.` });
@@ -310,8 +343,12 @@ export default function AdminRecycleBinPage() {
      const enrichedDeletedItems = useMemo(() => deletedItems.map(item => {
         const it = item as DeletedItem & { ownerId?: string; ownerEmail?: string; companyEmail?: string };
         const userLoginEmail = it.ownerId && userEmails[it.ownerId] ? userEmails[it.ownerId] : (it.ownerEmail ?? null);
-        return { ...item, userLoginEmail, companyEmail: it.companyEmail ?? it.email ?? null };
-    }), [deletedItems, userEmails]);
+        const deletedByUserName =
+            item.deletedBy && deletedByUserNamesMap[item.deletedBy]
+                ? deletedByUserNamesMap[item.deletedBy]
+                : undefined;
+        return { ...item, userLoginEmail, companyEmail: it.companyEmail ?? it.email ?? null, deletedByUserName };
+    }), [deletedItems, userEmails, deletedByUserNamesMap]);
 
     const filteredItems = useMemo(() => {
         return enrichedDeletedItems.filter(item => {
@@ -326,7 +363,8 @@ export default function AdminRecycleBinPage() {
                 (item.email || '').toLowerCase().includes(lowerSearch) ||
                 (it.companyEmail || '').toLowerCase().includes(lowerSearch) ||
                 (it.userLoginEmail || '').toLowerCase().includes(lowerSearch) ||
-                (item.country || '').toLowerCase().includes(lowerSearch)
+                (item.country || '').toLowerCase().includes(lowerSearch) ||
+                (item.deletedByUserName || '').toLowerCase().includes(lowerSearch)
             );
         });
     }, [enrichedDeletedItems, searchTerm]);

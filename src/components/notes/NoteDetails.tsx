@@ -7,7 +7,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Edit, FilePlus, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Filter, XCircle, Printer } from "lucide-react";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
@@ -132,7 +132,8 @@ export function NoteDetails({
   };
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () => sortTransactions(currentTransactions, sortBy, sortOrder),
     [currentTransactions, sortBy, sortOrder]

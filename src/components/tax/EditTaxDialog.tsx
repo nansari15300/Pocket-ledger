@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore, storage } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Combobox } from "../ui/combobox";
@@ -59,6 +60,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth(); // soft-delete par recycle bin "Deleted by" ke liye uid
   const { companyId, triggerSync } = useCompany();
   const { dateSystem } = useDate();
   const [groups, setGroups] = useState<TaxGroup[]>([]);
@@ -178,7 +180,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/taxes`, tax.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Tax Moved to Recycle Bin", description: `"${tax.name}" has been moved to the recycle bin.`});
         onTaxDeleted(tax.id);

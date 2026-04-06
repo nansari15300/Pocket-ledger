@@ -83,7 +83,11 @@ import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxns
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
-import { sortTransactions, recomputeRunningBalanceTopToBottom } from "@/lib/transactionSort";
+import {
+  sortTransactions,
+  recomputeRunningBalanceTopToBottom,
+  DEFAULT_TRANSACTION_SORT_ORDER,
+} from "@/lib/transactionSort";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -507,7 +511,8 @@ export function PartyDetails({
 
   // Sort state for footer dropdown (Statement / Bill wise); applied after status filter, before search/pagination
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(

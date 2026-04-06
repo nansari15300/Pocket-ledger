@@ -91,7 +91,8 @@ export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDelet
                         )}
                     </>
                 )}
-                {!compactView && item.deletedByUserName && (
+                {/* compactView bhi: company recycle bin me "Deleted by" dikhna chahiye */}
+                {item.deletedByUserName && (
                     <p className="text-xs text-muted-foreground whitespace-nowrap truncate">
                         Deleted by: <span className="font-medium">{item.deletedByUserName}</span>
                     </p>

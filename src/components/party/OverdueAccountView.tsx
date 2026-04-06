@@ -29,7 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { sortTransactions } from "@/lib/transactionSort";
+import { sortTransactions, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -195,7 +195,8 @@ export function OverdueAccountView({
   }, [overdueTransactions, filters, userNames]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
+  const [sortOrder, setSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedRows = useMemo(
     () => sortTransactions(filteredRows, sortBy, sortOrder),
     [filteredRows, sortBy, sortOrder]

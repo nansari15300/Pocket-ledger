@@ -5,6 +5,9 @@
 
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 
+/** Pehli load / refresh: footer "Default" (By Date ↑) jaisa — purani date upar, nayi niche */
+export const DEFAULT_TRANSACTION_SORT_ORDER: TransactionSortOrder = "asc";
+
 function getDate(t: any): number {
   const d = t?.date?.toDate ? t.date.toDate() : t?.date;
   if (d instanceof Date) return d.getTime();

@@ -1205,6 +1205,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
+                deletedBy: user?.uid || "",
                 convertedToType: 'journal',
                 convertedToVoucherNumber: submissionData.voucherNumber,
             });

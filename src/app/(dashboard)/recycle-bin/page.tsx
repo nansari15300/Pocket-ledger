@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
-import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, getDoc, getDocs, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, getDoc, getDocs, serverTimestamp, deleteField } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -126,6 +126,8 @@ function RecycleBinContent() {
                             deletedAt: data.deletedAt?.toDate ? data.deletedAt.toDate() : new Date(),
                             collectionPath: 'companies',
                             isRootCollection: true,
+                            // Kaun user ne company bin me bheja — displayName users/{uid} se
+                            deletedBy: data.deletedBy,
                         };
                     });
                 setDeletedItems(prev => {
@@ -175,6 +177,11 @@ function RecycleBinContent() {
                         collectionPath: coll.path,
                         convertedToType: data.convertedToType,
                         convertedToVoucherNumber: data.convertedToVoucherNumber,
+                        // Voucher: purane docs ke liye userId fallback; baaki collections: sirf deletedBy
+                        deletedBy:
+                            coll.path === 'vouchers'
+                                ? (data.deletedBy || data.userId)
+                                : data.deletedBy,
                     };
 
                     // For vouchers, extract additional fields
@@ -186,7 +193,6 @@ function RecycleBinContent() {
                         item.fromAccountId = data.fromAccountId;
                         item.toAccountId = data.toAccountId;
                         item.userId = data.userId;
-                        item.deletedBy = data.deletedBy || data.userId; // Use deletedBy if available, fallback to userId
                         
                         // Get account name from journalAccountNames
                         const accountIdToUse = item.accountId || item.fromAccountId || item.toAccountId;
@@ -309,8 +315,10 @@ function RecycleBinContent() {
         return deletedItems.map(item => {
             const enriched = { ...item };
             
-            // Add user name
-            const userIdToUse = enriched.deletedBy || enriched.userId;
+            // Display name: delete wale user ka — non-voucher par userId mat use karo (creator ho sakta hai)
+            const userIdToUse =
+                enriched.deletedBy ||
+                (enriched.type === 'Voucher' ? enriched.userId : undefined);
             if (userIdToUse && userNames[userIdToUse]) {
                 enriched.deletedByUserName = userNames[userIdToUse];
             }
@@ -380,6 +388,7 @@ function RecycleBinContent() {
             await updateDoc(docRef, {
                 isDeleted: false,
                 deletedAt: null,
+                deletedBy: deleteField(),
             });
             toast({ title: "Restored!", description: `"${item.name}" has been restored.` });
         } catch (error) {

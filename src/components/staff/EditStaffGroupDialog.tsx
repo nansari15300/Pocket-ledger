@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { StaffGroup } from "@/components/staff/types";
 import { toast as sonnerToast } from "sonner";
 
@@ -40,6 +41,7 @@ export function EditStaffGroupDialog({ group, allGroups, onGroupUpdated, onGroup
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
   const dialogOpen = isOpen !== undefined ? isOpen : internalIsOpen;
   const setDialogOpen = onOpenChange ?? setInternalIsOpen;
@@ -99,7 +101,8 @@ export function EditStaffGroupDialog({ group, allGroups, onGroupUpdated, onGroup
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/staff_groups`, group.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
         onGroupDeleted();

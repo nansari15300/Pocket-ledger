@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
 
@@ -39,6 +40,7 @@ export function EditTaxGroupDialog({ group, allGroups, onGroupUpdated, onGroupDe
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
   const { companyId } = useCompany();
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -105,7 +107,8 @@ export function EditTaxGroupDialog({ group, allGroups, onGroupUpdated, onGroupDe
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/tax_groups`, group.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp()
+            deletedAt: serverTimestamp(),
+            deletedBy: user?.uid || "",
         });
         sonnerToast.success("Group Moved to Recycle Bin", { id: toastId, description: `"${group.name}" has been moved.`});
         onGroupDeleted();
