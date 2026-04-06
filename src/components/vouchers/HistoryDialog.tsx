@@ -28,8 +28,10 @@ import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
 import { useDate } from "@/hooks/useDate";
 import { resetVoucherHistory, deleteHistoryEntries } from "@/lib/voucherActionsClient";
+import { SPEND_WISE_OPENING_BALANCE_ID, SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL } from "@/lib/spendWiseOpeningBalance";
 import { Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -105,7 +107,12 @@ function getEntityLabelForField(field: string, voucherType: string | undefined):
   const t = (voucherType || '').toLowerCase();
   if (field === 'partyId') return 'Party';
   if (field === 'fromAccountId') return 'From Bank/Cash';
-  if (field === 'toAccountId') return 'To Bank/Cash';
+  // direct_expense / payment_out: toAccountId = expense (other) ya counterparty — bank nahi; label galat ho to user UID samajh leta hai
+  if (field === 'toAccountId') {
+    if (t === 'direct_expense') return 'Expense Account';
+    if (t === 'payment_out') return 'To Account';
+    return 'To Bank/Cash';
+  }
   if (field === 'accountId') {
     if (['payment_in', 'payment_out', 'direct_income', 'direct_expense'].includes(t)) return 'Bank/Cash';
     if (t === 'add_salary') return 'Staff';
@@ -156,10 +163,14 @@ function renderUrlValue(value: any): React.ReactNode {
   return (
     <div className="flex flex-col gap-1">
       {urls.map((u, idx) => (
-        <a key={idx} href={u} target="_blank" rel="noopener noreferrer"
-          className="text-blue-600 underline hover:text-blue-800 break-all text-xs">
-          {urls.length > 1 ? `View File ${idx + 1}` : 'View File'}
-        </a>
+        <button
+          key={idx}
+          type="button"
+          onClick={() => void openAttachmentInApp(u, { title: urls.length > 1 ? `File ${idx + 1}` : "Attachment" })}
+          className="text-blue-600 underline hover:text-blue-800 break-all text-xs text-left"
+        >
+          {urls.length > 1 ? `View File ${idx + 1}` : "View File"}
+        </button>
       ))}
     </div>
   );
@@ -209,13 +220,21 @@ function formatLinkUnlinkDisplay(val: any, idToVoucherNo: Map<string, string>): 
   if (Array.isArray(val)) {
     if (val.length === 0) return '—';
     const ids = val.map((x: any) => (typeof x === 'object' && x?.voucherId) ? x.voucherId : x).filter(Boolean);
-    const vNos = ids.map((id: string) => idToVoucherNo.get(id) || `#${id.slice(0, 8)}`);
+    const vNos = ids.map((id: string) =>
+      id === SPEND_WISE_OPENING_BALANCE_ID
+        ? SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL
+        : idToVoucherNo.get(id) || `#${id.slice(0, 8)}`
+    );
     return vNos.length === 0 ? '—' : `From V. No. ${vNos.join(' to V. No. ')}`;
   }
   if (typeof val === 'object' && !Array.isArray(val)) {
     const ids = Object.keys(val).filter((k) => val[k] != null && val[k] !== 0);
     if (ids.length === 0) return '—';
-    const vNos = ids.map((id: string) => idToVoucherNo.get(id) || `#${id.slice(0, 8)}`);
+    const vNos = ids.map((id: string) =>
+      id === SPEND_WISE_OPENING_BALANCE_ID
+        ? SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL
+        : idToVoucherNo.get(id) || `#${id.slice(0, 8)}`
+    );
     return vNos.length === 0 ? '—' : `From V. No. ${vNos.join(' to V. No. ')}`;
   }
   return '—';
@@ -233,7 +252,10 @@ function formatLinkUnlinkAmountsDisplay(val: any, idToVoucherNo: Map<string, str
       const id = typeof x === 'object' && x?.voucherId ? x.voucherId : null;
       const amt = typeof x === 'object' && x?.amount != null ? Number(x.amount) : 0;
       if (id != null && amt !== 0) {
-        const vNo = idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
+        const vNo =
+          id === SPEND_WISE_OPENING_BALANCE_ID
+            ? SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL
+            : idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
         pairs.push({ vNo, amount: amt });
       }
     });
@@ -241,7 +263,10 @@ function formatLinkUnlinkAmountsDisplay(val: any, idToVoucherNo: Map<string, str
     Object.entries(val).forEach(([id, amt]) => {
       const n = Number(amt);
       if (n !== 0 && !Number.isNaN(n)) {
-        const vNo = idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
+        const vNo =
+          id === SPEND_WISE_OPENING_BALANCE_ID
+            ? SPEND_WISE_OPENING_BALANCE_HISTORY_LABEL
+            : idToVoucherNo.get(id) || `#${id.slice(0, 8)}`;
         pairs.push({ vNo, amount: n });
       }
     });
@@ -664,11 +689,15 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
     let found;
     switch(type) {
         case 'partyId': found = processedParties.find(p => p.id === id); break;
-        case 'accountId': 
+        case 'accountId':
         case 'fromAccountId':
-        case 'toAccountId':
-            found = processedAccounts.find(a => a.id === id);
-            return found?.accountName || id;
+        case 'toAccountId': {
+            // Bank/cash pehle; direct_expense / payment_out ka toAccountId expense id ho sakta hai — processedAccounts mein nahi milta
+            const bank = processedAccounts.find((a) => a.id === id);
+            if (bank) return bank.accountName;
+            const exp = expenseAccounts.find((e) => e.id === id);
+            return exp?.name || id;
+        }
         case 'staffId': found = processedStaff.find(s => s.id === id); break;
         case 'taxAccountId': found = processedTaxes.find(t => t.id === id); break;
         case 'expenseAccountId':

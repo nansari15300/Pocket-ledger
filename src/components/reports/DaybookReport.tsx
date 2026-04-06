@@ -5,7 +5,7 @@
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { useCompany } from "@/hooks/useCompany";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw } from "lucide-react";
+import { Info, X, Calendar as CalendarIcon, Expand, Filter, RotateCw, ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
 import type { Account } from "@/components/bank-cash/types";
@@ -14,7 +14,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { startOfDay, isSameDay, format } from "date-fns";
+import { startOfDay, isSameDay, addDays } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
@@ -91,28 +91,6 @@ function getTransactionAmounts(transaction: any) {
   
     return { debit, credit };
   }
-  
-const getParticularsString = (t: any, names: Record<string, string> = {}) => {
-    let particulars: string[] = [];
-    if (t.type === 'sale') particulars.push(`To: ${names?.[t.partyId] || t.partyId || 'N/A'}`);
-    else if (t.type === 'purchase') particulars.push(`From: ${names?.[t.partyId] || t.partyId || 'N/A'}`);
-    else if (t.type === 'payment_in') particulars.push(`From: ${names?.[t.partyId] || names?.[t.staffId] || names?.[t.taxAccountId] || names?.[t.incomeAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'payment_out') particulars.push(`To: ${names?.[t.partyId] || names?.[t.staffId] || names?.[t.taxAccountId] || names?.[t.expenseAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'contra') particulars.push(`${names?.[t.fromAccountId] || t.fromAccountId || 'N/A'} to ${names?.[t.toAccountId] || t.toAccountId || 'N/A'}`);
-    else if (t.type === 'direct_income') particulars.push(`By: ${names?.[t.incomeAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'direct_expense') particulars.push(`To: ${names?.[t.toAccountId || t.expenseAccountId] || t.payeeName || 'N/A'}`);
-    else if (t.type === 'journal') {
-        if (t.entries && Array.isArray(t.entries)) {
-            const dr = t.entries.filter((e: any) => e.debit > 0).map((e: any) => `Dr: ${names[e.accountId] || e.accountId ||'N/A'}`);
-            const cr = t.entries.filter((e: any) => e.credit > 0).map((e: any) => `Cr: ${names[e.accountId] || e.accountId || 'N/A'}`);
-            particulars.push(...dr, ...cr);
-        }
-    }
-    else if (t.type === 'note') {
-        particulars.push(`Note for: ${names?.[t.entityId] || t.entityId || 'N/A'}`);
-    }
-    return particulars.join(', ');
-};
 
 interface DaybookReportProps {
   onFullScreenToggle?: () => void;
@@ -142,6 +120,10 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const [isDateChange, setIsDateChange] = useState(false);
     const [daybookRotated, setDaybookRotated] = useState(false);
     const [isDaybookCalendarOpen, setIsDaybookCalendarOpen] = useState(false);
+    /** Daybook summary + table: null = sab users; warna sirf is Firebase uid ke vouchers */
+    const [daybookUserFilter, setDaybookUserFilter] = useState<string | null>(null);
+    const [daybookBankExpanded, setDaybookBankExpanded] = useState(false);
+    const [daybookCashExpanded, setDaybookCashExpanded] = useState(false);
     const isMobile = useIsMobile();
     const calendarMonths = useCalendarMonths();
 
@@ -221,6 +203,9 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const loadJournalAccountNames = useCallback(async (vouchersToLoad: Voucher[]) => {
         const accountIdsToFetch = new Set<string>();
         vouchersToLoad.forEach(v => {
+            // Note: linked party/account/staff/item ka naam resolve karne ke liye entityId bhi fetch karo
+            const noteEntityId = (v as any).type === "note" ? (v as any).entityId : undefined;
+            if (noteEntityId && !journalAccountNames[noteEntityId]) accountIdsToFetch.add(noteEntityId);
             if (v.type === 'journal' || v.type === 'contra' || v.type === 'payment_in' || v.type === 'payment_out' || v.type === 'direct_income' || v.type === 'direct_expense' || v.type === 'sale' || v.type === 'purchase') {
                 (v.entries || []).forEach((entry: any) => {
                     if (entry.accountId && !journalAccountNames[entry.accountId]) accountIdsToFetch.add(entry.accountId);
@@ -271,18 +256,42 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         setShowDaybookNarration(checked);
         sessionStorage.setItem("showNarration", String(checked));
     };
+
+    // PC: ek din shift — arrow buttons + keyboard (- / =); mobile par nahi
+    const shiftDaybookDateBy = useCallback((deltaDays: number) => {
+        setDaybookDate((prev) => startOfDay(addDays(prev ?? new Date(), deltaDays)));
+    }, []);
+
+    useEffect(() => {
+        if (isMobile) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            const isMinus = e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract";
+            const isEqual = e.key === "=" || e.code === "Equal";
+            if (!isMinus && !isEqual) return;
+            const el = e.target as HTMLElement | null;
+            if (el?.closest("input, textarea, select, [contenteditable=true]")) return;
+            if (el?.closest('[role="combobox"]')) return;
+            if (el?.closest('[role="dialog"]')) return;
+            e.preventDefault();
+            shiftDaybookDateBy(isMinus ? -1 : 1);
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [isMobile, shiftDaybookDateBy]);
     
     const isDaybookFilterActive = useMemo(() => {
         const isTypeFiltered = daybookVoucherTypes.length > 0 && !daybookVoucherTypes.includes('all');
         const isDateFiltered = daybookDate !== undefined && !isSameDay(daybookDate, new Date());
         const isColumnFiltered = Object.values(daybookFilters).some(v => v);
-        return isTypeFiltered || isDateFiltered || isColumnFiltered;
-    }, [daybookVoucherTypes, daybookDate, daybookFilters]);
+        const isUserFiltered = !!daybookUserFilter;
+        return isTypeFiltered || isDateFiltered || isColumnFiltered || isUserFiltered;
+    }, [daybookVoucherTypes, daybookDate, daybookFilters, daybookUserFilter]);
     
     const clearDaybookFilters = () => {
         setDaybookDate(new Date());
         setDaybookVoucherTypes(['all']);
         setDaybookFilters({});
+        setDaybookUserFilter(null);
     };
     
     const handleDaybookFilterChange = (key: string, value: string) => {
@@ -300,6 +309,45 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
       return Array.from(dates).map(d => new Date(d));
     }, [vouchers]);
 
+    // User filter dropdown: owner + shared (uid) + jinhone kabhi voucher banaya — selected date se list band nahi (chahe us din 0 tx ho)
+    const { daybookUserFilterIds, daybookUserLabelHints } = useMemo(() => {
+        const idSet = new Set<string>();
+        const labelHints: Record<string, string> = {};
+        if (company?.ownerId) {
+            const oid = String(company.ownerId);
+            idSet.add(oid);
+            labelHints[oid] = (company.ownerEmail && String(company.ownerEmail).trim()) || "Owner";
+        }
+        (company?.sharedWith || []).forEach((u: any) => {
+            if (!u?.uid) return;
+            const id = String(u.uid);
+            idSet.add(id);
+            if (!labelHints[id]) labelHints[id] = (u.name && String(u.name).trim()) || u.email || id;
+        });
+        (vouchers || []).forEach((v: any) => {
+            if (v?.userId) idSet.add(String(v.userId));
+        });
+        const sorted = Array.from(idSet).sort((a, b) => {
+            const la = userNames[a] || labelHints[a] || a;
+            const lb = userNames[b] || labelHints[b] || b;
+            return la.localeCompare(lb, undefined, { sensitivity: "base" });
+        });
+        return { daybookUserFilterIds: sorted, daybookUserLabelHints: labelHints };
+    }, [company, vouchers, userNames]);
+
+    useEffect(() => {
+        daybookUserFilterIds.forEach((uid) => {
+            if (!userNames[uid]) void fetchAccountName(uid);
+        });
+    }, [daybookUserFilterIds, userNames, fetchAccountName]);
+
+    // Company share list se user hata diya ho to stale filter clear
+    useEffect(() => {
+        if (daybookUserFilter && !daybookUserFilterIds.includes(daybookUserFilter)) {
+            setDaybookUserFilter(null);
+        }
+    }, [daybookUserFilterIds, daybookUserFilter]);
+
     const { daybookTransactions, daybookSummary } = useTransactions(
         {id: 'daybook', items: []}, 
         'daybook', 
@@ -311,7 +359,9 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
         daybookFilters, 
         daybookVoucherTypes, 
         journalAccountNames, 
-        userNames
+        userNames,
+        undefined,
+        daybookUserFilter
       );
     
     const isFullScreen = !!onFullScreenToggle;
@@ -350,16 +400,91 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                 </div>
                  {daybookSummary && (
                     <Card className={cn("mt-4 bg-blue-50 border-blue-200 text-blue-800", isMobile && "rounded-lg mx-[2px]")}>
-                        <CardHeader className={cn("pb-2 pt-4", isMobile ? "px-2" : "px-4")}>
-                             <CardTitle className="text-sm flex items-center gap-2"><Info className="h-4 w-4" />Daily Summary</CardTitle>
-                             <CardDescription className="text-blue-700">Only showing bank and cash summary.</CardDescription>
+                        <CardHeader className={cn("pb-2 pt-4 space-y-3", isMobile ? "px-2" : "px-4")}>
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                    <CardTitle className="text-sm flex items-center gap-2"><Info className="h-4 w-4 shrink-0" />Daily Summary</CardTitle>
+                                    {/* User dropdown se filter ab bhi kaam karta hai; label pehle jaisa simple rakha */}
+                                    <CardDescription className="text-blue-700">Only showing bank and cash summary.</CardDescription>
+                                </div>
+                                {/* User filter: company users + voucher creators; hook ko daybookUserFilter pass */}
+                                <div className="flex w-full flex-col gap-1 sm:w-[min(100%,220px)] shrink-0">
+                                    <span className="text-xs font-medium text-blue-900">User</span>
+                                    <Select
+                                        value={daybookUserFilter ?? "__all__"}
+                                        onValueChange={(v) => setDaybookUserFilter(v === "__all__" ? null : v)}
+                                    >
+                                        <SelectTrigger className="h-9 bg-background/80 border-blue-200">
+                                            <SelectValue placeholder="All users" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="__all__">All users</SelectItem>
+                                            {daybookUserFilterIds.map((uid) => (
+                                                <SelectItem key={uid} value={uid}>
+                                                    {userNames[uid] || daybookUserLabelHints[uid] || uid}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
                         </CardHeader>
                         <CardContent className={cn("pb-4", isMobile ? "px-2" : "px-4")}>
                            <Table>
                             <TableHeader><TableRow><TableHead className="font-bold">Account</TableHead><TableHead className="text-right font-bold">Yesterdays Balance</TableHead><TableHead className="text-right font-bold text-green-600">Todays In</TableHead><TableHead className="text-right font-bold text-red-600">Todays Out</TableHead><TableHead className="text-right font-bold">Todays Balance</TableHead></TableRow></TableHeader>
                             <TableBody>
-                                <TableRow><TableCell className="font-medium">Bank</TableCell><TableCell className={cn("text-right", daybookSummary.bank.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.bank.yesterday)}</TableCell><TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.bank.in, {noSuffix: true})}</TableCell><TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.bank.out, {noSuffix: true})}</TableCell><TableCell className={cn("text-right", daybookSummary.bank.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.bank.today)}</TableCell></TableRow>
-                                <TableRow><TableCell className="font-medium">Cash</TableCell><TableCell className={cn("text-right", daybookSummary.cash.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.cash.yesterday)}</TableCell><TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.cash.in, {noSuffix: true})}</TableCell><TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.cash.out, {noSuffix: true})}</TableCell><TableCell className={cn("text-right", daybookSummary.cash.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.cash.today)}</TableCell></TableRow>
+                                <TableRow className="hover:bg-blue-100/40">
+                                    <TableCell className="font-medium">
+                                        <button
+                                            type="button"
+                                            className="flex items-center gap-1 text-left"
+                                            onClick={() => setDaybookBankExpanded((e) => !e)}
+                                            aria-expanded={daybookBankExpanded}
+                                        >
+                                            {daybookBankExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                                            Bank
+                                        </button>
+                                    </TableCell>
+                                    <TableCell className={cn("text-right", daybookSummary.bank.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.bank.yesterday)}</TableCell>
+                                    <TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.bank.in, {noSuffix: true})}</TableCell>
+                                    <TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.bank.out, {noSuffix: true})}</TableCell>
+                                    <TableCell className={cn("text-right", daybookSummary.bank.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.bank.today)}</TableCell>
+                                </TableRow>
+                                {daybookBankExpanded && (daybookSummary as any).bankAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => (
+                                    <TableRow key={`bank-${row.id}`} className="bg-blue-100/30 text-sm">
+                                        <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
+                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
+                                        <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
+                                        <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
+                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
+                                    </TableRow>
+                                ))}
+                                <TableRow className="hover:bg-blue-100/40">
+                                    <TableCell className="font-medium">
+                                        <button
+                                            type="button"
+                                            className="flex items-center gap-1 text-left"
+                                            onClick={() => setDaybookCashExpanded((e) => !e)}
+                                            aria-expanded={daybookCashExpanded}
+                                        >
+                                            {daybookCashExpanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+                                            Cash
+                                        </button>
+                                    </TableCell>
+                                    <TableCell className={cn("text-right", daybookSummary.cash.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.cash.yesterday)}</TableCell>
+                                    <TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.cash.in, {noSuffix: true})}</TableCell>
+                                    <TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.cash.out, {noSuffix: true})}</TableCell>
+                                    <TableCell className={cn("text-right", daybookSummary.cash.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.cash.today)}</TableCell>
+                                </TableRow>
+                                {daybookCashExpanded && (daybookSummary as any).cashAccounts?.map((row: { id: string; name: string; yesterday: number; in: number; out: number; today: number }) => (
+                                    <TableRow key={`cash-${row.id}`} className="bg-blue-100/30 text-sm">
+                                        <TableCell className="pl-9 text-muted-foreground">{row.name}</TableCell>
+                                        <TableCell className={cn("text-right", row.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.yesterday)}</TableCell>
+                                        <TableCell className="text-right text-green-600">{formatCurrency(row.in, { noSuffix: true })}</TableCell>
+                                        <TableCell className="text-right text-red-600">{formatCurrency(row.out, { noSuffix: true })}</TableCell>
+                                        <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
+                                    </TableRow>
+                                ))}
                                 <TableRow className="font-bold border-t-4 border-foreground"><TableCell>Total</TableCell><TableCell className={cn("text-right", daybookSummary.total.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.yesterday)}</TableCell><TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.total.in, {noSuffix: true})}</TableCell><TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.total.out, {noSuffix: true})}</TableCell><TableCell className={cn("text-right", daybookSummary.total.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.today)}</TableCell></TableRow>
                             </TableBody>
                            </Table>
@@ -373,7 +498,6 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                             {dateSystem === 'BS' && (
                                 <BsDatePicker valueAD={daybookDate} onChangeAD={(date) => setDaybookDate(date as Date)} isRange={false} transactionDates={transactionDates} />
                             )}
-                            <Button variant="outline" onClick={() => setDaybookDate(new Date())}>Today</Button>
                             {(dateSystem === 'AD' || dateSystem === 'Both') && (
                                 <Popover open={isDaybookCalendarOpen} onOpenChange={setIsDaybookCalendarOpen}>
                                     <PopoverTrigger asChild>
@@ -400,6 +524,18 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                     </PopoverContent>
                                 </Popover>
                             )}
+                            {/* PC: date ↔ Today ke beech prev/next din; mobile par hide */}
+                            {!isMobile && (
+                                <>
+                                    <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" aria-label="Previous day" onClick={() => shiftDaybookDateBy(-1)}>
+                                        <ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                    <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" aria-label="Next day" onClick={() => shiftDaybookDateBy(1)}>
+                                        <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </>
+                            )}
+                            <Button variant="outline" onClick={() => setDaybookDate(new Date())}>Today</Button>
                              {isDaybookFilterActive && (
                                 <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearDaybookFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>
                             )}

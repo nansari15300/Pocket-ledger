@@ -252,7 +252,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             // PERMISSION_DENIED: Owner भए companyId clear नगर्ने (Settings लूप रोक्न; rules/auth timing को कारण पनि deny आउन सक्छ)।
             if (error?.code === 'permission-denied' || error?.code === 'PERMISSION_DENIED' || (error?.message && String(error.message).includes('permission'))) {
               console.warn(`[PERMISSION_DENIED TRACK] source=useVouchers path=companies/${companyId}/${path}`, { companyId, path, code: error?.code });
-              const isOwner = company?.ownerId === user?.uid || (!!company?.ownerEmail && !!user?.email && company.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
+              // company null hone par clear na karein – ownership check nahi ho sakta, Settings redirect loop avoid
+              if (!company) {
+                console.warn(`[Firestore] PERMISSION_DENIED but company not loaded yet – skipping clear to avoid Settings redirect.`);
+                return;
+              }
+              const isOwner = company.ownerId === user?.uid || (!!company.ownerEmail && !!user?.email && company.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
               if (!isOwner) {
                 console.warn(`[Firestore] PERMISSION_DENIED for path: companies/${companyId}/${path}. Clearing invalid company selection.`, { companyId, path });
                 try { clearCompanyId(); } catch (_) {}

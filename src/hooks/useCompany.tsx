@@ -87,6 +87,8 @@ export type Company = {
     isOwned?: boolean;
     planId?: string;
     planExpiry?: Timestamp;
+    /** Set when a paid plan is applied (Stripe fulfill); good proxy for “joined” paid subscription date. */
+    planUpgradedAt?: Timestamp;
     settings?: Record<string, boolean>;
     allowAttachments?: boolean;
     isDeleted?: boolean; 
@@ -125,6 +127,51 @@ type CompanyContextType = {
 
 const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 
+/** Trailing slash hataune; Next `usePathname()` navigation par 1 frame purana ho sakta hai — `window.location` sath check karo */
+function normalizeAppPath(p: string): string {
+  return (p || "").replace(/\/+$/, "") || "/";
+}
+
+/** Browser URL (Capacitor WebView ma `href` reliable) */
+function getBrowserPathname(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return new URL(window.location.href).pathname || window.location.pathname || "";
+  } catch {
+    return window.location.pathname || "";
+  }
+}
+
+/**
+ * In routes ma "pick company" push mat karo — Settings + sidebar footer static/APK ma pathname delay hunda timer galat fire hunchha.
+ * NOTE: `if (t === "/") return true` harek candidate ma hataeko — mix `["/","/settings"]` ma settings miss hunthyo.
+ */
+function pathExemptFromAutoSelectCompanyPush(t: string): boolean {
+  const p = normalizeAppPath(t);
+  if (p === "/not-authorized") return true;
+  if (p.startsWith("/company") || p.startsWith("/admin") || p.startsWith("/settings")) return true;
+  if (p.startsWith("/messages")) return true;
+  if (p.startsWith("/billing")) return true;
+  if (p.startsWith("/backup")) return true;
+  if (p.startsWith("/import-export")) return true;
+  if (p.startsWith("/recycle-bin")) return true;
+  if (p.startsWith("/distributor-signup")) return true;
+  if (p.startsWith("/embed")) return true;
+  return false;
+}
+
+function shouldSkipMissingCompanyRedirect(pathA: string, pathB: string): boolean {
+  const a = normalizeAppPath(pathA);
+  const b = normalizeAppPath(pathB);
+  const uniq = a === b ? [a] : [a, b];
+  for (const t of uniq) {
+    if (pathExemptFromAutoSelectCompanyPush(t)) return true;
+  }
+  // Hydration / khali path: dubai "/" matra
+  if (uniq.every((t) => t === "/")) return true;
+  return false;
+}
+
 export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [companyId, setCompanyIdState] = useState<string | null>(null);
   const [company, setCompany] = useState<Company | null>(null);
@@ -138,13 +185,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const ownedByEmailSnapRef = useRef<any>(null);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
   const triggerSync = useCallback(() => {}, []);
+  // Track mount time to avoid clearing companyId during initial Firestore load (static/Capacitor race)
+  const mountedAtRef = useRef<number>(Date.now());
+  const hasCheckedStorageRef = useRef(false);
 
   useEffect(() => {
-    const storedCompanyId = localStorage.getItem("companyId");
-    if (storedCompanyId) {
-      setCompanyIdState(storedCompanyId);
-    } else {
-      setLoading(false);
+    try {
+      const storedCompanyId = localStorage.getItem("companyId");
+      if (storedCompanyId && storedCompanyId.trim()) {
+        setCompanyIdState(storedCompanyId);
+      } else {
+        setLoading(false);
+      }
+    } finally {
+      hasCheckedStorageRef.current = true;
     }
   }, []);
   
@@ -274,7 +328,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const companyFromList = allCompanies.find(c => c.id === companyId);
     if (companyFromList) {
         setCompany(companyFromList);
-    } else if(allCompanies.length > 0) {
+    } else if (allCompanies.length > 0) {
+        // Grace period: avoid clearing during initial load (static/Capacitor race)
+        const graceMs = 2000;
+        if (Date.now() - mountedAtRef.current < graceMs) return;
         // If the stored companyId is not in the user's list (e.g., access revoked)
         // clear it and let the logic in dashboard redirect.
         console.log("Company not found in user's list, clearing local state.");
@@ -284,20 +341,43 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     if (authLoading) return;
+    // Wait for initial localStorage read before any redirect (static/Capacitor race)
+    if (!hasCheckedStorageRef.current) return;
 
-    const nonCompanyPages = ["/", "/company", "/company/create", "/not-authorized"];
-    const isAdminRoute = pathname.startsWith('/admin');
+    const pathTrim = normalizeAppPath(pathname ?? "");
+    const winPath = normalizeAppPath(getBrowserPathname());
 
-    if (nonCompanyPages.includes(pathname) || isAdminRoute) {
+    // pathname stale + companyId brief null → timer le /company (static build Settings)
+    if (shouldSkipMissingCompanyRedirect(pathTrim, winPath)) {
         return;
     }
 
     if (!companyId && user) {
-        const storedCompanyId = localStorage.getItem("companyId");
-        if(!storedCompanyId) {
-            router.push('/company');
-        } else {
-            setCompanyIdState(storedCompanyId);
+        try {
+            const storedCompanyId = localStorage.getItem("companyId");
+            const stored = storedCompanyId?.trim();
+            if (!stored) {
+                // Lamho grace: Next static client transition + localStorage sync (300ms ma pathname purano rahanchha)
+                const REDIRECT_DELAY_MS = 900;
+                const id = setTimeout(() => {
+                    const again = localStorage.getItem("companyId")?.trim();
+                    if (again) {
+                        setCompanyIdState(again);
+                        return;
+                    }
+                    const live = normalizeAppPath(getBrowserPathname());
+                    if (shouldSkipMissingCompanyRedirect(live, live)) return;
+                    router.push("/company");
+                }, REDIRECT_DELAY_MS);
+                return () => clearTimeout(id);
+            } else {
+                setCompanyIdState(stored);
+            }
+        } catch (_) {
+            const live = normalizeAppPath(getBrowserPathname());
+            if (!shouldSkipMissingCompanyRedirect(pathTrim, live)) {
+                router.push("/company");
+            }
         }
     }
   }, [companyId, pathname, router, user, authLoading]);

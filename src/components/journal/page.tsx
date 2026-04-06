@@ -202,6 +202,8 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const loadJournalAccountNames = useCallback(async (vouchersToLoad: Voucher[]) => {
         const accountIdsToFetch = new Set<string>();
         vouchersToLoad.forEach(v => {
+            const noteEntityId = (v as any).type === "note" ? (v as any).entityId : undefined;
+            if (noteEntityId && !journalAccountNames[noteEntityId]) accountIdsToFetch.add(noteEntityId);
             if (v.type === 'journal' || v.type === 'contra' || v.type === 'payment_in' || v.type === 'payment_out' || v.type === 'direct_income' || v.type === 'direct_expense' || v.type === 'sale' || v.type === 'purchase') {
                 (v.entries || []).forEach((entry: any) => {
                     if (entry.accountId && !journalAccountNames[entry.accountId]) accountIdsToFetch.add(entry.accountId);

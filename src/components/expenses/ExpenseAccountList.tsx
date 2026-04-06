@@ -11,6 +11,7 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -20,6 +21,8 @@ interface ExpenseAccountListProps {
   /** Pending approval count per account id (only when approve notifications on list). */
   pendingApprovalByAccountId?: Record<string, number>;
   disabled?: boolean;
+  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+  getItemHref?: (account: ExpenseAccount) => string | undefined;
 }
 
 export function ExpenseAccountList({
@@ -29,6 +32,7 @@ export function ExpenseAccountList({
   searchTerm,
   pendingApprovalByAccountId = {},
   disabled = false,
+  getItemHref,
 }: ExpenseAccountListProps) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -56,33 +60,24 @@ export function ExpenseAccountList({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className={cn("flex flex-col h-full min-h-0 rounded-b-lg border-t-0 bg-background", disabled && "pointer-events-none opacity-60")}>
-        <ScrollArea className="flex-1 min-h-0">
+      <div className={cn("flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background", disabled && "pointer-events-none opacity-60")}>
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
           <ul className="p-2 space-y-1">
             <AnimatePresence mode="popLayout">
               {filteredAndSortedAccounts.map((account) => {
                 const isSelected = selectedAccount?.id === account.id;
                 const isSystem = (account as any).isSystemReserved;
-                return (
-                  <motion.li
-                    key={account.id}
-                    layout
-                    initial={false}
-                    exit={{ transition: { duration: 0 } }}
-                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                  >
-                    <Card
-                      className={cn(
-                        "p-1.5 cursor-pointer border rounded-md transition-all duration-200",
-                        disabled && "cursor-not-allowed",
-                        isSelected
-                          ? "border-primary bg-secondary shadow-sm"
-                          : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
-                      )}
-                      onClick={() => onSelectAccount(account)}
-                    >
-                      <div className="flex items-center justify-between w-full gap-2 min-w-0">
-                        <div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+                const href = getItemHref?.(account);
+                const cardClassName = cn(
+                  "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
+                  disabled && "cursor-not-allowed",
+                  isSelected
+                    ? "border-primary bg-secondary shadow-sm"
+                    : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30"
+                );
+                const cardContent = (
+                      <div className="pl-master-list-row">
+                        <div className="pl-master-list-row-leading">
                           <div className="relative flex-shrink-0">
                             <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground">
                               {isSystem ? <Lock className="h-4 w-4" /> : <DollarSign className="h-4 w-4" />}
@@ -99,7 +94,7 @@ export function ExpenseAccountList({
                           </div>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="text-sm font-medium whitespace-nowrap truncate min-w-0 text-left cursor-default">
+                              <span className="pl-master-list-row-name cursor-default">
                                 {account.name}
                               </span>
                             </TooltipTrigger>
@@ -115,7 +110,7 @@ export function ExpenseAccountList({
                           <TooltipTrigger asChild>
                             <div
                               className={cn(
-                                "text-sm font-medium whitespace-nowrap flex-shrink-0 ml-2",
+                                "pl-master-list-row-amount ml-2",
                                 account.balance >= 0 ? "text-green-600" : "text-red-600",
                                 isSelected && (account.balance >= 0 ? "text-green-700" : "text-red-700")
                               )}
@@ -128,7 +123,24 @@ export function ExpenseAccountList({
                           </TooltipContent>
                         </Tooltip>
                       </div>
-                    </Card>
+                );
+                return (
+                  <motion.li
+                    key={account.id}
+                    layout
+                    initial={false}
+                    exit={{ transition: { duration: 0 } }}
+                    transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                  >
+                    {href ? (
+                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                        <Card className={cardClassName}>{cardContent}</Card>
+                      </Link>
+                    ) : (
+                      <Card className={cardClassName} onClick={() => onSelectAccount(account)}>
+                        {cardContent}
+                      </Card>
+                    )}
                   </motion.li>
                 );
               })}

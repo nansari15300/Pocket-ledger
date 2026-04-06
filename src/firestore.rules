@@ -117,18 +117,17 @@ service cloud.firestore {
 
     /**
      * True if the user has admin role (SuperAdmin or CompanyAdmin) for Firestore access (companies, vouchers).
-     * Checks: (1) doc at /users/{request.auth.uid} with role in [SuperAdmin, CompanyAdmin], or
-     * (2) app_settings/admin_config has superAdminEmails array containing request.auth.token.email, or
-     * (3) hardcoded fallback email.
+     * Order matters: check hardcoded email + admin_config BEFORE users/{auth.uid} — many profiles live only at
+     * users/slug_uid; useAuth mirrors role to users/{uid} but until then superAdminEmails must still grant admin.
      */
     function isAdmin() {
       return isSignedIn() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['SuperAdmin', 'CompanyAdmin'])
-        || (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
+        (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
         || (exists(/databases/$(database)/documents/app_settings/admin_config) &&
             request.auth.token.email != null &&
             request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []))
+        || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['SuperAdmin', 'CompanyAdmin'])
       );
     }
 
@@ -221,14 +220,6 @@ service cloud.firestore {
           (isOneOf(conversationId.split('_')) &&
             resource.data.get('deletedFor', []).hasAll(conversationId.split('_')));
       }
-    }
-
-    /**
-     * @description Admin config (e.g. superAdminEmails). Only admins can read/write.
-     * @path /app_settings/admin_config
-     */
-    match /app_settings/{docId} {
-      allow read, write: if isAdmin();
     }
 
     /**
@@ -401,9 +392,10 @@ service cloud.firestore {
       /**
        * @description Manages subscription payments for a company.
        * @path /companies/{companyId}/payments/{paymentId}
+       * collectionGroup("payments") evaluates each path; SuperAdmin must read without being isCompanyUser — same pattern as vouchers above.
        */
       match /payments/{paymentId} {
-        allow read, list: if isCompanyUser(companyId);
+        allow read, list: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow create, update, delete: if isCompanyUser(companyId);
       }
 
@@ -477,11 +469,12 @@ service cloud.firestore {
     }
 
     /**
-     * @description App-wide settings: features, plans, payment_gateways, permissions. Sidebar/dashboard reads features; admin/billing read-write. Signed-in users can read; write allowed for app (admin routes protected by app).
+     * @description App-wide settings: features, plans, payment_gateways, admin_config. Any signed-in user can read (sidebar/plans); only isAdmin() may write (admin UI + bootstrap).
      * @path /app_settings/{docId}
      */
     match /app_settings/{docId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
     /**

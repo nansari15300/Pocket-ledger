@@ -21,12 +21,15 @@ export function ItemGroupList({
   selectedGroup,
   onSelectGroup,
   pendingApprovalByGroupId = {},
+  getItemHref,
 }: {
   groups: ItemGroup[];
   searchTerm: string;
   selectedGroup: ItemGroup | null;
   onSelectGroup: (group: ItemGroup) => void;
   pendingApprovalByGroupId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+  getItemHref?: (group: ItemGroup) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -48,34 +51,22 @@ export function ItemGroupList({
   }, [groups, searchTerm]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-b-lg border-x border-b bg-background">
-      <ScrollArea className="flex-1 min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
         <ul className="p-2 space-y-1">
           <AnimatePresence>
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
-              return (
-                <motion.li
-                  key={group.id}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ 
-                    duration: rowAnimationDuration,
-                    ease: "easeInOut"
-                  }}
-                >
-                  <Card
-                    className={cn(
-                      "p-1 cursor-pointer border",
-                      isSelected
-                        ? "border-primary bg-secondary"
-                        : "hover:border-primary/50"
-                    )}
-                    onClick={() => onSelectGroup(group)}
-                  >
-                    <div className="flex items-center justify-between w-full gap-2">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
+              const href = getItemHref?.(group);
+              const cardClassName = cn(
+                "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
+                isSelected
+                  ? "border-primary bg-secondary"
+                  : "hover:border-primary/50"
+              );
+              const cardContent = (
+                    <div className="pl-master-list-row">
+                      <div className="pl-master-list-row-leading">
                         <div className="relative flex-shrink-0">
                           <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-lg text-muted-foreground">
                             <Users className="h-5 w-5" />
@@ -92,7 +83,7 @@ export function ItemGroupList({
                         </div>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                             <span className="font-semibold whitespace-nowrap truncate max-w-[150px] text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none cursor-pointer">
+                             <span className="pl-master-list-row-name-strong cursor-default">
                                {group.name}
                              </span>
                           </TooltipTrigger>
@@ -106,7 +97,7 @@ export function ItemGroupList({
                       </div>
                       <div
                         className={cn(
-                          "font-semibold text-sm whitespace-nowrap flex-shrink-0 ml-2",
+                          "pl-master-list-row-amount font-semibold ml-2",
                           group.balance >= 0 ? "text-green-600" : "text-red-600",
                           isSelected &&
                             (group.balance >= 0
@@ -116,9 +107,29 @@ export function ItemGroupList({
                       >
                          {/* ✅ FIX: Render formatCurrency directly instead of via AnimatedNumber */}
                         {formatCurrency(group.balance, { showDrCr: true })}
-                      </div>
                     </div>
-                  </Card>
+                  </div>
+              );
+              return (
+                <motion.li
+                  key={group.id}
+                  layout
+                  initial={false}
+                  exit={{ transition: { duration: 0 } }}
+                  transition={{ 
+                    duration: rowAnimationDuration,
+                    ease: "easeInOut"
+                  }}
+                >
+                  {href ? (
+                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      <Card className={cardClassName}>{cardContent}</Card>
+                    </Link>
+                  ) : (
+                    <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                      {cardContent}
+                    </Card>
+                  )}
                 </motion.li>
               );
             })}

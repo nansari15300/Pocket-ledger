@@ -105,7 +105,7 @@ export function StaffGroupDetails({
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -328,10 +328,10 @@ export function StaffGroupDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
@@ -397,7 +397,7 @@ export function StaffGroupDetails({
           openingBalance: openingBalanceForPeriod,
           transactions: sortedTransactions,
           showNarration: showNarration,
-          includeNotes: showNotes,
+          includeNotes: includeNotesInTable,
           visibleColumns: printVisibleColumns,
           userNames: userNames,
           billWise: balanceMode === "bill_wise",
@@ -459,7 +459,7 @@ export function StaffGroupDetails({
                   options={groupDropdownOptions}
                   value={group?.id || ""}
                   onChange={(value) => {
-                    if (value && value !== group.id) router.push(`/staff/group/${value}`);
+                    if (value && value !== group.id) router.push(`/staff?view=groups&selected=${value}`);
                   }}
                   placeholder="Select group"
                 />
@@ -486,7 +486,11 @@ export function StaffGroupDetails({
               </div>
             </div>
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             <TransactionsTable
               transactions={mobileTransactionsToShow}
@@ -923,7 +927,7 @@ export function StaffGroupDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-staff-group" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-staff-group" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-staff-group" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>

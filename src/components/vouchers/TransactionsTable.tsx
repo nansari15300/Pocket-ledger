@@ -232,16 +232,32 @@ export function TransactionsTable({
     } else if (!transactions.some((t) => t.id === selectedId)) setSelectedId(null);
   }, [transactions, selectedId, normalizeSpendWiseRowBase]);
 
+  // Click table ke bahar → row unselect; lekin Dialog/Dropdown/Popover radix portals body par hain — un par click se unselect mat karo (save ke baad edited row selected rahe)
+  const isTargetInsidePortaledOverlay = useCallback((target: EventTarget | null) => {
+    if (!target || !(target instanceof Element)) return false;
+    return !!(
+      target.closest('[role="dialog"]') ||
+      target.closest('[role="alertdialog"]') ||
+      target.closest("[data-radix-dropdown-menu-content]") ||
+      target.closest("[data-radix-select-content]") ||
+      target.closest("[data-radix-popover-content]") ||
+      target.closest("[data-radix-sheet-content]")
+    );
+  }, []);
+
   // Unselect when user clicks anywhere in the app outside the table (empty area, sidebar, etc.)
   useEffect(() => {
     const handleDocumentClick = (e: MouseEvent) => {
       const el = tableContainerRef.current;
       if (!el || !selectedId) return;
-      if (!el.contains(e.target as Node)) setSelectedId(null);
+      const t = e.target;
+      if (el.contains(t as Node)) return;
+      if (isTargetInsidePortaledOverlay(t)) return;
+      setSelectedId(null);
     };
     document.addEventListener("click", handleDocumentClick);
     return () => document.removeEventListener("click", handleDocumentClick);
-  }, [selectedId]);
+  }, [selectedId, isTargetInsidePortaledOverlay]);
 
   // Staff group (statement + bill wise): focus table after row select so one Enter opens edit; delay so page doesn’t steal focus
   const isStaffGroup = context === "group" && groupEntityType === "staff";

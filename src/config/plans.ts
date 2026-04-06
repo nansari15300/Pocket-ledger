@@ -1,6 +1,24 @@
 
 export type PlanId = "basic" | "advance" | "pro" | "pro-plus";
 
+/** Monotonic order for upgrade / downgrade UI (basic is 0). */
+export const PLAN_TIER_ORDER: PlanId[] = ["basic", "advance", "pro", "pro-plus"];
+
+export function planTierIndex(planId?: string | null): number {
+  const i = PLAN_TIER_ORDER.indexOf((planId as PlanId) || "basic");
+  return i >= 0 ? i : 0;
+}
+
+/** Next paid SKU above current (e.g. advance → pro). Null if already on top paid tier. */
+export function getNextPaidUpgrade(fromPlanId?: string | null): PlanId | null {
+  const cur = planTierIndex(fromPlanId);
+  for (let t = cur + 1; t < PLAN_TIER_ORDER.length; t++) {
+    const id = PLAN_TIER_ORDER[t];
+    if (id !== "basic") return id;
+  }
+  return null;
+}
+
 export type BillingCycle = "monthly" | "yearly";
 
 export type EntitlementKey =

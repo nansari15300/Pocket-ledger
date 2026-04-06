@@ -25,6 +25,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Combobox } from "../ui/combobox";
 import type { Party } from "@/components/party/types";
 import type { Account } from "@/components/bank-cash/types";
 import type { Staff } from "@/components/staff/types";
@@ -45,6 +46,12 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import { toast as sonnerToast } from "sonner";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
+import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
+import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
+import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
+import { CreateItemDialog } from "@/components/items/CreateItemDialog";
+import { CreateExpenseAccountDialog } from "@/components/expenses/CreateExpenseAccountDialog";
 
 const formSchema = z.object({
   voucherNumber: z.string().min(1, "Voucher number is required."),
@@ -118,9 +125,21 @@ export function CreateNoteForm({
   const [expenseAccounts, setExpenseAccounts] = useState<ExpenseAccount[]>([]);
   const [files, setFiles] = useState<(File|string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
+  /** Edit dialog: AddVoucherDialog live Firestore snapshot har ~1s naya voucher object deta hai — same id + user ne edit shuru kiya ho to reset mat chalao */
+  const syncedNoteVoucherIdRef = useRef<string | undefined>(undefined);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   /** Delete confirmation open state (only used when !compactFooter i.e. New Transaction → Note) */
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  /** Specific entity combobox se "Add new" — search mein match na ho to bhi yahi dialogs (Payment In / Direct Income jaisa flow) */
+  const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  const [isCreateBankOpen, setIsCreateBankOpen] = useState(false);
+  const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
+  const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
+  /** CreateTaxDialog prefillTaxName → CreateTaxForm name field (document event yahan use nahi) */
+  const [taxCreatePrefillName, setTaxCreatePrefillName] = useState("");
+  const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
+  const [isCreateIncomeAccountOpen, setIsCreateIncomeAccountOpen] = useState(false);
+  const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
 
   const form = useForm<NoteFormValues>({
     resolver: zodResolver(formSchema),
@@ -187,17 +206,26 @@ export function CreateNoteForm({
   }, [form]);
 
   useEffect(() => {
-    if (voucher) {
-        form.reset({
-            ...voucher,
-            date: voucher.date instanceof Date ? voucher.date : (voucher.date?.toDate ? voucher.date.toDate() : new Date()),
-        });
-        if (voucher.fileUrls) {
-          setFiles(voucher.fileUrls);
-          initialFilesRef.current = Array.isArray(voucher.fileUrls) ? [...voucher.fileUrls] : [];
-        } else {
-          initialFilesRef.current = [];
-        }
+    if (!voucher) {
+      syncedNoteVoucherIdRef.current = undefined;
+      return;
+    }
+    const vid = voucher.id as string | undefined;
+    if (vid && syncedNoteVoucherIdRef.current === vid && form.formState.isDirty) {
+      return;
+    }
+    syncedNoteVoucherIdRef.current = vid;
+
+    form.reset({
+      ...voucher,
+      date: voucher.date instanceof Date ? voucher.date : (voucher.date?.toDate ? voucher.date.toDate() : new Date()),
+    });
+    if (voucher.fileUrls) {
+      setFiles(voucher.fileUrls);
+      initialFilesRef.current = Array.isArray(voucher.fileUrls) ? [...voucher.fileUrls] : [];
+    } else {
+      setFiles([]);
+      initialFilesRef.current = [];
     }
   }, [voucher, form]);
 
@@ -226,6 +254,77 @@ export function CreateNoteForm({
       default: return [];
     }
   }, [selectedContext, parties, accounts, staff, taxes, items, expenseAccounts]);
+
+  // Note → Specific entity Combobox: user ko typed filter dikhane ke liye context-specific placeholder
+  const entityComboboxSearchPlaceholder = useMemo(() => {
+    switch (selectedContext) {
+      case "Party": return "Search party by name…";
+      case "Bank/Cash": return "Search bank / cash account…";
+      case "Staff": return "Search staff…";
+      case "Tax": return "Search tax…";
+      case "Items": return "Search item…";
+      case "Income": return "Search income account…";
+      case "Expense": return "Search expense account…";
+      default: return "Search…";
+    }
+  }, [selectedContext]);
+
+  // Combobox empty-state: "+ Add new …" label (context ke hisaab)
+  const entityAddNewLabel = useMemo(() => {
+    switch (selectedContext) {
+      case "Party": return "+ Add New Party";
+      case "Bank/Cash": return "+ Add New Account";
+      case "Staff": return "+ Add New Staff";
+      case "Tax": return "+ Add New Tax Ledger";
+      case "Items": return "+ Add New Item";
+      case "Income": return "+ Add New Income Account";
+      case "Expense": return "+ Add New Expense Account";
+      default: return undefined;
+    }
+  }, [selectedContext]);
+
+  /** Search se kuch na mile / add-new row: naya entity banakar entityId set karo + prefill event (Create* forms sunte hain) */
+  const openCreateEntityFromCombobox = useCallback(
+    (newName?: string) => {
+      const name = typeof newName === "string" ? newName : "";
+      const fire = (event: string, detail: unknown) => {
+        setTimeout(() => document.dispatchEvent(new CustomEvent(event, { detail })), 100);
+      };
+      switch (selectedContext) {
+        case "Party":
+          setIsCreatePartyOpen(true);
+          fire("prefill-create-party-name", name);
+          break;
+        case "Bank/Cash":
+          setIsCreateBankOpen(true);
+          fire("prefill-create-bank-account-name", name);
+          break;
+        case "Staff":
+          setIsCreateStaffOpen(true);
+          fire("prefill-create-staff-name", name);
+          break;
+        case "Tax":
+          setTaxCreatePrefillName(name);
+          setIsCreateTaxOpen(true);
+          break;
+        case "Items":
+          setIsCreateItemOpen(true);
+          fire("prefill-create-item-name", { name, type: "item" });
+          break;
+        case "Income":
+          setIsCreateIncomeAccountOpen(true);
+          fire("prefill-create-expense-account-name", name);
+          break;
+        case "Expense":
+          setIsCreateExpenseAccountOpen(true);
+          fire("prefill-create-expense-account-name", name);
+          break;
+        default:
+          break;
+      }
+    },
+    [selectedContext]
+  );
 
   // When Link to (context) changes, clear entityId if current value is not in the new options
   useEffect(() => {
@@ -532,9 +631,10 @@ export function CreateNoteForm({
   };
 
   return (
+    <>
     <Form {...form}>
       <form onSubmit={(e) => handleFormSubmit(e)} className="h-full flex flex-col min-w-0 w-full max-w-full">
-        <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
+        <ScrollArea className={cn("flex-1 min-h-0 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
             <div className={cn(
               "space-y-4 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               isMobile ? "" : "px-[2px]"
@@ -715,7 +815,31 @@ export function CreateNoteForm({
                      )} />
                     {selectedContext && (
                          <FormField control={form.control} name="entityId" render={({ field }: any) => (
-                            <FormItem><FormLabel>Specific {selectedContext}</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select entity" /></SelectTrigger></FormControl><SelectContent>{getEntityOptions().map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}</SelectContent></Select></FormItem>
+                            <FormItem>
+                              <FormLabel>Specific {selectedContext}</FormLabel>
+                              {/* Combobox + filter: Dialog ke andar popoverModal=false taaki search input focus / list filter sahi kaam kare */}
+                              <FormControl>
+                                <Combobox
+                                  options={getEntityOptions()}
+                                  value={field.value}
+                                  onChange={(id, newName) => {
+                                    if (id === "add-new") {
+                                      openCreateEntityFromCombobox(newName);
+                                      return;
+                                    }
+                                    field.onChange(id);
+                                  }}
+                                  placeholder="Select entity"
+                                  searchPlaceholder={entityComboboxSearchPlaceholder}
+                                  addNewLabel={entityAddNewLabel}
+                                  disabled={editingDisabled}
+                                  contentWidthMode="auto"
+                                  popoverModal={false}
+                                  autoFocusSearchOnOpen
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
                          )} />
                     )}
                 </div>
@@ -767,7 +891,7 @@ export function CreateNoteForm({
                 </div>
             </div>
         </ScrollArea>
-        <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden", isMobile ? "mt-[3px] pt-[3px] pb-[3px]" : "pt-4 flex flex-col md:flex-row items-stretch md:items-center gap-4", !isMobile && useCompactFooter && "justify-end", !isMobile && !useCompactFooter && "justify-between")}>
+        <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden shrink-0 bg-background", isMobile ? "mt-[3px] pt-[3px] pb-[max(6px,env(safe-area-inset-bottom,0px))]" : "pt-4 flex flex-col md:flex-row items-stretch md:items-center gap-4", !isMobile && useCompactFooter && "justify-end", !isMobile && !useCompactFooter && "justify-between")}>
             {isMobile ? (
               <div className={cn("grid grid-cols-3 gap-2 w-full min-w-0", VOUCHER_BUTTONS_CLASS)}>
                 {!useCompactFooter && (
@@ -850,5 +974,87 @@ export function CreateNoteForm({
         </div>
       </form>
     </Form>
+
+    <CreatePartyDialog
+      isOpen={isCreatePartyOpen}
+      onOpenChange={setIsCreatePartyOpen}
+      onPartyCreated={(id) => {
+        setIsCreatePartyOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    />
+    <CreateBankAccountDialog
+      isOpen={isCreateBankOpen}
+      onOpenChange={setIsCreateBankOpen}
+      onAccountCreated={(id) => {
+        setIsCreateBankOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    />
+    <CreateStaffDialog
+      isOpen={isCreateStaffOpen}
+      onOpenChange={setIsCreateStaffOpen}
+      onStaffCreated={(id) => {
+        setIsCreateStaffOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+      groups={[]}
+    >
+      <span className="hidden" />
+    </CreateStaffDialog>
+    <CreateTaxDialog
+      isOpen={isCreateTaxOpen}
+      onOpenChange={(open) => {
+        setIsCreateTaxOpen(open);
+        if (!open) setTaxCreatePrefillName("");
+      }}
+      prefillTaxName={taxCreatePrefillName}
+      onTaxCreated={(id) => {
+        setIsCreateTaxOpen(false);
+        setTaxCreatePrefillName("");
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    />
+    <CreateItemDialog
+      isOpen={isCreateItemOpen}
+      onOpenChange={setIsCreateItemOpen}
+      defaultType="item"
+      onItemCreated={(id) => {
+        setIsCreateItemOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    >
+      <span className="hidden" />
+    </CreateItemDialog>
+    <CreateExpenseAccountDialog
+      isOpen={isCreateIncomeAccountOpen}
+      onOpenChange={setIsCreateIncomeAccountOpen}
+      defaultGroupType="income"
+      onExpenseAccountCreated={(id) => {
+        setIsCreateIncomeAccountOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    >
+      <span className="hidden" />
+    </CreateExpenseAccountDialog>
+    <CreateExpenseAccountDialog
+      isOpen={isCreateExpenseAccountOpen}
+      onOpenChange={setIsCreateExpenseAccountOpen}
+      defaultGroupType="expense"
+      onExpenseAccountCreated={(id) => {
+        setIsCreateExpenseAccountOpen(false);
+        form.setValue("entityId", id);
+        void form.trigger("entityId");
+      }}
+    >
+      <span className="hidden" />
+    </CreateExpenseAccountDialog>
+    </>
   );
 }

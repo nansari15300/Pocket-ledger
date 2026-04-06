@@ -160,7 +160,7 @@ export function StaffDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -358,10 +358,10 @@ export function StaffDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, isEditStaffDialogOpen, historyVoucher, linkPaymentVoucher, linkAdvancesVoucher, closeModalInUrl, onBack]);
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -429,7 +429,7 @@ export function StaffDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: displayTransactions,
       showNarration: showNarration,
-      includeNotes: showNotes,
+      includeNotes: includeNotesInTable,
       visibleColumns: printVisibleColumns,
       userNames: userNames,
       billWise: false,
@@ -460,7 +460,7 @@ export function StaffDetails({
       openingBalance: openingBalanceForPeriod,
       transactions: displayTransactions,
       showNarration: showNarration,
-      includeNotes: showNotes,
+      includeNotes: includeNotesInTable,
       visibleColumns: printVisibleColumns,
       userNames: userNames,
       billWise: true,
@@ -618,7 +618,7 @@ export function StaffDetails({
                 value={staff?.id || ""}
                 onChange={(value) => {
                   if (value && value !== staff.id) {
-                    router.push(`/staff/${value}`);
+                    router.push(`/staff?selected=${value}`);
                   }
                 }}
                 placeholder="Select staff"
@@ -666,7 +666,11 @@ export function StaffDetails({
         </div>
       </div>
       {/* Transactions list - extends to footer line */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      {/* scroll-touch + inline style for APK/WebView touch scroll */}
+      <div
+        className="flex-1 min-h-0 overflow-auto scroll-touch"
+        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+      >
         <div className="pb-24">
         <TransactionsTable
           transactions={mobileTransactionsToShow}
@@ -1045,7 +1049,7 @@ export function StaffDetails({
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <Checkbox id="show-notes-staff" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+              <Checkbox id="show-notes-staff" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
               <label htmlFor="show-notes-staff" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
             </div>
           </div>

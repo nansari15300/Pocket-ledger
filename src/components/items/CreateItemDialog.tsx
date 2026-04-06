@@ -49,6 +49,8 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 
@@ -82,6 +84,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
@@ -183,7 +186,8 @@ export function CreateItemDialog({
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
   const [files, setFiles] = useState<(File | string)[]>([]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  
+  const isMobile = useIsMobile();
+
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : false;
   const setIsOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : () => {};
   
@@ -358,8 +362,12 @@ export function CreateItemDialog({
     }
     const newFiles = Array.from(e.target.files);
     for (const file of newFiles) {
-      if (file.size > 5 * 1024 * 1024) {
-        toast({ variant: "destructive", title: "File too large", description: `Please select a file smaller than 5MB to compress.` });
+      if (file.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+        toast({
+          variant: "destructive",
+          title: "File too large",
+          description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+        });
         continue;
       }
       try {
@@ -679,8 +687,10 @@ const capitalizeFirstLetter = (str: string) => {
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
-
+            className={cnStaticMobileFullscreenDialog(
+              isMobile,
+              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
+            )}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >

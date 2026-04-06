@@ -35,7 +35,10 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import usePermissions from "@/hooks/usePermissions";
@@ -81,7 +84,15 @@ function BankCashPageContent() {
   
   const [activeView, setActiveView] = useState("accounts");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Account | AccountGroup>(`bank_cash_view_${activeView}`);
-  
+  const useQueryNav = useMasterDetailQueryNav();
+
+  // Detail → list: replace + Android hardware back (push le history double hunchha)
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("bank-cash"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
+
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
@@ -90,6 +101,7 @@ function BankCashPageContent() {
 
   const selectedAccount = activeView === 'accounts' ? selected as Account : null;
   const selectedGroup = activeView === 'groups' ? selected as AccountGroup : null;
+  useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroup?.id ?? null);
   
    const processedAccountGroups = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');
@@ -102,14 +114,21 @@ function BankCashPageContent() {
 
     const ungroupedBalance = accountsForUngrouped.reduce((sum, acc) => sum + acc.balance, 0);
 
-    const initialGroupsWithChildData = initialProcessedAccountGroups.map(group => {
+    const initialGroupsWithChildData = initialProcessedAccountGroups
+        .filter((group: any) => {
+          if (group.isAutoUngrouped === true) return false;
+          if (group.isReportOnly === true || group.isSystemReserved === true) return false;
+          if (isSystemParentGroup("account_groups", group.id)) return false;
+          return true;
+        })
+        .map(group => {
         const accountsInGroup = processedAccounts.filter(acc => acc.groupId === group.id);
         const hasSpecial = accountsInGroup.some(acc => acc.isSpecial);
         const balance = canViewSpecialBalance || !hasSpecial 
             ? accountsInGroup.reduce((sum, acc) => sum + acc.balance, 0)
             : '*****';
         return { ...group, hasSpecial, balance };
-    }).filter((group: any) => group.isAutoUngrouped !== true); // Hide auto-created Ungrouped base doc until needed.
+    });
 
     if (accountsForUngrouped.length > 0) {
         const ungroupedGroup: any = {
@@ -156,7 +175,11 @@ function BankCashPageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (accountItem) setActiveView("accounts");
     if (item) setSelected(item);
-    router.replace("/bank-cash", { scroll: false });
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/bank-cash?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedAccounts, processedAccountGroups, setSelected, setActiveView, router]);
   
   // Initial Mount Safety
@@ -187,8 +210,9 @@ function BankCashPageContent() {
 
 
   const handleSelect = (item: Account | AccountGroup) => {
-    if (isMobile) {
-        const path = 'accountName' in item ? `/bank-cash/${item.id}` : (item.id === 'ungrouped' ? '/bank-cash?view=groups' : `/bank-cash/group/${item.id}`);
+    if (useQueryNav) {
+        // Static export ke liye query params – /bank-cash/[id] path refresh/redirect de sakta hai
+        const path = 'accountName' in item ? `/bank-cash?selected=${item.id}` : `/bank-cash?view=groups&selected=${item.id}`;
         router.push(path);
     } else {
         setSelected(item);
@@ -262,7 +286,7 @@ function BankCashPageContent() {
                 <span>Accounts ({processedAccounts.length})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountList accounts={processedAccounts} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} />
+                <AccountList accounts={processedAccounts} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? (a) => `/bank-cash?selected=${a.id}` : undefined} />
               </div>
             </>
         ) : (
@@ -272,7 +296,7 @@ function BankCashPageContent() {
                 <span>Groups ({filteredGroupCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountGroupList groups={processedAccountGroups} onSelectGroup={handleSelect as any} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByAccountGroupId} />
+                <AccountGroupList groups={processedAccountGroups} onSelectGroup={handleSelect as any} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByAccountGroupId} getItemHref={useQueryNav ? (g) => `/bank-cash?view=groups&selected=${g.id}` : undefined} />
               </div>
             </>
         )}
@@ -333,6 +357,8 @@ function BankCashPageContent() {
       detailView={detailView}
       isMobile={isMobile}
       mobileListOnly={true}
+      hasSelectedItem={!!selected}
+      onBackToList={onBackToList}
     />
   );
 }

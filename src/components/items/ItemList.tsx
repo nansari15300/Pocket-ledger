@@ -13,6 +13,7 @@ import type { StockView } from "./ItemDetails";
 import React, { useMemo } from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 
 interface ItemListProps {
   items: Item[];
@@ -23,6 +24,8 @@ interface ItemListProps {
   itemDisplayUnits: Record<string, string>;
   /** Pending approval count per item id (only when approve notifications on list). */
   pendingApprovalByItemId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+  getItemHref?: (item: Item) => string | undefined;
 }
 
 const getInitials = (name: string) => {
@@ -42,6 +45,7 @@ export function ItemList({
   stockView = 'amount',
   itemDisplayUnits,
   pendingApprovalByItemId = {},
+  getItemHref,
 }: ItemListProps) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -66,7 +70,7 @@ export function ItemList({
   }
 
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="h-full min-w-0">
       <div className="space-y-2 p-2">
         <AnimatePresence>
           {filteredAndSortedItems.map((item) => {
@@ -102,28 +106,16 @@ export function ItemList({
                 ? formatCurrency(displayValue, { showDrCr: true })
                 : `${displayValue.toFixed(2)}`;
 
-            return (
-              <motion.li
-                key={item.id}
-                layout
-                initial={false}
-                exit={{ transition: { duration: 0 } }}
-                transition={{ 
-                  duration: rowAnimationDuration,
-                  ease: "easeInOut"
-                }}
-              >
-                <Card
-                  className={cn(
-                    "p-1 cursor-pointer border",
-                    isSelected
-                      ? "border-primary bg-secondary"
-                      : "hover:border-primary/50"
-                  )}
-                  onClick={() => onSelectItem(item)}
-                >
-                  <div className="flex items-center justify-between w-full gap-2">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
+            const href = getItemHref?.(item);
+            const cardClassName = cn(
+              "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
+              isSelected
+                ? "border-primary bg-secondary"
+                : "hover:border-primary/50"
+            );
+            const cardContent = (
+                  <div className="pl-master-list-row">
+                    <div className="pl-master-list-row-leading">
                       <div className="relative flex-shrink-0">
                         <Avatar className="h-8 w-8 text-sm">
                           <AvatarImage src={item.fileUrls?.[0]} />
@@ -140,8 +132,8 @@ export function ItemList({
                         )}
                       </div>
                       <Tooltip>
-                        <TooltipTrigger className="font-medium whitespace-nowrap truncate max-w-[150px] text-left p-0 h-auto bg-transparent hover:bg-transparent border-none shadow-none">
-                          {item.name}
+                        <TooltipTrigger asChild>
+                          <span className="pl-master-list-row-name cursor-default">{item.name}</span>
                         </TooltipTrigger>
                         <TooltipContent>
                           <p>{item.name}</p>
@@ -153,7 +145,7 @@ export function ItemList({
                     </div>
                     <div
                       className={cn(
-                        "text-sm font-semibold flex items-baseline gap-1 whitespace-nowrap flex-shrink-0 ml-2",
+                        "pl-master-list-row-amount flex items-baseline gap-1 font-semibold ml-2",
                         isPositive ? "text-green-600" : "text-red-600",
                         isSelected && (isPositive ? "text-green-800" : "text-red-800")
                       )}
@@ -162,7 +154,27 @@ export function ItemList({
                       {stockView === 'qty' && <span className="text-xs">{displayUnit}</span>}
                     </div>
                   </div>
-                </Card>
+            );
+            return (
+              <motion.li
+                key={item.id}
+                layout
+                initial={false}
+                exit={{ transition: { duration: 0 } }}
+                transition={{ 
+                  duration: rowAnimationDuration,
+                  ease: "easeInOut"
+                }}
+              >
+                {href ? (
+                  <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                    <Card className={cardClassName}>{cardContent}</Card>
+                  </Link>
+                ) : (
+                  <Card className={cardClassName} onClick={() => onSelectItem(item)}>
+                    {cardContent}
+                  </Card>
+                )}
               </motion.li>
             );
           })}

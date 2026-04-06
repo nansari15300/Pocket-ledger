@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
 import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import { isSystemParentGroup } from "@/lib/system-groups";
 
 export function TaxGroupList({
@@ -19,12 +20,15 @@ export function TaxGroupList({
   selectedGroup,
   onSelectGroup,
   pendingApprovalByGroupId = {},
+  getItemHref,
 }: {
   groups: TaxGroup[];
   searchTerm: string;
   selectedGroup: TaxGroup | null;
   onSelectGroup: (group: TaxGroup) => void;
   pendingApprovalByGroupId?: Record<string, number>;
+  /** When provided, use Link for navigation (mobile/Capacitor) – static export ke liye query params */
+  getItemHref?: (group: TaxGroup) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -48,31 +52,22 @@ export function TaxGroupList({
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="flex flex-col h-full min-h-0 w-full rounded-b-lg border-t-0 bg-background">
-      <ScrollArea className="flex-1 min-h-0">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
         <ul className="p-2 space-y-1">
           <AnimatePresence mode="popLayout">
             {filteredAndSortedGroups.map((group) => {
               const isSelected = selectedGroup?.id === group.id;
-              return (
-                <motion.li 
-                  key={group.id}
-                  layout
-                  initial={false}
-                  exit={{ transition: { duration: 0 } }}
-                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                >
-                  <Card
-                      className={cn(
-                        "w-full p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
-                        isSelected
-                          ? "border-primary bg-secondary shadow-sm"
-                          : "border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
-                      )}
-                      onClick={() => onSelectGroup(group)}
-                    >
-                      <div className="flex items-center justify-between w-full gap-2">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
+              const href = getItemHref?.(group);
+              const cardClassName = cn(
+                "w-full min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-lg transition-colors duration-200",
+                isSelected
+                  ? "border-primary bg-secondary shadow-sm"
+                  : "border-gray-300 dark:border-gray-600 hover:border-primary/40 bg-card hover:bg-muted/30"
+              );
+              const cardContent = (
+                      <div className="pl-master-list-row">
+                        <div className="pl-master-list-row-leading">
                           <div className="relative flex-shrink-0">
                             <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground">
                               <Users className="h-5 w-5" />
@@ -89,7 +84,7 @@ export function TaxGroupList({
                           </div>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="font-semibold text-sm whitespace-nowrap truncate min-w-0 cursor-default">
+                              <span className="pl-master-list-row-name-strong cursor-default">
                                 {group.name}
                               </span>
                             </TooltipTrigger>
@@ -105,7 +100,7 @@ export function TaxGroupList({
                           <TooltipTrigger asChild>
                             <p
                               className={cn(
-                                "font-bold text-xs whitespace-nowrap flex-shrink-0 ml-1 px-1 rounded",
+                                "pl-master-list-row-amount-xs ml-1 rounded px-1",
                                 group.balance >= 0 ? "text-green-600" : "text-red-600"
                               )}
                             >
@@ -117,7 +112,24 @@ export function TaxGroupList({
                           </TooltipContent>
                         </Tooltip>
                       </div>
+              );
+              return (
+                <motion.li
+                  key={group.id}
+                  layout
+                  initial={false}
+                  exit={{ transition: { duration: 0 } }}
+                  transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
+                >
+                    {href ? (
+                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      <Card className={cardClassName}>{cardContent}</Card>
+                    </Link>
+                  ) : (
+                    <Card className={cardClassName} onClick={() => onSelectGroup(group)}>
+                      {cardContent}
                     </Card>
+                  )}
                 </motion.li>
               );
             })}

@@ -36,6 +36,7 @@ import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 
 
@@ -239,11 +240,11 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     }
     const inputFile = e.target.files[0];
 
-    if (inputFile.size > 5 * 1024 * 1024) { // 5MB pre-check
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
         variant: "destructive",
         title: "File Too Large",
-        description: `Please select a file smaller than 5MB to compress.`,
+        description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
       return;
     }

@@ -12,6 +12,7 @@ import { useVouchers } from "./useVouchers";
 import { useDate } from "./useDate";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { type Context } from "@/components/vouchers/TransactionsTable";
+import { getNoteLinkedEntityLabel } from "@/components/vouchers/transactionTableShared";
 import {
   getAllocatedByVoucherId,
   getAllocatedByVoucherIdFromPaymentOuts,
@@ -59,7 +60,7 @@ const getParticularsText = (t: any, names: Record<string, string> = {}) => {
         }
     }
     else if (t.type === 'note') {
-        particulars.push(`Note for: ${getName(t.entityId)}`);
+        particulars.push(`Note for: ${getNoteLinkedEntityLabel(t, names)}`);
     }
     
     return particulars.join(', ');
@@ -663,7 +664,9 @@ export function useTransactions(
     voucherTypes?: string[],
     journalAccountNames?: Record<string, string>,
     userNames?: Record<string, string>,
-    displayUnit?: string
+    displayUnit?: string,
+    /** Daybook: sirf is user ke vouchers (summary + table); null/undefined = sab users */
+    daybookUserIdFilter?: string | null
 ) {
     const { vouchers, processedTaxes } = useVouchers();
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
@@ -1026,6 +1029,11 @@ export function useTransactions(
                 if (openingBalanceDate && transactionDate < openingBalanceDate) {
                   return false;
                 }
+
+                // Daybook user filter: running balance opening sirf selected user ke pre-period txns se
+                if (context === "daybook" && daybookUserIdFilter && String((t as any).userId || "") !== String(daybookUserIdFilter)) {
+                  return false;
+                }
                 
                 return transactionDate < fromDate;
             });
@@ -1040,6 +1048,13 @@ export function useTransactions(
                 const transactionDate = safeToDate(t.date);
                 return transactionDate && transactionDate >= fromDate && transactionDate <= toDate;
             });
+
+            // Daybook: table + summary ke liye selected din par sirf chosen user ke vouchers
+            if (context === "daybook" && daybookUserIdFilter) {
+                transactionsToDisplay = transactionsToDisplay.filter(
+                    (t: any) => String(t.userId || "") === String(daybookUserIdFilter)
+                );
+            }
 
         }
         
@@ -1532,6 +1547,7 @@ export function useTransactions(
                 });
                 
                 vouchers.forEach((v: any) => {
+                    if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
                     const transactionDate = safeToDate(v.date);
                     if (transactionDate && transactionDate < targetDate) {
                         const accountIsRelevant = relevantAccounts.some(a => a.id === v.accountId || a.id === v.toAccountId || a.id === v.fromAccountId || (v.entries && v.entries.some((e:any) => e.accountId === a.id)));
@@ -1544,12 +1560,45 @@ export function useTransactions(
                 return balance;
             };
 
+            /** Ek bank/cash account ka balance targetDate se pehle (user filter ke saath) */
+            const balanceForAccountBefore = (acc: Account, targetDate: Date) => {
+                let balance = acc.openingBalance || 0;
+                vouchers.forEach((v: any) => {
+                    if (daybookUserIdFilter && String(v.userId || "") !== String(daybookUserIdFilter)) return;
+                    const transactionDate = safeToDate(v.date);
+                    if (!transactionDate || transactionDate >= targetDate) return;
+                    const touches =
+                        acc.id === v.accountId ||
+                        acc.id === v.toAccountId ||
+                        acc.id === v.fromAccountId ||
+                        (v.entries && v.entries.some((e: any) => e.accountId === acc.id));
+                    if (!touches) return;
+                    const { debit, credit } = getTransactionAmounts(v, "account", acc, stockView, entityList, processedTaxes);
+                    balance += debit - credit;
+                });
+                return balance;
+            };
+
             const yesterdayBankBalance = calculateBalanceUpTo(today, 'Bank');
             const yesterdayCashBalance = calculateBalanceUpTo(today, 'Cash');
             
             let totalBankIn = 0, totalBankOut = 0, totalCashIn = 0, totalCashOut = 0;
             const bankAccountIds = new Set((entityList as Account[]).filter(a => a.accountType === 'Bank').map(a => a.id));
             const cashAccountIds = new Set((entityList as Account[]).filter(a => a.accountType === 'Cash').map(a => a.id));
+
+            const addInOutForAccount = (accId: string, v: any) => {
+                const amount = v.total || v.amount || 0;
+                let tin = 0;
+                let tout = 0;
+                if (v.type === "contra") {
+                    if (v.toAccountId === accId) tin += amount;
+                    if (v.fromAccountId === accId) tout += amount;
+                } else if (v.accountId === accId) {
+                    if (["sale", "payment_in", "direct_income"].includes(v.type)) tin += amount;
+                    if (["purchase", "payment_out", "direct_expense"].includes(v.type)) tout += amount;
+                }
+                return { tin, tout };
+            };
             
             withBalance.forEach(v => {
                 const amount = v.total || v.amount || 0;
@@ -1571,7 +1620,48 @@ export function useTransactions(
             const cash = { yesterday: yesterdayCashBalance, in: totalCashIn, out: totalCashOut, today: yesterdayCashBalance + totalCashIn - totalCashOut };
             const total = { yesterday: bank.yesterday + cash.yesterday, in: bank.in + cash.in, out: bank.out + cash.out, today: bank.today + cash.today };
 
-            daybookSummary = { bank, cash, total };
+            const allAccounts = (entityList as Account[]) || [];
+            const bankAccountsSorted = allAccounts.filter(a => a.accountType === "Bank").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
+            const cashAccountsSorted = allAccounts.filter(a => a.accountType === "Cash").slice().sort((a, b) => (a.accountName || "").localeCompare(b.accountName || ""));
+
+            const bankAccounts = bankAccountsSorted.map((acc) => {
+                let accIn = 0;
+                let accOut = 0;
+                withBalance.forEach((v) => {
+                    const { tin, tout } = addInOutForAccount(acc.id, v);
+                    accIn += tin;
+                    accOut += tout;
+                });
+                const y = balanceForAccountBefore(acc, today);
+                return {
+                    id: acc.id,
+                    name: acc.accountName || "Bank",
+                    yesterday: y,
+                    in: accIn,
+                    out: accOut,
+                    today: y + accIn - accOut,
+                };
+            });
+            const cashAccounts = cashAccountsSorted.map((acc) => {
+                let accIn = 0;
+                let accOut = 0;
+                withBalance.forEach((v) => {
+                    const { tin, tout } = addInOutForAccount(acc.id, v);
+                    accIn += tin;
+                    accOut += tout;
+                });
+                const y = balanceForAccountBefore(acc, today);
+                return {
+                    id: acc.id,
+                    name: acc.accountName || "Cash",
+                    yesterday: y,
+                    in: accIn,
+                    out: accOut,
+                    today: y + accIn - accOut,
+                };
+            });
+
+            daybookSummary = { bank, cash, total, bankAccounts, cashAccounts };
         }
 
         // Bill-wise: opening balance row outstanding (amount - linked) and linked voucher nos for status
@@ -1744,7 +1834,7 @@ export function useTransactions(
             openingBalanceLinkedVoucherNos,
         };
 
-  }, [entity, context, vouchers, dateRange, stockView, entityList, passedTransactions, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency]);
+  }, [entity, context, vouchers, dateRange, stockView, entityList, passedTransactions, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter]);
 
   return result;
 }

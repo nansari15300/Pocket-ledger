@@ -33,7 +33,7 @@ import { collection, query, where, onSnapshot, getDocsFromServer, Timestamp } fr
 import { firestore, auth } from "@/lib/firebase";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth, format, differenceInDays } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
-import { useRouter, usePathname, useParams } from "next/navigation";
+import { useRouter, usePathname, useParams, useSearchParams } from "next/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,6 +66,13 @@ import { useOnlineStatus } from "@/hooks/use-online-status";
 import { cn } from "@/lib/utils";
 import { useReportPartyView } from "@/contexts/ReportPartyViewContext";
 import { useReportList } from "@/contexts/ReportListContext";
+import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
+
+/** Static export trailingSlash: URL /party/ vs /party — normalize for route checks */
+function pathRoot(pathname: string | null, segment: string): boolean {
+  const p = (pathname ?? "").replace(/\/$/, "") || "/";
+  return p === `/${segment}`;
+}
 
 
 function ScreenControls() {
@@ -107,12 +114,15 @@ function ScreenControls() {
 
 function ReportListButton() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { setReportListOpen } = useReportList();
   const isMobile = useIsMobile();
   // Only show report list icon on main Reports page ($/reports), not on entity-specific report pages
   // (party-statement, bank-statement, staff-statement, tax-statement, item-statement, expense-statement, etc.)
   const isReportListPage = pathname === "/reports" || pathname === "/reports/";
-  if (!isReportListPage || !isMobile) return null;
+  // Detail khule tab hi icon — list-only par header halka
+  const reportSelected = Boolean(searchParams.get("report"));
+  if (!isReportListPage || !isMobile || !reportSelected) return null;
   return (
     <Button
       variant="outline"
@@ -150,10 +160,20 @@ function AddNewButtonOnReportPage() {
 function ReportButtonForPartyOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/party\/group\/[^/]+$/.test(pathname);
-  const isPartyDetails = pathname != null && /^\/party\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("party");
+  // Path-based: /party/[id] or /party/group/[id]; Query-based (mobile/APK): /party?selected=id or /party?view=groups&selected=id
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/party\/group\/[^/]+$/.test(pathname);
+  const isPartyFromPath = pathname != null && /^\/party\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isPartyPage = pathRoot(pathname, "party");
+  const isGroupDetails = isGroupFromPath || (isPartyPage && viewFromQuery === "groups");
+  const isPartyDetails = isPartyFromPath || (isPartyPage && viewFromQuery !== "groups");
+  // sessionStorage fallback: router.replace / searchParams race se ~20ms flicker hatane
+  const id = idFromPath || (isPartyPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isPartyDetails && !isGroupDetails)) return null;
 
@@ -178,11 +198,18 @@ function ReportButtonForPartyOrGroup() {
 function ReportButtonForBankAccountOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/bank-cash\/group\/[^/]+$/.test(pathname);
-  const isAccountDetails =
-    pathname != null && /^\/bank-cash\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("bank-cash");
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/bank-cash\/group\/[^/]+$/.test(pathname);
+  const isAccountFromPath = pathname != null && /^\/bank-cash\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isBankPage = pathRoot(pathname, "bank-cash");
+  const isGroupDetails = isGroupFromPath || (isBankPage && viewFromQuery === "groups");
+  const isAccountDetails = isAccountFromPath || (isBankPage && viewFromQuery !== "groups");
+  const id = idFromPath || (isBankPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isAccountDetails && !isGroupDetails)) return null;
 
@@ -207,11 +234,18 @@ function ReportButtonForBankAccountOrGroup() {
 function ReportButtonForStaffOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/staff\/group\/[^/]+$/.test(pathname);
-  const isStaffDetails =
-    pathname != null && /^\/staff\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("staff");
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/staff\/group\/[^/]+$/.test(pathname);
+  const isStaffFromPath = pathname != null && /^\/staff\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isStaffPage = pathRoot(pathname, "staff");
+  const isGroupDetails = isGroupFromPath || (isStaffPage && viewFromQuery === "groups");
+  const isStaffDetails = isStaffFromPath || (isStaffPage && viewFromQuery !== "groups");
+  const id = idFromPath || (isStaffPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isStaffDetails && !isGroupDetails)) return null;
 
@@ -236,10 +270,18 @@ function ReportButtonForStaffOrGroup() {
 function ReportButtonForItemOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/items\/group\/[^/]+$/.test(pathname);
-  const isItemDetails = pathname != null && /^\/items\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("items");
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/items\/group\/[^/]+$/.test(pathname);
+  const isItemFromPath = pathname != null && /^\/items\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isItemsPage = pathRoot(pathname, "items");
+  const isGroupDetails = isGroupFromPath || (isItemsPage && viewFromQuery === "groups");
+  const isItemDetails = isItemFromPath || (isItemsPage && viewFromQuery !== "groups");
+  const id = idFromPath || (isItemsPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isItemDetails && !isGroupDetails)) return null;
 
@@ -264,11 +306,18 @@ function ReportButtonForItemOrGroup() {
 function ReportButtonForTaxOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/tax\/group\/[^/]+$/.test(pathname);
-  const isTaxDetails =
-    pathname != null && /^\/tax\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("tax");
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/tax\/group\/[^/]+$/.test(pathname);
+  const isTaxFromPath = pathname != null && /^\/tax\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isTaxPage = pathRoot(pathname, "tax");
+  const isGroupDetails = isGroupFromPath || (isTaxPage && viewFromQuery === "groups");
+  const isTaxDetails = isTaxFromPath || (isTaxPage && viewFromQuery !== "groups");
+  const id = idFromPath || (isTaxPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isTaxDetails && !isGroupDetails)) return null;
 
@@ -293,11 +342,18 @@ function ReportButtonForTaxOrGroup() {
 function ReportButtonForExpenseAccountOrGroup() {
   const pathname = usePathname();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
-  const id = params?.id as string | undefined;
-  const isGroupDetails = pathname != null && /^\/incomes\/group\/[^/]+$/.test(pathname);
-  const isAccountDetails =
-    pathname != null && /^\/incomes\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const idFromStore = useMasterDetailHeaderIdSnapshot("incomes");
+  const idFromPath = params?.id as string | undefined;
+  const idFromQuery = searchParams?.get("selected") ?? undefined;
+  const viewFromQuery = searchParams?.get("view");
+  const isGroupFromPath = pathname != null && /^\/incomes\/group\/[^/]+$/.test(pathname);
+  const isAccountFromPath = pathname != null && /^\/incomes\/[^/]+$/.test(pathname) && !pathname.includes("/group");
+  const isIncomesPage = pathRoot(pathname, "incomes");
+  const isGroupDetails = isGroupFromPath || (isIncomesPage && viewFromQuery === "groups");
+  const isAccountDetails = isAccountFromPath || (isIncomesPage && viewFromQuery !== "groups");
+  const id = idFromPath || (isIncomesPage ? (idFromQuery ?? idFromStore) : undefined);
 
   if (!id || (!isAccountDetails && !isGroupDetails)) return null;
 
@@ -485,6 +541,7 @@ function BalanceModeSwitcher() {
 }
 
 function UserProfileButton() {
+  const router = useRouter();
   const { user } = useAuth();
   const { company, allCompanies } = useCompany();
   const { isOnline } = useOnlineStatus();
@@ -493,6 +550,38 @@ function UserProfileButton() {
   const [dailyUsed, setDailyUsed] = useState<number | null>(null);
   const [monthlyUsed, setMonthlyUsed] = useState<number | null>(null);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
+  /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
+  const profileHoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearProfileHoverClose = useCallback(() => {
+    if (profileHoverCloseTimerRef.current != null) {
+      clearTimeout(profileHoverCloseTimerRef.current);
+      profileHoverCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleProfileHoverClose = useCallback(() => {
+    clearProfileHoverClose();
+    profileHoverCloseTimerRef.current = setTimeout(() => {
+      profileHoverCloseTimerRef.current = null;
+      setProfileOpen(false);
+    }, 220);
+  }, [clearProfileHoverClose]);
+
+  const openProfileFromHover = useCallback(() => {
+    clearProfileHoverClose();
+    setProfileOpen(true);
+  }, [clearProfileHoverClose]);
+
+  const handleProfileOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) clearProfileHoverClose();
+      setProfileOpen(open);
+    },
+    [clearProfileHoverClose]
+  );
+
+  useEffect(() => () => clearProfileHoverClose(), [clearProfileHoverClose]);
 
   const getInitials = (name: string | null | undefined) => {
     if (!name) return "U";
@@ -573,9 +662,14 @@ function UserProfileButton() {
 
   return (
     <>
-      <DropdownMenu open={profileOpen} onOpenChange={setProfileOpen}>
+      <DropdownMenu open={profileOpen} onOpenChange={handleProfileOpenChange}>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="relative h-9 w-9 rounded-full p-0 touch-manipulation">
+          <Button
+            variant="ghost"
+            className="relative h-9 w-9 rounded-full p-0 touch-manipulation"
+            onMouseEnter={openProfileFromHover}
+            onMouseLeave={scheduleProfileHoverClose}
+          >
             <div className={cn(
               "relative h-9 w-9 rounded-full",
               isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
@@ -595,6 +689,8 @@ function UserProfileButton() {
           align="end"
           sideOffset={8}
           forceMount
+          onMouseEnter={openProfileFromHover}
+          onMouseLeave={scheduleProfileHoverClose}
         >
           <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
             <div className="flex flex-col space-y-0.5">
@@ -607,13 +703,25 @@ function UserProfileButton() {
             <>
               <DropdownMenuSeparator />
               <div className="px-3 py-2 space-y-3">
+                {/* Plan / upgrade: owner-only — shared company users must not see paid-plan or billing CTAs */}
+                {company.isOwned === true && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">Current Plan</div>
                   <div className="flex items-center justify-between gap-2">
                     <Badge variant="secondary" className="shrink-0">{planName}</Badge>
-                    <Link href="/billing">
-                      <Button variant="outline" size="sm" className="h-7 text-xs shrink-0">Upgrade</Button>
-                    </Link>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs shrink-0"
+                      onClick={() => {
+                        clearProfileHoverClose();
+                        setProfileOpen(false);
+                        router.push("/billing");
+                      }}
+                    >
+                      Upgrade
+                    </Button>
                   </div>
                   {company?.planExpiry && (() => {
                     const raw = company.planExpiry;
@@ -637,6 +745,7 @@ function UserProfileButton() {
                     );
                   })()}
                 </div>
+                )}
 
                 <div className="text-xs space-y-2 pt-2 border-t">
                   {(dailyLimit > 0 || monthlyLimit > 0) && (
@@ -932,19 +1041,21 @@ export function DesktopAppHeader() {
 
         <HeaderActions />
 
+        {/* Spacer pushes Report buttons to the right; grow takes remaining space */}
         <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" />
-      </div>
 
-      <div className="absolute top-2 right-2 flex items-center gap-2">
-        <AddNewButtonOnReportPage />
-        <ReportButtonForPartyOrGroup />
-        <ReportButtonForBankAccountOrGroup />
-        <ReportButtonForStaffOrGroup />
-        <ReportButtonForTaxOrGroup />
-        <ReportButtonForExpenseAccountOrGroup />
-        <ReportButtonForItemOrGroup />
-        <ScreenControls />
-        <ReportListButton />
+        {/* Report buttons in flex flow (not absolute) so they stay visible on mobile/APK; absolute was getting clipped by overflow-hidden parent */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <AddNewButtonOnReportPage />
+          <ReportButtonForPartyOrGroup />
+          <ReportButtonForBankAccountOrGroup />
+          <ReportButtonForStaffOrGroup />
+          <ReportButtonForTaxOrGroup />
+          <ReportButtonForExpenseAccountOrGroup />
+          <ReportButtonForItemOrGroup />
+          <ScreenControls />
+          <ReportListButton />
+        </div>
       </div>
 
     </header>

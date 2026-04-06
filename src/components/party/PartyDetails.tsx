@@ -355,7 +355,7 @@ export function PartyDetails({
     sessionStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
   };
 
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
 
   const handleStatusFilterChange = (key: keyof StatusFilter, checked: boolean) => {
     const next = { ...statusFilter, [key]: checked };
@@ -495,10 +495,10 @@ export function PartyDetails({
     setFilters({});
   };
   
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const statusFilteredTransactions = useMemo(
     () => filterByStatus(displayTransactions, statusFilter),
@@ -750,7 +750,7 @@ export function PartyDetails({
                     options={partyDropdownOptions}
                     value={party.id}
                     onChange={(value) => {
-                      if (value && value !== party.id) router.push(`/party/${value}`);
+                      if (value && value !== party.id) router.push(`/party?selected=${value}`);
                     }}
                     placeholder="Select party"
                   />
@@ -782,8 +782,11 @@ export function PartyDetails({
               </div>
             </div>
           </div>
-          {/* Transaction list - extends to footer line */}
-          <div className="flex-1 min-h-0 overflow-auto">
+          {/* Transaction list - extends to footer line; scroll-touch + inline style for APK/WebView touch scroll */}
+          <div
+            className="flex-1 min-h-0 overflow-auto scroll-touch"
+            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+          >
             <div className="pb-24">
             <TransactionsTable
               transactions={mobileTransactions}
@@ -1264,7 +1267,7 @@ export function PartyDetails({
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <Checkbox id="show-notes-party" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                <Checkbox id="show-notes-party" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                 <label htmlFor="show-notes-party" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
               </div>
             </div>

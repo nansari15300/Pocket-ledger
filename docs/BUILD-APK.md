@@ -57,6 +57,15 @@ export default config;
 npx cap add android
 ```
 
+### Launcher icon (Pocket Ledger logo)
+
+1. Source image **`assets/icon-only.png`** ma rakhnus (≥1024×1024 PNG).
+2. Generate garhnus (`cap:icons` le adaptive foreground pani sync garxa):
+   ```bash
+   npm run cap:icons
+   ```
+3. `npx cap sync android` → Android Studio bata APK.
+
 ### Step 4: Sync र Build
 
 ```bash
@@ -81,6 +90,23 @@ Android Studio मा: **Build → Build Bundle(s) / APK(s) → Build APK(s)**�
 4. `npx cap sync android` र पछि Android Studio बाट APK बनाउनुहोस्।
 
 **नोट:** App मा Firebase + API routes छन् भने पहिले सजिलो तरिका (deployed URL) प्रयोग गर्नुहोस्।
+
+### Static build: refresh / “Page not found”
+
+- `build:static` मा **`trailingSlash: true`** हुन्छ — URL अक्सर `/party/` जस्तो हुन्छ; refresh मा `out/party/index.html` खुल्छ।
+- `out/404.html` पनि `index.html` बाट copy हुन्छ (कहीँ host unknown path मा SPA bootstrap को लागि)।
+- Local test: `npx http-server out -p 3000 -c-1` — गहिरो route खोल्दा **`/party/`** (अन्त्यमा slash) प्रयोग गर्नुहोस्।
+
+### Android back button
+
+- `@capacitor/app` dependency छ; **`npx cap sync android`** पछि hardware back पहिले in-app `history` pop गर्छ, एउटा मात्र entry भए `exitApp`।
+- Plugin थपे/हटाएपछि सधैं **`npx cap sync android`** चलाउनुहोस्।
+
+### Print / PDF (static APK)
+
+- **`NEXT_PUBLIC_STATIC_BUILD=1`** मा PDF **`window.open` बाहिर खोलिँदैन** — **`inAppPdfPreview`** ले **Print / Share / Close** दिन्छ।
+- **Android WebView** मा PDF **iframe** प्रायः खाली — preview को लागि **PDF.js → canvas** (scroll)। Offline को लागि **`public/pdf.worker.min.mjs`** राख्नुहोस् (`node_modules/pdfjs-dist/build/pdf.worker.min.mjs` बाट copy; `pdfjs-dist` अपडेट गर्दा फेरि copy)।
+- Share को लागि **`@capacitor/filesystem`** + **`@capacitor/share`** चाहिन्छ; plugin थपेपछि **`npx cap sync android`** अनिवार्य।
 
 ---
 

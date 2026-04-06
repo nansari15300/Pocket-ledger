@@ -28,6 +28,8 @@ type ComboboxProps = {
   onChange?: (value: string, newName?: string) => void;
   onMultiChange?: (values: string[]) => void;
   placeholder?: string;
+  /** CommandInput placeholder (filter list by typing). */
+  searchPlaceholder?: string;
   addNewLabel?: string;
   addNewLabels?: { value: string; label: string }[];
   disabled?: boolean;
@@ -41,6 +43,10 @@ type ComboboxProps = {
   showFullOptionText?: boolean;
   // Optional popover sizing mode: "auto" allows dropdown to grow wider than trigger.
   contentWidthMode?: "trigger" | "auto";
+  /** Dialog ke andar: modal=false + focus search — nested focus trap se search dikhe/kaam kare */
+  popoverModal?: boolean;
+  /** Khulte hi filter input par focus (Note form / lambe lists). */
+  autoFocusSearchOnOpen?: boolean;
 };
 
 export function Combobox({
@@ -49,6 +55,7 @@ export function Combobox({
   onChange,
   onMultiChange,
   placeholder = "Select an option",
+  searchPlaceholder = "Search...",
   addNewLabel,
   addNewLabels,
   disabled = false,
@@ -58,14 +65,25 @@ export function Combobox({
   noWrapOptions = false,
   showFullOptionText = false,
   contentWidthMode = "trigger",
+  popoverModal = true,
+  autoFocusSearchOnOpen = false,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Dialog + Popover: default preventDefault se search input focus nahi milta — optional rAF se focus
+  React.useEffect(() => {
+    if (!open || !autoFocusSearchOnOpen) return;
+    const id = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open, autoFocusSearchOnOpen]);
   
   const handleSingleSelect = (val: string) => {
     onChange?.(val);
     setOpen(false);
+    setSearch("");
   };
   
   const handleMultiSelect = (val: string) => {
@@ -95,6 +113,7 @@ export function Combobox({
   const handleAddNew = (val: string, newName: string) => {
     onChange?.(val, newName);
     setOpen(false);
+    setSearch("");
   };
   
   const displayValue = () => {
@@ -111,7 +130,8 @@ export function Combobox({
   };
 
   const addNewItems = addNewLabels || (addNewLabel ? [{value: "add-new", label: addNewLabel}] : []);
-  const filteredOptions = options.filter(opt => opt.label.toLowerCase().includes(search.toLowerCase()));
+  const q = search.trim().toLowerCase();
+  const filteredOptions = q.length === 0 ? options : options.filter((opt) => opt.label.toLowerCase().includes(q));
   const hasNoResults = filteredOptions.length === 0;
   const showAddNew = addNewItems.length > 0 && (search.trim().length > 0 || hasNoResults);
 
@@ -136,8 +156,13 @@ export function Combobox({
     );
   };
 
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setSearch("");
+  };
+
   return (
-    <Popover open={open} onOpenChange={setOpen} modal={true}>
+    <Popover open={open} onOpenChange={handleOpenChange} modal={popoverModal}>
       <PopoverTrigger asChild>
         <Button
           ref={triggerRef}
@@ -166,12 +191,15 @@ export function Combobox({
           contentWidthMode === "auto" && "w-auto max-w-[calc(100vw-2rem)]"
         )}
         sideOffset={4}
-        onOpenAutoFocus={(e) => e.preventDefault()}
+        onOpenAutoFocus={(e) => {
+          if (!autoFocusSearchOnOpen) e.preventDefault();
+        }}
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <Command shouldFilter={false}>
           <CommandInput
-            placeholder="Search..."
+            ref={searchInputRef}
+            placeholder={searchPlaceholder}
             value={search}
             onValueChange={setSearch}
           />

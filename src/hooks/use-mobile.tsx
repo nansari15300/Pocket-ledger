@@ -268,9 +268,18 @@ function useMobileDetection() {
   return context;
 }
 
-// Backward compatible hook - returns boolean
+/**
+ * Mobile flag for layout / Radix branching. Until the client has mounted, always `false` so SSR and the
+ * first client pass match — avoids hydration mismatches when `isMobile` swaps whole subtrees (e.g. Tabs vs
+ * Select in AddVoucherDialog, Sheet vs aside in Sidebar). After mount, returns the real detection value.
+ */
 export function useIsMobile(): boolean {
   const { isMobile } = useMobileDetection();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return false;
   return isMobile;
 }
 

@@ -48,6 +48,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { Combobox } from "../ui/combobox";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -55,6 +57,7 @@ import { Calendar } from "../ui/calendar";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import Image from 'next/image';
 import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
 import { toast as sonnerToast } from "sonner";
 import { ScrollArea } from "../ui/scroll-area";
@@ -106,7 +109,8 @@ export function CreateBankAccountDialog({
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
   const [compressionResult, setCompressionResult] = useState<{originalSize: number, compressedSize: number} | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
-  
+  const isMobile = useIsMobile();
+
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setIsOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
 
@@ -223,8 +227,12 @@ export function CreateBankAccountDialog({
     const inputFile = e.target.files[0];
     if (!inputFile) return;
 
-    if (inputFile.size > 5 * 1024 * 1024) { // Pre-check size
-        toast({ variant: "destructive", title: "File too large", description: `Please select a file smaller than 5MB to compress.` });
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+        toast({
+          variant: "destructive",
+          title: "File too large",
+          description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+        });
         return;
     }
 
@@ -363,7 +371,10 @@ export function CreateBankAccountDialog({
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Must match CreatePartyDialog height/size. */}
         <DialogContent 
-            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-2xl sm:grid sm:flex-none sm:px-6"
+            className={cnStaticMobileFullscreenDialog(
+              isMobile,
+              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-2xl sm:grid sm:flex-none sm:px-6"
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => {

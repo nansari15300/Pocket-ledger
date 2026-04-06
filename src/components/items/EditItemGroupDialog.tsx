@@ -18,6 +18,8 @@ import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { ItemGroup } from "@/components/items/types";
 import { useCompany } from "@/hooks/useCompany";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { toast as sonnerToast } from "sonner";
 
 const formSchema = z.object({
@@ -39,6 +41,7 @@ export function EditItemGroupDialog({ group, allGroups, onGroupUpdated, onGroupD
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { companyId } = useCompany();
+  const isMobile = useIsMobile();
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -118,7 +121,7 @@ export function EditItemGroupDialog({ group, allGroups, onGroupUpdated, onGroupD
     <>
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogTrigger asChild>{children}</DialogTrigger>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className={cnStaticMobileFullscreenDialog(isMobile, "flex flex-col sm:max-w-md")}>
           <DialogHeader>
             <DialogTitle>Edit Item Group</DialogTitle>
             <DialogDescription>Update the details for {group.name}.</DialogDescription>

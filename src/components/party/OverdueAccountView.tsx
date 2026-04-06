@@ -347,7 +347,11 @@ export function OverdueAccountView({
             </div>
           </div>
         </CardHeader>
-        <CardContent className="flex-1 min-h-0 overflow-auto p-0">
+        {/* scroll-touch + inline style for APK/WebView touch scroll */}
+        <CardContent
+          className="flex-1 min-h-0 overflow-auto scroll-touch p-0"
+          style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+        >
           <div
             ref={tableContainerRef}
             tabIndex={0}

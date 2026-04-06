@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { doc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
@@ -390,6 +391,11 @@ export function AddVoucherDialog(props: any) {
       setLiveVoucher(null);
       return;
     }
+    // Note vouchers: sale/journal jaisi live allocation sync nahi; snapshot har chhoti update par form reset trigger ho sakta tha
+    if (voucher?.type === "note") {
+      setLiveVoucher(null);
+      return;
+    }
     const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucher.id);
     const unsub = onSnapshot(voucherRef, (snap) => {
       if (snap.exists()) setLiveVoucher({ id: snap.id, ...snap.data() });
@@ -399,7 +405,7 @@ export function AddVoucherDialog(props: any) {
       unsub();
       setLiveVoucher(null);
     };
-  }, [isOpen, voucher?.id, companyId]);
+  }, [isOpen, voucher?.id, companyId, voucher?.type]);
 
   // Preserve clicked contra leg from table row even after live Firestore refresh replaces voucher object.
   const effectiveVoucher = liveVoucher
@@ -665,7 +671,13 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       ) : (
-        <DialogContent className="flex flex-col p-0 w-[min(90vw,15in)] max-w-[15in] h-[min(80vh,12in)] max-h-[12in] rounded-lg md:rounded-lg">
+        // Static APK + mobile: cnStaticMobileFullscreenDialog le 100dvh; dev par purana box
+        <DialogContent
+          className={cnStaticMobileFullscreenDialog(
+            isMobile,
+            "flex flex-col p-0 w-[min(90vw,15in)] max-w-[15in] h-[min(80vh,12in)] max-h-[12in] rounded-lg md:rounded-lg"
+          )}
+        >
           {headerBlock}
           {bodyBlock}
         </DialogContent>

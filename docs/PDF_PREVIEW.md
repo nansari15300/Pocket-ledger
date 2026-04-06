@@ -54,3 +54,9 @@ If thumbnail generation fails (network, CORS, invalid PDF, or abort), we show a 
 
 - **Gallery / unassigned documents**: pass `file={url}` and `storagePath={file.path}` so PDFs are loaded via Firebase Storage and preview is generated from the first page.
 - **Upload flows**: pass a `File`; `FilePreview` will use it directly and show the loading indicator, then the first-page thumbnail or the fallback icon.
+
+## Full-screen print / Save & Print preview (reports, payment, invoice)
+
+- **`shouldUseInAppPdfPreviewOverlay()`** (`src/lib/shouldUseInAppPdfPreview.ts`): static build, Capacitor native, ya **viewport ≤768px** par `openPrintDirect(..., true)` seedha **in-app overlay** kholta hai (nayi tab + blob weak).
+- **`showInAppPdfPreview`**: unhi conditions par **PDF.js canvas** scroll preview (iframe+blob mobile WebView par aksar fail).
+- Payment **Save & Print** ab `printPaymentVoucherReceipt` + `openPrintDirect` use karta hai ta route `/payment-*/receipt/...` par depend na ho.

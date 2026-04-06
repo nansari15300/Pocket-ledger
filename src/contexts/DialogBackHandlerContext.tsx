@@ -7,6 +7,7 @@ import React, {
   useCallback,
   useEffect,
 } from "react";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 const DIALOG_STATE_KEY = "dialog-open";
 
@@ -22,6 +23,16 @@ type DialogBackHandlerContextType = {
 
 const DialogBackHandlerContext = createContext<DialogBackHandlerContextType | null>(null);
 
+/**
+ * APK: Capacitor `backButton` ma popstate chaindaina — pehle khula Dialog/Sheet (register stack) band garna.
+ * Provider mount ma set hunchha; master–detail back bhanda AGADI call garnu.
+ */
+let globalTryConsumeDialogHardwareBack: (() => boolean) | null = null;
+
+export function tryConsumeDialogHardwareBack(): boolean {
+  return globalTryConsumeDialogHardwareBack?.() ?? false;
+}
+
 export function DialogBackHandlerProvider({ children }: { children: React.ReactNode }) {
   const stackRef = useRef<StackItemWithOpts[]>([]);
   const idCounterRef = useRef(0);
@@ -30,9 +41,12 @@ export function DialogBackHandlerProvider({ children }: { children: React.ReactN
     if (typeof window === "undefined") return () => {};
     const id = `db-${++idCounterRef.current}`;
     stackRef.current.push({ id, close, urlModal: false });
-    try {
-      window.history.pushState({ [DIALOG_STATE_KEY]: true }, "", window.location.href);
-    } catch (_) {}
+    // APK/static: pushState nagarnu — dummy entry pachhi `tryConsumeMasterDetailHardwareBack` agadi run hunchha ra ekai back ma list ma janchha
+    if (!isStaticAppBuild()) {
+      try {
+        window.history.pushState({ [DIALOG_STATE_KEY]: true }, "", window.location.href);
+      } catch (_) {}
+    }
     return () => {
       stackRef.current = stackRef.current.filter((item) => item.id !== id);
     };
@@ -44,6 +58,31 @@ export function DialogBackHandlerProvider({ children }: { children: React.ReactN
     stackRef.current.push({ id, close, urlModal: true });
     return () => {
       stackRef.current = stackRef.current.filter((item) => item.id !== id);
+    };
+  }, []);
+
+  // Capacitor back: popstate handler jastai — non–urlModal ma sirf close(); go(-1) le Next.js detail route pani pop garera list ma fijkinchha
+  useEffect(() => {
+    globalTryConsumeDialogHardwareBack = () => {
+      const stack = stackRef.current;
+      if (stack.length === 0) return false;
+      const top = stack[stack.length - 1];
+      stackRef.current = stack.filter((item) => item.id !== top.id);
+      if (top.urlModal) {
+        try {
+          window.history.forward();
+          setTimeout(() => top.close(), 0);
+        } catch {
+          top.close();
+        }
+      } else {
+        // URL sync (e.g. router.replace modal off) close() bhitrai hunchha; yaha history step pop nagarnu
+        top.close();
+      }
+      return true;
+    };
+    return () => {
+      globalTryConsumeDialogHardwareBack = null;
     };
   }, []);
 
@@ -97,32 +136,20 @@ export function useUrlModalBack(modalOpen: boolean, closeCallback: () => void) {
 
 /**
  * Call from a controlled Dialog/AlertDialog so that back (browser/Android) closes the dialog first.
- * When open is true: pushes history and registers close. When open turns false: unregisters.
+ * onOpenChange ref ma rakhein — inline handler har render par naya ho to pehle wala effect cleanup stack bata hata
+ * deta tha aur APK back par tryConsumeDialog khali rehkar App.exitApp() chal jata tha.
  */
 export function useDialogBack(open: boolean | undefined, onOpenChange: ((open: boolean) => void) | undefined) {
   const ctx = useDialogBackHandler();
-  const unregisterRef = useRef<(() => void) | null>(null);
-  const prevOpenRef = useRef(open);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
 
   useEffect(() => {
-    if (!ctx || onOpenChange === undefined) return;
-    const isOpen = !!open;
-    if (isOpen && !prevOpenRef.current) {
-      prevOpenRef.current = true;
-      unregisterRef.current = ctx.register(() => onOpenChange(false));
-    } else if (!isOpen) {
-      prevOpenRef.current = false;
-      if (unregisterRef.current) {
-        unregisterRef.current();
-        unregisterRef.current = null;
-      }
-    }
-    return () => {
-      if (unregisterRef.current) {
-        unregisterRef.current();
-        unregisterRef.current = null;
-      }
-      prevOpenRef.current = isOpen;
-    };
-  }, [open, onOpenChange, ctx]);
+    if (!ctx || !open) return;
+    if (onOpenChangeRef.current == null) return;
+
+    return ctx.register(() => {
+      onOpenChangeRef.current?.(false);
+    });
+  }, [open, ctx]);
 }

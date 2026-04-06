@@ -65,6 +65,7 @@ import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocatedByVoucherId, getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { usePaymentAllocations } from "@/hooks/usePaymentAllocations";
 import { useLinkPaymentToTxnsLinkableCount } from "@/hooks/useLinkPaymentToTxnsLinkableCount";
+import { printPaymentVoucherReceipt } from "@/lib/printPaymentVoucherReceipt";
 
 const fileSchema = z.object({
   file: z.custom<File | null>().optional(),
@@ -1006,8 +1007,50 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
-        if (print && docId) {
-            window.open(`/payment-in/receipt/${docId}`, "_blank");
+        if (print && docId && company) {
+          // openPrintDirect + in-app preview (mobile/static) — purana receipt URL WebView ma PDF seedha kholta tha
+          const payeeLabel =
+            data.payeeType === "party"
+              ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
+              : data.payeeType === "staff"
+                ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
+                : data.payeeType === "tax"
+                  ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
+                  : data.payeeType === "income"
+                    ? expenseAccounts.find((e) => e.id === data.incomeAccountId)?.name ?? "—"
+                    : data.payeeName?.trim() || "—";
+          const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
+          try {
+            await printPaymentVoucherReceipt({
+              company: {
+                name: company.name,
+                pan: company.pan,
+                phone: company.phone,
+                address: company.address,
+                decimalPlaces: company.decimalPlaces,
+                showDrCr: company.showDrCr,
+                showCurrencySymbol: company.showCurrencySymbol,
+                logoUrl: company.logoUrl,
+              },
+              dateSystem,
+              formatDate,
+              formatDateBS,
+              formatCurrencyForPrint,
+              voucherId: docId,
+              voucherType,
+              date: data.date instanceof Date ? data.date : new Date(data.date),
+              voucherNumber: data.voucherNumber,
+              amount: cleanAmount,
+              narration: data.narration,
+              payeeLabel,
+              accountLabel,
+            });
+          } catch (printErr) {
+            console.error(printErr);
+            sonnerToast.error("Print preview failed", {
+              description: printErr instanceof Error ? printErr.message : "Please try again.",
+            });
+          }
         }
 
         if (saveAndNew) {
@@ -1785,6 +1828,57 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   );
                 }}
               />
+              {/* File pehle — link cards ke upar; warna link ke baad attach band ho jata hai */}
+              <FormItem>
+                <FormLabel>Attach Files (Optional)</FormLabel>
+                <RestrictedFileUploader>
+                  <div className="flex flex-wrap gap-4">
+                    {files.map((file, index) => (
+                      <FilePreview
+                        key={index}
+                        file={file}
+                        onRemove={
+                          allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
+                            ? () => setFiles((prev) => prev.filter((_, i) => i !== index))
+                            : undefined
+                        }
+                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                      />
+                    ))}
+                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      <div
+                        className={cn(
+                          "relative flex h-24 w-24 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors",
+                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                            ? "cursor-pointer text-muted-foreground hover:border-primary"
+                            : "cursor-not-allowed border-muted-foreground/25 text-muted-foreground/50 opacity-50"
+                        )}
+                        onClick={() => {
+                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                            fileInputRef.current?.click();
+                          }
+                        }}
+                      >
+                        <PlusCircle className="h-6 w-6" />
+                        <span className="mt-1 text-xs">Add File</span>
+                        <Input
+                          type="file"
+                          className="hidden"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept={
+                            [fileAttachmentLimits.allowImage ? "image/*" : "", fileAttachmentLimits.allowPDF ? "application/pdf" : ""]
+                              .filter(Boolean)
+                              .join(",") || "image/*,application/pdf"
+                          }
+                          multiple={fileAttachmentLimits.maxFileCount > 1}
+                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </RestrictedFileUploader>
+              </FormItem>
               {/* Payment In: Link for bill wise first (full width, like Payment Out); then Link for spend wise (To Voucher left, From Voucher right) */}
               <div className={cn("grid gap-4 grid-cols-1 min-w-0 max-w-full")}>
                 {/* 1. Link for bill wise — full width, above spend wise (same order as Payment Out) */}
@@ -2111,7 +2205,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <FormField
                   control={form.control}
                   name="narration"
@@ -2125,53 +2219,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </FormItem>
                   )}
                 />
-                <FormItem>
-                  <FormLabel>Attach Files (Optional)</FormLabel>
-                <RestrictedFileUploader>
-                  {/* When linked: add/remove disabled; existing files stay clickable to open */}
-                  <div className="flex flex-wrap gap-4">
-                  {files.map((file, index) => (
-                    <FilePreview 
-                      key={index} 
-                      file={file} 
-                      onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                      className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                    />
-                  ))}
-                  {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                    <div 
-                      className={cn(
-                        "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                        allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                          ? "text-muted-foreground hover:border-primary cursor-pointer"
-                          : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                      )}
-                      onClick={() => {
-                        if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                          fileInputRef.current?.click();
-                        }
-                      }}
-                    >
-                       <PlusCircle className="h-6 w-6" />
-                      <span className="text-xs mt-1">Add File</span>
-                      <Input 
-                        type="file" 
-                        className="hidden"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept={[
-                          fileAttachmentLimits.allowImage ? "image/*" : "",
-                          fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                        ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                        multiple={fileAttachmentLimits.maxFileCount > 1}
-                        disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                      />
-                    </div>
-                  )}
-                  </div>
-                </RestrictedFileUploader>
-              </FormItem>
-            </div>
+              </div>
             </div>
           </ScrollArea>
 

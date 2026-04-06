@@ -2,13 +2,13 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import NepaliDate from 'nepali-date-converter';
 import { useAnimationSettings } from "./useAnimationSettings";
 import { useCompany } from "./useCompany";
 import { format } from 'date-fns';
 import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import type { ADFormatKey, BSFormatKey } from "@/lib/dateFormatOptions";
 import { AD_DATE_FORMATS, BS_DATE_FORMATS } from "@/lib/dateFormatOptions";
+import { formatBsFromAD } from "@/lib/bs-date";
 
 export type DateSystem = "AD" | "BS" | "Both";
 
@@ -101,9 +101,10 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
       if (!(date instanceof Date) || isNaN(date.getTime())) {
         return '';
       }
-      const nepaliDate = new NepaliDate(date);
-      return nepaliDate.format(dateFormatBS);
-  }
+      // BS: nepali-date-converter in-range, else datex-bs (~BS 2200); still out of range → AD format.
+      const bs = formatBsFromAD(date, dateFormatBS);
+      return bs !== "" ? bs : format(date, dateFormatAD);
+  };
   
   const formatCurrencyForPrint = (amount: number, options?: CurrencyFormattingOptions): string => {
      if (typeof amount !== 'number' || isNaN(amount)) return '-';

@@ -1,5 +1,5 @@
 
-'use server';
+/* No 'use server' - static export compatible */
 
 import { 
   doc, 

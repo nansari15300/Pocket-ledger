@@ -8,14 +8,16 @@ import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X } from "lucide-react";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
-import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
+import { openPrintDirect } from "@/lib/printDirect";
+import { buildBankAccountSpendWiseRows } from "@/lib/buildBankAccountSpendWiseRows";
+import { useSpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
@@ -79,6 +81,28 @@ export default function DesktopBankStatementPage() {
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [transactionSearch, setTransactionSearch] = useState("");
   const [view, setView] = useState<"list" | "chart">("list");
+  // Account details jaisa: localStorage se spend-wise preference (sirf single account + company flag)
+  const BANK_SPEND_WISE_VIEW_KEY = "bank-cash-spendWiseView";
+  const [spendWiseView, setSpendWiseViewState] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem(BANK_SPEND_WISE_VIEW_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setSpendWiseView = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    setSpendWiseViewState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      try {
+        localStorage.setItem(BANK_SPEND_WISE_VIEW_KEY, next ? "true" : "false");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+  const { spendWiseBlinkMode } = useSpendWiseBlinkMode();
 
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<AccountGroup | null>(null);
@@ -153,8 +177,18 @@ export default function DesktopBankStatementPage() {
 
   const handleEditVoucher = useCallback(
     (voucher: any) => {
+      // Spend-wise synthetic ids (-in-, -ob-link) ko real voucher id par map karo (AccountDetails jaisa).
+      const rawId = typeof voucher?.id === "string" ? voucher.id : "";
+      const resolvedId =
+        voucher?._baseVoucherId ??
+        (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
+        rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
+        rawId);
+      if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
+        return;
+      }
       openingModalRef.current = true;
-      setSelectedVoucher(voucher);
+      setSelectedVoucher({ ...voucher, id: resolvedId });
       openModalInUrl();
       setIsVoucherDialogOpen(true);
     },
@@ -205,8 +239,20 @@ export default function DesktopBankStatementPage() {
       : null);
   const activeContext = selectedAccount ? "account" : "group";
 
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } =
-    useTransactions(activeEntity as any, activeContext, dateRange, undefined, processedAccounts, undefined, undefined, undefined, undefined, undefined, userNames);
+  const {
+    processedTransactions,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    openingBalanceOutstanding,
+    openingBalanceLinkedVoucherNos,
+  } = useTransactions(activeEntity as any, activeContext, dateRange, undefined, processedAccounts, undefined, undefined, undefined, undefined, undefined, userNames);
+
+  const spendWiseEnabled = (company as any)?.spendWiseEnabled === true;
+  const spendWiseCanApply = !!selectedAccount && spendWiseEnabled;
+  // Group report par hamesha statement; toggle sirf jab single account + company flag ho.
+  const spendWiseActive = spendWiseCanApply && spendWiseView;
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const reportDisplayTransactions = useMemo(() => {
@@ -226,6 +272,46 @@ export default function DesktopBankStatementPage() {
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
   }, [reportDisplayTransactions, transactionSearch]);
+
+  const baseTransactionsNoNotes = useMemo(
+    () => filteredReportTransactions.filter((t: any) => t.type !== "note"),
+    [filteredReportTransactions]
+  );
+
+  const spendWiseBuiltRows = useMemo(() => {
+    if (!spendWiseActive || !vouchers?.length || !selectedAccount) return null;
+    return buildBankAccountSpendWiseRows({
+      accountId: selectedAccount.id,
+      openingBalanceForPeriod,
+      baseTransactions: baseTransactionsNoNotes,
+      vouchers,
+    });
+  }, [spendWiseActive, vouchers, selectedAccount, openingBalanceForPeriod, baseTransactionsNoNotes]);
+
+  const tableTransactions = useMemo(() => {
+    if (spendWiseBuiltRows !== null) return spendWiseBuiltRows;
+    return filteredReportTransactions;
+  }, [spendWiseBuiltRows, filteredReportTransactions]);
+
+  // Spend-wise rows par search alag se (spacer rows hamesha rakho ta layout toote na).
+  const displayTableRows = useMemo(() => {
+    if (!transactionSearch.trim()) return tableTransactions;
+    if (spendWiseBuiltRows === null) return tableTransactions;
+    const q = transactionSearch.trim().toLowerCase();
+    return tableTransactions.filter((t: any) => {
+      if ((t as any)._spendWiseSpacer) return true;
+      const vno = (t.voucherNumber || "").toLowerCase();
+      const narr = (t.narration || "").toLowerCase();
+      const type = (typeof t.type === "string" ? t.type.replace(/_/g, " ") : "").toLowerCase();
+      const amount = String(t.debit ?? t.credit ?? t.total ?? "").toLowerCase();
+      return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
+    });
+  }, [tableTransactions, spendWiseBuiltRows, transactionSearch]);
+
+  const visibleNonSpacerCount = useMemo(
+    () => displayTableRows.filter((t: any) => !(t as any)._spendWiseSpacer).length,
+    [displayTableRows]
+  );
 
   const summaryData = useMemo(() => {
     if (!activeEntity) return { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 };
@@ -264,18 +350,34 @@ export default function DesktopBankStatementPage() {
       else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
     const entityName = selectedAccount ? selectedAccount.accountName : selectedGroup?.name || "";
+    const printRows = displayTableRows.filter((t: any) => !(t as any)._spendWiseSpacer);
     openPrintDirect(
       {
-        company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-        title: `${selectedAccount ? "Account" : "Group"} Statement: ${entityName}`,
+        company: {
+          name: company.name,
+          pan: company.pan,
+          phone: company.phone,
+          address: company.address,
+          decimalPlaces: company.decimalPlaces,
+          showDrCr: company.showDrCr,
+          showCurrencySymbol: company.showCurrencySymbol,
+          logoUrl: company.logoUrl,
+        },
+        title: spendWiseActive
+          ? `Spend Wise ${selectedAccount ? "Account" : "Group"} Statement: ${entityName}`
+          : `${selectedAccount ? "Account" : "Group"} Statement: ${entityName}`,
         context: activeContext,
         contextId: activeEntity.id,
         dateSystem: dateSystem,
         dateRangeText,
-        vouchersCount: processedTransactions.length,
+        vouchersCount: printRows.length,
         openingBalance: openingBalanceForPeriod,
-        transactions: processedTransactions,
+        transactions: printRows,
         showNarration: true,
+        userNames: userNames,
+        preserveOrder: spendWiseActive,
+        spendWise: spendWiseActive,
+        billWise: false,
       },
       true
     );
@@ -284,13 +386,14 @@ export default function DesktopBankStatementPage() {
   const handleExcel = () => {
     if (!activeEntity) return;
     const entityName = selectedAccount ? selectedAccount.accountName : selectedGroup?.name || "";
-    const dataForExport = processedTransactions.map((t: any) => {
+    const rowsForExport = displayTableRows.filter((t: any) => !(t as any)._spendWiseSpacer);
+    const dataForExport = rowsForExport.map((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       return {
         "Date (BS)": formatDateBS(d),
         "Date (AD)": formatDate(d),
         "Voucher No.": t.voucherNumber,
-        Type: t.type.replace(/_/g, " "),
+        Type: typeof t.type === "string" ? t.type.replace(/_/g, " ") : String(t.type ?? ""),
         Narration: t.narration || "",
         Debit: t.debit,
         Credit: t.credit,
@@ -307,56 +410,6 @@ export default function DesktopBankStatementPage() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Bank Statement");
     XLSX.writeFile(workbook, `${entityName}_statement.xlsx`);
-  };
-
-  const handleShare = async () => {
-    if (!navigator.share) {
-      alert("Web Share API not supported in your browser.");
-      return;
-    }
-    if (!activeEntity || !company) return;
-    const entityName = selectedAccount ? selectedAccount.accountName : selectedGroup?.name || "";
-    const title = `Statement for ${entityName}`;
-    const text = `Here is the financial statement for ${entityName}.`;
-    try {
-      let dateRangeText = "All Time";
-      if (dateRange?.from) {
-        const from = dateRange.from;
-        const to = dateRange.to || from;
-        const fromBS = formatDateBS(from);
-        const toBS = formatDateBS(to);
-        const fromAD = formatDate(from);
-        const toAD = formatDate(to);
-        if (dateSystem === "AD") dateRangeText = `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
-        else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
-        else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-      }
-      const payload = {
-        company: { name: company.name, pan: company.pan, phone: company.phone, address: company.address, logoUrl: company.logoUrl },
-        title: `${selectedAccount ? "Account" : "Group"} Statement: ${entityName}`,
-        context: activeContext as Context,
-        contextId: activeEntity.id,
-        dateSystem: dateSystem,
-        dateRangeText,
-        vouchersCount: processedTransactions.length,
-        openingBalance: openingBalanceForPeriod,
-        transactions: processedTransactions,
-        showNarration: true,
-      };
-      const blob = await getPdfBlob(payload);
-      if (blob) {
-        const file = new (globalThis as any).File([blob], `${entityName.replace(/\s+/g, "_")}_statement.pdf`, { type: "application/pdf" });
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ title, text, url: window.location.href, files: [file] });
-        } else {
-          await navigator.share({ title, text, url: window.location.href });
-        }
-      } else {
-        await navigator.share({ title, text, url: window.location.href });
-      }
-    } catch (err) {
-      if (err instanceof Error && err.name !== "AbortError") console.error("Share failed:", err);
-    }
   };
 
   const dateRangeLabel = useMemo(() => {
@@ -405,7 +458,7 @@ export default function DesktopBankStatementPage() {
           </Button>
           <h1 className="text-base font-bold truncate flex-1 min-w-0">{pageTitle}</h1>
           <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-            Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
+            Showing {visibleNonSpacerCount} of {processedTransactions.length} voucher(s)
           </span>
         </div>
         <div className="flex justify-center items-center gap-2">
@@ -521,10 +574,15 @@ export default function DesktopBankStatementPage() {
               {isMobile ? (
                 <div className="pb-24">
                   <TransactionsTable
-                    transactions={filteredReportTransactions}
+                    key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}`}
+                    transactions={displayTableRows}
                     context={activeContext}
                     contextId={activeEntity?.id}
+                    forceBalanceMode="statement"
                     openingBalance={openingBalanceForPeriod}
+                    openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
+                    openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
+                    blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
@@ -541,10 +599,15 @@ export default function DesktopBankStatementPage() {
                 </div>
               ) : (
                 <TransactionsTable
-                  transactions={filteredReportTransactions}
+                  key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}`}
+                  transactions={displayTableRows}
                   context={activeContext}
                   contextId={activeEntity?.id}
+                  forceBalanceMode="statement"
                   openingBalance={openingBalanceForPeriod}
+                  openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
+                  openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
+                  blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
                   userNames={userNames}
                   journalAccountNames={journalAccountNames}
                   onRowClick={handleEditVoucher}
@@ -571,8 +634,29 @@ export default function DesktopBankStatementPage() {
         <PermissionButton permission="export_data" className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-yellow-500 hover:bg-yellow-600 text-white rounded-md" onClick={handleExcel}>
           <File className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Excel</span>
         </PermissionButton>
-        <Button className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-indigo-500 hover:bg-indigo-600 text-white rounded-md" onClick={handleShare}>
-          <Share2 className="w-4 h-4 mb-0" /> <span className="text-[10px] leading-tight">Share</span>
+        {/* Party report jaisa: Share hata kar Statement / Spend wise toggle (Account Details ke saath preference sync) */}
+        <Button
+          type="button"
+          disabled={!spendWiseCanApply}
+          title={
+            !spendWiseEnabled
+              ? "Company settings mein Spend wise enable karein"
+              : selectedGroup
+                ? "Group report: sirf statement"
+                : undefined
+          }
+          className={cn(
+            "flex-1 flex flex-col items-center justify-center py-1 min-w-0 rounded-md",
+            !spendWiseCanApply && "bg-slate-300 text-slate-600 cursor-not-allowed hover:bg-slate-300",
+            spendWiseCanApply && spendWiseActive && "bg-orange-500 hover:bg-orange-600 text-white",
+            spendWiseCanApply && !spendWiseActive && "bg-violet-500 hover:bg-violet-600 text-white"
+          )}
+          onClick={() => {
+            if (!spendWiseCanApply) return;
+            setSpendWiseView((v) => !v);
+          }}
+        >
+          <span className="text-[10px] leading-tight text-center px-0.5">{spendWiseActive ? "Statement" : "Spend wise"}</span>
         </Button>
         <Button
           className="flex-1 flex flex-col items-center justify-center py-1 min-w-0 bg-slate-500 hover:bg-slate-600 text-white rounded-md"

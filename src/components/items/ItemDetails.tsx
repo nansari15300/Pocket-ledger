@@ -153,7 +153,7 @@ export default function ItemDetails({
   const { processedItems, vouchers, processedAccounts, processedParties, journalAccountNames, userNames: userNamesFromHook } = useVouchers();
   const effectiveUserNames = userNames ?? userNamesFromHook ?? {};
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
-  const { showNotes, setShowNotes } = useShowNotes();
+  const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
   const { can } = usePermissions();
 
@@ -440,10 +440,10 @@ export default function ItemDetails({
     onBack?.();
   }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, onBack, closeModalInUrl]);
 
-  // When showNotes is off, hide note-type transactions (localStorage, shared across pages)
+  // PC: preference; mobile: hamesha notes (includeNotesInTable)
   const displayTransactions = useMemo(
-    () => (showNotes ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
-    [processedTransactions, showNotes]
+    () => (includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note")),
+    [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
   const [sortOrder, setSortOrder] = useState<TransactionSortOrder>("desc");
@@ -488,7 +488,7 @@ export default function ItemDetails({
         openingBalance: openingBalanceForPeriod,
         transactions: processedTransactions,
         showNarration: showNarration,
-        includeNotes: showNotes,
+        includeNotes: includeNotesInTable,
         visibleColumns: printVisibleColumns,
         stockView: stockView,
         displayUnit: displayUnit,
@@ -742,7 +742,11 @@ export default function ItemDetails({
       </div>
 
       {/* Transaction list - extends to footer line */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      {/* scroll-touch + inline style for APK/WebView touch scroll */}
+      <div
+        className="flex-1 min-h-0 overflow-auto scroll-touch"
+        style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+      >
         <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
           {openingBalanceForPeriod !== 0 && (
             <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
@@ -1077,7 +1081,7 @@ export default function ItemDetails({
                  </DropdownMenuContent>
                </DropdownMenu>
                <div className="flex items-center gap-2 flex-shrink-0">
-                 <Checkbox id="show-notes-item" checked={showNotes} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
+                 <Checkbox id="show-notes-item" checked={includeNotesInTable} disabled={notesPreferenceLockedOnMobile} onCheckedChange={(c) => setShowNotes(Boolean(c))} />
                  <label htmlFor="show-notes-item" className="text-sm font-medium leading-none whitespace-nowrap cursor-pointer">Note</label>
                </div>
              </div>

@@ -90,11 +90,8 @@ export async function convertPdfFirstPageToImage(
   const pdfjs = pdfjsLib.default || pdfjsLib;
   const version = (pdfjsLib as { version?: string }).version ?? (pdfjs as { version?: string }).version ?? "5.4.624";
 
-  if (typeof window !== "undefined" && pdfjs.GlobalWorkerOptions) {
-    // Worker from unpkg (exact version match with installed pdfjs-dist)
-    pdfjs.GlobalWorkerOptions.workerSrc =
-      `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
-  }
+  const { setPdfJsWorkerSrc } = await import("@/lib/pdfjsWorkerSrc");
+  setPdfJsWorkerSrc(pdfjs, version);
 
   let pdfData: { data: ArrayBuffer };
   if (pdfFile instanceof File) {

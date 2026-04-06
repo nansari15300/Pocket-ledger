@@ -3,14 +3,16 @@
 
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
-import NepaliDate from 'nepali-date-converter';
 import { format as formatDateFns } from "date-fns";
 import { AD_DATE_FORMATS, BS_DATE_FORMATS } from "@/lib/dateFormatOptions";
 import type { ADFormatKey, BSFormatKey } from "@/lib/dateFormatOptions";
+import { formatBsFromAD } from "@/lib/bs-date";
 // @ts-ignore - pdfmake types may not be available
 import type { TDocumentDefinitions, Content, TableCell } from "pdfmake/interfaces";
 import type { Item } from "@/components/items/types";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview";
+import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -73,6 +75,9 @@ export type DaybookSummary = {
   bank: { yesterday: number; in: number; out: number; today: number };
   cash: { yesterday: number; in: number; out: number; today: number };
   total: { yesterday: number; in: number; out: number; today: number };
+  /** Optional: per bank/cash account breakdown (Daybook UI expand) */
+  bankAccounts?: Array<{ id: string; name: string; yesterday: number; in: number; out: number; today: number }>;
+  cashAccounts?: Array<{ id: string; name: string; yesterday: number; in: number; out: number; today: number }>;
 } | null;
 
 export type PrintPayload = {
@@ -154,9 +159,18 @@ export function preloadCompanyLogo(logoUrl: string | null | undefined): void {
 export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNewTab?: boolean | string | Window) {
   if (typeof window === "undefined") return;
 
-  // 1. User gesture bhitra nai blank window kholne (popup block nahos)
+  // APK / static site / mobile: nayi tab blob weak — preview yahi (inAppPdfPreview + PDF.js jahan chahiye)
+  const isIframeId = typeof iframeTargetIdOrNewTab === "string";
+  const isTargetWindow =
+    typeof Window !== "undefined" &&
+    iframeTargetIdOrNewTab != null &&
+    iframeTargetIdOrNewTab instanceof Window;
+  const useInAppPdfOverlay = shouldUseInAppPdfPreviewOverlay() && !isIframeId && !isTargetWindow;
+
+  // 1. User gesture bhitra blank window (popup block) — overlay mode ma skip kyunki nayi tab nahin
   let printWindow: Window | null = null;
   const useNewTab =
+    !useInAppPdfOverlay &&
     typeof iframeTargetIdOrNewTab !== "string" &&
     !(iframeTargetIdOrNewTab && typeof (iframeTargetIdOrNewTab as Window).location !== "undefined");
 
@@ -203,11 +217,68 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
       } else {
         URL.revokeObjectURL(blobUrl);
       }
+    } else if (useInAppPdfOverlay) {
+      // Toolbar: preview + Print + Share + Close — sab app bhitra
+      showInAppPdfPreview(blobUrl, () => URL.revokeObjectURL(blobUrl), {
+        title: payload.title || "Print preview",
+        fileName: `pocket-ledger-${Date.now()}.pdf`,
+      });
     } else if (printWindow) {
       // Direct preview: blob URL ma navigate garne so browser PDF viewer turuntai khulcha (click garnu pardaina)
       printWindow.location.href = blobUrl;
     } else if (iframeTargetIdOrNewTab && typeof (iframeTargetIdOrNewTab as Window).location !== "undefined") {
       (iframeTargetIdOrNewTab as Window).location.href = blobUrl;
+    } else if (useNewTab && !printWindow) {
+      // Capacitor / Electron / Android WebView: window.open null (popup block) — iframe + print ya download
+      const iframe = document.createElement("iframe");
+      iframe.setAttribute("title", "Print preview");
+      iframe.setAttribute(
+        "aria-label",
+        "Print preview"
+      );
+      iframe.style.cssText =
+        "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;border:0;background:#fff";
+      document.body.appendChild(iframe);
+      const cleanup = () => {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          /* ignore */
+        }
+        iframe.remove();
+      };
+      iframe.onload = () => {
+        try {
+          const w = iframe.contentWindow;
+          if (w) {
+            w.focus();
+            w.print();
+          }
+        } catch (e) {
+          console.warn("[printDirect] iframe.print failed, download fallback", e);
+          try {
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = `pocket-ledger-print-${Date.now()}.pdf`;
+            a.rel = "noopener";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          } catch {
+            /* ignore */
+          }
+          setTimeout(cleanup, 3000);
+          return;
+        }
+        try {
+          iframe.contentWindow?.addEventListener?.("afterprint", cleanup);
+        } catch {
+          /* ignore */
+        }
+        setTimeout(cleanup, 120000);
+      };
+      iframe.onerror = () => cleanup();
+      iframe.src = blobUrl;
     }
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
@@ -954,14 +1025,9 @@ const getFormatters = (p: PrintPayload) => {
 
     const formatDateBS = (date: Date): string => {
       if (!(date instanceof Date) || isNaN(date.getTime())) return '';
-      try {
-        const nepaliDate = new NepaliDate(date);
-        return nepaliDate.format(dateFormatBS);
-      } catch {
-        const nepaliDate = new NepaliDate(date);
-        return nepaliDate.format(DEFAULT_BS_FORMAT);
-      }
-    }
+      const bs = formatBsFromAD(date, dateFormatBS);
+      return bs !== "" ? bs : formatDate(date);
+    };
 
     const formatCurrencyForPrint = (n: number, opts?: { noSuffix?: boolean}) => {
         if (typeof n !== 'number' || isNaN(n)) return '-';

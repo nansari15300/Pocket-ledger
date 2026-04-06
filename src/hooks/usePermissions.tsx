@@ -119,7 +119,12 @@ const usePermissions = () => {
             }
         }
         
-        const rolePermissions = config.roles[role] || [];
+        // Firestore may have shorter boolean[] than current PermissionGroups (new keys appended); pad from defaults so can() stays aligned.
+        const storedRolePerms = config.roles[role] || [];
+        const defaultRolePerms = initialPermissionConfig.roles[role] || [];
+        const rolePermissions = flattenedPermissions.map((_, i) =>
+            i < storedRolePerms.length ? !!storedRolePerms[i] : !!defaultRolePerms[i]
+        );
         const dateLimits = config.dateLimits?.[role] || { entryDays: 0, editDays: 0, deleteDays: 0 };
         
         const can = (permissionName: Permission): boolean => {

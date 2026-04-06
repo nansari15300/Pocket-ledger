@@ -92,8 +92,8 @@ export function FinancialSummaryCards({
 
     // Filter states
     const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
+    /** Mobile: 'both' = dono tables ek saath; 'receivables'|'payables' = sirf woh list (single source of truth, back se mismatch nahi). */
     const [receivablesPayablesTab, setReceivablesPayablesTab] = useState<'receivables' | 'payables' | 'both'>('both');
-    const [hasTabBeenClicked, setHasTabBeenClicked] = useState(false);
     const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
     const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
     const [cashFlowTab, setCashFlowTab] = useState<'inflow' | 'outflow' | 'both'>('both');
@@ -292,7 +292,54 @@ export function FinancialSummaryCards({
         return { totalReceivable, totalPayable, receivables, payables, recCount, payCount };
     }, [processedParties, processedStaff, processedTaxes, loading, vouchers, receivablesDateRange]);
 
-    const netBalance = financialSummary.totalReceivable + financialSummary.totalPayable;
+    /** Dialog table footer: sirf wahi rows jinki list filter ke saath dikh rahi hai (card / print totals same). */
+    const receivablesPayablesDialogListTotals = useMemo(() => {
+        const include = (t: "party" | "staff" | "tax") =>
+            receivablePayableFilter === "all" || receivablePayableFilter === t;
+        const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+        const { receivables, payables } = financialSummary;
+        let receivableSum = 0;
+        if (include("party")) receivableSum += receivables.parties.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
+        if (include("staff")) receivableSum += receivables.staff.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
+        if (include("tax")) receivableSum += receivables.taxes.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
+        let payableSum = 0;
+        if (include("party")) payableSum += payables.parties.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+        if (include("staff")) payableSum += payables.staff.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+        if (include("tax")) payableSum += payables.taxes.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+        return { receivableSum, payableSum };
+    }, [financialSummary, receivablePayableFilter]);
+
+    /** Total Receivable vs Total Payable ka farq; zyada amount wali side par strip mein dikhana hai. */
+    const receivablesPayablesDialogBalance = useMemo(() => {
+        const { receivableSum, payableSum } = receivablesPayablesDialogListTotals;
+        const amount = Math.abs(receivableSum - payableSum);
+        if (receivableSum > payableSum) return { amount, side: "receivable" as const };
+        if (payableSum > receivableSum) return { amount, side: "payable" as const };
+        return { amount: 0, side: "equal" as const };
+    }, [receivablesPayablesDialogListTotals]);
+
+    /** R/P "View Details" dialog: mobile par lambi account line … truncate, Amount poora + nowrap. */
+    const rpDlgTableClass = cn(isMobile && "w-full table-fixed");
+    const rpDlgAccountThClass = cn(isMobile && "min-w-0 w-[58%] max-w-[58%]");
+    const rpDlgAmountThClass = cn("text-right", isMobile && "w-[42%] min-w-0 whitespace-nowrap");
+    const rpDlgAccountTdClass = cn(isMobile && "min-w-0 max-w-0 truncate");
+    const rpDlgAmountTdRecClass = cn("text-right font-medium text-green-600 dark:text-green-500", isMobile && "whitespace-nowrap tabular-nums");
+    const rpDlgAmountTdPayClass = cn("text-right font-medium text-red-600 dark:text-red-500", isMobile && "whitespace-nowrap tabular-nums");
+
+    /** Outstanding card = dialog (All) jaisi list-sum; dialog filter alag ho to card stable rahe. */
+    const receivablesPayablesCardTotals = useMemo(() => {
+        const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+        const { receivables, payables } = financialSummary;
+        const receivableSum =
+            receivables.parties.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
+            receivables.staff.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
+            receivables.taxes.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
+        const payableSum =
+            payables.parties.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
+            payables.staff.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
+            payables.taxes.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+        return { receivableSum, payableSum, net: receivableSum - payableSum };
+    }, [financialSummary]);
 
     // --- CASH FLOW CALCULATION ---
     const cashFlowDetails = useMemo(() => {
@@ -1609,30 +1656,26 @@ export function FinancialSummaryCards({
                         <div className="flex items-baseline justify-between">
                             <span className="text-xs text-muted-foreground">{compact ? "Total Receivable" : "To Receive"}</span>
                             <span className="text-base font-bold text-green-600">
-                                {formatCurrency(financialSummary.totalReceivable, {noSuffix: true})} <span className="text-xs">Dr</span>
+                                {formatCurrency(receivablesPayablesCardTotals.receivableSum, {noSuffix: true})} <span className="text-xs">Dr</span>
                             </span>
                         </div>
                         <div className="flex items-baseline justify-between">
                             <span className="text-xs text-muted-foreground">{compact ? "Total Payable" : "To Pay"}</span>
                             <span className="text-base font-bold text-red-600">
-                                {formatCurrency(Math.abs(financialSummary.totalPayable), {noSuffix: true})} <span className="text-xs">Cr</span>
+                                {formatCurrency(receivablesPayablesCardTotals.payableSum, {noSuffix: true})} <span className="text-xs">Cr</span>
                             </span>
                         </div>
                         <div className="flex items-baseline justify-between pt-2 mt-2 border-t">
                             <span className="text-sm font-bold">{compact ? "Net Balance" : "Net"}</span>
-                            <span className={cn('text-lg font-bold', netBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                                {formatCurrency(netBalance, { showDrCr: true })}
+                            <span className={cn('text-lg font-bold', receivablesPayablesCardTotals.net >= 0 ? "text-green-600" : "text-red-600")}>
+                                {formatCurrency(receivablesPayablesCardTotals.net, { showDrCr: true })}
                             </span>
                         </div>
                         {showDetails && (
                             <div className="text-right pt-2">
                                 <Dialog open={receivablesPayablesOpen} onOpenChange={(open) => {
                                     setReceivablesPayablesOpen(open);
-                                    if (!open) {
-                                        // Reset tab state when dialog closes
-                                        setReceivablesPayablesTab('both');
-                                        setHasTabBeenClicked(false);
-                                    }
+                                    if (!open) setReceivablesPayablesTab('both');
                                 }}>
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
@@ -1671,10 +1714,7 @@ export function FinancialSummaryCards({
                                             </div>
                                             <Tabs 
                                                 value={receivablesPayablesTab === 'both' ? 'receivables' : receivablesPayablesTab} 
-                                                onValueChange={(v) => {
-                                                    setHasTabBeenClicked(true);
-                                                    setReceivablesPayablesTab(v as 'receivables' | 'payables');
-                                                }} 
+                                                onValueChange={(v) => setReceivablesPayablesTab(v as 'receivables' | 'payables')} 
                                                 className="w-full"
                                             >
                                                 <TabsList className="grid w-full grid-cols-2">
@@ -1684,60 +1724,93 @@ export function FinancialSummaryCards({
                                             </Tabs>
                                         </DialogHeader>
                                         <div className="flex-1 px-2 pt-0 pb-4 min-h-0 overflow-auto">
-                                            {isMobile && !hasTabBeenClicked ? (
-                                                // Mobile: Show both full width separately when tab is not clicked (initial state)
+                                            {isMobile && receivablesPayablesTab === 'both' ? (
+                                                // Mobile: dono lists jab tab state 'both' ho (close / back ke baad bhi safe)
                                                 <div className="space-y-4">
                                                     <div className="flex flex-col min-h-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-green-600 mt-0">Receivables ({financialSummary.recCount})</h3>
                                                         <div className="border rounded-lg flex flex-col min-h-0">
-                                                            <ScrollArea className="flex-1">
-                                                                <Table>
-                                                                    <TableHeader><TableRow><TableHead>Account</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+                                                            <ScrollArea className="min-w-0 flex-1">
+                                                                <Table className={rpDlgTableClass}>
+                                                                    <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
+                                                                        <TableRow>
+                                                                            <TableHead className={rpDlgAccountThClass}>Account</TableHead>
+                                                                            <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
+                                                                        </TableRow>
+                                                                    </TableHeader>
                                                                     <TableBody>
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
                                                                     </TableBody>
                                                                 </Table>
                                                             </ScrollArea>
-                                                            <div className="p-2 border-t font-bold flex justify-between"><span>Total Receivable</span><span>{formatCurrency(financialSummary.totalReceivable, {noSuffix: true})}</span></div>
+                                                            <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Receivable</span><span className="text-green-700 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.receivableSum, {noSuffix: true})}</span></div>
                                                         </div>
                                                     </div>
                                                     <div className="flex flex-col min-h-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-red-600">Payables ({financialSummary.payCount})</h3>
                                                         <div className="border rounded-lg flex flex-col min-h-0">
-                                                            <ScrollArea className="flex-1">
-                                                                <Table>
-                                                                    <TableHeader><TableRow><TableHead>Account</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+                                                            <ScrollArea className="min-w-0 flex-1">
+                                                                <Table className={rpDlgTableClass}>
+                                                                    <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
+                                                                        <TableRow>
+                                                                            <TableHead className={rpDlgAccountThClass}>Account</TableHead>
+                                                                            <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
+                                                                        </TableRow>
+                                                                    </TableHeader>
                                                                     <TableBody>
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
                                                                     </TableBody>
                                                                 </Table>
                                                             </ScrollArea>
-                                                            <div className="p-2 border-t font-bold flex justify-between"><span>Total Payable</span><span>{formatCurrency(Math.abs(financialSummary.totalPayable), {noSuffix: true})}</span></div>
+                                                            <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Payable</span><span className="text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.payableSum, {noSuffix: true})}</span></div>
                                                         </div>
                                                     </div>
+                                                    {/* Mobile dual: ek hi row, sirf jis side balance ho wahan align (do khali column nahi). */}
+                                                    {receivablesPayablesDialogBalance.side !== "equal" && receivablesPayablesDialogBalance.amount > 0 && (
+                                                        <div className="rounded-lg border border-border bg-gradient-to-br from-green-50/90 via-muted/40 to-red-50/90 dark:from-green-950/35 dark:via-background dark:to-red-950/35 p-3 shadow-sm">
+                                                            {receivablesPayablesDialogBalance.side === "receivable" && (
+                                                                <div className="flex w-full flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
+                                                                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                                    <span className="text-base font-bold text-green-600 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Dr</span></span>
+                                                                </div>
+                                                            )}
+                                                            {receivablesPayablesDialogBalance.side === "payable" && (
+                                                                <div className="flex w-full flex-wrap items-baseline justify-end gap-x-2 gap-y-0">
+                                                                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                                    <span className="text-base font-bold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Cr</span></span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 // Desktop: Always show side by side, Mobile: Show selected tab only
+                                                <>
                                                 <div className={cn("grid gap-4 flex-1 min-h-0", !isMobile ? "grid-cols-2" : "grid-cols-1")}>
                                                     {(!isMobile || receivablesPayablesTab === 'receivables') && (
                                                         <div className="flex flex-col min-h-0">
                                                             <h3 className="text-lg font-semibold mb-0.5 text-green-600">Receivables ({financialSummary.recCount})</h3>
                                                             <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                                <ScrollArea className="flex-1">
-                                                                    <Table>
-                                                                        <TableHeader><TableRow><TableHead>Account</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+                                                                <ScrollArea className="min-w-0 flex-1">
+                                                                    <Table className={rpDlgTableClass}>
+                                                                        <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
+                                                                            <TableRow>
+                                                                                <TableHead className={rpDlgAccountThClass}>Account</TableHead>
+                                                                                <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
+                                                                            </TableRow>
+                                                                        </TableHeader>
                                                                         <TableBody>
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
                                                                         </TableBody>
                                                                     </Table>
                                                                 </ScrollArea>
-                                                                <div className="p-2 border-t font-bold flex justify-between"><span>Total Receivable</span><span>{formatCurrency(financialSummary.totalReceivable, {noSuffix: true})}</span></div>
+                                                                <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Receivable</span><span className="text-green-700 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.receivableSum, {noSuffix: true})}</span></div>
                                                             </div>
                                                         </div>
                                                     )}
@@ -1745,21 +1818,60 @@ export function FinancialSummaryCards({
                                                         <div className="flex flex-col min-h-0">
                                                             <h3 className="text-lg font-semibold mb-0.5 text-red-600">Payables ({financialSummary.payCount})</h3>
                                                             <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                                <ScrollArea className="flex-1">
-                                                                    <Table>
-                                                                        <TableHeader><TableRow><TableHead>Account</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+                                                                <ScrollArea className="min-w-0 flex-1">
+                                                                    <Table className={rpDlgTableClass}>
+                                                                        <TableHeader className="[&_tr]:bg-sky-100/90 dark:[&_tr]:bg-sky-950/45 [&_th]:text-sky-950 dark:[&_th]:text-sky-100">
+                                                                            <TableRow>
+                                                                                <TableHead className={rpDlgAccountThClass}>Account</TableHead>
+                                                                                <TableHead className={rpDlgAmountThClass}>Amount</TableHead>
+                                                                            </TableRow>
+                                                                        </TableHeader>
                                                                         <TableBody>
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell>{p.party}</TableCell><TableCell className="text-right">{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
                                                                         </TableBody>
                                                                     </Table>
                                                                 </ScrollArea>
-                                                                <div className="p-2 border-t font-bold flex justify-between"><span>Total Payable</span><span>{formatCurrency(Math.abs(financialSummary.totalPayable), {noSuffix: true})}</span></div>
+                                                                <div className="p-2 border-t font-bold flex justify-between bg-emerald-50/90 dark:bg-emerald-950/35"><span>Total Payable</span><span className="text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogListTotals.payableSum, {noSuffix: true})}</span></div>
                                                             </div>
                                                         </div>
                                                     )}
                                                 </div>
+                                                {/* Footer: balance ek line mein, Dr = start / Cr = end (do half-row nahi). */}
+                                                {!isMobile && receivablesPayablesDialogBalance.side !== "equal" && receivablesPayablesDialogBalance.amount > 0 && (
+                                                    <div className="mt-3 rounded-lg border border-border bg-gradient-to-br from-green-50/90 via-muted/40 to-red-50/90 dark:from-green-950/35 dark:via-background dark:to-red-950/35 p-3 shadow-sm">
+                                                        {receivablesPayablesDialogBalance.side === "receivable" && (
+                                                            <div className="flex w-full flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
+                                                                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                                <span className="text-base font-bold text-green-600 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Dr</span></span>
+                                                            </div>
+                                                        )}
+                                                        {receivablesPayablesDialogBalance.side === "payable" && (
+                                                            <div className="flex w-full flex-wrap items-baseline justify-end gap-x-2 gap-y-0">
+                                                                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                                <span className="text-base font-bold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-xs font-normal">Cr</span></span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {isMobile && receivablesPayablesTab === 'receivables' && receivablesPayablesDialogBalance.side === "receivable" && receivablesPayablesDialogBalance.amount > 0 && (
+                                                    <div className="mt-3 rounded-lg border border-green-200/80 bg-green-50/90 dark:border-green-900 dark:bg-green-950/40 p-3 shadow-sm">
+                                                        <div className="flex flex-wrap items-baseline justify-start gap-x-2 gap-y-0">
+                                                            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                            <span className="text-lg font-bold text-green-600 dark:text-green-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-sm font-normal">Dr</span></span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {isMobile && receivablesPayablesTab === 'payables' && receivablesPayablesDialogBalance.side === "payable" && receivablesPayablesDialogBalance.amount > 0 && (
+                                                    <div className="mt-3 rounded-lg border border-red-200/80 bg-red-50/90 dark:border-red-900 dark:bg-red-950/40 p-3 shadow-sm">
+                                                        <div className="flex flex-wrap items-baseline justify-end gap-x-2 gap-y-0">
+                                                            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Balance</span>
+                                                            <span className="text-lg font-bold text-red-600 dark:text-red-400 tabular-nums">{formatCurrency(receivablesPayablesDialogBalance.amount, { noSuffix: true })} <span className="text-sm font-normal">Cr</span></span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                </>
                                             )}
                                         </div>
                                     </DialogContent>

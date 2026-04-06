@@ -1,29 +1,195 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
-import { getGatewayKeys } from "@/ai/flows/gateway-keys";
+import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
+import { getAdminDb } from "@/lib/firebaseAdmin";
+import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
+import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
+import {
+  BILLING_TERM_OPTIONS,
+  grossPriceNpr,
+  type SubscriptionTermKey,
+} from "@/lib/subscriptionPlanMath";
+
+type AdminKeysResult = {
+  stored: GatewayKeys;
+  adminReadOk: boolean;
+  docExists: boolean;
+  adminError?: string;
+};
+
+/** Server has no user auth — read Bank Settings doc with Admin SDK, then merge STRIPE_* / KHALTI_* from env. */
+async function getGatewayKeysFromAdmin(): Promise<AdminKeysResult> {
+  try {
+    const db = getAdminDb();
+    const snap = await db.doc("app_settings/payment_gateways").get();
+    return {
+      stored: (snap.exists ? (snap.data() as GatewayKeys) : {}) as GatewayKeys,
+      adminReadOk: true,
+      docExists: snap.exists,
+    };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("[payments/initiate] Firebase Admin read failed — check FIREBASE_* in .env.local", e);
+    return { stored: {}, adminReadOk: false, docExists: false, adminError: msg };
+  }
+}
+
+function hasStripeInEnv(): boolean {
+  return !!(process.env.STRIPE_SECRET_KEY?.trim() || process.env.STRIPE_TEST_SECRET_KEY?.trim());
+}
+
+function stripeConfigHelpMessage(adminResult: AdminKeysResult): string {
+  const envHint = hasStripeInEnv()
+    ? "STRIPE_SECRET_KEY is set but empty after merge — restart dev/server after editing .env.local."
+    : "Add STRIPE_SECRET_KEY=sk_test_… to .env.local (project root), then restart `npm run dev`.";
+
+  if (!adminResult.adminReadOk) {
+    return (
+      `Stripe is not configured. Firebase Admin cannot read Bank Settings. ` +
+      `Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY in .env.local. ` +
+      `(${adminResult.adminError || "unknown"}) ${envHint}`
+    );
+  }
+  if (!adminResult.docExists) {
+    return (
+      `Stripe is not configured. Save Stripe Secret once in Admin → Bank Settings (creates app_settings/payment_gateways). ${envHint}`
+    );
+  }
+  if (!adminResult.stored.stripeSecretKey?.trim()) {
+    return (
+      `Stripe is not configured. Bank Settings doc exists but Stripe Secret is empty — paste sk_test_… (not pk_test_), Save. ${envHint}`
+    );
+  }
+  return `Stripe is not configured. ${envHint}`;
+}
 
 type Body = {
-  planId: "basic" | "advance" | "pro";
+  planId: PlanId;
   gateway: "stripe" | "khalti" | "esewa";
-  amount: number;  // in smallest unit for gateway
+  amount: number; // in smallest unit for gateway
   currency: string;
   userId: string;
+  /** Active company to attach payment + plan upgrade (Stripe webhook). */
+  companyId: string;
+  billingCycle: "monthly" | "yearly";
+  /** When billingCycle is yearly: 1–10 (total term length for Stripe recurring / amount). */
+  periodYears?: number;
+  /** Full term (monthly, quarter, … year_10); when set, drives Stripe `recurring` + server price check. */
+  subscriptionTermKey?: string;
+  /** Donations (free/basic) vs paid plan checkout — webhook uses this to skip plan upgrade. */
+  billingIntent?: "donation" | "subscribe";
 };
+
+/** Normalize env-style base (may omit scheme) to absolute http(s) origin. */
+function normalizePaymentOrigin(raw: string): string {
+  let base = raw.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(base)) {
+    const local =
+      /^localhost\b/i.test(base) ||
+      /^127\.\d+\.\d+\.\d+/.test(base) ||
+      /^\[::1\]/.test(base);
+    base = `${local ? "http" : "https"}://${base}`;
+  }
+  return base;
+}
+
+/**
+ * Stripe/Khalti/eSewa return URLs must be absolute http(s).
+ * Prefer the host the browser used for this POST (`nextUrl.origin`) so production checkouts are not sent to
+ * localhost when NEXT_PUBLIC_BASE_URL is still a dev value. Env is fallback (e.g. cron, missing URL, or webhooks docs).
+ */
+function getPublicAppOrigin(req: NextRequest): string {
+  const fromReq = req.nextUrl?.origin;
+  if (fromReq && /^https?:\/\//i.test(fromReq)) {
+    return fromReq.replace(/\/+$/, "");
+  }
+
+  const raw = process.env.NEXT_PUBLIC_BASE_URL?.trim();
+  if (raw) {
+    return normalizePaymentOrigin(raw);
+  }
+
+  const vercel = process.env.VERCEL_URL?.trim();
+  if (vercel) {
+    return `https://${vercel.replace(/\/+$/, "")}`;
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    return "http://localhost:3000";
+  }
+
+  throw new Error(
+    "Set NEXT_PUBLIC_BASE_URL to a full URL with scheme (e.g. https://yourdomain.com or http://localhost:3000)."
+  );
+}
+
+const VALID_SUBSCRIPTION_TERM_KEYS = new Set(
+  BILLING_TERM_OPTIONS.map((o) => o.value)
+);
+
+/** Maps app term keys to Stripe `recurring` on Checkout `price_data` (subscription mode). */
+function stripeRecurringFromTerm(termKey: SubscriptionTermKey): {
+  interval: "month" | "year";
+  interval_count: number;
+} {
+  if (termKey === "monthly") return { interval: "month", interval_count: 1 };
+  if (termKey === "quarter") return { interval: "month", interval_count: 3 };
+  if (termKey === "half_year") return { interval: "month", interval_count: 6 };
+  const m = /^year_(\d+)$/.exec(termKey);
+  const n = m != null ? Math.min(10, Math.max(1, parseInt(m[1], 10))) : 1;
+  return { interval: "year", interval_count: n };
+}
 
 export async function POST(req: NextRequest) {
   try {
     const body: Body = await req.json();
-    const { planId, gateway, amount, currency, userId } = body;
-    const keys = await getGatewayKeys();
+    const { planId, gateway, amount, currency, userId, companyId, billingCycle, billingIntent } = body;
+
+    if (!companyId?.trim()) {
+      throw new Error("companyId is required for checkout.");
+    }
+    if (!userId?.trim()) {
+      throw new Error("userId is required for checkout.");
+    }
+    const intent = billingIntent ?? "subscribe";
+    const periodYears =
+      billingCycle === "yearly"
+        ? Math.min(10, Math.max(1, Math.floor(Number(body.periodYears) || 1)))
+        : 1;
+
+    const rawTerm = typeof body.subscriptionTermKey === "string" ? body.subscriptionTermKey.trim() : "";
+    const subscriptionTermKey: SubscriptionTermKey =
+      rawTerm && VALID_SUBSCRIPTION_TERM_KEYS.has(rawTerm as SubscriptionTermKey)
+        ? (rawTerm as SubscriptionTermKey)
+        : billingCycle === "monthly"
+          ? "monthly"
+          : (`year_${periodYears}` as SubscriptionTermKey);
+
+    // Paid checkouts: reject tampered amounts (client sends NPR × 100 as “paisa” unit here).
+    if (intent === "subscribe" && planId && !DEFAULT_PLANS[planId]?.isFree) {
+      const prices = await getEffectivePlanPrices(planId);
+      const expectedPaisa = Math.round(
+        grossPriceNpr(subscriptionTermKey, prices.monthly, prices.yearly) * 100
+      );
+      if (Math.abs(Number(amount) - expectedPaisa) > 2) {
+        throw new Error("Payment amount does not match plan and billing term. Refresh the page and try again.");
+      }
+    }
+
+    const appOrigin = getPublicAppOrigin(req);
+    const adminResult = await getGatewayKeysFromAdmin();
+    const keys = mergeGatewayKeysWithEnv(adminResult.stored);
 
     if (gateway === "stripe") {
         if (!keys.stripeSecretKey) {
-            throw new Error("Stripe is not configured.");
+            throw new Error(stripeConfigHelpMessage(adminResult));
         }
         const stripe = new Stripe(keys.stripeSecretKey, { apiVersion: "2025-12-15.clover" as any });
+        const recurring = stripeRecurringFromTerm(subscriptionTermKey);
+        const productLabel = `Plan ${planId} (${subscriptionTermKey})`;
+        // subscription_data.metadata is copied onto the Subscription so invoice.paid renewals can resolve companyId.
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ["card"],
             mode: "subscription",
@@ -31,16 +197,37 @@ export async function POST(req: NextRequest) {
             {
                 price_data: {
                 currency,
-                product_data: { name: `Plan ${planId}` },
+                product_data: { name: productLabel },
                 unit_amount: amount,
-                recurring: { interval: "month" },
+                recurring,
                 },
                 quantity: 1,
             },
             ],
-            success_url: `${process.env.NEXT_PUBLIC_BASE_URL}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL}/billing/cancel`,
-            metadata: { userId, planId, gateway },
+            success_url: `${appOrigin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${appOrigin}/billing/cancel`,
+            metadata: {
+              userId,
+              planId,
+              gateway,
+              companyId: companyId.trim(),
+              billingCycle,
+              billingIntent: intent,
+              periodYears: String(periodYears),
+              subscriptionTermKey,
+            },
+            subscription_data: {
+              metadata: {
+                userId,
+                companyId: companyId.trim(),
+                planId,
+                gateway,
+                billingCycle,
+                billingIntent: intent,
+                periodYears: String(periodYears),
+                subscriptionTermKey,
+              },
+            },
         });
         return NextResponse.json({ url: session.url });
 
@@ -54,8 +241,16 @@ export async function POST(req: NextRequest) {
             amount,
             product_identity: planId,
             product_name: `Plan ${planId}`,
-            returnUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/billing/khalti/success`,
-            metadata: { userId, planId },
+            returnUrl: `${appOrigin}/billing/khalti/success`,
+            metadata: {
+              userId,
+              planId,
+              companyId: companyId.trim(),
+              billingCycle,
+              billingIntent: intent,
+              periodYears: String(periodYears),
+              subscriptionTermKey,
+            },
         });
 
     } else if (gateway === "esewa") {
@@ -88,12 +283,20 @@ export async function POST(req: NextRequest) {
             url: eSewaUrl,
             amount: total_amount_in_rupees,
             oid: transaction_uuid,
-            successUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/billing/esewa/success`,
-            failUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/billing/cancel`,
+            successUrl: `${appOrigin}/billing/esewa/success`,
+            failUrl: `${appOrigin}/billing/cancel`,
             merchantCode: product_code,
             signature,
             signedFieldNames: "total_amount,transaction_uuid,product_code",
-            metadata: { userId, planId },
+            metadata: {
+              userId,
+              planId,
+              companyId: companyId.trim(),
+              billingCycle,
+              billingIntent: intent,
+              periodYears: String(periodYears),
+              subscriptionTermKey,
+            },
         });
     }
 

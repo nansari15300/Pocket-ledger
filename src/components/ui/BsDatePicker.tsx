@@ -3,13 +3,11 @@ import * as React from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Calendar as Icon } from "lucide-react";
-import { adToBs, bsToAd, type BSDate, sameBSDay, NEPALI_MONTHS, NEPALI_WEEKDAYS_SHORT } from "@/lib/bs-date";
-import type { DayPicker, SelectSingleEventHandler } from "react-day-picker";
+import { type BSDate, canConvertAdDateToBs } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useCalendarMonths } from "@/hooks/use-mobile";
-import { format, isSameDay, startOfDay } from "date-fns";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 
 type BsDatePickerBaseProps = {
@@ -35,21 +33,16 @@ type BsDatePickerConditionalProps =
 type BsDatePickerProps = BsDatePickerBaseProps & BsDatePickerConditionalProps;
 
 
-const MIN_VALID_AD_YEAR = 1944;
-const MAX_VALID_AD_YEAR = 2033;
-
+/** AD day can convert to BS (nepali-date-converter + datex-bs extended map). */
 function isValidForBS(date?: Date | null): boolean {
     if (!date) return false;
     if (!(date instanceof Date)) return false;
-    const time = date.getTime();
-    if (isNaN(time)) return false;
-    const year = date.getFullYear();
-    return year >= MIN_VALID_AD_YEAR && year <= MAX_VALID_AD_YEAR;
+    return canConvertAdDateToBs(date);
 }
 
 export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
-  const { dateSystem, formatDateBS } = useDate();
+  const { formatDateBS } = useDate();
   const calendarMonths = useCalendarMonths(); // mobile: 1 month, PC: 2 months (date range)
   const isRange = isRangeProp ?? true;
   const numberOfMonths = numberOfMonthsProp ?? (isRange ? calendarMonths : 1);

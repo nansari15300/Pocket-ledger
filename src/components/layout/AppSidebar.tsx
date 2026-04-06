@@ -31,7 +31,7 @@ import {
   Table,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
@@ -56,6 +56,7 @@ import { firestore, auth } from "@/lib/firebase";
 import type { Permission } from "@/lib/permissions";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
+import { appNavHref } from "@/lib/appNavHref";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { Badge } from "../ui/badge";
@@ -123,11 +124,24 @@ const ENTITY_IDS = ['party', 'bank-cash', 'staff', 'tax', 'items', 'incomes'] as
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, customUser } = useAuth();
   const { can } = usePermissions();
   const { company } = useCompany();
   const { vouchers, processedStaff, processedTaxes, processedExpenseAccounts } = useVouchers();
   const { isOpen, isMobile, setIsOpen } = useSidebar();
+  /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
+  const isStaticApp = process.env.NEXT_PUBLIC_STATIC_BUILD === "1";
+  const onNavLinkClick = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+      if (isStaticApp) {
+        e.preventDefault();
+        router.push(appNavHref(href));
+      }
+      if (isMobile) setIsOpen(false);
+    },
+    [isStaticApp, router, isMobile, setIsOpen]
+  );
   const [featureConfig, setFeatureConfig] = useState<Record<string, boolean> | null>(null);
   const [loadingFeatures, setLoadingFeatures] = useState(true);
   const [pendingHandovers, setPendingHandovers] = useState(0);
@@ -334,16 +348,21 @@ export function AppSidebar() {
     return filterByPermission(byFeature, can);
   }, [featureConfig, can]);
 
+  // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
   const visibleBottomMenuItems = React.useMemo(() => {
-    if (!featureConfig) return bottomMenuItems;
-    const byFeature = bottomMenuItems.filter((item) => {
+    const hideBilling = company != null && company.isOwned === false;
+    const stripBilling = (items: typeof bottomMenuItems) =>
+      hideBilling ? items.filter((item) => item.id !== "billing") : items;
+
+    if (!featureConfig) return filterByPermission(stripBilling(bottomMenuItems), can);
+    const byFeature = stripBilling(bottomMenuItems).filter((item) => {
       if (item.id === "distributor-signup" && customUser?.role === "Distributor") {
         return false;
       }
       return featureConfig[item.id] !== false;
     });
     return filterByPermission(byFeature, can);
-  }, [featureConfig, customUser, can]);
+  }, [featureConfig, customUser, can, company]);
   
   const userProfileSection = (
       <div className={cn("flex items-center gap-3", isMobile ? "p-4 border-t" : "mt-4")}>
@@ -421,20 +440,11 @@ export function AppSidebar() {
             const tooltipText = pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
             return (
             <SidebarMenuItem key={item.href}>
-              <Link href={item.href} passHref>
+              <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
                   <SidebarMenuButton
-                    isActive={pathname.startsWith(item.href)}
+                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
                     tooltip={tooltipText}
                     data-theme-nav={item.id}
-                    onClick={(e) => {
-                      if (isMobile) {
-                        e.preventDefault(); 
-                        setTimeout(() => {
-                            setIsOpen(false);
-                            window.location.href = item.href;
-                        }, 50);
-                      }
-                    }}
                   >
                       <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
                         <item.icon />
@@ -452,12 +462,11 @@ export function AppSidebar() {
           })}
           {isAdmin && (
                <SidebarMenuItem>
-                 <Link href="/admin">
+                 <Link href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
                     <SidebarMenuButton
-                        isActive={pathname.startsWith("/admin")}
+                        isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
                         tooltip="Admin Panel"
                         data-theme-nav="admin"
-                        onClick={() => { if (isMobile) setIsOpen(false); }}
                     >
                         <Shield />
                         {isOpen && <span>Admin Panel</span>}
@@ -475,20 +484,11 @@ export function AppSidebar() {
                     const showBadge = badgeCount > 0;
                     return (
                         <SidebarMenuItem key={item.href}>
-                            <Link href={item.href} passHref>
+                            <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
                                 <SidebarMenuButton
-                                    isActive={pathname.startsWith(item.href)}
+                                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
                                     tooltip={item.label}
                                     data-theme-nav={item.id}
-                                    onClick={(e) => {
-                                        if (isMobile) {
-                                          e.preventDefault();
-                                          setTimeout(() => {
-                                            setIsOpen(false);
-                                            window.location.href = item.href;
-                                          }, 50);
-                                        }
-                                    }}
                                 >
                                     <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
                                       <item.icon />
@@ -519,12 +519,11 @@ export function AppSidebar() {
 
                     return (
                         <SidebarMenuItem key={item.href}>
-                            <Link href={item.href}>
+                            <Link href={appNavHref(item.href)} onClick={(e) => onNavLinkClick(e, item.href)}>
                                 <SidebarMenuButton
-                                    isActive={pathname.startsWith(item.href)}
+                                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
                                     tooltip={item.label}
                                     data-theme-nav={item.id}
-                                    onClick={() => { if (isMobile) setIsOpen(false); }}
                                 >
                                     <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
                                       <item.icon />

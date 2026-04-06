@@ -105,6 +105,39 @@ const ENTITY_OPTIONS = [
   { value: "tax", label: "Tax" },
 ] as const;
 
+/** Account search empty: Entity=All → saare add-new; specific Entity → sirf us type ka ek option */
+const JOURNAL_ADD_NEW_BY_ENTITY: Record<
+  string,
+  { value: string; label: string; createType: "party" | "staff" | "account" | "expense" | "tax" }
+> = {
+  party: { value: "add-new-party", label: "+ Add Party", createType: "party" },
+  staff: { value: "add-new-staff", label: "+ Add Staff", createType: "staff" },
+  account: { value: "add-new-account", label: "+ Add Bank/Cash", createType: "account" },
+  expense: { value: "add-new-expense", label: "+ Add Expense Account", createType: "expense" },
+  tax: { value: "add-new-tax", label: "+ Add Tax", createType: "tax" },
+};
+const ALL_JOURNAL_ADD_NEW_KEYS = ["party", "staff", "account", "expense", "tax"] as const;
+
+function getJournalLineAddNewLabels(lineEntityType: string | undefined): { value: string; label: string }[] {
+  const et = String(lineEntityType || "").trim();
+  if (!et) {
+    return ALL_JOURNAL_ADD_NEW_KEYS.map((k) => {
+      const x = JOURNAL_ADD_NEW_BY_ENTITY[k];
+      return { value: x.value, label: x.label };
+    });
+  }
+  const one = JOURNAL_ADD_NEW_BY_ENTITY[et];
+  return one ? [{ value: one.value, label: one.label }] : [];
+}
+
+const JOURNAL_ADD_NEW_VALUE_TO_TYPE: Record<string, "party" | "staff" | "account" | "expense" | "tax"> = {
+  "add-new-party": "party",
+  "add-new-staff": "staff",
+  "add-new-account": "account",
+  "add-new-expense": "expense",
+  "add-new-tax": "tax",
+};
+
 const lineSchema = z.object({
   accountId: z.string().min(1, "Select an account"),
   entityType: z.string().optional(), // UI filter: party|staff|account|expense|tax; empty = show all
@@ -219,6 +252,8 @@ export function CreateJournalForm({
   const [isCreateStaffOpen, setIsCreateStaffOpen] = React.useState(false);
   const [isCreateExpenseOpen, setIsCreateExpenseOpen] = React.useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = React.useState(false);
+  /** CreateTaxDialog prefillTaxName — document event tax form mein nahi sunta */
+  const [journalTaxPrefillName, setJournalTaxPrefillName] = React.useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
   // Read latest files inside hydration effect without listing `files` in deps (avoids stale closure when accounts list refreshes).
@@ -1442,14 +1477,39 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (type === 'account') setIsCreateAccountOpen(true);
     if (type === 'staff') setIsCreateStaffOpen(true);
     if (type === 'expense') setIsCreateExpenseOpen(true);
-    if (type === 'tax') setIsCreateTaxOpen(true);
+    if (type === 'tax') {
+      setJournalTaxPrefillName(typeof newName === 'string' ? newName : '');
+      setIsCreateTaxOpen(true);
+    }
 
-    if (newName) {
-       setTimeout(() => {
-        const eventName = `prefill-create-${type}-name`;
-        document.dispatchEvent(new CustomEvent(eventName, { detail: newName }));
+    if (newName && type !== 'tax') {
+      setTimeout(() => {
+        // Bank dialog sunta hai prefill-create-bank-account-name, generic account-name nahi
+        if (type === 'account') {
+          document.dispatchEvent(new CustomEvent('prefill-create-bank-account-name', { detail: newName }));
+        } else {
+          document.dispatchEvent(new CustomEvent(`prefill-create-${type}-name`, { detail: newName }));
+        }
       }, 100);
     }
+  };
+
+  /** Journal line Account combobox: add-new-* → create dialog; warna account select + entity sync */
+  const handleJournalLineAccountChange = (
+    index: number,
+    field: { onChange: (v: string) => void },
+    value: string,
+    newName?: string
+  ) => {
+    const createType = JOURNAL_ADD_NEW_VALUE_TO_TYPE[value];
+    if (createType) {
+      setPendingCreateLineIndex(index);
+      handleCreateNew(createType, newName);
+      return;
+    }
+    field.onChange(value);
+    const acc = allAccountsWithEntity.find((a) => a.value === value);
+    if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
   };
 
   // Apply newly created account to the requested row to avoid extra debit rows being appended.
@@ -1723,26 +1783,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     )}
                                     options={filteredAccounts}
                                     value={field.value}
-                                    onChange={(value, newName) => {
-                                      if (value === "add-new-party") {
-                                        setPendingCreateLineIndex(index);
-                                        handleCreateNew("party", newName);
-                                      }
-                                      else if (value === "add-new-staff") {
-                                        setPendingCreateLineIndex(index);
-                                        handleCreateNew("staff", newName);
-                                      }
-                                      else {
-                                        field.onChange(value);
-                                        const acc = allAccountsWithEntity.find((a) => a.value === value);
-                                        if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
-                                      }
-                                    }}
+                                    onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
                                     placeholder="Select account"
-                                    addNewLabels={[
-                                      { value: "add-new-party", label: "+ Add Party" },
-                                      { value: "add-new-staff", label: "+ Add Staff" },
-                                    ]}
+                                    addNewLabels={getJournalLineAddNewLabels(entityType)}
                                     disabled={!isFormEditing || deleteDisabledWhenLinked}
                                   />
                                 </div>
@@ -1914,26 +1957,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   )}
                                   options={filteredAccounts}
                                   value={field.value}
-                                  onChange={(value, newName) => {
-                                    if (value === "add-new-party") {
-                                      setPendingCreateLineIndex(index);
-                                      handleCreateNew("party", newName);
-                                    }
-                                    else if (value === "add-new-staff") {
-                                      setPendingCreateLineIndex(index);
-                                      handleCreateNew("staff", newName);
-                                    }
-                                    else {
-                                      field.onChange(value);
-                                      const acc = allAccountsWithEntity.find((a) => a.value === value);
-                                      if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
-                                    }
-                                  }}
+                                  onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
                                   placeholder="Select account"
-                                  addNewLabels={[
-                                    { value: "add-new-party", label: "+ Add Party" },
-                                    { value: "add-new-staff", label: "+ Add Staff" },
-                                  ]}
+                                  addNewLabels={getJournalLineAddNewLabels(entityType)}
                                   disabled={!isFormEditing || deleteDisabledWhenLinked}
                                 />
                                 {balance !== undefined && (
@@ -2043,21 +2069,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </>
               )}
-
-              <FormField
-                control={form.control}
-                name="narration"
-                render={({ field }: any) => (
-                  <FormItem>
-                    <FormLabel>Overall Narration</FormLabel>
-                    <FormControl>
-                      <Textarea placeholder="e.g. Salary expense for the month of Baisakh" {...field} disabled={!isFormEditing}/>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              {/* Attach Files: full width like narration. */}
+              {/* File lines ke baad, link cards se pehle — pehle attach phir link; same UX as payment/contra */}
               <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 <RestrictedFileUploader>
@@ -2103,6 +2115,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                   </RestrictedFileUploader>
                 </FormItem>
+
+              <FormField
+                control={form.control}
+                name="narration"
+                render={({ field }: any) => (
+                  <FormItem>
+                    <FormLabel>Overall Narration</FormLabel>
+                    <FormControl>
+                      <Textarea placeholder="e.g. Salary expense for the month of Baisakh" {...field} disabled={!isFormEditing}/>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               {/* Link for bill wise: dono side se 5px inset taaki select ring dikhe. */}
               <div className="space-y-3 w-full max-w-full min-w-0 mb-[10px] px-[5px]">
                   {(["debit", "credit"] as const).map((sideKey) => {
@@ -2408,8 +2434,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
       <CreateBankAccountDialog onAccountCreated={(id) => { setIsCreateAccountOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
       <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]} />
-      <CreateExpenseAccountDialog onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateExpenseOpen} onOpenChange={setIsCreateExpenseOpen} />
-      <CreateTaxDialog onTaxCreated={(id) => { setIsCreateTaxOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen} />
+      <CreateExpenseAccountDialog
+        defaultGroupType="expense"
+        onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); applyCreatedAccountToPendingRow(id); }}
+        isOpen={isCreateExpenseOpen}
+        onOpenChange={setIsCreateExpenseOpen}
+      />
+      <CreateTaxDialog
+        prefillTaxName={journalTaxPrefillName}
+        onTaxCreated={(id) => { setIsCreateTaxOpen(false); setJournalTaxPrefillName(""); applyCreatedAccountToPendingRow(id); }}
+        isOpen={isCreateTaxOpen}
+        onOpenChange={(open) => {
+          setIsCreateTaxOpen(open);
+          if (!open) setJournalTaxPrefillName("");
+        }}
+      />
     </>
   );
 }

@@ -116,6 +116,8 @@ const lineItemSchema = z.object({
   taxAccountId: z.string().optional(),
   taxAmount: z.coerce.number().optional(),
   isTaxInclusive: z.boolean(),
+  /** Sale only: checkbox beside rate — when false, rate follows item price (read-only). Role still needs edit_item_rates_in_vouchers + company allow. */
+  allowManualRate: z.boolean().default(true),
 });
 
 const formSchema = z.object({
@@ -183,6 +185,7 @@ function getInitialFormValues(voucher?: any): SaleFormValues {
           taxAccountId: "",
           taxAmount: 0,
           isTaxInclusive: false,
+          allowManualRate: true,
         },
       ],
       subTotal: 0,
@@ -200,8 +203,15 @@ function getInitialFormValues(voucher?: any): SaleFormValues {
   const dueDate = dueDateRaw != null
     ? (dueDateRaw?.toDate ? dueDateRaw.toDate() : new Date(dueDateRaw))
     : undefined;
+  const lineItemsNorm = Array.isArray(copiedVoucher.lineItems)
+    ? copiedVoucher.lineItems.map((li: any) => ({
+        ...li,
+        allowManualRate: li?.allowManualRate !== false,
+      }))
+    : copiedVoucher.lineItems;
   return {
     ...copiedVoucher,
+    lineItems: lineItemsNorm,
     date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date),
     dueDate: dueDate ?? undefined,
     discount: voucher.discount || 0,
@@ -301,6 +311,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
   const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
+  // Effect deps mein isFormDirty mat rakho — file/field dirty hote hi effect dubara chal kar naye voucher template ka khali partyId set kar deta tha
+  const isFormDirtyRef = useRef(isFormDirty);
+  isFormDirtyRef.current = isFormDirty;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -513,9 +526,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       primaryLineItemType === "service" ? "sale_service" : "sale"
     ] ?? false;
 
-  // Check both company setting AND permission for rate editing
+  // Role (share settings) + company voucher switch; per-line allowManualRate toggles the actual input.
   const canEditRates = can('edit_item_rates_in_vouchers');
-  const isRateEditingAllowed = (company?.allowRateEditing?.sale ?? true) && canEditRates;
+  const companyAllowsLineRateEdit = company?.allowRateEditing?.sale ?? true;
+  const isRateEditingAllowed = companyAllowsLineRateEdit && canEditRates;
+  /** Rate box disabled when row locked, role/company disallow manual rates, or line toggle off (uses watchedLineItems from useWatch). */
+  const saleRateDisabled = (idx: number, rowLocked: boolean) =>
+    rowLocked ||
+    !isRateEditingAllowed ||
+    watchedLineItems?.[idx]?.allowManualRate === false;
 
   /* ----------------------------- EFFECTS: DATA ---------------------------- */
 
@@ -544,7 +563,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     if (voucher?.id) {
       const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
-      if (isSameVoucher && isFormDirty) return;
+      if (isSameVoucher && isFormDirtyRef.current) return;
       lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
@@ -556,7 +575,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else if (voucher) {
       lastResetVoucherIdRef.current = null;
       setSavedVoucherId(null);
-      if (voucher.partyId != null) form.setValue("partyId", voucher.partyId);
+      // Sirf real prefill — template ka partyId "" hai; warna har dirty pe customer clear ho jata tha
+      if (voucher.partyId != null && String(voucher.partyId).trim() !== "") {
+        form.setValue("partyId", voucher.partyId);
+      }
       if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
@@ -566,7 +588,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     } else {
       lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, form, isFormDirty]);
+  }, [voucher, form]);
 
   /* ---------------------- AUTO VOUCHER NUMBER GENERATION ------------------ */
 
@@ -1247,7 +1269,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     <>
       <Form {...form}>
         <form onSubmit={handleFormSubmit} className="h-full flex flex-col min-w-0 w-full max-w-full">
-          <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
+          <ScrollArea className={cn("flex-1 min-h-0 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
             <div className={cn(
               "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               "px-0"
@@ -1669,21 +1691,54 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     <TooltipProvider delayDuration={0}>
                                       <Tooltip>
                                         <TooltipTrigger asChild>
-                                          <div className="w-full">
+                                          <div className="w-full flex gap-1 items-center min-w-0">
                                             <Input
                                               type="number"
                                               {...field}
-                                              disabled={itemFieldsDisabled || !isRateEditingAllowed}
-                                              className={cn("h-9 text-xs text-right", (itemFieldsDisabled || !isRateEditingAllowed) && 'bg-muted cursor-not-allowed')}
-                                              title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
+                                              disabled={saleRateDisabled(index, itemFieldsDisabled)}
+                                              className={cn("h-9 text-xs text-right flex-1 min-w-0", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                              title={
+                                                !canEditRates
+                                                  ? "No role permission to edit rates"
+                                                  : !companyAllowsLineRateEdit
+                                                    ? "Sale rate editing is off in Voucher Settings"
+                                                    : watchedLineItems?.[index]?.allowManualRate === false
+                                                      ? "Tick the checkbox to edit rate on this line"
+                                                      : undefined
+                                              }
                                             />
+                                            {isRateEditingAllowed && !itemFieldsDisabled && (
+                                              <FormField
+                                                control={form.control}
+                                                name={`lineItems.${index}.allowManualRate`}
+                                                render={({ field: manualRateField }: any) => (
+                                                  <FormItem className="space-y-0 m-0 shrink-0">
+                                                    <FormControl>
+                                                      <Checkbox
+                                                        checked={manualRateField.value !== false}
+                                                        onCheckedChange={(c) => manualRateField.onChange(c === true)}
+                                                        aria-label="Allow editing item rate on this line"
+                                                      />
+                                                    </FormControl>
+                                                  </FormItem>
+                                                )}
+                                              />
+                                            )}
                                           </div>
                                         </TooltipTrigger>
-                                        {!isRateEditingAllowed && !canEditRates && (
+                                        {!isRateEditingAllowed && !canEditRates ? (
                                           <TooltipContent>
                                             <p>No permission to edit item rates</p>
                                           </TooltipContent>
-                                        )}
+                                        ) : !isRateEditingAllowed && canEditRates && !companyAllowsLineRateEdit ? (
+                                          <TooltipContent>
+                                            <p>Turn on &quot;Allow Rate Editing&quot; for Sale in Voucher Settings</p>
+                                          </TooltipContent>
+                                        ) : isRateEditingAllowed && watchedLineItems?.[index]?.allowManualRate === false ? (
+                                          <TooltipContent>
+                                            <p>Tick the checkbox next to rate to enable editing</p>
+                                          </TooltipContent>
+                                        ) : null}
                                       </Tooltip>
                                     </TooltipProvider>
                                   </FormControl>
@@ -1935,21 +1990,54 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <TooltipProvider delayDuration={0}>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <div className="w-full">
+                                      <div className="w-full flex gap-1 items-center min-w-0 justify-end">
                                         <Input
                                           type="number"
                                           {...field}
-                                          disabled={itemFieldsDisabled || !isRateEditingAllowed}
-                                          className={cn(FLAT_INPUT, (itemFieldsDisabled || !isRateEditingAllowed) && 'bg-muted cursor-not-allowed', "text-right")}
-                                          title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
+                                          disabled={saleRateDisabled(index, itemFieldsDisabled)}
+                                          className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                          title={
+                                            !canEditRates
+                                              ? "No role permission to edit rates"
+                                              : !companyAllowsLineRateEdit
+                                                ? "Sale rate editing is off in Voucher Settings"
+                                                : watchedLineItems?.[index]?.allowManualRate === false
+                                                  ? "Tick the checkbox to edit rate on this line"
+                                                  : undefined
+                                          }
                                         />
+                                        {isRateEditingAllowed && !itemFieldsDisabled && (
+                                          <FormField
+                                            control={form.control}
+                                            name={`lineItems.${index}.allowManualRate`}
+                                            render={({ field: manualRateField }: any) => (
+                                              <FormItem className="space-y-0 m-0 shrink-0">
+                                                <FormControl>
+                                                  <Checkbox
+                                                    checked={manualRateField.value !== false}
+                                                    onCheckedChange={(c) => manualRateField.onChange(c === true)}
+                                                    aria-label="Allow editing item rate on this line"
+                                                  />
+                                                </FormControl>
+                                              </FormItem>
+                                            )}
+                                          />
+                                        )}
                                       </div>
                                     </TooltipTrigger>
-                                    {!isRateEditingAllowed && !canEditRates && (
+                                    {!isRateEditingAllowed && !canEditRates ? (
                                       <TooltipContent>
                                         <p>No permission to edit item rates</p>
                                       </TooltipContent>
-                                    )}
+                                    ) : !isRateEditingAllowed && canEditRates && !companyAllowsLineRateEdit ? (
+                                      <TooltipContent>
+                                        <p>Turn on &quot;Allow Rate Editing&quot; for Sale in Voucher Settings</p>
+                                      </TooltipContent>
+                                    ) : isRateEditingAllowed && watchedLineItems?.[index]?.allowManualRate === false ? (
+                                      <TooltipContent>
+                                        <p>Tick the checkbox next to rate to enable editing</p>
+                                      </TooltipContent>
+                                    ) : null}
                                   </Tooltip>
                                 </TooltipProvider>
                               </FormControl>
@@ -2075,6 +2163,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             taxAccountId: "",
                             taxAmount: 0,
                             isTaxInclusive: false,
+                            allowManualRate: true,
                           })
                         }
                       >
@@ -2220,21 +2309,54 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     <TooltipProvider delayDuration={0}>
                                       <Tooltip>
                                         <TooltipTrigger asChild>
-                                          <div className="w-full">
+                                          <div className="w-full flex gap-1 items-center min-w-0 justify-end">
                                             <Input
                                               type="number"
                                               {...field}
-                                              disabled={itemFieldsDisabled || !isRateEditingAllowed}
-                                              className={cn(FLAT_INPUT, (itemFieldsDisabled || !isRateEditingAllowed) && 'bg-muted cursor-not-allowed', "text-right")}
-                                              title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
+                                              disabled={saleRateDisabled(index, itemFieldsDisabled)}
+                                              className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                              title={
+                                                !canEditRates
+                                                  ? "No role permission to edit rates"
+                                                  : !companyAllowsLineRateEdit
+                                                    ? "Sale rate editing is off in Voucher Settings"
+                                                    : watchedLineItems?.[index]?.allowManualRate === false
+                                                      ? "Tick the checkbox to edit rate on this line"
+                                                      : undefined
+                                              }
                                             />
+                                            {isRateEditingAllowed && !itemFieldsDisabled && (
+                                              <FormField
+                                                control={form.control}
+                                                name={`lineItems.${index}.allowManualRate`}
+                                                render={({ field: manualRateField }: any) => (
+                                                  <FormItem className="space-y-0 m-0 shrink-0">
+                                                    <FormControl>
+                                                      <Checkbox
+                                                        checked={manualRateField.value !== false}
+                                                        onCheckedChange={(c) => manualRateField.onChange(c === true)}
+                                                        aria-label="Allow editing item rate on this line"
+                                                      />
+                                                    </FormControl>
+                                                  </FormItem>
+                                                )}
+                                              />
+                                            )}
                                           </div>
                                         </TooltipTrigger>
-                                        {!isRateEditingAllowed && !canEditRates && (
+                                        {!isRateEditingAllowed && !canEditRates ? (
                                           <TooltipContent>
                                             <p>No permission to edit item rates</p>
                                           </TooltipContent>
-                                        )}
+                                        ) : !isRateEditingAllowed && canEditRates && !companyAllowsLineRateEdit ? (
+                                          <TooltipContent>
+                                            <p>Turn on &quot;Allow Rate Editing&quot; for Sale in Voucher Settings</p>
+                                          </TooltipContent>
+                                        ) : isRateEditingAllowed && watchedLineItems?.[index]?.allowManualRate === false ? (
+                                          <TooltipContent>
+                                            <p>Tick the checkbox next to rate to enable editing</p>
+                                          </TooltipContent>
+                                        ) : null}
                                       </Tooltip>
                                     </TooltipProvider>
                                   </FormControl>
@@ -2359,6 +2481,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               taxAccountId: "",
                               taxAmount: 0,
                               isTaxInclusive: false,
+                              allowManualRate: true,
                             })
                           }
                         >

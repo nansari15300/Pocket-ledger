@@ -27,7 +27,10 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { doc, getDoc, collection, query, getDocs, where, updateDoc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
+import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
+import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
+import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
 
 // Custom Hook Import
@@ -92,6 +95,13 @@ function IncomeExpensePageContent() {
   
   const [activeView, setActiveView] = useState("accounts");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<ExpenseAccount | ExpenseGroup>(`expense_view_${activeView}`);
+  const useQueryNav = useMasterDetailQueryNav();
+
+  const onBackToList = useCallback(() => {
+    setSelected(null);
+    router.replace(masterDetailListHref("incomes"), { scroll: false });
+  }, [setSelected, router]);
+  useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -105,6 +115,7 @@ function IncomeExpensePageContent() {
 
   const selectedAccount = activeView === 'accounts' ? selected as ExpenseAccount : null;
   const selectedGroup = activeView === 'groups' ? selected as ExpenseGroup : null;
+  useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroup?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
   const accountsTabEnabled = incomesListEnabled && featureConfig.incomes_accounts_tab !== false;
@@ -124,8 +135,14 @@ function IncomeExpensePageContent() {
       }
       return g;
     };
-    // Hide auto-created Ungrouped base doc; UI row is injected only when actually needed.
-    const normalized = (initialProcessedExpenseGroups || []).map(normalizeGroup).filter((g: any) => g.isAutoUngrouped !== true);
+    // Hide auto-created Ungrouped base doc; system groups (isSystemReserved) sirf Reports me – list pages pe nahi
+    const normalized = (initialProcessedExpenseGroups || [])
+      .map(normalizeGroup)
+      .filter((g: any) => {
+        if (g.isAutoUngrouped === true) return false;
+        if (g.isReportOnly === true || g.isSystemReserved === true) return false;
+        return true;
+      });
     // Show Ungrouped row only when at least one account is in the Ungrouped bucket.
     const ungrouped = processedExpenseAccounts.filter((p: any) => !p.groupId || p.groupId === "ungrouped_expense");
     if (ungrouped.length > 0) {
@@ -206,7 +223,11 @@ function IncomeExpensePageContent() {
     if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (accountItem) setActiveView("accounts");
     if (item) setSelected(item);
-    router.replace("/incomes", { scroll: false });
+    const canonical =
+      viewFromUrl === "groups"
+        ? `/incomes?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
+        : `/incomes?selected=${encodeURIComponent(selectedIdFromUrl)}`;
+    router.replace(canonical, { scroll: false });
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedExpenseAccounts, processedExpenseGroups, setSelected, setActiveView, router]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -293,10 +314,11 @@ function IncomeExpensePageContent() {
     const isGroup = view === 'groups';
     if (isGroup && !groupDetailsEnabled) return;
     if (!isGroup && !accountDetailsEnabled) return;
-    if (isMobile) {
+    if (useQueryNav) {
+        // Static export ke liye query params – /incomes/[id] path refresh/redirect de sakta hai
         const path = isGroup
-          ? (item.id === 'ungrouped' ? '/incomes?view=groups' : `/incomes/group/${item.id}`)
-          : `/incomes/${item.id}`;
+          ? `/incomes?view=groups&selected=${item.id}`
+          : `/incomes?selected=${item.id}`;
         router.push(path);
     } else {
         setSelected(item);
@@ -353,9 +375,10 @@ function IncomeExpensePageContent() {
     );
   }
   
+  // Mobile list column: flex-1 + min-h-0 (h-full nahi) taaki parent flex chain se height mile aur ScrollArea scroll kare
   const listView = (
-    <div className="flex flex-col h-full">
-        <div className={cn("p-3 border-b flex items-center gap-2", listDisabled && "pointer-events-none opacity-60")}>
+    <div className="flex min-h-0 flex-1 flex-col">
+        <div className={cn("p-3 border-b flex shrink-0 items-center gap-2", listDisabled && "pointer-events-none opacity-60")}>
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
@@ -375,7 +398,7 @@ function IncomeExpensePageContent() {
             )}
         </div>
         {activeView === 'accounts' && (
-          <div className={cn("p-2 border-b flex gap-2 flex-shrink-0", listDisabled && "pointer-events-none opacity-60")}>
+          <div className={cn("shrink-0 border-b p-2 flex gap-2", listDisabled && "pointer-events-none opacity-60")}>
             <PermissionButton permission="create_records" variant="outline" size="sm" className="flex-1 bg-blue-50 hover:bg-blue-100 border-blue-200 text-black hover:text-black" onClick={() => openVoucherDialog("direct_income")}>
               Direct Income
             </PermissionButton>
@@ -387,25 +410,25 @@ function IncomeExpensePageContent() {
             </PermissionButton>
           </div>
         )}
-        <div className="relative flex-1 min-h-0 overflow-hidden">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {activeView === 'accounts' ? (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
+              <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
                 <DollarSign className="h-4 w-4" />
                 <span>Account ({processedExpenseAccounts.length})</span>
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <ExpenseAccountList accounts={processedExpenseAccounts} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <ExpenseAccountList accounts={processedExpenseAccounts} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
               </div>
             </>
         ) : (
             <>
-              <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
+              <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" />
                 <span>Groups ({processedExpenseGroups.filter((g) => (g as any).isReportOnly !== true).length})</span>
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
-                <ExpenseGroupList groups={processedExpenseGroups} onSelectGroup={(g) => handleSelect(g, 'groups')} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} disabled={listDisabled || !groupDetailsEnabled} pendingApprovalByGroupId={pendingApprovalByExpenseGroupId} />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <ExpenseGroupList groups={processedExpenseGroups} onSelectGroup={(g) => handleSelect(g, 'groups')} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} disabled={listDisabled || !groupDetailsEnabled} pendingApprovalByGroupId={pendingApprovalByExpenseGroupId} getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined} />
               </div>
             </>
         )}
@@ -451,6 +474,8 @@ function IncomeExpensePageContent() {
 
   return (
     <>
+      {/* h-full + min-h-0: dashboard main (overflow-y-auto) ke andar list column ko height mile, PC par ScrollArea scroll kare */}
+      <div className="h-full min-h-0 min-w-0">
       <ResponsiveMasterDetail
         title="Income & Expense"
         balance={
@@ -478,7 +503,10 @@ function IncomeExpensePageContent() {
         detailView={detailView}
         isMobile={isMobile}
         mobileListOnly={true}
+        hasSelectedItem={!!selected}
+        onBackToList={onBackToList}
       />
+      </div>
       <AddVoucherDialog 
         isOpen={isVoucherOpen} 
         onOpenChange={setIsVoucherOpen}
