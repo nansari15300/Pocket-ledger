@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useIsMobile, isRealMobileDevice } from "@/hooks/use-mobile";
 
 export function usePageMemory<T extends { id: string }>(
   storageKey: string,
@@ -55,7 +55,12 @@ export function usePageMemory<T extends { id: string }>(
   
   useEffect(() => {
     if (isLoading) return;
-    if (disableAutoSelect || isMobile) return;
+    // useIsMobile() pehle client pass me false rehta hai (hydration); usi beech yeh effect desktop samajh kar pehla item select kar deta hai — mobile par sidebar se /tax etc. par aane par seedha detail khul jata hai, refresh par loading order alag hone se list sahi dikhti thi
+    const viewportActsMobile =
+      typeof window !== "undefined" &&
+      (window.innerWidth < 768 ||
+        (isRealMobileDevice() && window.innerHeight >= window.innerWidth));
+    if (disableAutoSelect || isMobile || viewportActsMobile) return;
 
     const viewChanged = previousActiveView.current !== activeView;
     previousActiveView.current = activeView;

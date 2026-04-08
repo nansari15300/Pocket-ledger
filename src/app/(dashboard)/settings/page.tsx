@@ -48,14 +48,17 @@ const settingsNavItems = [
 
 const SETTINGS_STORAGE_KEY = "settingsPageState";
 
-/** Narrow viewport: isMobile hook se pehle bhi URL push na ho + list-first UX */
+/**
+ * Narrow viewport (≤767px). Initial state hamesha false — SSR pe `window` nahi; warna server = desktop,
+ * client hydrate = mobile → React hydration mismatch (settings tree alag).
+ * `useIsMobile` jaisa: mount ke baad hi matchMedia.
+ */
 function useLayoutNarrow767(): boolean {
-    const [narrow, setNarrow] = useState(() =>
-        typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches
-    );
+    const [narrow, setNarrow] = useState(false);
     useEffect(() => {
         const mq = window.matchMedia("(max-width: 767px)");
         const fn = () => setNarrow(mq.matches);
+        fn();
         mq.addEventListener("change", fn);
         return () => mq.removeEventListener("change", fn);
     }, []);

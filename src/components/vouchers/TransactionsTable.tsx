@@ -572,48 +572,129 @@ export function TransactionsTable({
   // In party/staff/group billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
   const statusBillWiseOnly = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "staff" || context === "group");
 
-  if (useMobileCardView) {
-    type MobileBlock =
-      | { type: "spacer" }
-      | { type: "group"; colorIndex: number; items: any[] }
-      | { type: "single"; item: any };
-    const mobileBlocks = useMemo((): MobileBlock[] => {
-      const blocks: MobileBlock[] = [];
-      let i = 0;
-      while (i < tableTransactions.length) {
-        const t = tableTransactions[i] as any;
-        if (t._spendWiseSpacer) {
-          blocks.push({ type: "spacer" });
-          i++;
-          continue;
-        }
-        if (t._spendWiseGroupFirst === true) {
-          const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
-          const items: any[] = [];
-          while (i < tableTransactions.length) {
-            const cur = tableTransactions[i] as any;
-            if (cur._spendWiseSpacer) break;
-            items.push(cur);
-            if (cur._spendWiseGroupLast === true) {
-              i++;
-              break;
-            }
-            i++;
-          }
-          // Single-item "group" should render like a normal single row (thin border), not a thick group container.
-          if (items.length <= 1) {
-            blocks.push({ type: "single", item: items[0] ?? t });
-          } else {
-            blocks.push({ type: "group", colorIndex, items });
-          }
-          continue;
-        }
-        blocks.push({ type: "single", item: t });
+  type MobileBlock =
+    | { type: "spacer" }
+    | { type: "group"; colorIndex: number; items: any[] }
+    | { type: "single"; item: any };
+  // Hamesha same hooks order: pehle mobile path sirf isMemos andar tha, desktop ke baad doosre — isMobile flip par React crash.
+  const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+  const mobileBlocks = useMemo((): MobileBlock[] => {
+    if (!useMobileCardView) return [];
+    const blocks: MobileBlock[] = [];
+    let i = 0;
+    while (i < tableTransactions.length) {
+      const t = tableTransactions[i] as any;
+      if (t._spendWiseSpacer) {
+        blocks.push({ type: "spacer" });
         i++;
+        continue;
       }
-      return blocks;
-    }, [tableTransactions]);
+      if (t._spendWiseGroupFirst === true) {
+        const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < tableTransactions.length) {
+          const cur = tableTransactions[i] as any;
+          if (cur._spendWiseSpacer) break;
+          items.push(cur);
+          if (cur._spendWiseGroupLast === true) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        if (items.length <= 1) {
+          blocks.push({ type: "single", item: items[0] ?? t });
+        } else {
+          blocks.push({ type: "group", colorIndex, items });
+        }
+        continue;
+      }
+      blocks.push({ type: "single", item: t });
+      i++;
+    }
+    return blocks;
+  }, [useMobileCardView, tableTransactions]);
 
+  const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
+
+  const spendWiseColWidths = useMemo((): number[] => {
+    if (!hasSpendWiseGroups) return [];
+    const w: number[] = [];
+    if (showCol("date")) {
+      if (dateSystem === "Both") {
+        w.push(95, 95);
+      } else {
+        w.push(95);
+      }
+    }
+    if (showCol("type")) w.push(75);
+    if (showCol("voucherNo")) w.push(105);
+    if (context === "daybook") w.push(120);
+    if (isItemPartyContext && showItemPartyColumn) w.push(90);
+    if (showCol("user") && context !== "note") w.push(85);
+    if (showFileBySelection) w.push(44);
+    if (showCol("dr") && !hideDebitColumn) w.push(100);
+    if (showCol("cr") && !hideCreditColumn) w.push(100);
+    if (showCol("status") && !hideStatusColumn) w.push(95);
+    if (showCol("runningBalance") && !hideBalanceColumn) w.push(115);
+    w.push(40);
+    return w;
+  }, [
+    hasSpendWiseGroups,
+    showCol,
+    dateSystem,
+    context,
+    groupEntityType,
+    hideDebitColumn,
+    hideCreditColumn,
+    hideStatusColumn,
+    hideBalanceColumn,
+    showFileBySelection,
+    showItemPartyColumn,
+  ]);
+
+  type TableBlock =
+    | { type: "spacer"; id: string }
+    | { type: "group"; colorIndex: number; items: any[] }
+    | { type: "single"; item: any };
+  const tableBlocks = useMemo((): TableBlock[] | null => {
+    if (!hasSpendWiseGroups || !tableTransactions?.length) return null;
+    const blocks: TableBlock[] = [];
+    let i = 0;
+    while (i < tableTransactions.length) {
+      const t = tableTransactions[i] as any;
+      if (t._spendWiseSpacer) {
+        blocks.push({ type: "spacer", id: t.id ?? (t._rowKey ?? `spacer-${i}`) });
+        i++;
+        continue;
+      }
+      if (t._spendWiseGroupFirst === true) {
+        const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < tableTransactions.length) {
+          const cur = tableTransactions[i] as any;
+          if (cur._spendWiseSpacer) break;
+          items.push(cur);
+          if (cur._spendWiseGroupLast === true) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        if (items.length <= 1) {
+          blocks.push({ type: "single", item: items[0] ?? t });
+        } else {
+          blocks.push({ type: "group", colorIndex, items });
+        }
+        continue;
+      }
+      blocks.push({ type: "single", item: t });
+      i++;
+    }
+    return blocks;
+  }, [hasSpendWiseGroups, tableTransactions]);
+
+  if (useMobileCardView) {
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
         const label =
@@ -658,7 +739,11 @@ export function TransactionsTable({
       }
       const amount = credit > 0 ? credit : debit;
       const isCredit = credit > 0;
-      const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
+      // Dashboard / recent rows: kabhi date string malformed ho → Invalid Date; truthy reh kar bhi format() RangeError deta hai
+      const rawDate =
+        t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date as string | number | Date));
+      const d =
+        rawDate instanceof Date && !Number.isNaN(rawDate.getTime()) ? rawDate : null;
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
       const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
@@ -901,74 +986,6 @@ export function TransactionsTable({
       </div>
     );
   }
-
-  const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
-  // Fixed column widths so header and row vertical lines align perfectly (main + nested tables).
-  const spendWiseColWidths = useMemo((): number[] => {
-    if (!hasSpendWiseGroups) return [];
-    const w: number[] = [];
-    if (showCol("date")) {
-      if (dateSystem === "Both") { w.push(95, 95); } else { w.push(95); }
-    }
-    if (showCol("type")) w.push(75);
-    if (showCol("voucherNo")) w.push(105);
-    if (context === "daybook") w.push(120);
-    // Item/Item-group Party column width is included only when visible.
-    if (isItemPartyContext && showItemPartyColumn) w.push(90);
-    if (showCol("user") && context !== "note") w.push(85);
-    if (showFileBySelection) w.push(44);
-    if (showCol("dr") && !hideDebitColumn) w.push(100);
-    if (showCol("cr") && !hideCreditColumn) w.push(100);
-    if (showCol("status") && !hideStatusColumn) w.push(95);
-    if (showCol("runningBalance") && !hideBalanceColumn) w.push(115);
-    w.push(40); // actions
-    return w;
-  }, [hasSpendWiseGroups, showCol, dateSystem, context, groupEntityType, hideDebitColumn, hideCreditColumn, hideStatusColumn, hideBalanceColumn, showFileBySelection, showItemPartyColumn]);
-  // Keep opening-balance card styling only for bank/account spend-wise grouped view.
-  const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
-
-  // Same block logic as mobile: spacer | group (colorIndex, items) | single (item) — so PC and mobile behave identically
-  type TableBlock =
-    | { type: "spacer"; id: string }
-    | { type: "group"; colorIndex: number; items: any[] }
-    | { type: "single"; item: any };
-  const tableBlocks = useMemo((): TableBlock[] | null => {
-    if (!hasSpendWiseGroups || !tableTransactions?.length) return null;
-    const blocks: TableBlock[] = [];
-    let i = 0;
-    while (i < tableTransactions.length) {
-      const t = tableTransactions[i] as any;
-      if (t._spendWiseSpacer) {
-        blocks.push({ type: "spacer", id: t.id ?? (t._rowKey ?? `spacer-${i}`) });
-        i++;
-        continue;
-      }
-      if (t._spendWiseGroupFirst === true) {
-        const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
-        const items: any[] = [];
-        while (i < tableTransactions.length) {
-          const cur = tableTransactions[i] as any;
-          if (cur._spendWiseSpacer) break;
-          items.push(cur);
-          if (cur._spendWiseGroupLast === true) {
-            i++;
-            break;
-          }
-          i++;
-        }
-        // Single-item "group" should render like a normal single row (thin border), not a thick group container.
-        if (items.length <= 1) {
-          blocks.push({ type: "single", item: items[0] ?? t });
-        } else {
-          blocks.push({ type: "group", colorIndex, items });
-        }
-        continue;
-      }
-      blocks.push({ type: "single", item: t });
-      i++;
-    }
-    return blocks;
-  }, [hasSpendWiseGroups, tableTransactions]);
 
   const tableContent = (
       <Table
