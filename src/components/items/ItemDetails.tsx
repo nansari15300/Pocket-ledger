@@ -4,10 +4,11 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -166,6 +167,7 @@ export default function ItemDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -455,10 +457,10 @@ export default function ItemDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(displayTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
   const totalPages = Math.ceil(sortedTransactions.length / rowsPerPage);
   const paginatedTransactions = sortedTransactions.slice(
@@ -1012,6 +1014,7 @@ export default function ItemDetails({
                     setActiveFilter={setActiveFilter}
                     
                     showNarration={showNarration}
+                    narrationNoteSearch={narrationNoteSearch}
                     visibleColumns={{ ...visibleColumns, status: false }}
                     userNames={effectiveUserNames}
                     journalAccountNames={journalAccountNames}
@@ -1032,6 +1035,11 @@ export default function ItemDetails({
                  <Checkbox id="show-narration-item" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                  <label htmlFor="show-narration-item" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
                </div>
+               <NarrationNoteSearchInput
+                 id="narration-search-item"
+                 value={narrationNoteSearch}
+                 onChange={setNarrationNoteSearch}
+               />
                <DropdownMenu>
                  <DropdownMenuTrigger asChild>
                    <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

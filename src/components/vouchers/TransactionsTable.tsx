@@ -50,6 +50,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { toast } from "sonner";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
+import { filterTransactionsByNarrationNoteSearch } from "@/lib/transactionNarrationNoteSearch";
+import {
+  insertFiscalPartitionRows,
+  getFiscalMergePartitionDateFromCompany,
+  FISCAL_YEAR_PARTITION_ROW_TYPE,
+} from "@/lib/fiscalPartitionRows";
+import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 
 export type { Context, Transaction };
 
@@ -124,6 +132,8 @@ interface TransactionsTableProps {
   forceBalanceMode?: "statement" | "bill_wise";
   /** Item context: allow Party column show/hide from columns dropdown. */
   showItemPartyColumn?: boolean;
+  /** Narration + note title filter (footer search); spend-wise row groups stay intact when any row matches. */
+  narrationNoteSearch?: string;
 }
 
 export function TransactionsTable({
@@ -182,8 +192,35 @@ export function TransactionsTable({
   blinkMode,
   forceBalanceMode,
   showItemPartyColumn = true,
+  narrationNoteSearch = "",
 }: TransactionsTableProps) {
+  const filteredTableTransactions = useMemo(
+    () => filterTransactionsByNarrationNoteSearch(transactions, narrationNoteSearch ?? ""),
+    [transactions, narrationNoteSearch]
+  );
   const { company, companyId } = useCompany();
+  const fiscalPartitionOpts = useMemo(() => {
+    if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
+    return {
+      at: getFiscalMergePartitionDateFromCompany(company),
+      label: company.fiscalPartitionLabel,
+    };
+  }, [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalPartitionLabel]);
+  /** Neela divider: "FY …/… Start Date YYYY-MM-DD" (+ optional settings note). */
+  const fiscalMergeBannerLabel = useMemo(
+    () =>
+      fiscalPartitionOpts.at
+        ? buildFiscalMergePartitionBannerLabel(company, fiscalPartitionOpts.at, fiscalPartitionOpts.label)
+        : undefined,
+    [company, fiscalPartitionOpts.at, fiscalPartitionOpts.label]
+  );
+  const tableTransactions = useMemo(
+    () =>
+      fiscalPartitionOpts.at
+        ? insertFiscalPartitionRows(filteredTableTransactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel)
+        : filteredTableTransactions,
+    [filteredTableTransactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
+  );
   const { user, customUser } = useAuth();
   const currentUserUid = user?.uid ?? null;
   const currentUserDisplayName = customUser?.displayName || user?.displayName || user?.email || null;
@@ -192,10 +229,13 @@ export function TransactionsTable({
   const resolvedBalanceMode = forceBalanceMode ?? balanceMode;
   const handleApproveVoucherDefault = useCallback(
     async (transaction: any) => {
-      if (!companyId || !transaction?.id || !user?.uid) return;
+      if ((transaction as any)?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return;
+      // Synthetic row ids (group contra -in/-out, spend-wise -in-, -ob-link) ko real voucher id par map karo — warna Firestore "not found".
+      const voucherId = resolveLedgerRowToVoucherId(transaction);
+      if (!companyId || !voucherId || !user?.uid) return;
       try {
         const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-        await approveVoucherWithHistory(companyId, transaction.id, user.uid, approverName);
+        await approveVoucherWithHistory(companyId, voucherId, user.uid, approverName);
         toast.success("Transaction approved.");
       } catch (e) {
         toast.error("Failed to approve transaction.");
@@ -224,13 +264,13 @@ export function TransactionsTable({
 
   useEffect(() => {
     if (!selectedId) return;
-    const isSpendWise = transactions.some((t: any) => (t as any)._spendWiseChild === true || (t as any)._spendWiseGroupFirst === true);
+    const isSpendWise = tableTransactions.some((t: any) => (t as any)._spendWiseChild === true || (t as any)._spendWiseGroupFirst === true);
     if (isSpendWise) {
       const base = normalizeSpendWiseRowBase(selectedId);
-      const stillPresent = transactions.some((t: any) => t.id && normalizeSpendWiseRowBase(String(t.id)) === base);
+      const stillPresent = tableTransactions.some((t: any) => t.id && normalizeSpendWiseRowBase(String(t.id)) === base);
       if (!stillPresent) setSelectedId(null);
-    } else if (!transactions.some((t) => t.id === selectedId)) setSelectedId(null);
-  }, [transactions, selectedId, normalizeSpendWiseRowBase]);
+    } else if (!tableTransactions.some((t) => t.id === selectedId)) setSelectedId(null);
+  }, [tableTransactions, selectedId, normalizeSpendWiseRowBase]);
 
   // Click table ke bahar → row unselect; lekin Dialog/Dropdown/Popover radix portals body par hain — un par click se unselect mat karo (save ke baad edited row selected rahe)
   const isTargetInsidePortaledOverlay = useCallback((target: EventTarget | null) => {
@@ -273,38 +313,38 @@ export function TransactionsTable({
 
   const handleTableKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (transactions.length === 0) return;
-      const idx = transactions.findIndex((t) => t.id === selectedId);
+      if (tableTransactions.length === 0) return;
+      const idx = tableTransactions.findIndex((t) => t.id === selectedId);
       const currentIndex = idx >= 0 ? idx : -1;
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        const next = Math.min(currentIndex + 1, transactions.length - 1);
-        setSelectedId(transactions[next]?.id ?? null);
+        const next = Math.min(currentIndex + 1, tableTransactions.length - 1);
+        setSelectedId(tableTransactions[next]?.id ?? null);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         const prev = Math.max(currentIndex - 1, 0);
-        setSelectedId(transactions[prev]?.id ?? null);
+        setSelectedId(tableTransactions[prev]?.id ?? null);
       } else if (e.key === "Enter" && selectedId) {
         e.preventDefault();
-        const t = transactions.find((x) => x.id === selectedId);
-        if (t) onRowClick?.(t);
+        const t = tableTransactions.find((x) => x.id === selectedId);
+        if (t && (t as any).type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(t);
       }
     },
-    [transactions, selectedId, onRowClick]
+    [tableTransactions, selectedId, onRowClick]
   );
 
   /** Spend-wise multi-row: clicked row = selected (border); other rows of same voucher = blink only, not selected. */
-  const isSpendWiseMultiRow = transactions.some((t: any) => (t as any)._spendWiseChild === true || (t as any)._spendWiseGroupFirst === true);
+  const isSpendWiseMultiRow = tableTransactions.some((t: any) => (t as any)._spendWiseChild === true || (t as any)._spendWiseGroupFirst === true);
   // Track how many rendered rows belong to the same base voucher id for row-mode gating.
   const spendWiseBaseRowCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of transactions as any[]) {
+    for (const t of tableTransactions as any[]) {
       const baseId = normalizeSpendWiseRowBase(t?.id ? String(t.id) : "");
       if (!baseId) continue;
       counts.set(baseId, (counts.get(baseId) ?? 0) + 1);
     }
     return counts;
-  }, [transactions, normalizeSpendWiseRowBase]);
+  }, [tableTransactions, normalizeSpendWiseRowBase]);
   const getBaseVoucherId = useCallback((row: { id?: string }) => {
     return normalizeSpendWiseRowBase(row?.id);
   }, [normalizeSpendWiseRowBase]);
@@ -505,7 +545,7 @@ export function TransactionsTable({
   const fullRowColSpan = openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1;
 
   // When spend-wise already has an explicit opening-balance group row, avoid rendering top opening row twice.
-  const hasSpendWiseOpeningGroupRow = transactions?.some((t: any) =>
+  const hasSpendWiseOpeningGroupRow = tableTransactions?.some((t: any) =>
     t?.type === "opening_balance" && (t?._spendWiseGroupFirst || t?._spendWiseGroupLast || t?._spendWiseChild)
   );
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context) && !hasSpendWiseOpeningGroupRow;
@@ -540,8 +580,8 @@ export function TransactionsTable({
     const mobileBlocks = useMemo((): MobileBlock[] => {
       const blocks: MobileBlock[] = [];
       let i = 0;
-      while (i < transactions.length) {
-        const t = transactions[i] as any;
+      while (i < tableTransactions.length) {
+        const t = tableTransactions[i] as any;
         if (t._spendWiseSpacer) {
           blocks.push({ type: "spacer" });
           i++;
@@ -550,8 +590,8 @@ export function TransactionsTable({
         if (t._spendWiseGroupFirst === true) {
           const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
           const items: any[] = [];
-          while (i < transactions.length) {
-            const cur = transactions[i] as any;
+          while (i < tableTransactions.length) {
+            const cur = tableTransactions[i] as any;
             if (cur._spendWiseSpacer) break;
             items.push(cur);
             if (cur._spendWiseGroupLast === true) {
@@ -572,9 +612,24 @@ export function TransactionsTable({
         i++;
       }
       return blocks;
-    }, [transactions]);
+    }, [tableTransactions]);
 
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
+      if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+        const label =
+          typeof t._partitionLabel === "string" && t._partitionLabel
+            ? t._partitionLabel
+            : "── Closing fiscal period · New fiscal period ──";
+        return (
+          <div
+            key={key}
+            className="w-full rounded-lg border-2 border-blue-600/70 bg-blue-50 py-3 px-2 text-center text-xs font-semibold uppercase tracking-wide text-blue-900 dark:bg-blue-950/50 dark:text-blue-100"
+            role="separator"
+          >
+            {label}
+          </div>
+        );
+      }
       let debit = t.debit ?? 0;
       let credit = t.credit ?? 0;
       let balance = t.balance ?? t.runningBalance ?? 0;
@@ -847,7 +902,7 @@ export function TransactionsTable({
     );
   }
 
-  const hasSpendWiseGroups = transactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+  const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
   // Fixed column widths so header and row vertical lines align perfectly (main + nested tables).
   const spendWiseColWidths = useMemo((): number[] => {
     if (!hasSpendWiseGroups) return [];
@@ -878,11 +933,11 @@ export function TransactionsTable({
     | { type: "group"; colorIndex: number; items: any[] }
     | { type: "single"; item: any };
   const tableBlocks = useMemo((): TableBlock[] | null => {
-    if (!hasSpendWiseGroups || !transactions?.length) return null;
+    if (!hasSpendWiseGroups || !tableTransactions?.length) return null;
     const blocks: TableBlock[] = [];
     let i = 0;
-    while (i < transactions.length) {
-      const t = transactions[i] as any;
+    while (i < tableTransactions.length) {
+      const t = tableTransactions[i] as any;
       if (t._spendWiseSpacer) {
         blocks.push({ type: "spacer", id: t.id ?? (t._rowKey ?? `spacer-${i}`) });
         i++;
@@ -891,8 +946,8 @@ export function TransactionsTable({
       if (t._spendWiseGroupFirst === true) {
         const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
         const items: any[] = [];
-        while (i < transactions.length) {
-          const cur = transactions[i] as any;
+        while (i < tableTransactions.length) {
+          const cur = tableTransactions[i] as any;
           if (cur._spendWiseSpacer) break;
           items.push(cur);
           if (cur._spendWiseGroupLast === true) {
@@ -913,7 +968,7 @@ export function TransactionsTable({
       i++;
     }
     return blocks;
-  }, [hasSpendWiseGroups, transactions]);
+  }, [hasSpendWiseGroups, tableTransactions]);
 
   const tableContent = (
       <Table
@@ -1106,7 +1161,7 @@ export function TransactionsTable({
                 </tr>
               )
             )}
-            {transactions.length > 0 ? (
+            {tableTransactions.length > 0 ? (
               tableBlocks ? (
                 <AnimatePresence mode="popLayout">
                   {tableBlocks.map((block) => {
@@ -1172,6 +1227,7 @@ export function TransactionsTable({
                                       <TransactionRow
                                         key={rowKey}
                                         transaction={t}
+                                        fullRowColSpan={fullRowColSpan}
                                         animateLayout={true}
                                         layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                                         isSpendWiseChild={!!(t as any)._spendWiseChild}
@@ -1228,6 +1284,7 @@ export function TransactionsTable({
                         <TransactionRow
                           key={rowKey}
                           transaction={t}
+                          fullRowColSpan={fullRowColSpan}
                           animateLayout={true}
                           layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                           isSpendWiseChild={!!(t as any)._spendWiseChild}
@@ -1273,7 +1330,7 @@ export function TransactionsTable({
                   })}
                 </AnimatePresence>
               ) : (
-                transactions.map((t: any, rowIndex: number) => {
+                tableTransactions.map((t: any, rowIndex: number) => {
                     const rowKey = (t as any)._rowKey ?? (t as any).id ?? `row-${rowIndex}`;
                     return (t as any)._spendWiseSpacer ? (
                       <motion.tr
@@ -1294,6 +1351,7 @@ export function TransactionsTable({
                       <TransactionRow
                         key={rowKey}
                         transaction={t}
+                        fullRowColSpan={fullRowColSpan}
                         animateLayout={true}
                         layoutTransition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
                         isSpendWiseChild={!!(t as any)._spendWiseChild}

@@ -8,10 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Receipt, ChevronDown, Columns3 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -116,6 +117,7 @@ export function TaxGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
@@ -307,10 +309,10 @@ export function TaxGroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(displayTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const filteredMobileTransactions = useMemo(() => {
@@ -516,6 +518,7 @@ export function TaxGroupDetails({
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceActions={undefined}
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
@@ -790,6 +793,7 @@ export function TaxGroupDetails({
               contextId={group.id}
               groupEntityType="tax"
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
@@ -823,6 +827,11 @@ export function TaxGroupDetails({
                 <Checkbox id="show-narration-tax-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-tax-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-tax-group"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

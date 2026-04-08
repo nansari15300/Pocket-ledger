@@ -35,10 +35,11 @@ import {
   Search,
 } from "lucide-react";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -212,6 +213,7 @@ export function GroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
     try {
@@ -697,10 +699,10 @@ export function GroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const totalPages = Math.max(
@@ -1040,6 +1042,7 @@ export function GroupDetails({
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
             openingBalanceActions={undefined}
             showNarration={showNarration}
+            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
             journalAccountNames={journalAccountNames}
             userNames={mergedUserNames}
@@ -1346,6 +1349,7 @@ export function GroupDetails({
             groupEntityType="party"
             contextId={group.id}
             showNarration={showNarration}
+            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={openingBalanceOutstanding}
@@ -1400,6 +1404,11 @@ export function GroupDetails({
               <Checkbox id="show-narration-party-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-party-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
             </div>
+            <NarrationNoteSearchInput
+              id="narration-search-party-group"
+              value={narrationNoteSearch}
+              onChange={setNarrationNoteSearch}
+            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

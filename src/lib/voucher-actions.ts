@@ -17,6 +17,7 @@ import { ensureSuperAdminInSharedEmails } from '@/lib/superAdminEmails';
 import { diff } from 'deep-object-diff';
 import { moveFilesToVoucherDate } from './storage'; // Import the move function
 import { getEffectiveHistorySettings } from './voucherHistoryUtils';
+import { coerceVoucherDateForStamp, toIsoDateStamp } from './voucherDateStamp';
 
 /**
  * 1. Auto-setup function: Creates default groups and accounts for each menu.
@@ -134,8 +135,10 @@ function getChanges(oldData: any, newData: any) {
 
     // Handle Timestamps/Dates by converting to ISO strings for comparison
     if ((oldVal instanceof Date || (oldVal && oldVal.toDate instanceof Function)) && (newVal instanceof Date || (newVal && newVal.toDate instanceof Function))) {
-        const oldTime = oldVal instanceof Date ? oldVal.toISOString() : oldVal.toDate().toISOString();
-        const newTime = newVal instanceof Date ? newVal.toISOString() : new Date(newVal).toISOString();
+        const oldD = coerceVoucherDateForStamp(oldVal);
+        const newD = coerceVoucherDateForStamp(newVal);
+        const oldTime = oldD ? oldD.toISOString() : "";
+        const newTime = newD ? newD.toISOString() : "";
         if(oldTime !== newTime) {
              changes[key] = { from: oldData?.[key] ?? null, to: newData?.[key] ?? null };
         }
@@ -273,24 +276,15 @@ export async function saveVoucher(
     return { id: voucherId };
   }
 
-  // ✅ date change check (voucher edit)
-  const oldDate =
-    oldData?.date && typeof (oldData as any).date?.toDate === "function"
-      ? (oldData as any).date.toDate()
-      : new Date((oldData as any)?.date);
-
-  const newDate =
-    cleanVoucherData?.date instanceof Date
-      ? cleanVoucherData.date
-      : new Date(cleanVoucherData?.date);
-
-  const oldStamp = oldDate?.toISOString?.().slice(0, 10);
-  const newStamp = newDate?.toISOString?.().slice(0, 10);
+  const oldDate = coerceVoucherDateForStamp((oldData as any)?.date);
+  const newDate = coerceVoucherDateForStamp(cleanVoucherData?.date);
+  const oldStamp = toIsoDateStamp(oldDate);
+  const newStamp = toIsoDateStamp(newDate);
 
   // ✅ If date changed and voucher has filePaths, move them
   let movedFileObjects: any[] | null = null;
   
-  if (oldStamp && newStamp && oldStamp !== newStamp) {
+  if (oldDate && newDate && oldStamp && newStamp && oldStamp !== newStamp) {
     const voucherType = cleanVoucherData?.type || (oldData as any)?.type || "sale";
     const filesToMove = (oldData as any)?.files || [];
 

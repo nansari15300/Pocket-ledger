@@ -112,14 +112,21 @@ const SelectLabel = React.forwardRef<
 ))
 SelectLabel.displayName = SelectPrimitive.Label.displayName
 
-const SelectItem = React.forwardRef<
-  React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+/** Calendar month list: accent pill band — year dropdown jaisa border-only hover/selected. */
+export type SelectItemProps = React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+  variant?: "default" | "calendar";
+};
+
+const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, SelectItemProps>(
+  ({ className, children, variant = "default", ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex w-full cursor-default select-none items-center py-1.5 pl-8 pr-2 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      variant === "default" && "rounded-sm focus:bg-accent focus:text-accent-foreground",
+      // BS/AD month dropdown: kabhi focus:bg-accent mat lagao — warna hover par hara solid pill
+      variant === "calendar" &&
+        "rounded-full border-2 border-transparent bg-transparent focus:bg-transparent focus:text-foreground",
       className
     )}
     {...props}

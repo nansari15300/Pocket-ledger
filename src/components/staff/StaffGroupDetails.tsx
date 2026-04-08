@@ -5,10 +5,11 @@ import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { Edit, Printer, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -108,6 +109,7 @@ export function StaffGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -343,10 +345,10 @@ export function StaffGroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(displayTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
   const paginatedTransactions = sortedTransactions.slice(
@@ -507,6 +509,7 @@ export function StaffGroupDetails({
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceActions={undefined}
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               accountNames={accountNamesMap}
@@ -839,6 +842,7 @@ export function StaffGroupDetails({
               contextId={group.id}
               groupEntityType="staff"
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
@@ -890,6 +894,11 @@ export function StaffGroupDetails({
                   Show Narration
                 </label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-staff-group"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

@@ -27,6 +27,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
+import { useCompany } from "@/hooks/useCompany";
+import { insertFiscalPartitionRows, getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { VoucherTypeFilter } from "@/components/vouchers/VoucherTypeFilter";
 import {
   TransactionRow,
@@ -126,6 +129,28 @@ export function BillwiseTransactionTable({
   onAddLink,
   onApproveVoucher,
 }: BillwiseTransactionTableProps) {
+  const { company } = useCompany();
+  const fiscalPartitionOpts = useMemo(() => {
+    if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
+    return {
+      at: getFiscalMergePartitionDateFromCompany(company),
+      label: company.fiscalPartitionLabel,
+    };
+  }, [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalPartitionLabel]);
+  const fiscalMergeBannerLabel = useMemo(
+    () =>
+      fiscalPartitionOpts.at
+        ? buildFiscalMergePartitionBannerLabel(company, fiscalPartitionOpts.at, fiscalPartitionOpts.label)
+        : undefined,
+    [company, fiscalPartitionOpts.at, fiscalPartitionOpts.label]
+  );
+  const displayTransactions = useMemo(
+    () =>
+      fiscalPartitionOpts.at
+        ? insertFiscalPartitionRows(transactions as any[], fiscalPartitionOpts.at, fiscalMergeBannerLabel)
+        : transactions,
+    [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
+  );
   const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
@@ -137,8 +162,8 @@ export function BillwiseTransactionTable({
   const statusBillWiseOnly = context === "party" || context === "staff" || context === "group";
 
   useEffect(() => {
-    if (selectedId && !transactions.some((t) => t.id === selectedId)) setSelectedId(null);
-  }, [transactions, selectedId]);
+    if (selectedId && !displayTransactions.some((t) => t.id === selectedId)) setSelectedId(null);
+  }, [displayTransactions, selectedId]);
 
   // Unselect when user clicks anywhere in the app outside the table (empty area, sidebar, etc.)
   useEffect(() => {
@@ -215,6 +240,13 @@ export function BillwiseTransactionTable({
     (showCol("user") && context !== "note" ? 1 : 0);
   const openingBalanceColSpan = visibleLabelCols;
   const totalColSpan = visibleLabelCols;
+  const fullRowColSpan =
+    openingBalanceColSpan +
+    (showCol("dr") && !hideDebitColumn ? 1 : 0) +
+    (showCol("cr") && !hideCreditColumn ? 1 : 0) +
+    (showCol("status") ? 1 : 0) +
+    (showCol("runningBalance") && !hideBalanceColumn ? 1 : 0) +
+    1;
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
 
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
@@ -277,21 +309,22 @@ export function BillwiseTransactionTable({
 
   const handleTableKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (transactions.length === 0) return;
-      const idx = transactions.findIndex((t) => t.id === selectedId);
+      if (displayTransactions.length === 0) return;
+      const idx = displayTransactions.findIndex((t) => t.id === selectedId);
       const currentIndex = idx >= 0 ? idx : -1;
-      if (e.key === "ArrowDown" && currentIndex < transactions.length - 1) {
+      if (e.key === "ArrowDown" && currentIndex < displayTransactions.length - 1) {
         e.preventDefault();
-        setSelectedId(transactions[currentIndex + 1].id);
+        setSelectedId(displayTransactions[currentIndex + 1].id);
       } else if (e.key === "ArrowUp" && currentIndex > 0) {
         e.preventDefault();
-        setSelectedId(transactions[currentIndex - 1].id);
+        setSelectedId(displayTransactions[currentIndex - 1].id);
       } else if (e.key === "Enter" && currentIndex >= 0) {
         e.preventDefault();
-        onRowClick?.(transactions[currentIndex]);
+        const row = displayTransactions[currentIndex] as any;
+        if (row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(row);
       }
     },
-    [transactions, selectedId, onRowClick]
+    [displayTransactions, selectedId, onRowClick]
   );
 
   return (
@@ -446,11 +479,12 @@ export function BillwiseTransactionTable({
                 </TableCell>
               </motion.tr>
             )}
-            {transactions.length > 0 ? (
-              transactions.map((t: any, rowIndex: number) => (
+            {displayTransactions.length > 0 ? (
+              displayTransactions.map((t: any, rowIndex: number) => (
                 <TransactionRow
                   key={t.id}
                   transaction={t}
+                  fullRowColSpan={fullRowColSpan}
                   animateLayout={true}
                   showNarration={showNarration}
                   userNames={userNames}

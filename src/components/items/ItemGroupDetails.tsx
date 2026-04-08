@@ -31,10 +31,11 @@ import {
   Columns3,
 } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -150,6 +151,7 @@ export function ItemGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { showNotes, setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
@@ -372,10 +374,10 @@ export function ItemGroupDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(displayTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
   const totalPages = Math.max(
     1,
@@ -915,6 +917,7 @@ export function ItemGroupDetails({
               contextId={group.id}
               showItemPartyColumn={showPartyColumn}
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={{ ...visibleColumns, status: false }}
               openingBalance={openingBalanceForPeriod}
               userNames={userNames}
@@ -952,6 +955,11 @@ export function ItemGroupDetails({
                   Show Narration
                 </label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-item-group"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

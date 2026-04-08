@@ -4,6 +4,8 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
+import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import type { Account } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,10 +79,11 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -150,6 +153,7 @@ export function AccountDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
@@ -281,14 +285,9 @@ export function AccountDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
-    // Resolve synthetic spend-wise row ids back to real voucher id before opening edit.
-    const rawId = typeof voucher?.id === "string" ? voucher.id : "";
-    const resolvedId =
-      voucher?._baseVoucherId ??
-      (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
-      rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
-      rawId);
-    if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
+    // Synthetic ledger row id -> Firestore voucher id (same rules as table Approve).
+    const resolvedId = resolveLedgerRowToVoucherId(voucher);
+    if (voucher?.type === "opening_balance" || !resolvedId) {
       // Opening group header is synthetic; it should not open voucher edit dialog.
       return;
     }
@@ -547,10 +546,10 @@ export function AccountDetails({
   const sortedTransactions = useMemo(() => {
     if (spendWiseView) return displayTransactions;
     return recomputeRunningBalanceTopToBottom(
-      sortTransactions(displayTransactions, sortBy, sortOrder),
+      sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
       openingBalanceForPeriod
     );
-  }, [displayTransactions, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod]);
+  }, [displayTransactions, spendWiseView, sortBy, sortOrder, openingBalanceForPeriod, company]);
 
   const displayTransactionCount = useMemo(
     () => sortedTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length,
@@ -667,6 +666,8 @@ export function AccountDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
+          country: company.country,
+          fiscalYearStart: company.fiscalYearStart,
         },
         title: spendWiseView
           ? `Spend Wise Account Statement: ${account.accountName}`
@@ -685,6 +686,8 @@ export function AccountDetails({
         preserveOrder: spendWiseView,
         spendWise: Boolean(spendWiseView),
         billWise: false,
+        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
+        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       }, true);
       toast.dismiss(toastId);
     } catch (e) {
@@ -711,6 +714,8 @@ export function AccountDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
+          country: company.country,
+          fiscalYearStart: company.fiscalYearStart,
         },
         title: `Bill Wise Account Statement: ${account.accountName}`,
         context: "account",
@@ -728,6 +733,8 @@ export function AccountDetails({
         billWise: true,
         openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
         openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
+        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
+        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       }, true);
       toast.dismiss(toastId);
     } catch (e) {
@@ -767,6 +774,7 @@ export function AccountDetails({
         t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
         (t.type ?? "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
         t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        String((t as any).title || "").toLowerCase().includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -986,6 +994,7 @@ export function AccountDetails({
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
             showNarration={showNarration}
+            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={visibleColumns}
             journalAccountNames={journalAccountNames}
             userNames={userNames}
@@ -1254,6 +1263,7 @@ export function AccountDetails({
                 ) : null
               }
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
@@ -1281,6 +1291,11 @@ export function AccountDetails({
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-bank-cash"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

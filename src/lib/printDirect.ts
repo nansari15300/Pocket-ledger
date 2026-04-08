@@ -13,6 +13,8 @@ import type { Item } from "@/components/items/types";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview";
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
+import { FISCAL_YEAR_PARTITION_ROW_TYPE, insertFiscalPartitionRows } from "@/lib/fiscalPartitionRows";
+import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 
 const DEFAULT_AD_FORMAT: ADFormatKey = "yyyy-MM-dd";
 const DEFAULT_BS_FORMAT: BSFormatKey = "YYYY-MM-DD";
@@ -90,6 +92,8 @@ export type PrintPayload = {
     showDrCr?: boolean;
     showCurrencySymbol?: boolean;
     logoUrl?: string | null;
+    country?: string;
+    fiscalYearStart?: unknown;
   };
   title: string;
   context: Context;
@@ -124,6 +128,10 @@ export type PrintPayload = {
   spendWise?: boolean;
   /** Bill-wise: vouchers for allocation amount lookup (voucher details with amount in print). */
   vouchers?: any[];
+  /** Merge fiscal: nayi FY ki pehli din (AD) — table jaisa PDF me divider. */
+  fiscalMergePartitionAt?: Date | null;
+  /** Optional custom divider line (same as company settings). */
+  fiscalPartitionLabel?: string | null;
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -362,6 +370,7 @@ const getAutoFontSize = (text: string | number, baseSize: number): number => {
 function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const { rows, periodDr, periodCr, closing } = computeRows(p);
   const { formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, numToWords } = getFormatters(p);
+  const voucherRowCount = rows.filter((r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE).length;
 
   const LOGO_SIZE = 60; // 48 * 1.25
   const LOGO_LEFT_INSET = 20;
@@ -432,7 +441,7 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
     columns: [
         // Keep report labels compact as requested (about 50% smaller).
         { text: p.title, style: 'subheader', fontSize: 8, alignment: 'left', width: '*' },
-        { text: `Total Vouchers: ${rows.length}`, style: 'subheader', fontSize: 8, alignment: 'right', width: 'auto' }
+        { text: `Total Vouchers: ${voucherRowCount}`, style: 'subheader', fontSize: 8, alignment: 'right', width: 'auto' }
     ],
     margin: [0, 0, 0, 5],
   };
@@ -494,7 +503,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
         columns: [
             { text: p.title, style: 'subheader', alignment: 'left', width: '*' },
             { text: '(Note: Summary is for Bank & Cash only)', alignment: 'center', fontSize: 8, italics: true, color: 'gray', width: '*'},
-            { text: `Total Vouchers: ${rows.length}`, style: 'subheader', alignment: 'right', width: '*' }
+            { text: `Total Vouchers: ${voucherRowCount}`, style: 'subheader', alignment: 'right', width: '*' }
         ],
         margin: [0, 0, 0, 5],
     });
@@ -572,7 +581,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       body: [
         tableHeader,
         ...(openingBalanceRow ?? []),
-        ...rows.flatMap(row => buildTableRow(row, p, formatDate, formatDateBS, formatCurrencyForPrint, formatRunning)),
+        ...rows.flatMap(row => buildTableRow(row, p, formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, tableHeader.length)),
         ...tableFooter,
       ]
     },
@@ -678,7 +687,31 @@ function computeRows(payload: PrintPayload) {
             (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
         );
 
-    const rows = prepared.map((t: any) => {
+    const partAtSpend =
+      payload.fiscalMergePartitionAt instanceof Date
+        ? payload.fiscalMergePartitionAt
+        : payload.fiscalMergePartitionAt
+          ? new Date(payload.fiscalMergePartitionAt as unknown as string)
+          : null;
+    const mergeLblSpend =
+      partAtSpend && !isNaN(partAtSpend.getTime())
+        ? buildFiscalMergePartitionBannerLabel(
+            { country: payload.company.country, fiscalYearStart: payload.company.fiscalYearStart },
+            partAtSpend,
+            payload.fiscalPartitionLabel ?? null
+          )
+        : undefined;
+    const preparedWithPart =
+      partAtSpend && !isNaN(partAtSpend.getTime())
+        ? insertFiscalPartitionRows(prepared, partAtSpend, mergeLblSpend)
+        : prepared;
+
+    let lastSpendWiseBal: number | null = null;
+    const rows = preparedWithPart.map((t: any) => {
+      if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+        const bal = lastSpendWiseBal ?? (Number(payload.openingBalance) || 0);
+        return { ...t, debit: 0, credit: 0, runningBalance: bal };
+      }
       let debit = Number(t.debit) || 0;
       let credit = Number(t.credit) || 0;
       const linkedAmt = Number((t as any)._spendWiseLinkedAmount) || 0;
@@ -695,6 +728,7 @@ function computeRows(payload: PrintPayload) {
       const spendWiseBalance = typeof (t as any)._spendWiseRunningBalance === "number"
         ? Number((t as any)._spendWiseRunningBalance)
         : (Number(t.balance ?? t.runningBalance) || 0);
+      lastSpendWiseBal = spendWiseBalance;
       return { ...t, debit, credit, runningBalance: spendWiseBalance };
     });
 
@@ -716,12 +750,32 @@ function computeRows(payload: PrintPayload) {
           (b.date?.toDate ? b.date.toDate() : new Date(b.date)).getTime()
       );
 
+  const partAt =
+    payload.fiscalMergePartitionAt instanceof Date
+      ? payload.fiscalMergePartitionAt
+      : payload.fiscalMergePartitionAt
+        ? new Date(payload.fiscalMergePartitionAt as unknown as string)
+        : null;
+  const mergeLbl =
+    partAt && !isNaN(partAt.getTime())
+      ? buildFiscalMergePartitionBannerLabel(
+          { country: payload.company.country, fiscalYearStart: payload.company.fiscalYearStart },
+          partAt,
+          payload.fiscalPartitionLabel ?? null
+        )
+      : undefined;
+  const sortedWithPart =
+    partAt && !isNaN(partAt.getTime()) ? insertFiscalPartitionRows(sorted, partAt, mergeLbl) : sorted;
+
   const openingBalNum = typeof payload.openingBalance === 'number' ? payload.openingBalance : 0;
   let runningBalance = openingBalNum;
   
   const itemForContext = payload.context === 'item' ? findItem(payload.itemsData, payload.contextId) : undefined;
 
-  const rowsAsc = sorted.map((t) => {
+  const rowsAsc = sortedWithPart.map((t) => {
+    if ((t as any).type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+      return { ...(t as any), debit: 0, credit: 0, runningBalance };
+    }
     const { debit, credit } = getTransactionAmounts(t, payload.context, itemForContext || payload.contextId, payload.stockView, payload.itemsData);
     // Preserve dueDate / due_date and status so party/account print shows "xx days" like UI
     const dueDate = t.dueDate ?? t.due_date;
@@ -1452,7 +1506,25 @@ function getOverdueDays(dueDate: any): number {
   return Math.floor((today.getTime() - dueOnly.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function): TableCell[][] => {
+const buildTableRow = (row: any, p: PrintPayload, formatDate: Function, formatDateBS: Function, formatCurrencyForPrint: Function, formatRunning: Function, ledgerColCount: number): TableCell[][] => {
+    if (row.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+      const n = Math.max(1, ledgerColCount);
+      const label = row._partitionLabel || "── Closing fiscal period · New fiscal period ──";
+      const cell: TableCell = {
+        text: label,
+        colSpan: n,
+        alignment: "center",
+        bold: true,
+        fontSize: 8,
+        color: "#1e3a8a",
+        fillColor: "#dbeafe",
+        margin: [0, 4, 0, 4],
+      };
+      const mainRow: TableCell[] = [cell];
+      for (let i = 1; i < n; i++) mainRow.push({});
+      return [mainRow];
+    }
+
     const d = row.date?.toDate ? row.date.toDate() : new Date(row.date);
     const narration = row.narration || row.content || "";
     

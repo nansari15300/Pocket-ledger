@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { calendarPanelClassName } from "@/lib/calendarChrome";
 import {
   isSameDay,
   startOfDay,
@@ -13,8 +14,12 @@ import {
   getMonth,
   getYear,
 } from "date-fns";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
+import { YearSelectShowMore } from "./year-select-show-more";
+import { CalendarMonthWheel } from "./calendar-month-wheel";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+
+const AD_YEAR_MIN = 1950;
+const AD_YEAR_MAX = 2100;
 
 const AD_MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -116,36 +121,19 @@ export default function AdCalendar({
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="flex gap-2 flex-1 justify-center min-w-0">
-            <Select
-              value={String(month)}
-              onValueChange={(v) => setMonth((prev) => ({ ...prev, m: Number(v) }))}
-            >
-              <SelectTrigger className="w-[120px] h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {AD_MONTHS.map((name, i) => (
-                  <SelectItem key={name} value={String(i)}>
-                    {name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={String(year)}
-              onValueChange={(v) => setMonth((prev) => ({ ...prev, y: Number(v) }))}
-            >
-              <SelectTrigger className="w-[90px] h-8 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Array.from({ length: 80 }, (_, i) => 1950 + i).map((y) => (
-                  <SelectItem key={y} value={String(y)}>
-                    {y}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CalendarMonthWheel
+              labels={AD_MONTHS}
+              monthIndex={month}
+              onMonthIndexChange={(i) => setMonth((prev) => ({ ...prev, m: i }))}
+              disabled={disabled}
+            />
+            <YearSelectShowMore
+              value={year}
+              minYear={AD_YEAR_MIN}
+              maxYear={AD_YEAR_MAX}
+              onChange={(newYear) => setMonth((prev) => ({ ...prev, y: newYear }))}
+              disabled={disabled}
+            />
           </div>
           <Button
             type="button"
@@ -216,7 +204,7 @@ export default function AdCalendar({
   }
 
   return (
-    <div className="p-3 border rounded-lg shadow-md bg-card text-card-foreground w-full">
+    <div className={calendarPanelClassName}>
       <div
         className={cn(
           "flex flex-col md:flex-row gap-6 w-full",

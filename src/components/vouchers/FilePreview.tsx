@@ -6,7 +6,7 @@ import Image from "next/image";
 import { FileText, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
 import { storage } from "@/lib/firebase";
 import { ref, getBlob } from "firebase/storage";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
@@ -53,12 +53,12 @@ function pdfThumbCacheSet(key: string, blobUrl: string) {
   }
 }
 
-/** Tooltip/hover FilePreview jiska previewBox 600×700 hai — wahi layoutMaxEdge=700 cache key */
+/** Hover FilePreview (portal preview) jiska previewBox 600×700 hai — wahi layoutMaxEdge=700 cache key */
 const GALLERY_PDF_HOVER_THUMB_EDGE = 700;
 
 /**
  * Gallery "Full preview" ON par current page ke PDF hovers ke liye pdf.js + pehla page pehle se cache me;
- * mouse le jate hi tooltip me turant thumb dikhe.
+ * mouse le jate hi portal preview me turant thumb dikhe.
  */
 export async function prewarmPdfThumbnailsForGallery(
   entries: ReadonlyArray<{ url: string; storagePath?: string }>,
@@ -522,23 +522,19 @@ export function FilePreview({
         </button>
       )}
       {showHoverFullPreview ? (
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>{borderedPreview}</TooltipTrigger>
-            <TooltipContent
-              side="right"
-              sideOffset={8}
-              className="z-[9999] border bg-background p-2 shadow-lg"
-            >
-              <div className="max-h-[85vh] max-w-[min(90vw,820px)] overflow-auto">
-                {hoverPanel}
-                <p className="pt-1 text-center text-[10px] font-semibold text-muted-foreground">
-                  {fileInfo.formatLabel}
-                </p>
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <AttachmentHoverPortal
+          triggerClassName="h-full w-full min-h-0 min-w-0"
+          preview={
+            <div className="max-h-[85vh] max-w-[min(90vw,820px)] overflow-auto">
+              {hoverPanel}
+              <p className="pt-1 text-center text-[10px] font-semibold text-muted-foreground">
+                {fileInfo.formatLabel}
+              </p>
+            </div>
+          }
+        >
+          {borderedPreview}
+        </AttachmentHoverPortal>
       ) : (
         borderedPreview
       )}

@@ -3,7 +3,8 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, CalendarIcon, Eye, EyeOff, Trash2, Upload } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { startOfDay } from "date-fns";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, Timestamp, serverTimestamp } from "firebase/firestore";
@@ -97,8 +98,28 @@ export function EditCompanyForm() {
   } | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
-  const { vouchers } = useVouchers();
-  const hasTransactions = vouchers.length > 0;
+  const { vouchersAll } = useVouchers();
+  // Bounds for fiscal pickers: full voucher list (not view-filtered) for min/max dates.
+  const voucherEntryDateRange = useMemo(() => {
+    if (!vouchersAll.length) return null;
+    let minMs = Infinity;
+    let maxMs = -Infinity;
+    for (const v of vouchersAll) {
+      const raw = (v as { date?: unknown }).date;
+      const d =
+        raw && typeof (raw as { toDate?: () => Date }).toDate === "function"
+          ? (raw as { toDate: () => Date }).toDate()
+          : raw
+            ? new Date(raw as string | number)
+            : null;
+      if (!d || isNaN(d.getTime())) continue;
+      const t = startOfDay(d).getTime();
+      if (t < minMs) minMs = t;
+      if (t > maxMs) maxMs = t;
+    }
+    if (minMs === Infinity) return null;
+    return { first: new Date(minMs), last: new Date(maxMs) };
+  }, [vouchersAll]);
   const { canAddAvatar } = usePermissions();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
@@ -612,6 +633,7 @@ export function EditCompanyForm() {
                       onChangeAD={(d) => field.onChange(d as Date)}
                       numberOfMonths={1}
                       isRange={false}
+                      entryDateRangeAD={voucherEntryDateRange}
                     />
                     <FormMessage />
                   </FormItem>
@@ -629,6 +651,7 @@ export function EditCompanyForm() {
                       onChangeAD={(d) => field.onChange(d as Date)}
                       numberOfMonths={1}
                       isRange={false}
+                      entryDateRangeAD={voucherEntryDateRange}
                     />
                     <FormMessage />
                   </FormItem>

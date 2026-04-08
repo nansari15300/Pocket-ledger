@@ -83,6 +83,13 @@ import { useVouchers } from '@/hooks/useVouchers';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
+import {
+  TransactionTableSortDropdown,
+  type TransactionSortBy,
+  type TransactionSortOrder,
+} from "@/components/vouchers/TransactionTableSortDropdown";
+import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
+import { NarrationNoteSearchInput } from '@/components/vouchers/NarrationNoteSearchInput';
 import { useDashboard } from '@/hooks/useDashboard';
 import AdCalendar from "@/components/ui/ad-calendar";
 import { useAuth } from '@/hooks/useAuth';
@@ -507,6 +514,7 @@ function DashboardPageContent() {
     const [cashFlowOpen, setCashFlowOpen] = useState(false);
 
     const [showRecentNarration, setShowRecentNarration] = useState(true);
+    const [recentNarrationNoteSearch, setRecentNarrationNoteSearch] = useState("");
   
   const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
@@ -523,6 +531,10 @@ function DashboardPageContent() {
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
+  /** Recent: footer jaisa — pehli load par "By Date" + Default (↑ purani date upar). */
+  const [recentSortBy, setRecentSortBy] = useState<TransactionSortBy>("date");
+  const [recentSortOrder, setRecentSortOrder] =
+    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const [isDateChange, setIsDateChange] = useState(false);
   const [liveTime, setLiveTime] = useState(new Date());
 
@@ -1011,18 +1023,17 @@ function DashboardPageContent() {
 
   const recentTransactions = useMemo(() => {
     if (!allRecentTransactions) return [];
-    let sorted = [...allRecentTransactions].sort((a, b) => {
-        const dateA = safeToDate(a.date)?.getTime() || 0;
-        const dateB = safeToDate(b.date)?.getTime() || 0;
-        if (dateB !== dateA) return dateB - dateA;
-        const creationA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-        const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-        return creationB - creationA;
-      });
+    let sorted = sortTransactionsWithFiscalMergeForCompany(
+      [...allRecentTransactions],
+      recentSortBy,
+      recentSortOrder,
+      { tieBreakCreatedAtDesc: true },
+      company
+    );
     const limit = Number(recentRowsPerPage);
     if (!isNaN(limit) && limit > 0) sorted = sorted.slice(0, limit);
     return sorted;
-  }, [allRecentTransactions, recentRowsPerPage]);
+  }, [allRecentTransactions, recentRowsPerPage, recentSortBy, recentSortOrder, company]);
   
   const handlePrint = () => {
     const shouldInclude = (type: 'party' | 'staff' | 'tax') => {
@@ -1380,6 +1391,15 @@ function DashboardPageContent() {
           <CardTitle className="text-center w-full">Recent Transactions</CardTitle>
           <div className="flex flex-wrap items-center gap-2 min-h-9">
             <div className={cn("flex items-center gap-2 h-9", isMobile ? "order-1" : "md:order-2")}>
+            <TransactionTableSortDropdown
+              sortBy={recentSortBy}
+              sortOrder={recentSortOrder}
+              onSortChange={(by, ord) => {
+                setRecentSortBy(by);
+                setRecentSortOrder(ord);
+              }}
+              viewMode="statement"
+            />
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker isRange valueAD={recentDateRange} onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)} transactionDates={transactionDates} className="h-9" />
             )}
@@ -1441,6 +1461,13 @@ function DashboardPageContent() {
                   <span className="text-sm whitespace-nowrap">Show Narration</span>
                 </label>
                 )}
+                {!isMobile && (
+                <NarrationNoteSearchInput
+                  id="narration-search-dashboard-recent"
+                  value={recentNarrationNoteSearch}
+                  onChange={setRecentNarrationNoteSearch}
+                />
+                )}
             </div>
              {isRecentFilterActive && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearRecentFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>}
           </div>
@@ -1474,6 +1501,7 @@ function DashboardPageContent() {
           onVoucherTypeChange={setRecentVoucherTypes}
           hideFooter={true}
           showNarration={showRecentNarration}
+          narrationNoteSearch={recentNarrationNoteSearch}
         />
         </div>
       </CardContent>

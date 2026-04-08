@@ -59,7 +59,7 @@ type VoucherContextType = {
   journalAccountNames: Record<string, string>;
   userNames: Record<string, string>;
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
-  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }>;
+  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; title?: string }>;
   hasOverdueTransactions: boolean;
 };
 
@@ -718,7 +718,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
     const allocatedFromJournal = getAllocatedByVoucherIdFromJournal(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
-    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }> = [];
+    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; title?: string }> = [];
     for (const v of vouchersForDisplay) {
       if ((v.type !== "sale" && v.type !== "purchase") || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
@@ -764,6 +764,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         userId: fallbackUserId,
         userName: fallbackUserName,
         narration: (v as any).narration,
+        title: (v as any).title,
       });
     }
     return { overdueTransactions: list, hasOverdueTransactions: list.length > 0 };

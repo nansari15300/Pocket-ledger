@@ -12,6 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -440,6 +441,7 @@ export function CreateNoteForm({
       const isEdit = !!voucher?.id;
       const voucherDate = values.date instanceof Date ? values.date : new Date(values.date);
       
+      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -450,7 +452,6 @@ export function CreateNoteForm({
         assertCanEdit(canEditRecord, isOwnRecord);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
-        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (voucher?.id && companyId) {
@@ -467,6 +468,18 @@ export function CreateNoteForm({
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
+      }
+
+      const fp = runFiscalVoucherPreflight({
+        company,
+        can,
+        isEditing: isEdit,
+        recordDate: voucherDate,
+        originalVoucherDate: isEdit ? originalVoucherDate : null,
+      });
+      if (fp.ok === false) {
+        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
+        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {

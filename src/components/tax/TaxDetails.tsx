@@ -55,10 +55,11 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -153,6 +154,7 @@ export function TaxDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
@@ -322,10 +324,10 @@ export function TaxDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -568,6 +570,7 @@ export function TaxDetails({
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceActions={undefined}
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
@@ -845,6 +848,7 @@ export function TaxDetails({
                     </EditTaxDialog>
                   }
                   showNarration={showNarration}
+                  narrationNoteSearch={narrationNoteSearch}
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
                   periodDr={periodDr}
                   periodCr={periodCr}
@@ -872,6 +876,11 @@ export function TaxDetails({
                 <Checkbox id="show-narration-tax" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-tax" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-tax"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

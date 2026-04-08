@@ -47,6 +47,7 @@ import { Checkbox } from "../ui/checkbox";
 import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError } from "@/lib/voucherActionsClient";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
@@ -293,6 +294,29 @@ export function CreatePaymentInForm({
     
     if (!voucher && !canPerformBackdatedAction("entry", data.date)) {
       sonnerToast.error("Permission Denied", { description: "You cannot create a voucher for this date based on your role's permissions."});
+      return;
+    }
+
+    const isEditDi = !!(voucher?.id || savedVoucherId);
+    const voucherDateDi = data.date instanceof Date ? data.date : new Date(data.date);
+    let originalVoucherDateDi: Date = voucherDateDi;
+    if (voucher?.date) {
+      originalVoucherDateDi = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
+    } else if (savedVoucherId) {
+      const ev = allVouchers.find((v: { id: string }) => v.id === savedVoucherId);
+      if (ev?.date) {
+        originalVoucherDateDi = ev.date?.toDate ? ev.date.toDate() : new Date(ev.date as string);
+      }
+    }
+    const fpDi = runFiscalVoucherPreflight({
+      company,
+      can,
+      isEditing: isEditDi,
+      recordDate: voucherDateDi,
+      originalVoucherDate: isEditDi ? originalVoucherDateDi : null,
+    });
+    if (fpDi.ok === false) {
+      if (fpDi.message) sonnerToast.error("Permission Denied", { description: fpDi.message });
       return;
     }
 

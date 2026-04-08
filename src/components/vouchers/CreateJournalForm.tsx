@@ -91,6 +91,7 @@ import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentO
 import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
@@ -1104,6 +1105,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
+      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -1114,7 +1116,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
-        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -1136,6 +1137,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
+      }
+
+      // Split-books prior-year permission + merge-mode divider impact confirm
+      const fp = runFiscalVoucherPreflight({
+        company,
+        can,
+        isEditing: isEdit,
+        recordDate: voucherDate,
+        originalVoucherDate: isEdit ? originalVoucherDate : null,
+      });
+      if (fp.ok === false) {
+        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
+        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {

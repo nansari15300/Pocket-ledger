@@ -31,7 +31,9 @@ export type Permission =
   | "view_voucher_history"
   | "reset_voucher_history"
   | "add_link"
-  | "edit_link";
+  | "edit_link"
+  /** Split-books FY mode: allow dated entries before company fiscalYearStart */
+  | "edit_prior_fiscal_year_split_books";
 
 export type PermissionInfo = {
   key: Permission;
@@ -105,7 +107,13 @@ export const PermissionGroups: PermissionGroup[] = [
             { key: "add_link", label: "Add Link (Link to Txns)" },
             { key: "edit_link", label: "Edit Link (Unlink / Change allocation)" },
         ]
-    }
+    },
+    {
+        title: "Fiscal period",
+        permissions: [
+            { key: "edit_prior_fiscal_year_split_books", label: "Edit vouchers before current fiscal year (split books mode)" },
+        ],
+    },
 ];
 
 export const allPermissions = PermissionGroups.flatMap(group => group.permissions.map(p => p.key));

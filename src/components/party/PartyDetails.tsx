@@ -5,6 +5,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
+import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import type { Party, Group } from "@/components/party/types";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -81,10 +82,11 @@ import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesT
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
-  sortTransactions,
+  sortTransactionsWithFiscalMergeForCompany,
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
@@ -242,6 +244,7 @@ export function PartyDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
+  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
     try {
@@ -516,10 +519,10 @@ export function PartyDetails({
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
-        sortTransactions(statusFilteredTransactions, sortBy, sortOrder),
+        sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
         openingBalanceForPeriod
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod]
+    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -635,6 +638,8 @@ export function PartyDetails({
         showDrCr: company.showDrCr,
         showCurrencySymbol: company.showCurrencySymbol,
         logoUrl: company.logoUrl,
+        country: company.country,
+        fiscalYearStart: company.fiscalYearStart,
       },
       title: getPrintTitle(variant),
       context: "party",
@@ -650,6 +655,8 @@ export function PartyDetails({
       userNames: mergedUserNames,
       journalAccountNames: journalAccountNames,
       billWise: variant === "bill_wise",
+      fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
+      fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
     }, true);
   };
@@ -802,6 +809,7 @@ export function PartyDetails({
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceActions={undefined}
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={mergedUserNames}
@@ -1199,6 +1207,7 @@ export function PartyDetails({
                 ) : null
               }
               showNarration={showNarration}
+              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={mergedUserNames}
@@ -1236,6 +1245,11 @@ export function PartyDetails({
                 <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked: boolean) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
+              <NarrationNoteSearchInput
+                id="narration-search-party"
+                value={narrationNoteSearch}
+                onChange={setNarrationNoteSearch}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

@@ -113,6 +113,15 @@ export type Company = {
     voucherHistoryLimit?: number;
     /** When history full: block_edit = disallow edit; allow_edit_delete_last = allow edit, overwrite oldest. */
     voucherHistoryFullBehavior?: 'block_edit' | 'allow_edit_delete_last';
+    /**
+     * off = koi partition nahi; merge = ek hi company, nayi FY ki pehli date par table/print me divider;
+     * separate = alag books ke liye mostly nayi company (UI me guide + yahan sirf mode record).
+     */
+    fiscalSplitMode?: 'off' | 'merge' | 'separate';
+    /** Merge mode: nayi fiscal period ki pehli din (AD) — is din aur baad ke vouchers divider ke niche. */
+    fiscalMergePartitionAt?: Timestamp;
+    /** Optional custom divider text (print + live table). */
+    fiscalPartitionLabel?: string;
 };
 
 type CompanyContextType = {

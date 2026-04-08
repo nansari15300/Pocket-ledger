@@ -11,13 +11,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { FilePreview } from "@/components/vouchers/FilePreview";
+import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { differenceInDays } from "date-fns";
@@ -30,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
 import { motion } from "framer-motion";
+import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 
 export type Context =
   | "party"
@@ -529,7 +525,30 @@ export const TransactionRow = React.memo(
     blinkMode,
     animateLayout = false,
     statusBillWiseOnly = false,
+    /** Full table colspan (partition banner row ke liye TransactionsTable se). */
+    fullRowColSpan,
   }: any) => {
+    // Merge fiscal mode: purane / naye FY ke beech full-width divider — amounts / approve menu nahi.
+    if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+      const span = typeof fullRowColSpan === "number" && fullRowColSpan > 0 ? fullRowColSpan : 12;
+      const label =
+        typeof (transaction as any)._partitionLabel === "string" && (transaction as any)._partitionLabel
+          ? (transaction as any)._partitionLabel
+          : "── Closing fiscal period · New fiscal period ──";
+      return (
+        <motion.tr
+          layout={animateLayout ? "position" : false}
+          initial={false}
+          className="cursor-default border-y-2 border-blue-600/55 bg-blue-50/90 dark:bg-blue-950/45 hover:!bg-blue-50/90 dark:hover:!bg-blue-950/45"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <TableCell colSpan={span} className="py-2.5 px-3 text-center align-middle">
+            <span className="text-xs font-semibold uppercase tracking-wide text-blue-900 dark:text-blue-100">{label}</span>
+          </TableCell>
+        </motion.tr>
+      );
+    }
+
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
     const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
     const swColor = hasSpendWiseColor && (spendWiseGroupColorIndex === 1 ? "green" : spendWiseGroupColorIndex === 2 ? "pink" : "blue");
@@ -656,64 +675,57 @@ export const TransactionRow = React.memo(
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
-              <TooltipProvider delayDuration={200}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex cursor-help">
-                      <CheckCircle className="h-4 w-4 text-green-600" aria-label="Has attachment" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" sideOffset={8} className="p-0 border bg-background shadow-lg z-[9999]">
-                    <div className="max-h-[85vh] overflow-y-auto rounded-lg bg-background">
-                      <div className="flex flex-col gap-3 p-2">
-                        {(transaction.fileUrls as string[]).map((url, idx) => {
-                          const cleanUrl = String(url).split("?")[0].toLowerCase();
-                          const isImage = cleanUrl.match(/\.(jpe?g|png|gif|webp|bmp|svg)$/) || String(url).startsWith("data:image/");
-                          const isPdf =
-                            cleanUrl.endsWith(".pdf") ||
-                            String(url).toLowerCase().includes(".pdf") ||
-                            String(url).startsWith("data:application/pdf");
-                          // APK/static/mobile: app ke andar preview; desktop: nayi tab
-                          const openAtt = () =>
-                            void openAttachmentInApp(url, {
-                              kind: isImage ? "image" : isPdf ? "pdf" : "other",
-                            });
-                          return (
-                            <div key={idx} className="flex w-[800px] flex-shrink-0 flex-col gap-1">
-                              <div className="flex min-h-[400px] items-center justify-center overflow-hidden rounded-lg border bg-background">
-                                {isImage ? (
-                                  <img
-                                    src={url}
-                                    alt=""
-                                    className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
-                                    loading="eager"
-                                    onClick={openAtt}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(e) => e.key === "Enter" && openAtt()}
-                                  />
-                                ) : (
-                                  <FilePreview
-                                    file={url}
-                                    size={800}
-                                    disabled={false}
-                                    objectFit="contain"
-                                    enableHoverFullPreview={false}
-                                    showFormatBadge={false}
-                                  />
-                                )}
-                              </div>
-                              <p className="text-center text-[10px] font-semibold text-muted-foreground">
-                                {getAttachmentFormatLabel(url)}
-                              </p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <AttachmentHoverPortal
+                triggerClassName="cursor-help"
+                preview={
+                  <div className="flex flex-col gap-3">
+                    {(transaction.fileUrls as string[]).map((url, idx) => {
+                      const cleanUrl = String(url).split("?")[0].toLowerCase();
+                      const isImage = cleanUrl.match(/\.(jpe?g|png|gif|webp|bmp|svg)$/) || String(url).startsWith("data:image/");
+                      const isPdf =
+                        cleanUrl.endsWith(".pdf") ||
+                        String(url).toLowerCase().includes(".pdf") ||
+                        String(url).startsWith("data:application/pdf");
+                      const openAtt = () =>
+                        void openAttachmentInApp(url, {
+                          kind: isImage ? "image" : isPdf ? "pdf" : "other",
+                        });
+                      return (
+                        <div key={idx} className="flex w-full min-w-0 flex-col gap-1">
+                          <div className="flex min-h-[400px] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-zinc-600 dark:bg-zinc-900">
+                            {isImage ? (
+                              <img
+                                src={url}
+                                alt=""
+                                className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
+                                loading="eager"
+                                onClick={openAtt}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => e.key === "Enter" && openAtt()}
+                              />
+                            ) : (
+                              <FilePreview
+                                file={url}
+                                size={800}
+                                disabled={false}
+                                objectFit="contain"
+                                enableHoverFullPreview={false}
+                                showFormatBadge={false}
+                              />
+                            )}
+                          </div>
+                          <p className="text-center text-[10px] font-semibold text-muted-foreground">
+                            {getAttachmentFormatLabel(url)}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                }
+              >
+                <CheckCircle className="h-4 w-4 text-green-600" aria-label="Has attachment" />
+              </AttachmentHoverPortal>
             ) : (
               "-"
             )}

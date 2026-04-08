@@ -53,6 +53,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -139,6 +140,7 @@ function PartyPageContent() {
       return true;
     }
   });
+  const [overdueNarrationNoteSearch, setOverdueNarrationNoteSearch] = useState("");
 
   const selectedParty = activeView === 'parties' ? selected as Party : null;
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
@@ -182,6 +184,7 @@ function PartyPageContent() {
         userId: row.userId,
         userName: row.userName,
         narration: row.narration,
+        title: (v as any)?.title,
         dueDate: row.dueDate,
         isApproved: v?.isApproved,
         partyName: row.partyName,
@@ -207,6 +210,7 @@ function PartyPageContent() {
         (t.voucherNumber || "").toLowerCase().includes(q) ||
         (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
         (t.narration || "").toLowerCase().includes(q) ||
+        String((t as any).title || "").toLowerCase().includes(q) ||
         (t.partyName || "").toLowerCase().includes(q) ||
         String(amt || 0).toLowerCase().includes(q) ||
         userStr.toLowerCase().includes(q)
@@ -588,7 +592,7 @@ function PartyPageContent() {
             </p>
           </div>
           {/* Search */}
-          <div className="p-2 border-b flex-shrink-0">
+          <div className="p-2 border-b flex-shrink-0 space-y-2">
             <div className="flex items-stretch gap-2">
               <div className="flex-1 min-w-0 h-9 relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
@@ -600,6 +604,12 @@ function PartyPageContent() {
                 />
               </div>
             </div>
+            <NarrationNoteSearchInput
+              id="narration-search-party-overdue-mobile"
+              value={overdueNarrationNoteSearch}
+              onChange={setOverdueNarrationNoteSearch}
+              className="w-full min-w-0"
+            />
           </div>
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
           <div
@@ -612,6 +622,7 @@ function PartyPageContent() {
               contextId={OVERDUE_ACCOUNT_ID}
               openingBalance={0}
               showNarration={overdueShowNarration}
+              narrationNoteSearch={overdueNarrationNoteSearch}
               userNames={mergedUserNames}
               accountNames={overduePartyNames}
               onRowClick={handleOverdueRowClick}

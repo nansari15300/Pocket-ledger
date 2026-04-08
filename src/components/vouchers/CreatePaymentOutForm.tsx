@@ -32,6 +32,7 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -370,12 +371,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const totalLinked = useMemo(() => linkedToRows.reduce((s, r) => s + r.amount, 0), [linkedToRows]);
 
-  /** Report effective has-links to dialog: 1 link → fields disabled; all unlink → edit enable. Applies to Party, Staff, Tax, Expense equally. */
+  /** Report effective has-links to dialog — align with hasPaymentLinks: only positive bill-wise rows / real spend ids; stub rows must not lock edit. */
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
-    const hasLinks = allocations.length > 0 || (linkedPaymentInIds?.length ?? 0) > 0;
-    onEffectiveLinksChange(hasLinks);
-  }, [onEffectiveLinksChange, allocations.length, linkedPaymentInIds?.length]);
+    const hasBill = allocations.some((a) => getAllocationTotal(a) > 0);
+    const hasSpend = (linkedPaymentInIds ?? []).some(Boolean);
+    onEffectiveLinksChange(hasBill || hasSpend);
+  }, [onEffectiveLinksChange, allocations, linkedPaymentInIds]);
 
   /** Per target voucher: amount already linked by other payment outs (for "Linked on others" column in bill-wise table). */
   const linkedOnOthersByVoucherId = useMemo(() => {
@@ -757,6 +759,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
+      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -768,7 +771,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord, currentVoucher);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
-        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -790,6 +792,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
+      }
+
+      const fp = runFiscalVoucherPreflight({
+        company,
+        can,
+        isEditing: isEdit,
+        recordDate: voucherDate,
+        originalVoucherDate: isEdit ? originalVoucherDate : null,
+      });
+      if (fp.ok === false) {
+        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
+        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
@@ -1987,7 +2001,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="amount"
                 render={({ field }: any) => {
-                  const hasLinks = allocations.length > 0;
+                  const hasLinks = allocations.some((a) => getAllocationTotal(a) > 0);
                   const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                   return (
                   <FormItem>

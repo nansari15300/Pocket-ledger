@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DayPicker } from "react-day-picker";
 
 import { cn } from "@/lib/utils";
+import { calendarPanelClassName } from "@/lib/calendarChrome";
 import { buttonVariants } from "@/components/ui/button";
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>;
@@ -17,10 +18,7 @@ function Calendar({
 }: CalendarProps) {
   return (
     <div
-      className={cn(
-        "p-3 border rounded-lg shadow-md bg-card text-card-foreground w-full",
-        className
-      )}
+      className={cn(calendarPanelClassName, className)}
     >
       <DayPicker
         showOutsideDays={showOutsideDays}

@@ -32,6 +32,7 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -616,13 +617,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** For Link Pay dialog: outflow voucher ids that currently link to this Payment In. */
   const linkedPaymentOutSelectedIds = useMemo(() => spendWiseLinkedToMeRows.map((r) => r.id), [spendWiseLinkedToMeRows]);
 
-  /** Report effective has-links to dialog: 1 link → fields disabled; all unlink → edit enable. Applies to Party, Staff, Tax, Income equally. */
+  /** Dialog lock: positive bill-wise rows or real spend-wise / pending link — not empty allocation stubs or display-only linked nos. */
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
-    const spendWiseLinked = spendWiseLinkedToMeRows.length > 0 || (pendingLinkedPaymentOut?.ids?.length ?? 0) > 0;
-    const hasLinks = allocations.length > 0 || spendWiseLinked;
-    onEffectiveLinksChange(hasLinks);
-  }, [onEffectiveLinksChange, allocations.length, spendWiseLinkedToMeRows.length, pendingLinkedPaymentOut?.ids?.length]);
+    const hasBill = allocations.some((a) => getAllocationTotal(a) > 0);
+    const spendWiseLinked =
+      spendWiseLinkedToMeRows.length > 0 || (pendingLinkedPaymentOut?.ids?.some(Boolean) ?? false);
+    onEffectiveLinksChange(hasBill || spendWiseLinked);
+  }, [onEffectiveLinksChange, allocations, spendWiseLinkedToMeRows.length, pendingLinkedPaymentOut?.ids]);
 
   /** Names for "To" column in Link Pay dialog (party, staff, account, expense). */
   const paymentOutDialogNames = useMemo(() => {
@@ -767,6 +769,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
+      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -778,7 +781,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord, currentVoucher);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
-        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -800,6 +802,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
+      }
+
+      const fp = runFiscalVoucherPreflight({
+        company,
+        can,
+        isEditing: isEdit,
+        recordDate: voucherDate,
+        originalVoucherDate: isEdit ? originalVoucherDate : null,
+      });
+      if (fp.ok === false) {
+        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
+        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
@@ -1799,7 +1813,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="amount"
                 render={({ field }: any) => {
-                  const hasLinks = allocations.length > 0;
+                  const hasLinks = allocations.some((a) => getAllocationTotal(a) > 0);
                   const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                   return (
                   <FormItem>

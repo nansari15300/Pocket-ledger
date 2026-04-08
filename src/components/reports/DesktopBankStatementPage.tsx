@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect } from "@/lib/printDirect";
+import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
+import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import { buildBankAccountSpendWiseRows } from "@/lib/buildBankAccountSpendWiseRows";
 import { useSpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
@@ -177,14 +179,8 @@ export default function DesktopBankStatementPage() {
 
   const handleEditVoucher = useCallback(
     (voucher: any) => {
-      // Spend-wise synthetic ids (-in-, -ob-link) ko real voucher id par map karo (AccountDetails jaisa).
-      const rawId = typeof voucher?.id === "string" ? voucher.id : "";
-      const resolvedId =
-        voucher?._baseVoucherId ??
-        (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
-        rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
-        rawId);
-      if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
+      const resolvedId = resolveLedgerRowToVoucherId(voucher);
+      if (voucher?.type === "opening_balance" || !resolvedId) {
         return;
       }
       openingModalRef.current = true;
@@ -362,6 +358,8 @@ export default function DesktopBankStatementPage() {
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
+          country: company.country,
+          fiscalYearStart: company.fiscalYearStart,
         },
         title: spendWiseActive
           ? `Spend Wise ${selectedAccount ? "Account" : "Group"} Statement: ${entityName}`
@@ -378,6 +376,8 @@ export default function DesktopBankStatementPage() {
         preserveOrder: spendWiseActive,
         spendWise: spendWiseActive,
         billWise: false,
+        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
+        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       },
       true
     );

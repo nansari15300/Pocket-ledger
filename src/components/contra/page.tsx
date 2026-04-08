@@ -29,6 +29,7 @@ import { VoucherTypeFilter } from "../vouchers/VoucherTypeFilter";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "../ui/input";
 import { TransactionsTable } from "../vouchers/TransactionsTable";
+import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { useVouchers } from "@/hooks/useVouchers";
 import { Skeleton } from "../ui/skeleton";
 import { useTransactions } from "@/hooks/use-transactions";
@@ -124,6 +125,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
     const [daybookRowsPerPage, setDaybookRowsPerPage] = useState('all');
     const [daybookVoucherTypes, setDaybookVoucherTypes] = useState<string[]>(['all']);
     const [showDaybookNarration, setShowDaybookNarration] = useState(false);
+    const [daybookNarrationNoteSearch, setDaybookNarrationNoteSearch] = useState("");
     const [items, setItems] = useState<Item[]>([]);
     const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
     const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
@@ -377,6 +379,11 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                            <Checkbox id="show-narration-daybook" checked={showDaybookNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                            <label htmlFor="show-narration-daybook" className="text-sm font-medium leading-none">Show Narration</label>
                         </div>
+                        <NarrationNoteSearchInput
+                          id="narration-search-contra-daybook"
+                          value={daybookNarrationNoteSearch}
+                          onChange={setDaybookNarrationNoteSearch}
+                        />
                         <Button variant="outline" size="icon" onClick={handlePrint}><Printer className="h-4 w-4" /></Button>
                         <div className="flex items-center space-x-2">
                             <span className="text-sm font-medium">Rows:</span>
@@ -402,6 +409,7 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                 transactions={daybookTransactions || []}
                                 context="daybook" 
                                 showNarration={showDaybookNarration}
+                                narrationNoteSearch={daybookNarrationNoteSearch}
                                 journalAccountNames={journalAccountNames}
                                 userNames={userNames}
                                 onRowClick={handleEditVoucher}

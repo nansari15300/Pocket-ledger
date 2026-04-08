@@ -31,7 +31,7 @@ import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CheckCircle } from "lucide-react";
-import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
+import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId, hasJournalBillWiseLinkToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
@@ -412,9 +412,11 @@ export function AddVoucherDialog(props: any) {
     ? { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg }
     : voucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
+  // Journal → Payment In/Out: real link is on journal.allocations; ignore payment row linkedFromVoucherNos (often table-only enrichment).
   const hasBillWiseLinks =
     !!effectiveVoucher?.id &&
     (hasPaymentLinks(effectiveVoucher) ||
+      hasJournalBillWiseLinkToVoucherId(effectiveVoucher.id, vouchers || []) ||
       ((effectiveVoucher.type === "sale" || effectiveVoucher.type === "purchase") &&
         hasAllocationsToVoucherId(effectiveVoucher.id, vouchers || [])));
   const hasSpendWise = !!effectiveVoucher?.id && hasSpendWiseLinks(effectiveVoucher, vouchers || []);

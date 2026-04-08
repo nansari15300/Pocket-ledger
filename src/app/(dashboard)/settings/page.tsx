@@ -5,7 +5,7 @@ import { Suspense, useState, useEffect, useLayoutEffect, useMemo, useCallback } 
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight } from "lucide-react";
+import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -16,6 +16,7 @@ import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { AnimationSettings } from "@/components/settings/AnimationSettings";
 import { HandoverManager } from "@/components/settings/HandoverManager";
 import { CompanySettings } from "@/components/settings/CompanySettings";
+import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { DangerZone } from "@/components/settings/DangerZone";
 import { CurrencySettings } from "@/components/settings/CurrencySettings";
 import { DisplaySettings } from "@/components/settings/DisplaySettings";
@@ -32,6 +33,7 @@ import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
+    { id: "fiscal_split", title: "Fiscal year & split", icon: CalendarRange, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     { id: "devices", title: "Synced devices", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
@@ -184,6 +186,8 @@ function SettingsPageContent() {
         switch (activeView) {
             case "company":
                 return can('configure_company_settings') ? <CompanySettings /> : null;
+            case "fiscal_split":
+                return can('configure_company_settings') ? <FiscalSplitSettings /> : null;
             case "sharing":
                 return can('manage_users_roles') ? (
                     <PermissionRouteGuard permission="manage_users_roles">

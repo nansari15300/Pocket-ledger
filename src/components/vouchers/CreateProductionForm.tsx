@@ -26,6 +26,7 @@ import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
+import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { firestore } from "@/lib/firebase";
 import { collection, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
@@ -495,14 +496,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (!user || !companyId) return;
 
     try {
+      const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
+      let originalVoucherDate: Date = voucherDate;
       if (isEditing) {
         const isOwnRecord = voucher?.userId === user.uid;
         assertCanEdit(canEditRecord, isOwnRecord, voucher);
-        const originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
+        originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         assertCanPerformBackdated(canPerformBackdatedAction, "edit", originalVoucherDate);
       } else {
         assertCan(can, "create_records");
         assertCanPerformBackdated(canPerformBackdatedAction, "create", data.date);
+      }
+
+      const fp = runFiscalVoucherPreflight({
+        company,
+        can,
+        isEditing: isEditing,
+        recordDate: voucherDate,
+        originalVoucherDate: isEditing ? originalVoucherDate : null,
+      });
+      if (fp.ok === false) {
+        if (fp.message) toast({ variant: "destructive", title: "Permission Denied", description: fp.message });
+        return;
       }
 
       setIsLoading(true);

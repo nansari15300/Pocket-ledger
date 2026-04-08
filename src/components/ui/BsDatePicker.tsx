@@ -8,7 +8,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useCalendarMonths } from "@/hooks/use-mobile";
-import NepaliCalendar from "@/components/ui/nepali-calendar";
+import NepaliCalendar, { type EntryDateRangeAD } from "@/components/ui/nepali-calendar";
 
 type BsDatePickerBaseProps = {
   numberOfMonths?: number;
@@ -16,6 +16,8 @@ type BsDatePickerBaseProps = {
   disabled?: boolean;
   children?: React.ReactNode;
   className?: string;
+  /** Min/max voucher dates for this company — shown above BS grid when set (fiscal year edit UX). */
+  entryDateRangeAD?: EntryDateRangeAD | null;
 };
 
 type BsDatePickerConditionalProps =
@@ -40,7 +42,7 @@ function isValidForBS(date?: Date | null): boolean {
     return canConvertAdDateToBs(date);
 }
 
-export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
+export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className, entryDateRangeAD = null }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
   const calendarMonths = useCalendarMonths(); // mobile: 1 month, PC: 2 months (date range)
@@ -131,6 +133,7 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
             isRange={isRange}
             numberOfMonths={numberOfMonths}
             transactionDates={transactionDates}
+            entryDateRangeAD={entryDateRangeAD}
         />
       </PopoverContent>
     </Popover>

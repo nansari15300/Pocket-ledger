@@ -406,12 +406,43 @@ export function mergeLinkedRows(incoming: LinkedAmountRow[], outgoing: LinkedAmo
   return result;
 }
 
-/** Returns true if the voucher has payment links (allocations or linked voucher refs). Such vouchers should not be deleted until unlinked. */
+/**
+ * True when some journal voucher bill-wise row allocates to this voucher (mirror of use-transactions status enrichment).
+ * Needed because we intentionally ignore linkedFromVoucherNos on payment rows for edit-lock — those arrays are often UI-only.
+ */
+export function hasJournalBillWiseLinkToVoucherId(voucherId: string | undefined, allVouchers: any[]): boolean {
+  if (!voucherId || !Array.isArray(allVouchers)) return false;
+  for (const v of allVouchers) {
+    if (v.isDeleted || v.type !== "journal") continue;
+    const allocations = (v.allocations as Allocation[] | undefined) ?? [];
+    if (allocations.some((a) => a.voucherId === voucherId && getAllocationTotal(a) > 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true if the voucher has real bill/spend link data on the document (not display-only linkedFrom/linkedTo nos from use-transactions).
+ * Payment In/Out: linkedFromVoucherNos can list journals from table enrichment even when the edit dialog should follow allocations + spend ids only — that mismatch looked like "fiscal companies break edit".
+ */
 export function hasPaymentLinks(voucherData: any): boolean {
   if (!voucherData) return false;
+  const alloc = (voucherData.allocations as any[] | undefined) ?? [];
+  if (alloc.some((a) => getAllocationTotal(a) > 0)) return true;
+  const type = voucherData.type;
+  if (type === "payment_out" || type === "direct_expense") {
+    const ids = (voucherData.linkedPaymentInIds as string[] | undefined) ?? [];
+    if (ids.some(Boolean)) return true;
+  }
+  if (
+    type === "payment_in" ||
+    type === "payment_out" ||
+    type === "direct_income" ||
+    type === "direct_expense"
+  ) {
+    return false;
+  }
   const from = (voucherData.linkedFromVoucherNos as string[] | undefined) ?? [];
   const to = (voucherData.linkedToVoucherNos as string[] | undefined) ?? [];
-  const alloc = (voucherData.allocations as any[] | undefined) ?? [];
   return from.length > 0 || to.length > 0 || alloc.length > 0;
 }
 
@@ -440,7 +471,7 @@ export function hasSpendWiseLinks(voucherData: any, allVouchers: any[]): boolean
   const type = voucherData.type;
   if (type === "payment_out" || type === "direct_expense") {
     const ids = (voucherData.linkedPaymentInIds as string[] | undefined) ?? [];
-    return ids.length > 0;
+    return ids.some(Boolean);
   }
   if (type === "payment_in" || type === "direct_income") {
     return allVouchers.some(

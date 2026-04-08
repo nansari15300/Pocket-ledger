@@ -15,10 +15,19 @@ import {
 } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
+import {
+  calendarPanelClassName,
+  calendarSelectContentClassName,
+  calendarMonthSelectItemClassName,
+} from "@/lib/calendarChrome";
 import { isSameDay, startOfDay } from "date-fns";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
+import { YearSelectShowMore } from "./year-select-show-more";
+import { CalendarMonthWheel } from "./calendar-month-wheel";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useDate } from "@/hooks/useDate";
 
+/** When set, shown above month nav (e.g. existing company voucher span while editing fiscal year). */
+export type EntryDateRangeAD = { first: Date; last: Date };
 
 type NepaliCalendarProps = {
   valueAD?: Date | DateRange;
@@ -27,6 +36,7 @@ type NepaliCalendarProps = {
   transactionDates?: Date[],
   isRange?: boolean,
   disabled?: boolean,
+  entryDateRangeAD?: EntryDateRangeAD | null;
 };
 
 /** AD → BS for initial view: same rules as formatDateBS / BsDatePicker (nepali + datex-bs). */
@@ -35,7 +45,8 @@ function isInitialAdInBsRange(date?: Date | null): boolean {
   return canConvertAdDateToBs(date);
 }
 
-export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, transactionDates = [], isRange: isRangeProp, disabled = false }: NepaliCalendarProps) {
+export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, transactionDates = [], isRange: isRangeProp, disabled = false, entryDateRangeAD = null }: NepaliCalendarProps) {
+  const { dateSystem, formatDate, formatDateBS } = useDate();
   const todayAD = new Date();
   const todayBS = adToBs(todayAD);
   const isRange = isRangeProp === undefined ? valueAD === undefined || !(valueAD instanceof Date) : isRangeProp;
@@ -79,15 +90,6 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
     });
   }, [current.y, current.m]);
 
-  const bsYearOptions = React.useMemo(
-    () =>
-      Array.from(
-        { length: BS_CALENDAR_MAX_YEAR - BS_CALENDAR_MIN_YEAR + 1 },
-        (_, i) => BS_CALENDAR_MIN_YEAR + i
-      ),
-    []
-  );
-
   /** Month grid — BS years from datex-bs only (replaces old 2000–2090 cap). */
   function getMonthDays(y: number, m: number) {
     if (y < BS_CALENDAR_MIN_YEAR || y > BS_CALENDAR_MAX_YEAR) return { firstW: 0, days: [] as BSDate[] };
@@ -107,6 +109,14 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
 
   function toUtcNoon(d: Date) {
     return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0));
+  }
+
+  /** One line for header: respect user AD/BS/Both preference when BS conversion exists. */
+  function formatEntryHint(d: Date): string {
+    if (!canConvertAdDateToBs(d)) return formatDate(d);
+    if (dateSystem === "AD") return formatDate(d);
+    if (dateSystem === "BS") return formatDateBS(d);
+    return `${formatDateBS(d)} (${formatDate(d)})`;
   }
 
   function renderMonth(
@@ -133,8 +143,19 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
               return { y: v.y, m: v.m - 1 };
             })}><ChevronLeft className="h-4 w-4" /></Button>
             <div className="flex gap-2">
-                <Select value={String(m)} onValueChange={(newMonth) => setMonth(prev => ({...prev, m: Number(newMonth)}))}><SelectTrigger className="w-[120px] h-8 text-sm"><SelectValue /></SelectTrigger><SelectContent>{NEPALI_MONTHS.map((month, index) => (<SelectItem key={month} value={String(index + 1)}>{month}</SelectItem>))}</SelectContent></Select>
-                <Select value={String(y)} onValueChange={(newYear) => setMonth(prev => ({...prev, y: Number(newYear)}))}><SelectTrigger className="w-[90px] h-8 text-sm"><SelectValue /></SelectTrigger><SelectContent>{bsYearOptions.map((year) => (<SelectItem key={year} value={String(year)}>{year}</SelectItem>))}</SelectContent></Select>
+                <CalendarMonthWheel
+                  labels={NEPALI_MONTHS}
+                  monthIndex={m - 1}
+                  onMonthIndexChange={(i) => setMonth((prev) => ({ ...prev, m: i + 1 }))}
+                  disabled={disabled}
+                />
+                <YearSelectShowMore
+                  value={y}
+                  minYear={BS_CALENDAR_MIN_YEAR}
+                  maxYear={BS_CALENDAR_MAX_YEAR}
+                  onChange={(newYear) => setMonth((prev) => ({ ...prev, y: newYear }))}
+                  disabled={disabled}
+                />
             </div>
             <Button type="button" variant="outline" size="icon" className="h-7 w-7" onClick={() => setMonth((v) => {
               if (v.m === 12) {
@@ -206,7 +227,19 @@ export default function NepaliCalendar({ valueAD, onSelect, numberOfMonths = 2, 
   }
 
   return (
-    <div className="p-3 border rounded-lg shadow-md bg-card text-card-foreground w-full">
+    <div className={calendarPanelClassName}>
+      {entryDateRangeAD ? (
+        <div className="text-xs text-muted-foreground border-b border-border -mx-1 px-1 pb-2 mb-2 space-y-1">
+          <div>
+            <span className="font-medium text-foreground/90">1st entry date:</span>{" "}
+            {formatEntryHint(entryDateRangeAD.first)}
+          </div>
+          <div>
+            <span className="font-medium text-foreground/90">Last entry date:</span>{" "}
+            {formatEntryHint(entryDateRangeAD.last)}
+          </div>
+        </div>
+      ) : null}
       <div className={cn("flex flex-col md:flex-row gap-6", numberOfMonths === 1 && "justify-center")}>
         {renderMonth(current.y, current.m, setCurrent)}
         {isRange && numberOfMonths === 2 && renderMonth(secondMonth.y, secondMonth.m, setSecondMonth)}

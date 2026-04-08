@@ -3,7 +3,9 @@
  * Used by table footer sort dropdown across party, staff, account, etc.
  */
 
+import { startOfDay } from "date-fns";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
+import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 
 /** Pehli load / refresh: footer "Default" (By Date ↑) jaisa — purani date upar, nayi niche */
 export const DEFAULT_TRANSACTION_SORT_ORDER: TransactionSortOrder = "asc";
@@ -43,10 +45,20 @@ function getStatusOrder(t: any): number {
   return -1; // unpaid
 }
 
+function getCreatedAtTime(t: any): number {
+  return t?.createdAt?.toDate ? t.createdAt.toDate().getTime() : 0;
+}
+
+/** Optional: Recent / daybook jahan same date par naya voucher upar chahiye. */
+export type SortTransactionsOptions = {
+  tieBreakCreatedAtDesc?: boolean;
+};
+
 export function sortTransactions<T = any>(
   list: T[],
   sortBy: TransactionSortBy,
-  sortOrder: TransactionSortOrder
+  sortOrder: TransactionSortOrder,
+  options?: SortTransactionsOptions
 ): T[] {
   if (!list.length) return list;
   const mult = sortOrder === "asc" ? 1 : -1;
@@ -54,43 +66,117 @@ export function sortTransactions<T = any>(
   const compare = (a: T, b: T): number => {
     const ta = a as any;
     const tb = b as any;
+    let primary = 0;
     switch (sortBy) {
       case "date": {
         const da = getDate(ta);
         const db = getDate(tb);
-        return mult * (da - db);
+        primary = mult * (da - db);
+        break;
       }
       case "amount": {
         const aa = getAmount(ta);
         const ab = getAmount(tb);
-        return mult * (aa - ab);
+        primary = mult * (aa - ab);
+        break;
       }
       case "voucherNo": {
         const va = (ta?.voucherNumber ?? "").toString();
         const vb = (tb?.voucherNumber ?? "").toString();
-        return mult * va.localeCompare(vb);
+        primary = mult * va.localeCompare(vb);
+        break;
       }
       case "settled": {
         const oa = getOutstanding(ta);
         const ob = getOutstanding(tb);
-        return mult * (oa - ob);
+        primary = mult * (oa - ob);
+        break;
       }
       case "overdue": {
         const oa = getOverdueDays(ta);
         const ob = getOverdueDays(tb);
-        return mult * (ob - oa); // overdue first when desc
+        primary = mult * (ob - oa); // overdue first when desc
+        break;
       }
       case "partial": {
         const sa = getStatusOrder(ta);
         const sb = getStatusOrder(tb);
-        return mult * (sa - sb);
+        primary = mult * (sa - sb);
+        break;
       }
       default:
-        return 0;
+        primary = 0;
     }
+    if (primary !== 0) return primary;
+    if (options?.tieBreakCreatedAtDesc) return getCreatedAtTime(tb) - getCreatedAtTime(ta);
+    return 0;
   };
 
   return [...list].sort(compare);
+}
+
+/** Merge divider ke liye row din — fiscalPartitionRows.rowSortTime jaisa (segment split). */
+function transactionDayStartMs(t: any): number | null {
+  if (!t || t.type === "opening_balance") return null;
+  if (t.type === "fiscal_year_partition") return null;
+  const raw = t?.date;
+  if (!raw) return null;
+  const d =
+    raw instanceof Date ? raw : typeof raw.toDate === "function" ? raw.toDate() : new Date(raw);
+  if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+  return startOfDay(d).getTime();
+}
+
+/**
+ * Merge mode + amount/voucher/bill-wise keys: globally sort se FY lines mix ho kar neela divider jump karta tha.
+ * Pehle purana period block (partition se pehle), phir naya — har block ke andar chosen sort.
+ * `date` sort pura list par hi (timeline).
+ */
+export function sortTransactionsWithFiscalMerge<T = any>(
+  list: T[],
+  sortBy: TransactionSortBy,
+  sortOrder: TransactionSortOrder,
+  options: SortTransactionsOptions | undefined,
+  partitionAt: Date | null | undefined
+): T[] {
+  if (!list.length) return list;
+  if (!partitionAt || isNaN(partitionAt.getTime()) || sortBy === "date") {
+    return sortTransactions(list, sortBy, sortOrder, options);
+  }
+  const boundary = startOfDay(partitionAt).getTime();
+  const noDay: T[] = [];
+  const before: T[] = [];
+  const after: T[] = [];
+  for (const row of list) {
+    const t = row as any;
+    if (t?.type === "fiscal_year_partition") continue;
+    const day = transactionDayStartMs(t);
+    if (day == null) {
+      noDay.push(row);
+      continue;
+    }
+    if (day < boundary) before.push(row);
+    else after.push(row);
+  }
+  const sortSeg = (seg: T[]) => sortTransactions(seg, sortBy, sortOrder, options);
+  return [...noDay, ...sortSeg(before), ...sortSeg(after)];
+}
+
+type FiscalCompanyLike = {
+  fiscalSplitMode?: string;
+  fiscalMergePartitionAt?: { toDate?: () => Date };
+};
+
+/** Company merge partition nikaal kar `sortTransactionsWithFiscalMerge` — callers ko At pass na karna pade. */
+export function sortTransactionsWithFiscalMergeForCompany<T = any>(
+  list: T[],
+  sortBy: TransactionSortBy,
+  sortOrder: TransactionSortOrder,
+  options: SortTransactionsOptions | undefined,
+  company: FiscalCompanyLike | null | undefined
+): T[] {
+  const at = getFiscalMergePartitionDateFromCompany(company);
+  return sortTransactionsWithFiscalMerge(list, sortBy, sortOrder, options, at);
 }
 
 /** Recompute running balance in current visible order (top to bottom), used after custom sorting in statement view. */

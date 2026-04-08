@@ -22,6 +22,7 @@ import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { coerceVoucherDateForStamp, toIsoDateStamp } from "@/lib/voucherDateStamp";
 
 function removeUndefined(obj: any): any {
   if (Array.isArray(obj)) return obj.map(removeUndefined);
@@ -52,8 +53,10 @@ function getChanges(oldData: any, newData: any): Record<string, { from: any; to:
       (oldVal instanceof Date || (oldVal?.toDate instanceof Function)) &&
       (newVal instanceof Date || (newVal?.toDate instanceof Function))
     ) {
-      const oldTime = oldVal instanceof Date ? oldVal.toISOString() : oldVal.toDate().toISOString();
-      const newTime = newVal instanceof Date ? newVal.toISOString() : new Date(newVal).toISOString();
+      const oldD = coerceVoucherDateForStamp(oldVal);
+      const newD = coerceVoucherDateForStamp(newVal);
+      const oldTime = oldD ? oldD.toISOString() : "";
+      const newTime = newD ? newD.toISOString() : "";
       if (oldTime !== newTime) changes[key] = { from: oldData?.[key] ?? null, to: newData?.[key] ?? null };
     } else if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
       changes[key] = { from: oldVal ?? null, to: newData?.[key] ?? null };
@@ -275,16 +278,13 @@ export async function saveVoucher(
     }
   }
 
-  const oldDate =
-    oldData?.date && typeof (oldData as any).date?.toDate === "function"
-      ? (oldData as any).date.toDate()
-      : new Date((oldData as any)?.date);
-  const newDate = cleanVoucherData?.date instanceof Date ? cleanVoucherData.date : new Date(cleanVoucherData?.date);
-  const oldStamp = oldDate?.toISOString?.().slice(0, 10);
-  const newStamp = newDate?.toISOString?.().slice(0, 10);
+  const oldDate = coerceVoucherDateForStamp((oldData as any)?.date);
+  const newDate = coerceVoucherDateForStamp(cleanVoucherData?.date);
+  const oldStamp = toIsoDateStamp(oldDate);
+  const newStamp = toIsoDateStamp(newDate);
   let movedFileObjects: any[] | null = null;
 
-  if (oldStamp && newStamp && oldStamp !== newStamp) {
+  if (oldDate && newDate && oldStamp && newStamp && oldStamp !== newStamp) {
     const vType = cleanVoucherData?.type || (oldData as any)?.type || "sale";
     const filesToMove = (oldData as any)?.files || [];
     if (Array.isArray(filesToMove) && filesToMove.length > 0) {
