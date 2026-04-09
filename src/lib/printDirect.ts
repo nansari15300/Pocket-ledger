@@ -132,6 +132,12 @@ export type PrintPayload = {
   fiscalMergePartitionAt?: Date | null;
   /** Optional custom divider line (same as company settings). */
   fiscalPartitionLabel?: string | null;
+  /** openPrintDirect: dialog mat dikhao (chhota receipt / programmatic). */
+  skipPrintOptionsDialog?: boolean;
+  /** PDF header me logo / placeholder — false = bilkul na (dialog ya manual). */
+  printIncludeLogo?: boolean;
+  /** PDF header me company name, address, phone, PAN — false par sirf date range line. */
+  printIncludeCompanyDetails?: boolean;
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -175,37 +181,45 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     iframeTargetIdOrNewTab instanceof Window;
   const useInAppPdfOverlay = shouldUseInAppPdfPreviewOverlay() && !isIframeId && !isTargetWindow;
 
-  // 1. User gesture bhitra blank window (popup block) — overlay mode ma skip kyunki nayi tab nahin
+  /** Naya tab sirf PDF ready + Continue ke baad — warna khali tab + options modaal eksaath kharab UX */
   let printWindow: Window | null = null;
   const useNewTab =
     !useInAppPdfOverlay &&
     typeof iframeTargetIdOrNewTab !== "string" &&
     !(iframeTargetIdOrNewTab && typeof (iframeTargetIdOrNewTab as Window).location !== "undefined");
 
-  if (useNewTab) {
-    printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      throw new Error("Popup blocked. Please allow popups for this site.");
+  let effectivePayload: PrintPayload = payload;
+  if (!payload.skipPrintOptionsDialog) {
+    const { promptPrintOptions } = await import("@/components/print/PrintOptionsPrompt");
+    const opts = await promptPrintOptions();
+    if (!opts) {
+      return;
     }
-    printWindow.document.write(
-      "<html><head><title>Preparing Print...</title></head><body style=\"display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;margin:0;\">Loading Print Preview...</body></html>"
-    );
-    printWindow.document.close();
+    effectivePayload = {
+      ...payload,
+      printIncludeLogo: opts.printIncludeLogo,
+      printIncludeCompanyDetails: opts.printIncludeCompanyDetails,
+    };
   }
 
-  // Use logo only if already cached so print opens immediately; otherwise proceed without logo and cache for next time
-  let processedPayload = payload;
-  if (payload.company.logoUrl && payload.company.logoUrl.startsWith("http")) {
-    const cached = logoCache.get(payload.company.logoUrl);
+  // Logo: unchecked ya HTTP cache — pdfmake ke liye data URL preferred
+  let processedPayload = effectivePayload;
+  if (effectivePayload.printIncludeLogo === false) {
+    processedPayload = {
+      ...effectivePayload,
+      company: { ...effectivePayload.company, logoUrl: undefined },
+    };
+  } else if (effectivePayload.company.logoUrl && effectivePayload.company.logoUrl.startsWith("http")) {
+    const cached = logoCache.get(effectivePayload.company.logoUrl);
     if (cached) {
       processedPayload = {
-        ...payload,
-        company: { ...payload.company, logoUrl: cached },
+        ...effectivePayload,
+        company: { ...effectivePayload.company, logoUrl: cached },
       };
     } else {
-      processedPayload = { ...payload, company: { ...payload.company, logoUrl: undefined } };
-      fetchLogoAsDataUrl(payload.company.logoUrl).then((dataUrl) => {
-        if (dataUrl) logoCache.set(payload.company.logoUrl!, dataUrl);
+      processedPayload = { ...effectivePayload, company: { ...effectivePayload.company, logoUrl: undefined } };
+      fetchLogoAsDataUrl(effectivePayload.company.logoUrl).then((dataUrl) => {
+        if (dataUrl) logoCache.set(effectivePayload.company.logoUrl!, dataUrl);
       }).catch(() => {});
     }
   }
@@ -228,65 +242,68 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
     } else if (useInAppPdfOverlay) {
       // Toolbar: preview + Print + Share + Close — sab app bhitra
       showInAppPdfPreview(blobUrl, () => URL.revokeObjectURL(blobUrl), {
-        title: payload.title || "Print preview",
+        title: effectivePayload.title || "Print preview",
         fileName: `pocket-ledger-${Date.now()}.pdf`,
       });
-    } else if (printWindow) {
-      // Direct preview: blob URL ma navigate garne so browser PDF viewer turuntai khulcha (click garnu pardaina)
-      printWindow.location.href = blobUrl;
     } else if (iframeTargetIdOrNewTab && typeof (iframeTargetIdOrNewTab as Window).location !== "undefined") {
       (iframeTargetIdOrNewTab as Window).location.href = blobUrl;
-    } else if (useNewTab && !printWindow) {
-      // Capacitor / Electron / Android WebView: window.open null (popup block) — iframe + print ya download
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("title", "Print preview");
-      iframe.setAttribute(
-        "aria-label",
-        "Print preview"
-      );
-      iframe.style.cssText =
-        "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;border:0;background:#fff";
-      document.body.appendChild(iframe);
-      const cleanup = () => {
-        try {
-          URL.revokeObjectURL(blobUrl);
-        } catch {
-          /* ignore */
-        }
-        iframe.remove();
-      };
-      iframe.onload = () => {
-        try {
-          const w = iframe.contentWindow;
-          if (w) {
-            w.focus();
-            w.print();
-          }
-        } catch (e) {
-          console.warn("[printDirect] iframe.print failed, download fallback", e);
+    } else if (useNewTab) {
+      // Continue + PDF tayar hone ke baad tab kholo; popup block ho to iframe fallback
+      printWindow = window.open("", "_blank");
+      if (printWindow) {
+        printWindow.location.href = blobUrl;
+      } else {
+        // Capacitor / Electron / Android WebView: window.open null — iframe + print ya download
+        const iframe = document.createElement("iframe");
+        iframe.setAttribute("title", "Print preview");
+        iframe.setAttribute(
+          "aria-label",
+          "Print preview"
+        );
+        iframe.style.cssText =
+          "position:fixed;inset:0;width:100%;height:100%;z-index:2147483647;border:0;background:#fff";
+        document.body.appendChild(iframe);
+        const cleanup = () => {
           try {
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = `pocket-ledger-print-${Date.now()}.pdf`;
-            a.rel = "noopener";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
+            URL.revokeObjectURL(blobUrl);
           } catch {
             /* ignore */
           }
-          setTimeout(cleanup, 3000);
-          return;
-        }
-        try {
-          iframe.contentWindow?.addEventListener?.("afterprint", cleanup);
-        } catch {
-          /* ignore */
-        }
-        setTimeout(cleanup, 120000);
-      };
-      iframe.onerror = () => cleanup();
-      iframe.src = blobUrl;
+          iframe.remove();
+        };
+        iframe.onload = () => {
+          try {
+            const w = iframe.contentWindow;
+            if (w) {
+              w.focus();
+              w.print();
+            }
+          } catch (e) {
+            console.warn("[printDirect] iframe.print failed, download fallback", e);
+            try {
+              const a = document.createElement("a");
+              a.href = blobUrl;
+              a.download = `pocket-ledger-print-${Date.now()}.pdf`;
+              a.rel = "noopener";
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            } catch {
+              /* ignore */
+            }
+            setTimeout(cleanup, 3000);
+            return;
+          }
+          try {
+            iframe.contentWindow?.addEventListener?.("afterprint", cleanup);
+          } catch {
+            /* ignore */
+          }
+          setTimeout(cleanup, 120000);
+        };
+        iframe.onerror = () => cleanup();
+        iframe.src = blobUrl;
+      }
     }
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
@@ -320,7 +337,12 @@ export async function getPdfBlob(payload: PrintPayload): Promise<Blob | null> {
 
   // Use logo only if cached so PDF builds immediately; otherwise proceed without logo and cache in background
   let processedPayload = payload;
-  if (payload.company.logoUrl && payload.company.logoUrl.startsWith("http")) {
+  if (payload.printIncludeLogo === false) {
+    processedPayload = {
+      ...payload,
+      company: { ...payload.company, logoUrl: undefined },
+    };
+  } else if (payload.company.logoUrl && payload.company.logoUrl.startsWith("http")) {
     const cached = logoCache.get(payload.company.logoUrl);
     if (cached) {
       processedPayload = { ...payload, company: { ...payload.company, logoUrl: cached } };
@@ -372,68 +394,97 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const { formatDate, formatDateBS, formatCurrencyForPrint, formatRunning, numToWords } = getFormatters(p);
   const voucherRowCount = rows.filter((r: any) => r?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE).length;
 
+  const includeLogo = p.printIncludeLogo !== false;
+  const includeCompanyDetails = p.printIncludeCompanyDetails !== false;
+
   const LOGO_SIZE = 60; // 48 * 1.25
   const LOGO_LEFT_INSET = 20;
   const LOGO_TOP_INSET = 20; // space from top of paper (20px)
 
+  // Company lines print toggle: off par sirf period (date range) text — table neeche waisa hi
   const companyInfoStack: Content = {
-    stack: [
-      { text: p.company.name, style: 'header', alignment: 'center' },
-      { text: p.company.address || '', style: 'sub', alignment: 'center', margin: [0, 2, 0, 0] },
-      {
-        text: [
-          p.company.phone ? `Phone: ${p.company.phone}` : '',
-          p.company.pan ? `PAN: ${p.company.pan}` : ''
-        ].filter(Boolean).join(' | '),
-        style: 'sub',
-        alignment: 'center'
-      },
-      { text: p.dateRangeText, style: 'body', alignment: 'center', margin: [0, 5, 0, 0] },
-    ],
-    margin: [0, LOGO_TOP_INSET, 0, 0]
+    stack: includeCompanyDetails
+      ? [
+          { text: p.company.name, style: "header", alignment: "center" },
+          { text: p.company.address || "", style: "sub", alignment: "center", margin: [0, 2, 0, 0] },
+          {
+            text: [p.company.phone ? `Phone: ${p.company.phone}` : "", p.company.pan ? `PAN: ${p.company.pan}` : ""]
+              .filter(Boolean)
+              .join(" | "),
+            style: "sub",
+            alignment: "center",
+          },
+          { text: p.dateRangeText, style: "body", alignment: "center", margin: [0, 5, 0, 0] },
+        ]
+      : [{ text: p.dateRangeText, style: "body", alignment: "center", margin: [0, 5, 0, 0] }],
+    margin: [0, LOGO_TOP_INSET, 0, 0],
   };
 
   const noLogoPlaceholder: Content = {
     table: {
       widths: [LOGO_SIZE],
       heights: [LOGO_SIZE],
-      body: [[
-        {
-          text: 'Pocket Ledger',
-          alignment: 'center' as const,
-          fontSize: 8,
-          fillColor: '#f0f0f0'
-        }
-      ]]
+      body: [
+        [
+          {
+            text: "Pocket Ledger",
+            alignment: "center" as const,
+            fontSize: 8,
+            fillColor: "#f0f0f0",
+          },
+        ],
+      ],
     },
     layout: {
       hLineWidth: () => 0.5,
-      vLineWidth: () => 0.5
+      vLineWidth: () => 0.5,
     },
-    margin: [LOGO_LEFT_INSET, LOGO_TOP_INSET, 0, 0]
+    margin: [LOGO_LEFT_INSET, LOGO_TOP_INSET, 0, 0],
   };
 
-  const leftColumnContent: Content = p.company.logoUrl
-    ? { image: 'companyLogo', width: LOGO_SIZE, height: LOGO_SIZE, margin: [LOGO_LEFT_INSET, LOGO_TOP_INSET, 0, 0] }
-    : noLogoPlaceholder;
+  const leftColumnContent: Content = includeLogo
+    ? p.company.logoUrl
+      ? { image: "companyLogo", width: LOGO_SIZE, height: LOGO_SIZE, margin: [LOGO_LEFT_INSET, LOGO_TOP_INSET, 0, 0] }
+      : noLogoPlaceholder
+    : { text: "", margin: [0, 0, 0, 0] };
 
   const leftRightColumnWidth = LOGO_SIZE + LOGO_LEFT_INSET;
 
-  const header: Content = {
-    columns: [
-      { ...leftColumnContent, width: leftRightColumnWidth },
-      { stack: [companyInfoStack], width: '*' },
-      { width: leftRightColumnWidth, text: '' }
-    ],
-    margin: [0, 0, 0, 10]
-  };
+  const header: Content = includeLogo
+    ? {
+        columns: [
+          { ...leftColumnContent, width: leftRightColumnWidth },
+          { stack: [companyInfoStack], width: "*" },
+          { width: leftRightColumnWidth, text: "" },
+        ],
+        margin: [0, 0, 0, 10],
+      }
+    : {
+        columns: [{ stack: [companyInfoStack], width: "*" }],
+        margin: [0, 0, 0, 10],
+      };
 
+  /** Har page: baen pocket-ledger.com (link), daayan page X of Y */
   const footer = (currentPage: number, pageCount: number): Content => {
     return {
-      text: `Page ${currentPage} of ${pageCount}`,
-      alignment: 'center',
-      margin: [0, 20, 0, 20],
-      fontSize: 8,
+      columns: [
+        {
+          text: "pocket-ledger.com",
+          link: "https://pocket-ledger.com",
+          decoration: "underline",
+          color: "#1d4ed8",
+          alignment: "left",
+          fontSize: 8,
+          margin: [8, 0, 0, 0],
+        },
+        {
+          text: `Page ${currentPage} of ${pageCount}`,
+          alignment: "right",
+          fontSize: 8,
+          margin: [0, 0, 8, 0],
+        },
+      ],
+      margin: [0, 10, 0, 12],
     };
   };
 
@@ -646,7 +697,7 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
       body: { fontSize: 9 }
     }
   };
-  if (p.company.logoUrl) {
+  if (includeLogo && p.company.logoUrl) {
     (docDef as any).images = { companyLogo: p.company.logoUrl };
   }
   return docDef;

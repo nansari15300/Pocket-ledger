@@ -1609,12 +1609,21 @@ export default function DashboardPage() {
                                             <div className="flex flex-col min-h-0">
                                                 <h3 className="text-lg font-semibold mb-2 text-green-600">Inflow</h3>
                                                 <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                    <ScrollArea className="flex-1">
-                                                        <Table>
+                                                    <ScrollArea className="flex-1 min-w-0">
+                                                        <Table className="w-full table-fixed">
                                                             <TableBody>
                                                                 {Object.entries(cashFlowDetails.categorizedInflow).map(([category, items]) => { 
                                                                     if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                    return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (<TableRow key={i.id}><TableCell className="pl-6">{i.name}</TableCell><TableCell className="text-right text-green-600">{formatCurrency(i.amount, {noSuffix: true})}</TableCell></TableRow>))}</React.Fragment> )
+                                                                    return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
+                                                                    <TableRow key={i.id}>
+                                                                      <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
+                                                                        {i.name}
+                                                                      </TableCell>
+                                                                      <TableCell className="w-[42%] text-right text-green-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
+                                                                        {formatCurrency(i.amount, {noSuffix: true})}
+                                                                      </TableCell>
+                                                                    </TableRow>
+                                                                  ))}</React.Fragment> )
                                                                 })}
                                                             </TableBody>
                                                         </Table>
@@ -1627,12 +1636,21 @@ export default function DashboardPage() {
                                             <div className="flex flex-col min-h-0">
                                                 <h3 className="text-lg font-semibold mb-2 text-red-600">Outflow</h3>
                                                 <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                    <ScrollArea className="flex-1">
-                                                        <Table>
+                                                    <ScrollArea className="flex-1 min-w-0">
+                                                        <Table className="w-full table-fixed">
                                                             <TableBody>
                                                                 {Object.entries(cashFlowDetails.categorizedOutflow).map(([category, items]) => { 
                                                                     if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                    return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (<TableRow key={i.id}><TableCell className="pl-6">{i.name}</TableCell><TableCell className="text-right text-red-600">{formatCurrency(i.amount, {noSuffix: true})}</TableCell></TableRow>))}</React.Fragment> )
+                                                                    return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
+                                                                    <TableRow key={i.id}>
+                                                                      <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
+                                                                        {i.name}
+                                                                      </TableCell>
+                                                                      <TableCell className="w-[42%] text-right text-red-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
+                                                                        {formatCurrency(i.amount, {noSuffix: true})}
+                                                                      </TableCell>
+                                                                    </TableRow>
+                                                                  ))}</React.Fragment> )
                                                                 })}
                                                             </TableBody>
                                                         </Table>

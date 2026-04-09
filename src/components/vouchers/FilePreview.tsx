@@ -482,11 +482,11 @@ export function FilePreview({
   // Bade hover panel: nested FilePreview par hover band — infinite tooltip na bane
   const hoverPanel =
     fileInfo.type === "image" && fileInfo.url ? (
-      // eslint-disable-next-line @next/next/no-img-element -- tooltip ke andar Next/Image zaroori nahi
+      // eslint-disable-next-line @next/next/no-img-element -- tooltip ke andar Next/Image zaroori nahi; portal max-h + object-contain = screen fit (scroll kam)
       <img
         src={fileInfo.url}
         alt=""
-        className="max-h-[75vh] max-w-[800px] object-contain"
+        className="h-auto max-h-[min(70vh,calc(100dvh-220px))] w-auto max-w-full object-contain"
       />
     ) : (
       <FilePreview
@@ -525,12 +525,12 @@ export function FilePreview({
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
           preview={
-            <div className="max-h-[85vh] max-w-[min(90vw,820px)] overflow-auto">
+            <>
               {hoverPanel}
               <p className="pt-1 text-center text-[10px] font-semibold text-muted-foreground">
                 {fileInfo.formatLabel}
               </p>
-            </div>
+            </>
           }
         >
           {borderedPreview}

@@ -85,6 +85,8 @@ export async function printPaymentVoucherReceipt(opts: {
           ],
         },
       ],
+      // Chhota receipt: print options dialog skip (turant PDF)
+      skipPrintOptionsDialog: true,
     },
     true
   );

@@ -691,15 +691,17 @@ export const TransactionRow = React.memo(
                           kind: isImage ? "image" : isPdf ? "pdf" : "other",
                         });
                       return (
-                        <div key={idx} className="flex w-full min-w-0 flex-col gap-1">
-                          <div className="flex min-h-[400px] items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-zinc-600 dark:bg-zinc-900">
+                        <div key={idx} className="flex w-full min-w-0 max-w-full flex-col gap-1">
+                          {/* min-h-[400px] hata: mobile par poori image native size — portal me fit + zoom toolbar */}
+                          <div className="flex max-h-[min(70vh,calc(100dvh-220px))] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-zinc-600 dark:bg-zinc-900">
                             {isImage ? (
                               <img
                                 src={url}
                                 alt=""
-                                className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
+                                className="h-auto max-h-full max-w-full w-auto cursor-zoom-in object-contain"
                                 loading="eager"
-                                onClick={openAtt}
+                                onDoubleClick={openAtt}
+                                title="Double-click to open in app viewer"
                                 role="button"
                                 tabIndex={0}
                                 onKeyDown={(e) => e.key === "Enter" && openAtt()}
