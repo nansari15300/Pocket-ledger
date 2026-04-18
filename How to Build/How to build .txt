@@ -1,0 +1,17 @@
+Aapke goal ke liye practical command flow
+cd "D:\Static Build Project"
+
+npm run build:static
+
+npm run cap:copy:android
+
+npm run cap:copy:ios
+
+npm run electron:build:win
+
+npm run electron:build:linux
+
+
+
+Ya single command:
+npm run build:static:all

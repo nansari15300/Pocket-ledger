@@ -1,0 +1,55 @@
+{
+  "name": "pocket-ledger-electron",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:web\" \"npm:dev:electron\"",
+    "dev:web": "cd .. && npm run dev",
+    "dev:electron": "wait-on http://localhost:3000 && electron .",
+    "build:web": "cd .. && npm run build:static",
+    "build": "electron-builder --win --projectDir .",
+    "build:win": "electron-builder --win --projectDir .",
+    "build:linux": "electron-builder --linux --projectDir ."
+  },
+  "build": {
+    "appId": "com.pocketledger.desktop",
+    "productName": "Pocket Ledger",
+    "electronVersion": "41.0.4",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      {
+        "from": "../out",
+        "to": "out",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../public",
+        "to": ".",
+        "filter": [
+          "app-icon.png"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false,
+      "icon": "../public/app-icon.png"
+    },
+    "icon": "../public/app-icon.png"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1",
+    "wait-on": "^9.0.4"
+  },
+  "dependencies": {
+    "serve-handler": "^6.1.7"
+  }
+}

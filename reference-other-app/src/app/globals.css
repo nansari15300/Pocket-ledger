@@ -1,0 +1,1769 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Master–detail lists: grid → dayaan amount (auto width) poora, baayaan naam minmax(0,1fr) + truncate */
+@layer components {
+  .pl-master-list-row {
+    @apply grid w-full max-w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 overflow-hidden;
+  }
+  .pl-master-list-row-leading {
+    @apply flex min-w-0 items-center gap-2 overflow-hidden;
+  }
+  .pl-master-list-row-name {
+    @apply min-w-0 flex-1 truncate text-left text-sm font-medium;
+  }
+  .pl-master-list-row-name-strong {
+    @apply min-w-0 flex-1 truncate text-left text-sm font-semibold;
+  }
+  /* Amount: grid col auto — Rs. xxxx Dr/Cr kabhi clip nahin; naam pehle ghatcha */
+  .pl-master-list-row-amount {
+    @apply justify-self-end text-right text-sm font-medium whitespace-nowrap tabular-nums;
+  }
+  .pl-master-list-row-amount-xs {
+    @apply justify-self-end text-right text-xs font-bold whitespace-nowrap tabular-nums;
+  }
+}
+
+/* Spend-wise group balance: one visible blink per second when balance !== 0 */
+@keyframes spend-wise-balance-blink {
+  0%, 100% { opacity: 1; }
+  5% { opacity: 0; }
+  10% { opacity: 1; }
+}
+.animate-spend-wise-balance-blink {
+  animation: spend-wise-balance-blink 1s ease-in-out infinite;
+}
+
+/* Related row blink: same voucher, not selected — subtle pulse once per second */
+@keyframes spend-wise-related-blink {
+  0%, 100% { opacity: 1; }
+  5% { opacity: 0.6; }
+  10% { opacity: 1; }
+}
+.animate-spend-wise-related-blink {
+  animation: spend-wise-related-blink 1s ease-in-out infinite;
+}
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 22 96% 54%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 142 76% 36%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 22 96% 54%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222.2 84% 4.9%;
+    --sidebar-primary: 22 96% 54%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 210 20% 88%;
+    --sidebar-accent-foreground: 222.2 47.4% 11.2%;
+    --sidebar-border: 210 20% 80%;
+    --sidebar-ring: 22 96% 54%;
+  }
+
+  .theme-pure-white { 
+    --background: 0 0% 100%; 
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222.2 84% 4.9%;
+  }
+  .theme-soft-green { 
+    --background: 160 70% 95%; 
+    --foreground: 95 35% 20%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+    --muted: 95 35% 85%;
+  }
+  .theme-dim-soft-green { 
+    --background: 140 200% 96.5%; 
+    --foreground: 540 50% 25%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+  }
+  .theme-soft-blue { 
+    --background: 197 71% 94%;
+    --foreground: 210 90% 25%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+  }
+  .theme-sky-blue { 
+    --background: 197 71% 85%;
+    --foreground: 159 89% 25%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+  }
+  .theme-soft-yellow { 
+    --background: 48 100% 96%; 
+    --foreground: 45 95% 25%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+  }
+  .theme-soft-pink { 
+    --background: 350 100% 94%; 
+    --foreground: 350 80% 25%; 
+    --card: var(--background);
+    --card-foreground: var(--foreground);
+    --popover: var(--background);
+    --popover-foreground: var(--foreground);
+    --sidebar-background: var(--background);
+    --sidebar-foreground: var(--foreground);
+  }
+
+  /* Colorfull: sab jagah same dim green background; sidebar bold nahi; buttons alag-alag single color; saari lines black 20% kam (dark grey) */
+  .theme-colorfull {
+    --background: 140 28% 94%;
+    --foreground: 140 30% 18%;
+    --card: 140 22% 96%;
+    --card-foreground: 140 30% 18%;
+    --popover: 140 22% 96%;
+    --popover-foreground: 140 30% 18%;
+    --muted: 140 20% 90%;
+    --muted-foreground: 140 25% 40%;
+    --border: 0 0% 20%;
+    --sidebar-background: 140 22% 88%;
+    --sidebar-foreground: 140 35% 18%;
+    --sidebar-primary: 140 50% 38%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 140 25% 88%;
+    --sidebar-accent-foreground: 140 35% 18%;
+    --sidebar-border: 0 0% 20%;
+    --sidebar-ring: 140 50% 38%;
+    --input: 0 0% 20%;
+    --header-bg: 140 28% 94%;
+    --list-page-bg: 140 28% 94%;
+    --details-header-bg: 140 28% 94%;
+    --table-header-bg: 210 40% 88%;
+    --table-header-fg: 0 0% 0%;
+    --row-odd-bg: 140 18% 98%;
+    --row-even-bg: 140 22% 95%;
+    /* 50% tint: account list aur tab ke liye (sidebar card color ka 50% feel) */
+    --colorfull-tint: 140 22% 95%;
+    --colorfull-tint-active: 140 28% 90%;
+  }
+
+  .primary-pure-white { --primary: 22 96% 54%; --primary-foreground: 210 40% 98%; --ring: 22 96% 54%; }
+  .primary-soft-green { --primary: 95 35% 45%; --primary-foreground: 95 35% 95%; --ring: 95 35% 45%; }
+  .primary-dim-soft-green { --primary: 140 70% 50%; --primary-foreground: 140 70% 95%; --ring: 140 70% 50%; }
+  .primary-soft-blue { --primary: 210 90% 50%; --primary-foreground: 210 90% 95%; --ring: 210 90% 50%; }
+  .primary-sky-blue { --primary: 199 89% 50%; --primary-foreground: 199 89% 95%; --ring: 199 89% 50%; }
+  .primary-soft-yellow { --primary: 45 95% 55%; --primary-foreground: 45 95% 20%; --ring: 45 95% 55%; }
+  .primary-soft-pink { --primary: 350 80% 60%; --primary-foreground: 350 80% 95%; --ring: 350 80% 60%; }
+  .primary-colorfull { --primary: 270 70% 50%; --primary-foreground: 0 0% 100%; --ring: 270 70% 50%; }
+
+  .dark {
+    --background: 220 13% 10%;
+    --foreground: 210 20% 88%;
+    --card: 220 13% 18%;
+    --card-foreground: 210 20% 88%;
+    --popover: var(--background);
+    --popover-foreground: 210 20% 88%;
+    --primary: 22 96% 54%;
+    --primary-foreground: 220 13% 10%;
+    --secondary: 220 13% 25%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 220 13% 25%;
+    --muted-foreground: 210 20% 65%;
+    --accent: 142 76% 36%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 13% 25%;
+    --input: 220 13% 25%;
+    --ring: 22 96% 54%;
+    --sidebar-background: var(--background);
+    --sidebar-foreground: 210 20% 88%;
+    --sidebar-primary: 22 96% 54%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 220 13% 25%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 220 13% 25%;
+    --sidebar-ring: 22 96% 54%;
+  }
+}
+
+/* Colorfull theme: saari vertical/horizontal lines same color – black 20% kam (dark grey); sidebar vertical line bhi same thick (2px) jitna baaki structural borders */
+body.theme-colorfull .app-main-border.border-l {
+  border-left-width: 2px !important;
+  border-left-color: hsl(var(--border)) !important;
+}
+body.theme-colorfull header.border-b {
+  background: hsl(var(--header-bg)) !important;
+}
+body.theme-colorfull main {
+  background: hsl(var(--list-page-bg));
+}
+body.theme-colorfull main > div > div.border-b:first-of-type {
+  background: hsl(var(--details-header-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead tr {
+  background: hsl(var(--table-header-bg)) !important;
+  color: hsl(var(--table-header-fg)) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead th {
+  color: hsl(var(--table-header-fg)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table thead th[data-theme-header="file"] {
+  color: #000 !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(odd) {
+  background: hsl(var(--row-odd-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody tr:nth-child(even) {
+  background: hsl(var(--row-even-bg));
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td {
+  color: #000 !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td .text-green-700,
+body.theme-colorfull [data-theme-table="transactions"] table tbody td span.text-green-700 {
+  color: rgb(21 128 61) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td[data-cell-settled="true"] {
+  color: rgb(22 163 74) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td.text-green-600 {
+  color: rgb(22 163 74) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tbody td.text-red-600 {
+  color: rgb(220 38 38) !important;
+}
+body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
+  color: #000 !important;
+}
+
+/* Opening balance row ke niche bold line – Statement aur Bill wise dono view */
+[data-theme-table="transactions"] table tbody tr[data-row="opening-balance"] td {
+  border-bottom-width: 2px !important;
+  border-bottom-style: solid !important;
+}
+
+/* Colorfull: har action button alag single color (header + list/detail pages) */
+body.theme-colorfull [data-theme-btn="add-sale"] { background: hsl(142 55% 42%) !important; color: white !important; border-color: hsl(142 55% 35%) !important; }
+body.theme-colorfull [data-theme-btn="add-sale"]:hover { background: hsl(142 55% 36%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"] { background: hsl(210 70% 48%) !important; color: white !important; border-color: hsl(210 70% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"]:hover { background: hsl(210 70% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="payment-in"] { background: hsl(168 60% 38%) !important; color: white !important; border-color: hsl(168 60% 32%) !important; }
+body.theme-colorfull [data-theme-btn="payment-in"]:hover { background: hsl(168 60% 32%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="payment-out"] { background: hsl(0 65% 48%) !important; color: white !important; border-color: hsl(0 65% 40%) !important; }
+body.theme-colorfull [data-theme-btn="payment-out"]:hover { background: hsl(0 65% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-salary"] { background: hsl(262 55% 52%) !important; color: white !important; border-color: hsl(262 55% 44%) !important; }
+body.theme-colorfull [data-theme-btn="add-salary"]:hover { background: hsl(262 55% 45%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-party"] { background: hsl(25 85% 52%) !important; color: white !important; border-color: hsl(25 85% 44%) !important; }
+body.theme-colorfull [data-theme-btn="add-party"]:hover { background: hsl(25 85% 45%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-item"] { background: hsl(45 90% 48%) !important; color: hsl(45 90% 12%) !important; border-color: hsl(45 90% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-item"]:hover { background: hsl(45 90% 42%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"] { background: hsl(199 75% 45%) !important; color: white !important; border-color: hsl(199 75% 38%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"]:hover { background: hsl(199 75% 38%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="add-staff"] { background: hsl(320 60% 48%) !important; color: white !important; border-color: hsl(320 60% 40%) !important; }
+body.theme-colorfull [data-theme-btn="add-staff"]:hover { background: hsl(320 60% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-btn="statement"] { background: hsl(142 45% 88%) !important; color: hsl(142 55% 22%) !important; border-color: hsl(142 40% 75%) !important; }
+body.theme-colorfull [data-theme-btn="statement"]:hover { background: hsl(142 45% 82%) !important; color: hsl(142 55% 18%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"] { background: hsl(210 50% 88%) !important; color: hsl(210 55% 22%) !important; border-color: hsl(210 45% 75%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"]:hover { background: hsl(210 50% 82%) !important; color: hsl(210 55% 18%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"] { background: hsl(160 55% 42%) !important; color: white !important; border-color: hsl(160 55% 35%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"]:hover { background: hsl(160 55% 36%) !important; color: white !important; }
+
+/* Colorfull: sidebar nav cards – 25% kam bold (saturation ~75%, lightness thoda up) */
+body.theme-colorfull [data-theme-nav] {
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  min-height: 2.5rem;
+}
+body.theme-colorfull [data-theme-nav="dashboard"] { background: hsl(210 52% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="dashboard"]:hover { background: hsl(210 52% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="dashboard"][data-active="true"] { background: hsl(210 52% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="party"] { background: hsl(142 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="party"]:hover { background: hsl(142 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="party"][data-active="true"] { background: hsl(142 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="bank-cash"] { background: hsl(199 56% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="bank-cash"]:hover { background: hsl(199 56% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="bank-cash"][data-active="true"] { background: hsl(199 56% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="staff"] { background: hsl(320 45% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="staff"]:hover { background: hsl(320 45% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="staff"][data-active="true"] { background: hsl(320 45% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="tax"] { background: hsl(45 67% 58%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-nav="tax"]:hover { background: hsl(45 67% 52%) !important; color: hsl(45 90% 12%) !important; }
+body.theme-colorfull [data-theme-nav="tax"][data-active="true"] { background: hsl(45 67% 48%) !important; color: hsl(45 90% 12%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="incomes"] { background: hsl(168 45% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="incomes"]:hover { background: hsl(168 45% 42%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="incomes"][data-active="true"] { background: hsl(168 45% 40%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="items"] { background: hsl(25 64% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="items"]:hover { background: hsl(25 64% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="items"][data-active="true"] { background: hsl(25 64% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="reports"] { background: hsl(262 41% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="reports"]:hover { background: hsl(262 41% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="reports"][data-active="true"] { background: hsl(262 41% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="gallery"] { background: hsl(330 49% 62%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="gallery"]:hover { background: hsl(330 49% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="gallery"][data-active="true"] { background: hsl(330 49% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="production"] { background: hsl(22 67% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="production"]:hover { background: hsl(22 67% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="production"][data-active="true"] { background: hsl(22 67% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="sale-note"] { background: hsl(152 41% 50%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="sale-note"]:hover { background: hsl(152 41% 44%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="sale-note"][data-active="true"] { background: hsl(152 41% 42%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="purchase-note"] { background: hsl(200 52% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="purchase-note"]:hover { background: hsl(200 52% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="purchase-note"][data-active="true"] { background: hsl(200 52% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="quotations"] { background: hsl(270 41% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="quotations"]:hover { background: hsl(270 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="quotations"][data-active="true"] { background: hsl(270 41% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="messages"] { background: hsl(210 49% 60%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="messages"]:hover { background: hsl(210 49% 54%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="messages"][data-active="true"] { background: hsl(210 49% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="billing"] { background: hsl(240 41% 60%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="billing"]:hover { background: hsl(240 41% 54%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="billing"][data-active="true"] { background: hsl(240 41% 52%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="distributor-signup"] { background: hsl(160 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="distributor-signup"]:hover { background: hsl(160 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="distributor-signup"][data-active="true"] { background: hsl(160 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="backup"] { background: hsl(215 37% 55%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="backup"]:hover { background: hsl(215 37% 48%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="backup"][data-active="true"] { background: hsl(215 37% 46%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="import-export"] { background: hsl(190 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="import-export"]:hover { background: hsl(190 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="import-export"][data-active="true"] { background: hsl(190 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="recycle-bin"] { background: hsl(0 49% 58%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="recycle-bin"]:hover { background: hsl(0 49% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="recycle-bin"][data-active="true"] { background: hsl(0 49% 50%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="settings"] { background: hsl(220 11% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="settings"]:hover { background: hsl(220 11% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="settings"][data-active="true"] { background: hsl(220 11% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+body.theme-colorfull [data-theme-nav="admin"] { background: hsl(262 41% 52%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="admin"]:hover { background: hsl(262 41% 46%) !important; color: white !important; }
+body.theme-colorfull [data-theme-nav="admin"][data-active="true"] { background: hsl(262 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
+
+/* Colorfull: account list cards aur tabs – 50% color (sidebar card jaisa soft tint) */
+body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border {
+  background: hsl(var(--colorfull-tint)) !important;
+}
+body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border[class*="border-primary"] {
+  background: hsl(var(--colorfull-tint-active)) !important;
+}
+/* Tabs (Parties/Groups): dono active aur inactive button jaisa color */
+body.theme-colorfull main [role="tablist"] {
+  background: hsl(140 20% 92%) !important;
+}
+body.theme-colorfull main [role="tab"] {
+  font-weight: 600;
+}
+body.theme-colorfull main [role="tab"]:not([data-state="active"]) {
+  background: hsl(210 30% 92%) !important;
+  color: hsl(210 30% 30%) !important;
+  border: 1px solid hsl(210 25% 85%) !important;
+}
+body.theme-colorfull main [role="tab"]:not([data-state="active"]):hover {
+  background: hsl(210 30% 88%) !important;
+  color: hsl(210 30% 25%) !important;
+}
+body.theme-colorfull main [role="tab"][data-state="active"] {
+  background: hsl(142 41% 52%) !important;
+  color: white !important;
+}
+
+/* Colorfull: app header – company selector, date selector, mobile/PC icon ko color */
+body.theme-colorfull [data-theme-header="company-selector"] {
+  background: hsl(199 50% 92%) !important;
+  color: hsl(199 55% 28%) !important;
+  border-color: hsl(199 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-header="company-selector"]:hover {
+  background: hsl(199 50% 86%) !important;
+  color: hsl(199 55% 22%) !important;
+}
+body.theme-colorfull [data-theme-header="date-selector"] {
+  background: hsl(142 40% 92%) !important;
+  color: hsl(142 45% 28%) !important;
+  border-color: hsl(142 35% 75%) !important;
+}
+body.theme-colorfull [data-theme-header="date-selector"]:hover {
+  background: hsl(142 40% 86%) !important;
+  color: hsl(142 45% 22%) !important;
+}
+body.theme-colorfull [data-theme-header="view-toggle"] {
+  background: hsl(262 40% 92%) !important;
+  color: hsl(262 50% 32%) !important;
+  border-color: hsl(262 35% 78%) !important;
+}
+body.theme-colorfull [data-theme-header="view-toggle"]:hover {
+  background: hsl(262 40% 86%) !important;
+  color: hsl(262 50% 26%) !important;
+}
+
+/* Colorfull: details header ke saare boxes – date range, Members, Add Note, Print, Edit – alag color */
+body.theme-colorfull [data-theme-detail="date-range"] {
+  background: hsl(45 55% 92%) !important;
+  color: hsl(45 50% 28%) !important;
+  border-color: hsl(45 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="date-range"]:hover {
+  background: hsl(45 55% 86%) !important;
+  color: hsl(45 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="members"] {
+  background: hsl(270 45% 92%) !important;
+  color: hsl(270 50% 28%) !important;
+  border-color: hsl(270 40% 78%) !important;
+}
+body.theme-colorfull [data-theme-detail="members"]:hover {
+  background: hsl(270 45% 86%) !important;
+  color: hsl(270 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="add-note"] {
+  background: hsl(152 45% 92%) !important;
+  color: hsl(152 50% 28%) !important;
+  border-color: hsl(152 40% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="add-note"]:hover {
+  background: hsl(152 45% 86%) !important;
+  color: hsl(152 50% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="print"] {
+  background: hsl(200 50% 92%) !important;
+  color: hsl(200 55% 28%) !important;
+  border-color: hsl(200 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="print"]:hover {
+  background: hsl(200 50% 86%) !important;
+  color: hsl(200 55% 22%) !important;
+}
+body.theme-colorfull [data-theme-detail="edit"] {
+  background: hsl(25 55% 92%) !important;
+  color: hsl(25 55% 28%) !important;
+  border-color: hsl(25 45% 75%) !important;
+}
+body.theme-colorfull [data-theme-detail="edit"]:hover {
+  background: hsl(25 55% 86%) !important;
+  color: hsl(25 55% 22%) !important;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  
+  /* This ensures the Vaul (Sheet) overlay is contained */
+  body.force-mobile-view [data-vaul-overlay] {
+    position: absolute !important;
+  }
+  
+  .chat-bg {
+    background-color: hsl(var(--background));
+    position: relative;
+  }
+
+  .chat-bg > * {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* 🔸 AD Calendar – Is project ma narrow na hos (Firebase Studio jasto); mobile ma full width */
+  .rdp {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: min(100%, 280px) !important;
+  }
+  .rdp-months,
+  .rdp-month {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  @media (max-width: 768px) {
+    .rdp,
+    .rdp-months,
+    .rdp-month {
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+    }
+  }
+
+  /* 🔸 AD Calendar – Force 7-column grid layout like BS calendar (match BS exactly) */
+  .rdp-table,
+  table.rdp-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    display: block !important;
+  }
+
+  .rdp-head_row,
+  .rdp-row,
+  tr.rdp-head_row,
+  tr.rdp-row {
+    display: grid !important;
+    grid-template-columns: repeat(7, 1fr) !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+
+  .rdp-head_cell,
+  .rdp-cell,
+  th.rdp-head_cell,
+  td.rdp-cell {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    min-height: auto !important;
+    height: auto !important;
+  }
+
+  /* Ensure cells don't create bars - match BS calendar structure */
+  .rdp-cell > *,
+  .rdp-head_cell > * {
+    width: auto !important;
+    height: auto !important;
+    display: inline-flex !important;
+  }
+
+  /* Remove any tbody/thead styling that might create bars */
+  .rdp-table tbody,
+  .rdp-table thead,
+  tbody.rdp-tbody,
+  thead.rdp-thead {
+    display: contents !important;
+  }
+
+  .rdp-tbody,
+  .rdp-thead {
+    display: contents !important;
+  }
+
+  /* 🔸 AD Calendar – Ensure all day buttons are circular and remove default styles (match BS exactly) */
+  .rdp-day,
+  .rdp-day_button,
+  button.rdp-day,
+  [role="gridcell"] button,
+  .rdp-button,
+  .rdp-cell button {
+    border-radius: 9999px !important;
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-width: 2.25rem !important;
+    max-width: 2.25rem !important;
+    min-height: 2.25rem !important;
+    max-height: 2.25rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: auto !important;
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  /* Remove react-day-picker default hover/active states that interfere */
+  .rdp-day:hover:not([aria-disabled="true"]):not(.rdp-day_selected):not([aria-selected="true"]),
+  button.rdp-day:hover:not([aria-disabled="true"]):not(.rdp-day_selected):not([aria-selected="true"]) {
+    background-color: hsl(var(--accent) / 0.8) !important;
+    border-radius: 9999px !important;
+  }
+
+  .rdp-day:active:not([aria-disabled="true"]),
+  button.rdp-day:active:not([aria-disabled="true"]) {
+    background-color: hsl(var(--accent)) !important;
+    border-radius: 9999px !important;
+  }
+
+  /* 🔸 AD Calendar – match BS: selected=green circle, today=blue full, data=orange full, today+data=50/50 */
+  .has-transactions:not(.is-today):not(.day_selected):not([aria-selected="true"]):not(.rdp-day_selected),
+  .rdp-day.has-transactions:not(.is-today):not(.rdp-day_selected):not([aria-selected="true"]),
+  button.has-transactions:not(.is-today):not(.day_selected):not([aria-selected="true"]) {
+    background: #f97316 !important; /* Orange full circle */
+    color: white !important;
+    font-weight: bold !important;
+    border-radius: 9999px !important;
+  }
+
+  .is-today:not(.has-transactions):not(.day_selected):not([aria-selected="true"]):not(.rdp-day_selected),
+  .rdp-day.is-today:not(.has-transactions):not(.rdp-day_selected):not([aria-selected="true"]),
+  button.is-today:not(.has-transactions):not(.day_selected):not([aria-selected="true"]) {
+    background: #3b82f6 !important; /* Blue full circle */
+    color: white !important;
+    border-radius: 9999px !important;
+  }
+
+  .is-today.has-transactions:not(.day_selected):not([aria-selected="true"]):not(.rdp-day_selected),
+  .rdp-day.is-today.has-transactions:not(.rdp-day_selected):not([aria-selected="true"]),
+  button.is-today.has-transactions:not(.day_selected):not([aria-selected="true"]) {
+    background-image: linear-gradient(140deg, #f97316 50%, #3b82f6 50%) !important;
+    color: white !important;
+    font-weight: bold !important;
+    border-radius: 9999px !important;
+  }
+  
+  .day_range_middle,
+  .rdp-day_range_middle {
+    background-color: hsl(var(--accent)) !important;
+    color: hsl(var(--accent-foreground)) !important;
+    border-radius: 9999px !important;
+  }
+
+  /* Override react-day-picker default selected styles - match BS calendar exactly */
+  button[aria-selected="true"],
+  .rdp-day_selected,
+  .rdp-day[aria-selected="true"],
+  [role="gridcell"] button[aria-selected="true"],
+  .rdp-day_button[aria-selected="true"] {
+    background-color: transparent !important;
+    border: 2px solid #22c55e !important;
+    border-radius: 9999px !important;
+    color: inherit !important;
+    font-weight: bold !important;
+  }
+  
+  /* Selected + Has Data (not today) */
+  button[aria-selected="true"].has-transactions:not(.is-today),
+  .rdp-day_selected.has-transactions:not(.is-today),
+  .rdp-day[aria-selected="true"].has-transactions:not(.is-today),
+  .rdp-day_button[aria-selected="true"].has-transactions:not(.is-today) {
+    background-color: #f97316 !important;
+    border: 2px solid #22c55e !important;
+    border-radius: 9999px !important;
+    color: white !important;
+  }
+  
+  /* Selected + Today (no data) */
+  button[aria-selected="true"].is-today:not(.has-transactions),
+  .rdp-day_selected.is-today:not(.has-transactions),
+  .rdp-day[aria-selected="true"].is-today:not(.has-transactions),
+  .rdp-day_button[aria-selected="true"].is-today:not(.has-transactions) {
+    background-color: #3b82f6 !important;
+    border: 2px solid #22c55e !important;
+    border-radius: 9999px !important;
+    color: white !important;
+  }
+  
+  /* Selected + Today + Has Data = 50/50 */
+  button[aria-selected="true"].is-today.has-transactions,
+  .rdp-day_selected.is-today.has-transactions,
+  .rdp-day[aria-selected="true"].is-today.has-transactions,
+  .rdp-day_button[aria-selected="true"].is-today.has-transactions {
+    background-image: linear-gradient(140deg, #f97316 50%, #3b82f6 50%) !important;
+    border: 2px solid #22c55e !important;
+    border-radius: 9999px !important;
+    color: white !important;
+  }
+
+  .transaction-main-row td {
+    padding-top: 1px !important;
+    padding-bottom: 0 !important;
+  }
+
+  .narration-row td {
+    border-top: none !important;
+    padding-top: 1px !important;
+    padding-bottom: 0 !important;
+  }
+
+  .fullscreen-active main {
+    width: 100vw;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .fullscreen-active main > div {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* Hide spin buttons on number inputs */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type=number] {
+    -moz-appearance: textfield;
+  }
+
+/* 🌿 Selected Day Styling – green circle (match BD) - Support both class and aria-selected */
+/* Target all possible react-day-picker selectors */
+.day_selected,
+[aria-selected="true"]:not([aria-selected="false"]),
+button[aria-selected="true"],
+.rdp-day_selected,
+.rdp-day[aria-selected="true"],
+[role="gridcell"] button[aria-selected="true"],
+button.day_selected {
+  background-color: transparent !important;
+  border: 2px solid #22c55e !important;            /* green circle */
+  border-radius: 9999px !important;
+  color: inherit !important;
+  font-weight: bold !important;
+  z-index: 10;
+  position: relative;
+  transition: all 0.2s ease-in-out !important;
+}
+
+/* ✅ Selected + Has Data (not today) = Orange full + Green border */
+.day_selected.has-transactions:not(.is-today),
+[aria-selected="true"].has-transactions:not(.is-today),
+button[aria-selected="true"].has-transactions:not(.is-today),
+.rdp-day_selected.has-transactions:not(.is-today),
+.rdp-day[aria-selected="true"].has-transactions:not(.is-today),
+button.day_selected.has-transactions:not(.is-today) {
+  background-color: #f97316 !important;
+  border: 2px solid #22c55e !important;
+  border-radius: 9999px !important;
+  color: white !important;
+}
+
+/* ✅ Selected + Today (no data) = Blue full + Green border */
+.day_selected.is-today:not(.has-transactions),
+[aria-selected="true"].is-today:not(.has-transactions),
+button[aria-selected="true"].is-today:not(.has-transactions),
+.rdp-day_selected.is-today:not(.has-transactions),
+.rdp-day[aria-selected="true"].is-today:not(.has-transactions),
+button.day_selected.is-today:not(.has-transactions) {
+  background-color: #3b82f6 !important;
+  border: 2px solid #22c55e !important;
+  border-radius: 9999px !important;
+  color: white !important;
+}
+
+/* ✅ Selected + Today + Has Data = 50/50 Orange/Blue + Green border */
+.day_selected.is-today.has-transactions,
+[aria-selected="true"].is-today.has-transactions,
+button[aria-selected="true"].is-today.has-transactions,
+.rdp-day_selected.is-today.has-transactions,
+.rdp-day[aria-selected="true"].is-today.has-transactions,
+button.day_selected.is-today.has-transactions {
+  background-image: linear-gradient(140deg, #f97316 50%, #3b82f6 50%) !important;
+  border: 2px solid #22c55e !important;
+  border-radius: 9999px !important;
+  color: white !important;
+}
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-left {
+    padding-left: env(safe-area-inset-left);
+  }
+  .safe-right {
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .rdp-table {
+    width: 100% !important;
+  }
+
+  /* Financial Summary Grid - Auto-adjust columns based on available space */
+  /* Minimum card width 280px ensures content fits without overflow */
+  .financial-summary-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)) !important;
+    gap: 0.125rem;
+    padding: 0 0.125rem;
+    width: 100%;
+  }
+
+  /* Stock Summary card - spans 2 columns when space allows (min 560px) */
+  .financial-summary-stock-card {
+    grid-column: span 2;
+    min-width: 560px;
+  }
+
+  /* On smaller screens, force single column and adjust Stock Summary */
+  @media (max-width: 640px) {
+    .financial-summary-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .financial-summary-stock-card {
+      grid-column: span 1;
+      min-width: 100%;
+    }
+  }
+
+  /* Ensure cards maintain minimum width to prevent content overflow */
+  .financial-summary-grid > * {
+    min-width: 280px;
+  }
+
+  /* Hide scrollbar but keep scrolling functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;  /* Chrome, Safari and Opera */
+  }
+
+  /* Slim, dim scrollbar – patla aur dim (thin and low-contrast) */
+  .scrollbar-slim-dim {
+    scrollbar-width: thin;  /* Firefox: slim */
+    scrollbar-color: hsl(0 0% 75% / 0.5) transparent;  /* Firefox: dim thumb */
+  }
+  .scrollbar-slim-dim::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-slim-dim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-slim-dim::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 2px;
+  }
+  .scrollbar-slim-dim::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.35);
+  }
+
+  /* Touch-friendly scroll for Capacitor/Android WebView – APK mein details/group details pages pe scroll kaam kare */
+  .scroll-touch {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: scroll !important;
+    overflow-x: auto;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    /* Android WebView: scroll container ko explicit height constraint */
+    min-height: 0;
+  }
+
+  /* Extra thin, dim scrollbar */
+  .scrollbar-slim-dim-extra {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(0 0% 75% / 0.4) transparent;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 2px;
+  }
+  .scrollbar-slim-dim-extra::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.35);
+  }
+
+  /* Link dialogs: table light fill + rows cycle through max 7 light colors */
+  .table-row-stripe-7 {
+    background: hsl(var(--muted) / 0.5);
+  }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 1) { background: hsl(210 20% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 2) { background: hsl(200 40% 95% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 3) { background: hsl(150 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 4) { background: hsl(45 40% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 5) { background: hsl(260 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 6) { background: hsl(350 25% 96% / 0.9); }
+  .table-row-stripe-7 tbody tr:nth-child(7n + 7) { background: hsl(180 30% 95% / 0.9); }
+}
+
+@media print {
+  body {
+    background: white !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  header, [data-sidebar], .print-hidden {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .invoice-container {
+    width: 100%;
+    height: 100%;
+    min-height: 297mm;
+    margin: 0;
+    padding: 10mm;
+    border: none !important;
+    box-shadow: none !important;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .invoice-table {
+    flex-grow: 1;
+  }
+}
+
+/* 4K Screen Detection - Increase line thickness by 3px for better visibility */
+/* Detects 4K screens (3840x2160) on desktop/PC only - NOT mobile devices */
+/* 2K ma lines thik dekhinxa, 4K ma dherai patlo dekhinxa, so 3px thick pure black lines */
+/* Only applies to desktop screens with 4K width, excludes mobile/touch devices */
+@media (min-width: 3840px) and (hover: hover) and (pointer: fine) {
+  
+  /* Table borders - common in financial apps like transaction tables */
+  /* 4K ma lines dherai moto chahiyeko - pure black thick lines */
+  table,
+  table td,
+  table th,
+  table tr,
+  thead th,
+  tbody td,
+  tfoot td {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Input and form element borders */
+  input,
+  textarea,
+  select,
+  button:not([class*="border-0"]),
+  [type="text"],
+  [type="number"],
+  [type="email"],
+  [type="password"],
+  [type="date"],
+  [type="time"],
+  [type="datetime-local"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Card and container borders */
+  [class*="card"]:not([class*="border-0"]),
+  [class*="Card"]:not([class*="border-0"]),
+  .card:not([class*="border-0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Divider lines */
+  hr {
+    border-width: 3px !important;
+    border-top-width: 3px !important;
+    height: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* SVG strokes - double thickness */
+  svg line,
+  svg path,
+  svg rect,
+  svg circle,
+  svg polyline,
+  svg polygon,
+  svg ellipse {
+    stroke-width: 2 !important;
+  }
+  
+  /* Calendar day borders - double from 2px to 4px */
+  .rdp-day,
+  .rdp-day_button,
+  button.rdp-day,
+  [role="gridcell"] button,
+  .rdp-button,
+  .rdp-cell button {
+    border-width: 4px !important;
+  }
+  
+  /* Selected day border (green circle) - double from 2px to 4px */
+  button[aria-selected="true"],
+  .rdp-day_selected,
+  .rdp-day[aria-selected="true"],
+  [role="gridcell"] button[aria-selected="true"],
+  .rdp-day_button[aria-selected="true"],
+  .day_selected,
+  [aria-selected="true"]:not([aria-selected="false"]),
+  button[aria-selected="true"],
+  button.day_selected {
+    border-width: 4px !important;
+  }
+  
+  /* Ring/outline widths (for focus states) */
+  *:focus-visible,
+  *:focus {
+    outline-width: 4px !important;
+  }
+  
+  /* Tailwind ring utilities */
+  [class*="ring-"]:not([class*="ring-0"]) {
+    --tw-ring-width: 4px !important;
+  }
+  
+  /* Scrollbar thickness */
+  ::-webkit-scrollbar {
+    width: 12px !important;
+    height: 12px !important;
+  }
+  
+  /* UI component borders (shadcn/ui) */
+  [class*="border-border"]:not([class*="border-0"]),
+  [data-border]:not([class*="border-0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Dialog, Sheet, Popover borders */
+  [role="dialog"]:not([class*="border-0"]),
+  [data-vaul-drawer]:not([class*="border-0"]),
+  [data-vaul-overlay]:not([class*="border-0"]),
+  [class*="dialog"]:not([class*="border-0"]),
+  [class*="sheet"]:not([class*="border-0"]),
+  [class*="popover"]:not([class*="border-0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Navigation and sidebar borders */
+  nav:not([class*="border-0"]),
+  [role="navigation"]:not([class*="border-0"]),
+  [class*="nav"]:not([class*="border-0"]),
+  [class*="sidebar"]:not([class*="border-0"]),
+  [data-sidebar]:not([class*="border-0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Separator and divider lines */
+  [class*="separator"]:not([class*="border-0"]),
+  [class*="divider"]:not([class*="border-0"]),
+  .separator:not([class*="border-0"]),
+  .divider:not([class*="border-0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+    height: 3px !important;
+  }
+  
+  /* Tailwind border utilities - double thickness (except border-0) */
+  /* 4K ma sabai borders moto ra pure black */
+  .border:not(.border-0),
+  .border-t:not(.border-0),
+  .border-r:not(.border-0),
+  .border-b:not(.border-0),
+  .border-l:not(.border-0),
+  .border-x:not(.border-0),
+  .border-y:not(.border-0) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Elements with border style set should have 3px width on 4K */
+  [style*="border"]:not([style*="border: 0"]):not([style*="border:0"]):not([style*="border-width: 0"]):not([style*="border-width:0"]) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     DIALOGS, POPUPS, SHEETS, DRAWERS - All popup components
+     ============================================ */
+  
+  /* Dialog Content (Radix UI) - Voucher dialogs, Add Party, Add Bank, etc. */
+  [data-radix-dialog-content],
+  [role="dialog"],
+  .dialog-content,
+  [class*="DialogContent"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Dialog internal elements - forms, inputs, tables inside dialogs */
+  [data-radix-dialog-content] table,
+  [data-radix-dialog-content] table td,
+  [data-radix-dialog-content] table th,
+  [data-radix-dialog-content] table tr,
+  [role="dialog"] table,
+  [role="dialog"] table td,
+  [role="dialog"] table th,
+  [role="dialog"] table tr {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  [data-radix-dialog-content] input,
+  [data-radix-dialog-content] textarea,
+  [data-radix-dialog-content] select,
+  [data-radix-dialog-content] button,
+  [role="dialog"] input,
+  [role="dialog"] textarea,
+  [role="dialog"] select,
+  [role="dialog"] button {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Drawer Content (Vaul) - Mobile drawers, side panels */
+  [data-vaul-drawer],
+  [data-vaul-drawer-content],
+  [data-vaul-overlay] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Drawer internal elements */
+  [data-vaul-drawer] table,
+  [data-vaul-drawer] table td,
+  [data-vaul-drawer] table th,
+  [data-vaul-drawer] input,
+  [data-vaul-drawer] textarea,
+  [data-vaul-drawer] select,
+  [data-vaul-drawer] button {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Sheet Content (Radix UI) - Side sheets */
+  [data-radix-dialog-content][class*="sheet"],
+  [class*="SheetContent"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Sheet internal elements */
+  [class*="SheetContent"] table,
+  [class*="SheetContent"] table td,
+  [class*="SheetContent"] table th,
+  [class*="SheetContent"] input,
+  [class*="SheetContent"] textarea,
+  [class*="SheetContent"] select,
+  [class*="SheetContent"] button {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* All popup/dialog containers - comprehensive coverage */
+  [class*="Dialog"],
+  [class*="dialog"],
+  [class*="Drawer"],
+  [class*="drawer"],
+  [class*="Sheet"],
+  [class*="sheet"],
+  [class*="Modal"],
+  [class*="modal"],
+  [class*="Popup"],
+  [class*="popup"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Popup form elements - specific targeting for inputs, selects, textareas inside popups */
+  [data-radix-dialog-content] input:not(.border-0),
+  [data-radix-dialog-content] textarea:not(.border-0),
+  [data-radix-dialog-content] select:not(.border-0),
+  [data-radix-dialog-content] button:not(.border-0),
+  [role="dialog"] input:not(.border-0),
+  [role="dialog"] textarea:not(.border-0),
+  [role="dialog"] select:not(.border-0),
+  [role="dialog"] button:not(.border-0),
+  [data-vaul-drawer] input:not(.border-0),
+  [data-vaul-drawer] textarea:not(.border-0),
+  [data-vaul-drawer] select:not(.border-0),
+  [data-vaul-drawer] button:not(.border-0),
+  [class*="DialogContent"] input:not(.border-0),
+  [class*="DialogContent"] textarea:not(.border-0),
+  [class*="DialogContent"] select:not(.border-0),
+  [class*="DialogContent"] button:not(.border-0),
+  [class*="DrawerContent"] input:not(.border-0),
+  [class*="DrawerContent"] textarea:not(.border-0),
+  [class*="DrawerContent"] select:not(.border-0),
+  [class*="DrawerContent"] button:not(.border-0),
+  [class*="SheetContent"] input:not(.border-0),
+  [class*="SheetContent"] textarea:not(.border-0),
+  [class*="SheetContent"] select:not(.border-0),
+  [class*="SheetContent"] button:not(.border-0) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Reset border-0 inside popups to stay 0 */
+  [data-radix-dialog-content] .border-0,
+  [role="dialog"] .border-0,
+  [data-vaul-drawer] .border-0,
+  [class*="DialogContent"] .border-0,
+  [class*="DrawerContent"] .border-0,
+  [class*="SheetContent"] .border-0 {
+    border-width: 0 !important;
+  }
+  
+  /* Voucher form dialogs - specific targeting */
+  [class*="VoucherDialog"],
+  [class*="voucher-dialog"],
+  [class*="AddVoucherDialog"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Party/Bank/Staff/Group creation dialogs */
+  [class*="CreateParty"],
+  [class*="CreateBank"],
+  [class*="CreateStaff"],
+  [class*="CreateGroup"],
+  [class*="CreateItem"],
+  [class*="CreateTax"],
+  [class*="CreateExpense"],
+  [class*="EditParty"],
+  [class*="EditBank"],
+  [class*="EditStaff"],
+  [class*="EditGroup"],
+  [class*="EditItem"],
+  [class*="EditTax"],
+  [class*="EditExpense"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Tabs inside dialogs (voucher tabs: Sale, Purchase, etc.) */
+  [data-radix-dialog-content] [role="tablist"],
+  [data-radix-dialog-content] [role="tab"],
+  [role="dialog"] [role="tablist"],
+  [role="dialog"] [role="tab"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Card components inside dialogs */
+  [data-radix-dialog-content] [class*="card"],
+  [role="dialog"] [class*="card"],
+  [data-vaul-drawer] [class*="card"],
+  [class*="DialogContent"] [class*="card"],
+  [class*="DrawerContent"] [class*="card"],
+  [class*="SheetContent"] [class*="card"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Badge and label borders inside popups */
+  [data-radix-dialog-content] [class*="badge"],
+  [role="dialog"] [class*="badge"],
+  [data-vaul-drawer] [class*="badge"],
+  [data-radix-dialog-content] [class*="Badge"],
+  [role="dialog"] [class*="Badge"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Separator/divider lines inside popups */
+  [data-radix-dialog-content] hr,
+  [role="dialog"] hr,
+  [data-vaul-drawer] hr,
+  [data-radix-dialog-content] [class*="separator"],
+  [role="dialog"] [class*="separator"],
+  [data-vaul-drawer] [class*="separator"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+    height: 3px !important;
+  }
+  
+  /* Close button borders in dialogs */
+  [data-radix-dialog-content] button[aria-label*="Close"],
+  [data-radix-dialog-content] button[class*="close"],
+  [role="dialog"] button[aria-label*="Close"],
+  [data-vaul-drawer] button[aria-label*="Close"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Form field borders - labels, inputs, selects in popups */
+  [data-radix-dialog-content] label,
+  [role="dialog"] label,
+  [data-vaul-drawer] label,
+  [data-radix-dialog-content] [class*="form-field"],
+  [role="dialog"] [class*="form-field"],
+  [data-vaul-drawer] [class*="form-field"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Table borders specifically in voucher/transaction dialogs */
+  [data-radix-dialog-content] table[class*="transaction"],
+  [data-radix-dialog-content] table[class*="voucher"],
+  [role="dialog"] table[class*="transaction"],
+  [role="dialog"] table[class*="voucher"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  [data-radix-dialog-content] table[class*="transaction"] td,
+  [data-radix-dialog-content] table[class*="transaction"] th,
+  [data-radix-dialog-content] table[class*="voucher"] td,
+  [data-radix-dialog-content] table[class*="voucher"] th,
+  [role="dialog"] table[class*="transaction"] td,
+  [role="dialog"] table[class*="transaction"] th,
+  [role="dialog"] table[class*="voucher"] td,
+  [role="dialog"] table[class*="voucher"] th {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     BUTTONS - All button variants (Quick Action, Header, etc.)
+     ============================================ */
+  
+  /* All buttons - Quick action buttons, header buttons, etc. */
+  button:not(.border-0),
+  [role="button"]:not(.border-0),
+  [type="button"]:not(.border-0),
+  [type="submit"]:not(.border-0) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Button variants - outline, default, etc. */
+  button[class*="outline"],
+  button[class*="default"],
+  button[class*="secondary"],
+  button[class*="destructive"],
+  button[class*="ghost"],
+  [class*="Button"][class*="outline"],
+  [class*="Button"][class*="default"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Quick action buttons in header */
+  [class*="header"] button,
+  [class*="Header"] button,
+  header button,
+  [data-header] button,
+  [class*="quick-action"],
+  [class*="QuickAction"],
+  [class*="action-button"],
+  [class*="ActionButton"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Icon buttons */
+  button[class*="icon"],
+  button[class*="Icon"],
+  [class*="icon-button"],
+  [class*="IconButton"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     CARDS - Dashboard containers, summary cards, etc.
+     ============================================ */
+  
+  /* All card components */
+  [class*="card"]:not(.border-0),
+  [class*="Card"]:not(.border-0),
+  .card:not(.border-0) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Card header, content, footer borders */
+  [class*="CardHeader"],
+  [class*="CardContent"],
+  [class*="CardFooter"],
+  [class*="card-header"],
+  [class*="card-content"],
+  [class*="card-footer"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Dashboard summary cards */
+  [class*="summary"],
+  [class*="Summary"],
+  [class*="dashboard-card"],
+  [class*="DashboardCard"],
+  [class*="financial-summary"],
+  [class*="FinancialSummary"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Container borders */
+  [class*="container"]:not(.border-0),
+  [class*="Container"]:not(.border-0),
+  .container:not(.border-0) {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     HEADER & NAVIGATION - App header, sidebar, etc.
+     ============================================ */
+  
+  /* Header borders */
+  header,
+  [class*="header"]:not(.border-0),
+  [class*="Header"]:not(.border-0),
+  [data-header],
+  [class*="app-header"],
+  [class*="AppHeader"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Sidebar borders */
+  [class*="sidebar"]:not(.border-0),
+  [class*="Sidebar"]:not(.border-0),
+  [data-sidebar],
+  aside,
+  nav {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Navigation items */
+  [class*="nav-item"],
+  [class*="NavItem"],
+  [class*="sidebar-item"],
+  [class*="SidebarItem"],
+  nav a,
+  nav button,
+  [role="navigation"] a,
+  [role="navigation"] button {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     FORM ELEMENTS - All form components
+     ============================================ */
+  
+  /* Select dropdowns */
+  [class*="select"],
+  [class*="Select"],
+  [role="combobox"],
+  [data-radix-select-trigger],
+  [data-radix-select-content] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Checkbox borders */
+  [type="checkbox"],
+  [class*="checkbox"],
+  [class*="Checkbox"],
+  [role="checkbox"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Radio button borders */
+  [type="radio"],
+  [class*="radio"],
+  [class*="Radio"],
+  [role="radio"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Switch/Toggle borders */
+  [class*="switch"],
+  [class*="Switch"],
+  [class*="toggle"],
+  [class*="Toggle"],
+  [role="switch"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     TABS - Tab navigation
+     ============================================ */
+  
+  /* Tab list and tabs */
+  [role="tablist"],
+  [role="tab"],
+  [class*="tab"],
+  [class*="Tab"],
+  [class*="tabs"],
+  [class*="Tabs"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     BADGES & LABELS
+     ============================================ */
+  
+  /* Badge borders */
+  [class*="badge"],
+  [class*="Badge"],
+  [role="status"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Label borders */
+  label,
+  [class*="label"],
+  [class*="Label"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     DROPDOWNS & MENUS
+     ============================================ */
+  
+  /* Dropdown menus */
+  [class*="dropdown"],
+  [class*="Dropdown"],
+  [class*="menu"],
+  [class*="Menu"],
+  [role="menu"],
+  [role="menuitem"],
+  [data-radix-dropdown-menu-content],
+  [data-radix-popover-content] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     TOOLTIPS & POPOVERS
+     ============================================ */
+  
+  /* Tooltip borders */
+  [class*="tooltip"],
+  [class*="Tooltip"],
+  [role="tooltip"],
+  [data-radix-tooltip-content] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Popover borders */
+  [class*="popover"],
+  [class*="Popover"],
+  [data-radix-popover-content] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     ALERTS & NOTIFICATIONS
+     ============================================ */
+  
+  /* Alert borders */
+  [class*="alert"],
+  [class*="Alert"],
+  [role="alert"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Toast/Notification borders */
+  [class*="toast"],
+  [class*="Toast"],
+  [class*="notification"],
+  [class*="Notification"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     ACCORDION & COLLAPSIBLE
+     ============================================ */
+  
+  /* Accordion borders */
+  [class*="accordion"],
+  [class*="Accordion"],
+  [role="region"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     PROGRESS & SLIDERS
+     ============================================ */
+  
+  /* Progress bar borders */
+  [class*="progress"],
+  [class*="Progress"],
+  [role="progressbar"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Slider borders */
+  [class*="slider"],
+  [class*="Slider"],
+  [type="range"],
+  [role="slider"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     SEARCH & INPUT GROUPS
+     ============================================ */
+  
+  /* Search input borders */
+  [class*="search"],
+  [class*="Search"],
+  input[type="search"],
+  [placeholder*="Search"],
+  [placeholder*="search"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Input group borders */
+  [class*="input-group"],
+  [class*="InputGroup"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     DASHBOARD SPECIFIC - Financial summaries, etc.
+     ============================================ */
+  
+  /* Financial summary grid items */
+  [class*="financial-summary"],
+  [class*="FinancialSummary"],
+  [class*="summary-card"],
+  [class*="SummaryCard"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Bank cash summary */
+  [class*="bank-cash"],
+  [class*="BankCash"],
+  [class*="account-summary"],
+  [class*="AccountSummary"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Stock summary */
+  [class*="stock-summary"],
+  [class*="StockSummary"],
+  [class*="inventory-summary"],
+  [class*="InventorySummary"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     LIST ITEMS & GRID ITEMS
+     ============================================ */
+  
+  /* List item borders */
+  li,
+  [class*="list-item"],
+  [class*="ListItem"],
+  [role="listitem"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Grid item borders */
+  [class*="grid-item"],
+  [class*="GridItem"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* ============================================
+     MISC UI COMPONENTS
+     ============================================ */
+  
+  /* Avatar borders */
+  [class*="avatar"],
+  [class*="Avatar"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Skeleton borders */
+  [class*="skeleton"],
+  [class*="Skeleton"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+  }
+  
+  /* Divider/Separator */
+  [class*="divider"],
+  [class*="Divider"],
+  [class*="separator"],
+  [class*="Separator"] {
+    border-width: 3px !important;
+    border-color: #000000 !important;
+    height: 3px !important;
+  }
+  
+  /* Code block borders */
+  code,
+  pre,
+  [class*="code"],
+  [class*="Code"] {
+    border-width: 2px !important;
+  }
+  
+  /* Blockquote borders */
+  blockquote,
+  [class*="quote"],
+  [class*="Quote"] {
+    border-width: 2px !important;
+  }
+}

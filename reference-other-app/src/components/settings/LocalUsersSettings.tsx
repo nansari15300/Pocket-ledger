@@ -1,0 +1,172 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useCompany } from "@/hooks/useCompany";
+import { useDataSource } from "@/contexts/DataSourceContext";
+import { getLocalApiBaseUrl } from "@/lib/localApiClient";
+import { Loader2, UserPlus } from "lucide-react";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import type { PlanId } from "@/config/plans";
+import { doc, updateDoc } from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
+import { isLocalCompanyId } from "@/lib/localApiClient";
+
+type LocalUser = { id: string; username: string; displayName?: string; role?: string; createdAt?: number };
+
+export function LocalUsersSettings() {
+  const { companyId, company } = useCompany();
+  const { localApiBaseUrl } = useDataSource();
+  const livePlans = useLivePlans();
+  const [users, setUsers] = useState<LocalUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  const plan = getPlanFromPlans(livePlans, (company?.planId as PlanId) || "basic");
+  const maxUsers = Math.max(1, Number(plan?.entitlements?.maxUsers) ?? 1);
+  const ownerPlusShared = 1 + (company?.sharedWithEmails?.length ?? 0);
+  const totalAfterAdd = users.length + 1 + ownerPlusShared;
+  const atLimit = totalAfterAdd > maxUsers;
+
+  const baseUrl = localApiBaseUrl || getLocalApiBaseUrl();
+
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setLoading(true);
+    fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`)
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setUsers(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setUsers([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [companyId, baseUrl]);
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!companyId || !username.trim() || !password) {
+      setError("Username aur password likhein.");
+      return;
+    }
+    if (atLimit) {
+      setError(`Plan limit: is plan me ${maxUsers} user tak allowed. Upgrade karein ya online shared users kam karein.`);
+      return;
+    }
+    setAdding(true);
+    try {
+      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim(), password, displayName: displayName.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Add failed");
+      setUsers((prev) => [...prev, { id: data.id, username: data.username, displayName: data.displayName, role: data.role }]);
+      setUsername("");
+      setPassword("");
+      setDisplayName("");
+      if (typeof data.localUserCount === "number") {
+        try {
+          const payload = { localUserCount: data.localUserCount };
+          const done = await updateCompanyDocRoot(companyId, payload);
+          if (!done && !isLocalCompanyId(companyId)) await updateDoc(doc(firestore, "companies", companyId), payload);
+        } catch (_) {}
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Add failed");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  if (!companyId) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Local users</CardTitle>
+        <CardDescription>
+          Is company me kaam karne ke liye username/password se login. Same plan limit (e.g. {maxUsers} user) local + online dono pe lagta hai. Naya user add karein.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {loading ? (
+          <p className="text-sm text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </p>
+        ) : (
+          <div>
+            <p className="text-sm font-medium mb-2">Users ({users.length})</p>
+            <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1">
+              {users.length === 0 ? (
+                <li>Abhi koi user nahi. Neeche se pehla user add karein.</li>
+              ) : (
+                users.map((u) => (
+                  <li key={u.id}>
+                    {u.displayName || u.username} ({u.username}) {u.role ? `· ${u.role}` : ""}
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
+
+        <form onSubmit={handleAdd} className="space-y-4 border-t pt-4">
+          <p className="text-sm font-medium flex items-center gap-2">
+            <UserPlus className="h-4 w-4" /> Add user
+          </p>
+          <div className="grid gap-2">
+            <Label htmlFor="local-username-add">Username</Label>
+            <Input
+              id="local-username-add"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Username"
+              disabled={adding}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="local-password-add">Password</Label>
+            <Input
+              id="local-password-add"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              disabled={adding}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="local-display-add">Display name (optional)</Label>
+            <Input
+              id="local-display-add"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Display name"
+              disabled={adding}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          {atLimit && !error && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              Plan limit: total users (local + online) {maxUsers} se zyada nahi ho sakte. Ab add nahi kar sakte.
+            </p>
+          )}
+          <Button type="submit" disabled={adding || atLimit}>
+            {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Add user
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}

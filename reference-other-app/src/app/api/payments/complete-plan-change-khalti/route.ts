@@ -1,0 +1,128 @@
+import { NextRequest, NextResponse } from "next/server";
+import admin from "firebase-admin";
+import { getAdminDb } from "@/lib/firebaseAdmin";
+import type { PlanId } from "@/config/plans";
+import {
+  applyPlanChangeOneTimeToFirestore,
+  PENDING_PLAN_CHANGES_COLLECTION,
+  type PlanChangeHistoryFirestore,
+} from "@/lib/payments/planChangeApply";
+
+type Body = {
+  pendingId?: string;
+  token?: string;
+  /** Khalti amount in paisa (same unit as initiate / widget). */
+  amount?: number;
+};
+
+/**
+ * After Khalti widget success, client POSTs here with pendingId + token; verifies with Khalti when secret is configured.
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const authHeader = req.headers.get("authorization");
+    const authToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    if (!authToken) {
+      return NextResponse.json({ error: "Missing Authorization Bearer token" }, { status: 401 });
+    }
+
+    getAdminDb();
+    let decoded: admin.auth.DecodedIdToken;
+    try {
+      decoded = await admin.auth().verifyIdToken(authToken);
+    } catch {
+      return NextResponse.json({ error: "Invalid auth token" }, { status: 401 });
+    }
+
+    const body = (await req.json()) as Body;
+    const pendingId = typeof body.pendingId === "string" ? body.pendingId.trim() : "";
+    const khaltiToken = typeof body.token === "string" ? body.token.trim() : "";
+    const amountPaisa = typeof body.amount === "number" ? body.amount : NaN;
+
+    if (!pendingId || !khaltiToken) {
+      return NextResponse.json({ error: "pendingId and token required" }, { status: 400 });
+    }
+
+    const db = getAdminDb();
+    const pendingRef = db.collection(PENDING_PLAN_CHANGES_COLLECTION).doc(pendingId);
+    const pendingSnap = await pendingRef.get();
+    if (!pendingSnap.exists) {
+      return NextResponse.json({ error: "Pending checkout not found" }, { status: 404 });
+    }
+
+    const p = pendingSnap.data()!;
+    if (p.status !== "pending") {
+      return NextResponse.json({ error: "This checkout was already processed" }, { status: 409 });
+    }
+    if (p.userId !== decoded.uid) {
+      return NextResponse.json({ error: "This payment belongs to another account" }, { status: 403 });
+    }
+    if (p.gateway !== "khalti") {
+      return NextResponse.json({ error: "Not a Khalti pending checkout" }, { status: 400 });
+    }
+
+    const exp = p.expiresAt as admin.firestore.Timestamp;
+    if (exp.toMillis() < Date.now()) {
+      await pendingRef.update({ status: "cancelled" }).catch(() => {});
+      return NextResponse.json({ error: "Checkout expired — start again from Billing." }, { status: 410 });
+    }
+
+    const netNpr = Number(p.netNpr);
+    const expectedPaisa = Math.round(netNpr * 100);
+    if (!Number.isFinite(amountPaisa) || Math.abs(amountPaisa - expectedPaisa) > 2) {
+      return NextResponse.json({ error: "Amount does not match quoted renewal" }, { status: 400 });
+    }
+
+    const khaltiSecret =
+      process.env.KHALTI_SECRET_KEY?.trim() || process.env.KHALTI_TEST_SECRET_KEY?.trim();
+    if (khaltiSecret) {
+      const verifyRes = await fetch("https://khalti.com/api/v2/payment/verify/", {
+        method: "POST",
+        headers: {
+          Authorization: `Key ${khaltiSecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token: khaltiToken, amount: amountPaisa }),
+      });
+      const vdata = (await verifyRes.json()) as { state?: string; detail?: string };
+      if (!verifyRes.ok || vdata?.state !== "Completed") {
+        return NextResponse.json(
+          { error: typeof vdata?.detail === "string" ? vdata.detail : "Khalti verification failed" },
+          { status: 402 }
+        );
+      }
+    }
+
+    const planChangeHistory = p.planChangeHistory as PlanChangeHistoryFirestore;
+    const applied = await applyPlanChangeOneTimeToFirestore({
+      db,
+      companyId: String(p.companyId),
+      userId: String(p.userId),
+      paymentId: khaltiToken,
+      gateway: "khalti",
+      amountNpr: netNpr,
+      currency: "npr",
+      targetPlanId: p.targetPlanId as PlanId,
+      previousPlanId: p.previousPlanId != null ? String(p.previousPlanId) : null,
+      planChangeHistory,
+      newPlanExpiryMs: Number(p.newPlanExpiryMs),
+      paymentStatus: "completed",
+      historySource: "khalti_plan_change",
+    });
+
+    if (applied.ok === false) {
+      return NextResponse.json({ error: applied.reason }, { status: 400 });
+    }
+
+    await pendingRef.update({
+      status: "applied",
+      appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[complete-plan-change-khalti]", e);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
