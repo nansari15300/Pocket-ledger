@@ -7,11 +7,11 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build",
+    "build": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
-    "typecheck:light": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
+    "typecheck:light": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
     "ci": "npm install && npm run build",
     "electron:install": "cd electron && npm install",
     "electron:start": "cd electron && npm start",

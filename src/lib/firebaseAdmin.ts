@@ -19,6 +19,14 @@ function normalizePrivateKey(key?: string): string | undefined {
   return k;
 }
 
+/** API routes: `getAdminApp` se pehle — env missing par 503 (throw nahi) */
+export function isFirebaseAdminConfigured(): boolean {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+  return !!(projectId && clientEmail && privateKey);
+}
+
 export function getAdminApp() {
   if (admin.apps.length) return admin.app();
 
