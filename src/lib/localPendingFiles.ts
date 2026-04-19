@@ -2,11 +2,28 @@
 
 import { openDB } from "./offlineDb";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, type DocumentReference } from "firebase/firestore";
 import { storage } from "@/lib/firebase";
 import { firestore } from "@/lib/firebase";
 
 const STORE = "pendingFiles";
+
+/** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
+const PENDING_SYNC_COLLECTIONS = new Set(["vouchers", "parties", "bank_accounts", "staff", "items"]);
+
+export function firestoreDocRefFromPath(docPath: string): DocumentReference {
+  const p = String(docPath || "").trim().replace(/^\/+|\/+$/g, "");
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(p);
+  if (!m || !PENDING_SYNC_COLLECTIONS.has(m[2])) {
+    throw new Error(`[localPendingFiles] invalid or unsupported docPath: ${docPath}`);
+  }
+  return doc(firestore, "companies", m[1], m[2], m[3]);
+}
+
+/** `@deprecated` — `firestoreDocRefFromPath` use karo; vouchers ke liye bhi wahi. */
+export function voucherDocRefFromPath(docPath: string): DocumentReference {
+  return firestoreDocRefFromPath(docPath);
+}
 
 export type PendingFilePayload = {
   id: string;
@@ -36,6 +53,25 @@ export function isLocalFileRef(url: string): boolean {
   return typeof url === "string" && url.startsWith(LOCAL_FILE_PREFIX);
 }
 
+/** Preview / open: `local:uuid` → IndexedDB blob (SQLite me sirf string ref store hota hai). */
+export async function getBlobFromLocalFileRef(url: string): Promise<Blob | null> {
+  if (!isLocalFileRef(url)) return null;
+  const localId = url.slice(LOCAL_FILE_PREFIX.length);
+  if (!localId) return null;
+  const pending = await getPendingFiles();
+  const item = pending.find((row) => row.id === localId);
+  return item?.blob ?? null;
+}
+
+/** Gallery label + FilePreview `resolvedName` — puri pending row (fileName / contentType / blob) */
+export async function getPendingPayloadForLocalRef(url: string): Promise<PendingFilePayload | null> {
+  if (!isLocalFileRef(url)) return null;
+  const localId = url.slice(LOCAL_FILE_PREFIX.length);
+  if (!localId) return null;
+  const pending = await getPendingFiles();
+  return pending.find((row) => row.id === localId) ?? null;
+}
+
 export async function uploadPendingLocalFileRef(
   localFileRef: string,
   storagePathPrefix: string
@@ -52,7 +88,7 @@ export async function uploadPendingLocalFileRef(
   const storageRef = ref(storage, storagePath);
   await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
   const url = await getDownloadURL(storageRef);
-  const docRef = doc(firestore, item.docPath);
+  const docRef = firestoreDocRefFromPath(item.docPath);
   const snap = await getDoc(docRef);
   if (!snap.exists()) {
     throw new Error("Document not found");
@@ -117,7 +153,7 @@ export async function syncOnePendingFile(
     await uploadBytes(storageRef, item.blob, { contentType: item.contentType || "application/octet-stream" });
     const url = await getDownloadURL(storageRef);
 
-    const docRef = doc(firestore, item.docPath);
+    const docRef = firestoreDocRefFromPath(item.docPath);
     const snap = await getDoc(docRef);
     if (!snap.exists()) {
       return { success: false, error: "Document not found" };

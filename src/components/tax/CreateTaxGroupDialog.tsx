@@ -21,11 +21,26 @@ import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
   parentId: z.string().min(1, "Parent group is required."),
 });
+
+const FALLBACK_TAX_SYSTEM_GROUPS: Array<{ id: string; name: string }> = [
+  { id: "duties_taxes", name: "Duties & Taxes" },
+];
 
 
 export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenChange, groups = [] }: { 
@@ -86,6 +101,32 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
     setIsLoading(true);
     
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: save tax group locally and queue backup sync.
+        const localId = createLocalEntityId("tax_group");
+        const payload = {
+          id: localId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          isDeleted: false,
+          createdAt: new Date().toISOString(),
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "tax_groups", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "tax_groups", "create", localId, payload);
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        onGroupCreated(localId);
+        if (saveAndNew) form.reset({ name: "", parentId: "duties_taxes" });
+        return;
+      }
+
       const nameTrimmed = values.name.trim();
       
       // Check if it's a system group name
@@ -144,10 +185,21 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
   }
 
   const { systemGroups, userGroups } = useMemo(() => {
-      const system = groups.filter(g => (g as any).isSystemReserved);
+      const dynamicSystem = groups.filter(g => (g as any).isSystemReserved);
+      const system = dynamicSystem.length > 0
+        ? dynamicSystem
+        : (FALLBACK_TAX_SYSTEM_GROUPS as unknown as TaxGroup[]);
       const userDefined = groups.filter(g => !(g as any).isSystemReserved);
       return { systemGroups: system, userGroups: userDefined };
   }, [groups]);
+
+  useEffect(() => {
+    const currentParent = form.getValues("parentId");
+    if (!currentParent && systemGroups.length > 0) {
+      // Local-only fallback: keep a valid default parent selected.
+      form.setValue("parentId", systemGroups[0].id, { shouldDirty: false });
+    }
+  }, [systemGroups, form]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>

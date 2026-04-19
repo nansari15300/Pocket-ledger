@@ -51,8 +51,8 @@ export function CreateCompanyDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent 
-        // Mobile keeps current full-height style; desktop uses requested 80% width and 70% height.
-        className="w-[98%] h-[90vh] max-h-[90vh] md:w-[80vw] md:max-w-[80vw] md:h-[70vh] md:max-h-[70vh] flex flex-col rounded-xl"
+        // Mobile + desktop: ~90% viewport height taaki create form fields scroll ho sakein
+        className="w-[98%] h-[90vh] max-h-[90vh] md:w-[80vw] md:max-w-[80vw] md:h-[90vh] md:max-h-[90vh] flex flex-col rounded-xl"
         {...dialogProps}
         hideCloseButton={!isDismissable}
         onPointerDownOutside={isDismissable ? undefined : (e) => e.preventDefault()}

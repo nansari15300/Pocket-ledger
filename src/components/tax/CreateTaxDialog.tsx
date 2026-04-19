@@ -12,7 +12,8 @@ import { z } from "zod";
 import { addDoc, collection, serverTimestamp, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
-import { useToast } from "@/hooks/use-toast";
+import { useVouchers } from "@/hooks/useVouchers";
+import { isLocalOnlyMode } from "@/lib/localMode";
 import { firestore, storage } from "@/lib/firebase";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -63,7 +64,9 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
   const router = useRouter();
   const [groups, setGroups] = useState<TaxGroup[]>(parentGroups);
   const { companyId } = useCompany();
-  const { toast } = useToast();
+  const { processedTaxGroups } = useVouchers();
+  const processedTaxGroupsRef = useRef(processedTaxGroups);
+  processedTaxGroupsRef.current = processedTaxGroups;
   
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setIsOpen;
@@ -71,17 +74,24 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-
+    if (isLocalOnlyMode()) {
+      setGroups((processedTaxGroups as TaxGroup[]) || []);
+      return;
+    }
     const q = query(collection(firestore, `companies/${companyId}/tax_groups`), where("isDeleted", "==", false));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-        setGroups(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TaxGroup)));
-    }, (error) => {
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        setGroups(querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as TaxGroup)));
+      },
+      (error) => {
         console.error("Error fetching tax groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
-    });
-    
+        const fb = (processedTaxGroupsRef.current || []) as TaxGroup[];
+        if (fb.length > 0) setGroups(fb);
+      }
+    );
     return () => unsubscribe();
-  }, [isOpen, companyId, toast]);
+  }, [isOpen, companyId, processedTaxGroups]);
 
   const handleTaxCreated = (isSaveAndNew: boolean, newId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
     onTaxCreated(newId, newTax);

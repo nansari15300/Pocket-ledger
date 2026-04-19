@@ -32,6 +32,8 @@ export type Permission =
   | "reset_voucher_history"
   | "add_link"
   | "edit_link"
+  /** Header Copy ledger — doosri company ka party ledger */
+  | "copy_ledger_cross_company"
   /** Split-books FY mode: allow dated entries before company fiscalYearStart */
   | "edit_prior_fiscal_year_split_books";
 
@@ -106,6 +108,7 @@ export const PermissionGroups: PermissionGroup[] = [
         permissions: [
             { key: "add_link", label: "Add Link (Link to Txns)" },
             { key: "edit_link", label: "Edit Link (Unlink / Change allocation)" },
+            { key: "copy_ledger_cross_company", label: "Copy ledger across companies" },
         ]
     },
     {

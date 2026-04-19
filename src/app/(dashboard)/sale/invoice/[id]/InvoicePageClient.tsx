@@ -15,6 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Printer } from "lucide-react";
 import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview";
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
+import { openPdfBlobInExternalViewer, shouldOpenPdfInExternalViewer } from "@/lib/openPdfExternal";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 
 type LineItem = { itemId: string; quantity: number; rate: number; amount: number };
 type Invoice = {
@@ -49,11 +52,14 @@ export function InvoicePageClient() {
       .then((pdf: any) => {
         const blob = pdf.output("blob") as Blob;
         const name = `invoice_${invoice?.voucherNumber || "invoice"}.pdf`;
-        const url = URL.createObjectURL(blob);
-        // Mobile / APK / static: yahi overlay + PDF.js; desktop web: nayi tab
-        if (shouldUseInAppPdfPreviewOverlay()) {
+        // Mobile / native: turant bahar PDF viewer; baaki: overlay ya nayi tab
+        if (shouldOpenPdfInExternalViewer()) {
+          void openPdfBlobInExternalViewer(blob, name);
+        } else if (shouldUseInAppPdfPreviewOverlay()) {
+          const url = URL.createObjectURL(blob);
           showInAppPdfPreview(url, () => URL.revokeObjectURL(url), { title: "Invoice", fileName: name });
         } else {
+          const url = URL.createObjectURL(blob);
           window.open(url, "_blank");
         }
       })
@@ -63,27 +69,78 @@ export function InvoicePageClient() {
   useEffect(() => {
     if (!id || !companyId) { setLoading(false); return; }
     setLoading(true);
-    const unsubInvoice = onSnapshot(doc(firestore, `companies/${companyId}/vouchers`, id as string), async (docSnap) => {
-      if (docSnap.exists()) {
-        const invoiceData = { id: docSnap.id, ...docSnap.data() } as Invoice;
-        let associatedParty = null;
-        if (invoiceData.partyId) {
-          const partySnap = await getDoc(doc(firestore, `companies/${companyId}/parties`, invoiceData.partyId));
-          if (partySnap.exists()) associatedParty = partySnap.data() as Party;
-        }
-        let newItemsData: Record<string, any> = {};
-        if (invoiceData.lineItems?.length) {
-          for (const item of invoiceData.lineItems) {
-            if (item.itemId) {
-              const itemSnap = await getDoc(doc(firestore, `companies/${companyId}/items`, item.itemId));
-              if (itemSnap.exists()) newItemsData[item.itemId] = itemSnap.data();
-            }
+
+    const enrichPartyAndItemsFromBrowser = async (invoiceData: Invoice) => {
+      let associatedParty: Party | null = null;
+      if (invoiceData.partyId) {
+        const p = await getCompanyDocFromBrowserDb(companyId, "parties", invoiceData.partyId);
+        if (p) associatedParty = p as Party;
+      }
+      const newItemsData: Record<string, any> = {};
+      if (invoiceData.lineItems?.length) {
+        for (const line of invoiceData.lineItems) {
+          if (line.itemId) {
+            const it = await getCompanyDocFromBrowserDb(companyId, "items", line.itemId);
+            if (it) newItemsData[line.itemId] = it;
           }
         }
-        setInvoice(invoiceData); setParty(associatedParty); setItemsData(newItemsData);
       }
-      setLoading(false);
-    });
+      setParty(associatedParty);
+      setItemsData(newItemsData);
+    };
+
+    const applyLocalInvoice = async (): Promise<boolean> => {
+      if (!isStaticAppBuild()) return false;
+      const local = await getCompanyDocFromBrowserDb(companyId, "vouchers", id as string);
+      if (!local) return false;
+      const invoiceData = { id: id as string, ...local } as Invoice;
+      setInvoice(invoiceData);
+      await enrichPartyAndItemsFromBrowser(invoiceData);
+      return true;
+    };
+
+    // Static: cache se pehle dikhau jab tak snapshot na aaye / network fail ho.
+    applyLocalInvoice().then(() => {});
+
+    const unsubInvoice = onSnapshot(
+      doc(firestore, `companies/${companyId}/vouchers`, id as string),
+      async (docSnap) => {
+        if (docSnap.exists()) {
+          const invoiceData = { id: docSnap.id, ...docSnap.data() } as Invoice;
+          let associatedParty = null;
+          if (invoiceData.partyId) {
+            const partySnap = await getDoc(doc(firestore, `companies/${companyId}/parties`, invoiceData.partyId));
+            if (partySnap.exists()) associatedParty = partySnap.data() as Party;
+            else if (isStaticAppBuild()) {
+              const p = await getCompanyDocFromBrowserDb(companyId, "parties", invoiceData.partyId);
+              if (p) associatedParty = p as Party;
+            }
+          }
+          let newItemsData: Record<string, any> = {};
+          if (invoiceData.lineItems?.length) {
+            for (const item of invoiceData.lineItems) {
+              if (item.itemId) {
+                const itemSnap = await getDoc(doc(firestore, `companies/${companyId}/items`, item.itemId));
+                if (itemSnap.exists()) newItemsData[item.itemId] = itemSnap.data();
+                else if (isStaticAppBuild()) {
+                  const it = await getCompanyDocFromBrowserDb(companyId, "items", item.itemId);
+                  if (it) newItemsData[item.itemId] = it;
+                }
+              }
+            }
+          }
+          setInvoice(invoiceData); setParty(associatedParty); setItemsData(newItemsData);
+        } else if (isStaticAppBuild()) {
+          // Firestore cache miss: ho sakta hai local mirror mein ho (offline / delayed rules).
+          await applyLocalInvoice();
+        }
+        setLoading(false);
+      },
+      async () => {
+        await applyLocalInvoice();
+        setLoading(false);
+      }
+    );
     return () => unsubInvoice();
   }, [id, companyId]);
 

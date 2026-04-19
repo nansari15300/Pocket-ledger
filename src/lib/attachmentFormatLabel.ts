@@ -75,3 +75,52 @@ export function getAttachmentFormatLabel(source: string | File): string {
   if (lower.endsWith(".pdf")) return "PDF";
   return "FILE";
 }
+
+/**
+ * `local:…` par URL label "FILE" rehta hai — asli type pending row / voucher `name` + MIME se (JPEG, PDF, …).
+ */
+export function getAttachmentFormatLabelFromHints(
+  fileName?: string | null,
+  contentType?: string | null
+): string | null {
+  const ct = String(contentType || "").trim().toLowerCase();
+  if (ct) {
+    if (MIME_TO_LABEL[ct]) return MIME_TO_LABEL[ct];
+    if (ct.startsWith("image/")) {
+      const sub = (ct.split("/")[1] || "").toLowerCase();
+      if (sub === "jpeg" || sub === "jpg") return sub === "jpeg" ? "JPEG" : "JPG";
+      return sub.length > 0 && sub.length <= 8 ? sub.toUpperCase() : "IMAGE";
+    }
+    if (ct === "application/pdf" || ct.includes("pdf")) return "PDF";
+  }
+  const fn = String(fileName || "").trim();
+  if (fn) {
+    const ext = extensionFromPath(fn);
+    if (ext) return normalizeExt(ext);
+  }
+  return null;
+}
+
+/**
+ * Jab `Blob.type` khali ya `octet-stream` ho (IndexedDB local save) — pehle bytes se PDF / chitra sniff.
+ * `blob:` object URLs par `getAttachmentFormatLabel` "FILE" deta hai; preview PDF branch tak pohchna zaroori hai.
+ */
+export async function sniffBlobKindForPreview(blob: Blob): Promise<"pdf" | "image" | "other"> {
+  const mime = String(blob.type || "").toLowerCase();
+  if (mime === "application/pdf" || mime.includes("pdf")) return "pdf";
+  if (mime.startsWith("image/")) return "image";
+  if (mime && mime !== "application/octet-stream") return "other";
+  if (blob.size < 5) return "other";
+  try {
+    const buf = await blob.slice(0, 5).arrayBuffer();
+    const head = new TextDecoder("latin1", { fatal: false }).decode(buf);
+    if (head.startsWith("%PDF")) return "pdf";
+    const u8 = new Uint8Array(buf);
+    if (u8[0] === 0xff && u8[1] === 0xd8) return "image";
+    if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) return "image";
+    if (u8[0] === 0x47 && u8[1] === 0x49 && u8[2] === 0x46) return "image";
+  } catch {
+    /* slice/fetch fail — "other" */
+  }
+  return "other";
+}

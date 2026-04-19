@@ -42,11 +42,17 @@ export function FirebaseErrorListener() {
         code === 'PERMISSION_DENIED' ||
         message.toLowerCase().includes('missing or insufficient permissions');
 
-      if (!isPermissionError) return;
+      if (isPermissionError) {
+        event.preventDefault();
+        return;
+      }
 
-      // Suppress only Firestore permission-denied unhandled promise noise.
-      // Other error types are not touched.
-      event.preventDefault();
+      // Auth: LAN/offline par token refresh fail — fatal overlay nahi; session persistence / listener recover karega.
+      if (code === 'auth/network-request-failed' || message.includes('auth/network-request-failed')) {
+        event.preventDefault();
+        return;
+      }
+
       return;
     };
 

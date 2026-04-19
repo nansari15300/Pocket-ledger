@@ -3,12 +3,12 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Trash2, CalendarIcon, Upload, FileText } from "lucide-react";
+import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query } from "firebase/firestore";
-import { uploadFile } from "@/lib/storage";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import type { Party, Group } from "@/components/party/types";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,18 @@ import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
+import { useVouchers } from "@/hooks/useVouchers";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
+/** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
+function normalizePartyEditGroupId(groupId: string | null | undefined): string {
+  const u = getUngroupedGroupId("party");
+  if (!groupId || groupId === u) return u;
+  return groupId;
+}
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Party name must be at least 2 characters." }),
@@ -49,6 +60,7 @@ const formSchema = z.object({
   groupId: z.string().optional(),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
 
 const MAX_FILE_SIZE_MB = 0.5;
@@ -63,16 +75,25 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 }) {
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId, triggerSync, company } = useCompany();
-  const { canAddAvatar } = usePermissions();
+  const { companyId, company } = useCompany();
+  const { processedGroups } = useVouchers();
+  /** Dialog effect me Firestore fail hone par bhi latest list — deps me poora array na dalein (balance churn). */
+  const processedGroupsRef = React.useRef(processedGroups);
+  processedGroupsRef.current = processedGroups;
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  /** Profile photo only — image; string = saved URL or local: ref */
   const [file, setFile] = useState<File | string | null>(party.fileUrl || null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  /** PDF / images — File new pick ya existing URL string */
+  const [docSlots, setDocSlots] = useState<Array<File | string>>(() => party.documentFileUrls || []);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
 
@@ -84,9 +105,10 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         phone: party.phone || "",
         pan: party.pan || "",
         address: party.address || "",
-        groupId: party.groupId || "",
+        groupId: normalizePartyEditGroupId(party.groupId),
         openingBalance: party.openingBalance || 0,
         openingBalanceDate: (party as any).openingBalanceDate?.toDate ? (party as any).openingBalanceDate.toDate() : undefined,
+        openingBalanceNarration: party.openingBalanceNarration ?? "",
     },
   });
   
@@ -97,17 +119,76 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    
+    let cancelled = false;
+
+    const applyPartyGroups = (list: Group[]) => {
+      setGroups(
+        list.filter((g: any) => g?.id && !g.isDeleted && !(g as any).isSystemReserved)
+      );
+    };
+
+    const seedFromVoucherContext = () => {
+      const fromCtx = (processedGroupsRef.current || []).filter(
+        (g: any) => !g.isDeleted && !g.isSystemReserved
+      ) as Group[];
+      if (fromCtx.length) applyPartyGroups(fromCtx);
+    };
+
+    const loadGroupsFromBrowserDb = async (): Promise<Group[]> => {
+      try {
+        const rows = await listCompanyDocsFromBrowserDb(companyId, "groups");
+        return rows.map((r: any) => ({ ...r, id: r.id } as Group));
+      } catch {
+        return [];
+      }
+    };
+
+    seedFromVoucherContext();
+
+    // Local-first: Firestore snapshot mat lagao (network/auth error + redundant) — SQLite + context kaafi.
+    if (isLocalOnlyMode()) {
+      void (async () => {
+        const fromDb = await loadGroupsFromBrowserDb();
+        if (cancelled) return;
+        if (fromDb.length) applyPartyGroups(fromDb);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      const fromDb = await loadGroupsFromBrowserDb();
+      if (cancelled || !fromDb.length) return;
+      applyPartyGroups(fromDb);
+    })();
+
     const q = query(collection(firestore, `companies/${companyId}/groups`));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-        const fetchedGroups = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Group));
-        setGroups(fetchedGroups);
-    }, (error) => {
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        if (cancelled) return;
+        applyPartyGroups(querySnapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Group)));
+      },
+      async (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
-    });
-    
-    return () => unsubscribe();
+        if (cancelled) return;
+        const fromDb = await loadGroupsFromBrowserDb();
+        if (cancelled) return;
+        if (fromDb.length) {
+          applyPartyGroups(fromDb);
+          return;
+        }
+        seedFromVoucherContext();
+        if (cancelled) return;
+        // Synthetic "Ungrouped" combobox option hamesha hai — listener glitch par user ko disturb mat karo
+      }
+    );
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [isOpen, companyId, toast]);
 
 
@@ -131,11 +212,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         phone: party.phone || "",
         pan: party.pan || "",
         address: party.address || "",
-        groupId: party.groupId || "",
+        groupId: normalizePartyEditGroupId(party.groupId),
         openingBalance: party.openingBalance || 0,
         openingBalanceDate: finalDate,
+        openingBalanceNarration: party.openingBalanceNarration ?? "",
       });
       setFile(party.fileUrl || null);
+      setDocSlots(party.documentFileUrls || []);
     }
   }, [isOpen, party, form]);
 
@@ -144,58 +227,147 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    
-    setIsOpen(false);
-    
+
     const toastId = sonnerToast.loading("Updating party...");
+    const isLocalGuestUser = user?.uid === "local_guest_user";
+    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
     try {
-      let fileUrl = typeof file === 'string' ? file : null;
-      if (file instanceof File && companyId && canAddAvatar) {
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: file.size, storageBytes: file.size });
+      let fileUrl: string | null = typeof file === "string" ? file : null;
+      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
+      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
+      const totalBytes =
+        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+      if (totalBytes > 0 && companyId) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+          company?.storageOption
+        );
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           return;
         }
-        const res = await uploadFile(
-          { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
-          companyId,
-          company?.name,
-          "avatar",
-          undefined,
-          undefined,
-          undefined,
-          new Date()
-        );
-        if (res.success && res.url) {
-          fileUrl = res.url;
-          await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-        }
       }
-      
+
+      if (file instanceof File && companyId && canAddAvatar) {
+        const st = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "parties",
+          entityId: party.id,
+          avatarFile: file,
+          documentFiles: [],
+        });
+        if (st.fileUrl) fileUrl = st.fileUrl;
+      }
+
+      let documentFileUrls = [...keptDocUrls];
+      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
+        const st2 = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "parties",
+          entityId: party.id,
+          avatarFile: null,
+          documentFiles: newDocFiles,
+        });
+        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
+      }
+
       const oldOpeningBalance = party.openingBalance || 0;
       const newOpeningBalance = values.openingBalance || 0;
-      
-      const partyRef = doc(firestore, `companies/${companyId}/parties`, party.id);
-      await updateDoc(partyRef, { 
-          ...values,
+      const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
+      const narrationClean = values.openingBalanceNarration?.trim() || null;
+
+      // Local-first (default web): Firestore updateDoc yahan fail hota tha — SQLite + outbox (create party jaisa).
+      if (isLocalOnlyMode()) {
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: party.id,
+          companyId,
+          ownerId: user?.uid ?? "local_guest_user",
+          balance: party.balance ?? 0,
+          debit: party.debit ?? 0,
+          credit: party.credit ?? 0,
+          isDeleted: false,
+        };
+        const payload: Record<string, unknown> = {
+          ...base,
+          id: party.id,
+          name: values.name,
+          address: values.address ?? "",
+          phone: values.phone ?? "",
+          email: values.email ?? "",
+          pan: values.pan ?? "",
           openingBalance: newOpeningBalance,
-          openingBalanceDate: values.openingBalanceDate || null,
-          fileUrl, 
-          groupId: values.groupId || null
+          openingBalanceDate: values.openingBalanceDate ?? null,
+          openingBalanceNarration: narrationClean,
+          groupId: resolvedGroupId,
+          companyId,
+          fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Party updated!", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.name}" saved locally; sync when online.`
+            : `"${values.name}" has been updated.`,
+        });
+        setIsOpen(false);
+        onPartyUpdated({
+          id: party.id,
+          ...values,
+          fileUrl: fileUrl || "",
+          documentFileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+        });
+        return;
+      }
+
+      if (totalBytes > 0 && companyId) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalBytes,
+          storageBytes: totalBytes,
+        });
+      }
+
+      const partyRef = doc(firestore, `companies/${companyId}/parties`, party.id);
+      // Firestore undefined reject karti hai — ...values spread se leak na ho.
+      await updateDoc(partyRef, {
+        name: values.name,
+        email: values.email ?? "",
+        phone: values.phone ?? "",
+        pan: values.pan ?? "",
+        address: values.address ?? "",
+        openingBalance: newOpeningBalance,
+        openingBalanceDate: values.openingBalanceDate ?? null,
+        openingBalanceNarration: narrationClean,
+        fileUrl: fileUrl ?? null,
+        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        groupId: resolvedGroupId,
       });
 
-      // Automatically balance opening balance change with Capital Account
       if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-        await balanceOpeningBalanceWithCapital(companyId, 'parties', party.id, oldOpeningBalance, newOpeningBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "parties", party.id, oldOpeningBalance, newOpeningBalance);
       }
 
       sonnerToast.success("Party Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      onPartyUpdated({ id: party.id, ...values, fileUrl: fileUrl || '' });
-      triggerSync(); // Trigger UI refresh
-
+      setIsOpen(false);
+      onPartyUpdated({
+        id: party.id,
+        ...values,
+        fileUrl: fileUrl || "",
+        documentFileUrls,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+      });
     } catch (error) {
       console.error("Error updating party:", error);
-      sonnerToast.error("Error Updating Party", { id: toastId, description: "An error occurred. Please try again." });
+      sonnerToast.error("Error Updating Party", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
+      });
     }
   }
 
@@ -214,8 +386,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
+            deletedAt: serverTimestamp()
         });
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
         onPartyDeleted(party.id);
@@ -233,14 +404,19 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     }
   }
   
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return;
     if (!canAddAvatar) {
       e.target.value = "";
-      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding or changing avatar/file." });
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow changing profile photo." });
       return;
     }
     const inputFile = e.target.files[0];
+    if (!isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
 
     if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
@@ -248,44 +424,59 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         title: "File Too Large",
         description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
+      e.target.value = "";
       return;
     }
 
-    if (inputFile) {
-      try {
-        const compressedFile = await compressFile(inputFile);
-         if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({
-              variant: "destructive",
-              title: "File Too Large After Compression",
-              description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-            });
-            return;
-        }
-        setFile(compressedFile);
-      } catch (err) {
-        console.error("File compression error:", err);
+    try {
+      const compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         toast({
-            variant: "destructive",
-            title: "File Error",
-            description: "Could not process the file.",
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
         });
+        e.target.value = "";
+        return;
       }
+      setFile(compressedFile);
+    } catch (err) {
+      console.error("File compression error:", err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
     }
+    e.target.value = "";
   };
-  
-  const removeFile = () => {
-    setFile(null);
-    if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+
+  const handleDocsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
     }
-  }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocSlots((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeAvatar = () => {
+    setFile(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const removeDocAt = (idx: number) => setDocSlots((p) => p.filter((_, i) => i !== idx));
 
   const partyGroupOptions = React.useMemo(() => {
-    // Only user-created groups; system parent groups (Sundry Debtors/Creditors) are hidden
-    return groups
-      .filter(group => !(group as any).isSystemReserved)
-      .map(group => ({ value: group.id, label: group.name }));
+    // CreatePartyForm ke saath milao: pehle synthetic Ungrouped; `ungrouped_party` doc list se `isAutoUngrouped` filter se hat jata hai
+    return [
+      { value: getUngroupedGroupId("party"), label: "Ungrouped" },
+      ...groups
+        .filter(
+          (group) =>
+            !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true
+        )
+        .map((group) => ({ value: group.id, label: group.name })),
+    ];
   }, [groups]);
 
   return (
@@ -294,18 +485,20 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className="sm:max-w-3xl z-50"
+            className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:w-full sm:max-w-3xl sm:px-6"
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className="shrink-0">
             <DialogTitle>Edit Party</DialogTitle>
             <DialogDescription>Update the details for {party.name}.</DialogDescription>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
+            {/* flex-col: scroll body + footer hamesha dikhe (Save cut off na ho) */}
+            <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                     control={form.control}
@@ -389,7 +582,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     </FormItem>
                   )}
                 />
-                <div className="md:col-span-1 grid grid-cols-2 gap-4">
+                {/* OB + date — File tick hata: attachments sirf Documents section + statement row */}
+                <div className="md:col-span-1 grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <FormField
                     control={form.control}
                     name="openingBalance"
@@ -451,41 +645,109 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                   )}
                 />
               </div>
-                 <FormItem>
-                    <FormLabel>Avatar/File</FormLabel>
-                    {!canAddAvatar ? (
-                      <p className="text-xs text-muted-foreground">
-                        Upgrade plan to add or change avatar/file.{" "}
-                        <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Click here to upgrade</Link>
-                      </p>
-                    ) : (
-                    <div className="flex items-center gap-4">
-                        {file && (
-                        <FilePreview file={file} onRemove={() => setFile(null)} />
-                        )}
-                        {!file && (
+                <FormItem>
+                  <FormLabel>Profile photo</FormLabel>
+                  {!canAddAvatar ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade plan to change profile photo.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Upgrade</Link>
+                    </p>
+                  ) : (
+                    <div className="flex items-center gap-4 flex-wrap">
+                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
+                      {!file ? (
                         <FormControl>
-                            <div 
-                                className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                type="file" 
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                                />
-                            </div>
+                          <div
+                            className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            onClick={() => avatarInputRef.current?.click()}
+                          >
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs mt-1 text-center px-1">Add photo</span>
+                            <Input
+                              type="file"
+                              className="hidden"
+                              ref={avatarInputRef}
+                              onChange={handleAvatarChange}
+                              accept="image/*"
+                            />
+                          </div>
                         </FormControl>
-                        )}
+                      ) : null}
                     </div>
-                    )}
+                  )}
+                  <p className="text-[10px] text-muted-foreground mt-1">Images only — shown on profile / avatar.</p>
                 </FormItem>
 
-              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+                <FormItem>
+                  <FormLabel>Documents</FormLabel>
+                  <p className="text-xs text-muted-foreground mb-1 leading-snug">
+                    Optional supporting files for this party (PDF or images — e.g. registration, agreement scans). Up to 5 files; stored with the party and available from the statement.
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mb-1">
+                    On the party statement they show on the opening balance row under the <span className="font-medium">File</span> column (green tick), like voucher attachments.
+                  </p>
+                  {!canAttachDocuments ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade for PDF/image attachments.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Upgrade</Link>
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap items-start gap-2">
+                      {docSlots.map((slot, idx) => (
+                        <FilePreview
+                          key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
+                          file={slot}
+                          onRemove={() => removeDocAt(idx)}
+                          size={96}
+                        />
+                      ))}
+                      {docSlots.length < 5 ? (
+                        <FormControl>
+                          <div
+                            className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            onClick={() => docsInputRef.current?.click()}
+                          >
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                            <Input
+                              type="file"
+                              className="hidden"
+                              ref={docsInputRef}
+                              onChange={handleDocsChange}
+                              accept="image/*,application/pdf"
+                              multiple
+                            />
+                          </div>
+                        </FormControl>
+                      ) : null}
+                    </div>
+                  )}
+                </FormItem>
+
+                <FormField
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  render={({ field }: any) => (
+                    <FormItem>
+                      <FormLabel>Opening balance narration (Optional)</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="e.g. OB brought forward…"
+                          className="min-h-[72px] resize-y"
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                      </FormControl>
+                      <p className="text-[10px] text-muted-foreground">
+                        Shown on the party statement under the Opening Balance row (voucher-style narration).
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+            </div>
+              <DialogFooter className="mt-0 shrink-0 gap-2 border-t bg-background/95 py-3 grid grid-cols-2 sm:flex sm:justify-end">
                 <DialogClose asChild>
                   <Button variant="ghost">Cancel</Button>
                 </DialogClose>

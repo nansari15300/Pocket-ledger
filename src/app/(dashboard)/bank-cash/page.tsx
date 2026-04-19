@@ -46,42 +46,62 @@ import usePermissions from "@/hooks/usePermissions";
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 function BankCashPageContent() {
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
   const { vouchers, loading: vouchersLoading, processedAccounts, processedAccountGroups: initialProcessedAccountGroups, userNames } = useVouchers();
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByAccountId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length || !processedAccounts?.length) return {} as Record<string, number>;
+    const accountIdSet = new Set(processedAccounts.map((a: Account) => a.id));
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
-      if (v.isApproved === true) return;
-      const ids = Array.from(new Set([v.fromAccountId, v.toAccountId, v.accountId].filter(Boolean)));
-      ids.forEach((id) => {
+      const touched = collectBankAccountIdsTouchedByUnapprovedVoucher(v, accountIdSet);
+      touched.forEach((id) => {
         map[id] = (map[id] || 0) + 1;
       });
     });
     return map;
-  }, [vouchers, canApproveTransactions]);
+  }, [vouchers, showApproveOnList, processedAccounts]);
   const pendingApprovalByAccountGroupId = useMemo(() => {
-    if (!canApproveTransactions) return {} as Record<string, number>;
+    if (!showApproveOnList) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedAccounts.forEach((a: any) => {
-      const groupId = a.groupId || "ungrouped";
-      map[groupId] = (map[groupId] || 0) + (pendingApprovalByAccountId[a.id] || 0);
+      const n = pendingApprovalByAccountId[a.id] || 0;
+      if (!n) return;
+      // Synthetic `AccountGroupList` row `id: 'ungrouped'` — `ungrouped_account` bucket yahi
+      const gid =
+        a.groupId && String(a.groupId).trim() !== "" && a.groupId !== "ungrouped_account"
+          ? a.groupId
+          : "ungrouped";
+      map[gid] = (map[gid] || 0) + n;
     });
     return map;
-  }, [processedAccounts, pendingApprovalByAccountId, canApproveTransactions]);
-
+  }, [processedAccounts, pendingApprovalByAccountId, showApproveOnList]);
+  /** Toolbar pink box total: jitne unapproved vouchers kisi bank account ko touch karte hain */
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedAccounts?.length) return 0;
+    const accountIdSet = new Set(processedAccounts.map((a: Account) => a.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      if (collectBankAccountIdsTouchedByUnapprovedVoucher(v, accountIdSet).size > 0) n += 1;
+    }
+    return n;
+  }, [vouchers, showApproveOnList, processedAccounts]);
+  
   const [activeView, setActiveView] = useState("accounts");
   const { isMobile, selected, setSelected } = useResponsiveListLayout<Account | AccountGroup>(`bank_cash_view_${activeView}`);
   const useQueryNav = useMasterDetailQueryNav();
@@ -94,7 +114,8 @@ function BankCashPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  /** Accounts tab: pink count click → sirf jinke paas pending approval */
+  const [showOnlyAccountsWithPendingApproval, setShowOnlyAccountsWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [accountDetailsDateRange, setAccountDetailsDateRange] = useState<DateRange | undefined>(undefined);
@@ -146,10 +167,6 @@ function BankCashPageContent() {
     return initialGroupsWithChildData;
   }, [processedAccounts, initialProcessedAccountGroups, companyId, can]);
 
-  const accountsForListDisplay = useMemo(
-    () => filterByPendingApproval(processedAccounts, pendingApprovalByAccountId, unapprovedOnly),
-    [processedAccounts, pendingApprovalByAccountId, unapprovedOnly]
-  );
 
   // ========== MEMORY LOGIC ==========
   usePageMemory(
@@ -157,8 +174,8 @@ function BankCashPageContent() {
     activeView,               
     setActiveView,            
     selected,                 
-    setSelected,            
-    activeView === 'accounts' ? accountsForListDisplay : processedAccountGroups, 
+    setSelected,              
+    activeView === 'accounts' ? processedAccounts : processedAccountGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -166,8 +183,27 @@ function BankCashPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyAccountsWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "accounts") setShowOnlyAccountsWithPendingApproval(false);
+  }, [activeView]);
+
+  const accountsForAccountList = useMemo(() => {
+    if (!showOnlyAccountsWithPendingApproval || !showApproveOnList) return processedAccounts;
+    return processedAccounts.filter((a) => (pendingApprovalByAccountId[a.id] ?? 0) > 0);
+  }, [processedAccounts, showOnlyAccountsWithPendingApproval, showApproveOnList, pendingApprovalByAccountId]);
+  // Header count: `AccountList` jaisa — search + special-account permission
+  const filteredAccountListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    const canViewSpecialAccount = can("view_special_bank_accounts");
+    return accountsForAccountList.filter((account) => {
+      if (account.isSpecial && !canViewSpecialAccount) return false;
+      return !!(account.accountName && account.accountName.toLowerCase().includes(searchLower));
+    }).length;
+  }, [accountsForAccountList, searchTerm, can]);
 
   // Restore selection when returning from details (e.g. /bank-cash?selected=xyz or /bank-cash?view=groups&selected=xyz)
   const selectedIdFromUrl = searchParams.get("selected");
@@ -185,7 +221,9 @@ function BankCashPageContent() {
       viewFromUrl === "groups"
         ? `/bank-cash?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/bank-cash?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedAccounts, processedAccountGroups, setSelected, setActiveView, router]);
   
   // Initial Mount Safety
@@ -199,10 +237,7 @@ function BankCashPageContent() {
     const canViewSpecialBalance = can('view_special_account_balance');
     
     if (activeView === 'accounts') {
-        let accountsToSum = processedAccounts.filter((acc) => !acc.isSpecial || canViewSpecialBalance);
-        if (unapprovedOnly) {
-          accountsToSum = filterByPendingApproval(accountsToSum, pendingApprovalByAccountId, true);
-        }
+        const accountsToSum = processedAccounts.filter(acc => !acc.isSpecial || canViewSpecialBalance);
         return accountsToSum.reduce((acc, account) => acc + account.balance, 0);
     } 
     // activeView === 'groups'
@@ -215,7 +250,7 @@ function BankCashPageContent() {
         return typeof g.balance === "number" && !isSystemParent;
       })
       .reduce((acc, group) => acc + (group.balance as number), 0);
-  }, [activeView, processedAccounts, processedAccountGroups, can, unapprovedOnly, pendingApprovalByAccountId]);
+  }, [activeView, processedAccounts, processedAccountGroups, can]);
 
 
   const handleSelect = (item: Account | AccountGroup) => {
@@ -237,15 +272,6 @@ function BankCashPageContent() {
   }, [selectedGroup, processedAccounts]);
 
   // Filtered group count (matches AccountGroupList: search + exclude report-only + exclude system groups)
-  const filteredAccountCount = useMemo(() => {
-    const canViewSpecialAccount = can("view_special_bank_accounts");
-    const q = (searchTerm || "").toLowerCase();
-    return accountsForListDisplay.filter((account) => {
-      if (account.isSpecial && !canViewSpecialAccount) return false;
-      return !!(account.accountName && account.accountName.toLowerCase().includes(q));
-    }).length;
-  }, [accountsForListDisplay, searchTerm, can]);
-
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedAccountGroups || []).filter((g) => {
@@ -279,13 +305,22 @@ function BankCashPageContent() {
   const listView = (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1">
+        {/* `min-w-0`: flex row me search shrink ho sake; badge Add ke beech party/staff page jaisa */}
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
-        {activeView === "accounts" && canApproveTransactions && (
-          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-        )}
+        {activeView === "accounts" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyAccountsWithPendingApproval}
+            onToggle={() => setShowOnlyAccountsWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all accounts (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all accounts"
+          />
+        ) : null}
         {activeView === "accounts" ? (
           <CreateBankAccountDialog onAccountCreated={(id) => handleSelect({ id, accountName: "" } as Account)} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
@@ -304,10 +339,10 @@ function BankCashPageContent() {
             <>
               <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
                 <Landmark className="h-4 w-4" />
-                <span>Accounts ({filteredAccountCount})</span>
+                <span>Accounts ({filteredAccountListCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <AccountList accounts={accountsForListDisplay} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? (a) => `/bank-cash?selected=${a.id}` : undefined} />
+                <AccountList accounts={accountsForAccountList} onSelectAccount={handleSelect as any} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByAccountId} getItemHref={useQueryNav ? (a) => `/bank-cash?selected=${a.id}` : undefined} />
               </div>
             </>
         ) : (

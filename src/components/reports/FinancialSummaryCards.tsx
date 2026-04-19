@@ -74,6 +74,9 @@ export function FinancialSummaryCards({
         if (!name || name.length <= maxLength) return name;
         return name.substring(0, maxLength) + '...';
     };
+    // Tax summary label override: keep requested wording only for VAT/Sales total footer row text.
+    const getTaxTotalLabel = (taxName: string) =>
+        taxName === "VAT / Sales Tax" ? "VAT / Sales, purchage Tax" : taxName;
 
     // Date ranges for filtering
     const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
@@ -94,10 +97,11 @@ export function FinancialSummaryCards({
     const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
     /** Mobile: 'both' = dono tables ek saath; 'receivables'|'payables' = sirf woh list (single source of truth, back se mismatch nahi). */
     const [receivablesPayablesTab, setReceivablesPayablesTab] = useState<'receivables' | 'payables' | 'both'>('both');
+    // Sirf yahi flow toggle (mobile/desktop); purana `cashFlowTab` hata — ReferenceError / duplicate UI avoid
     const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
     const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
-    const [cashFlowTab, setCashFlowTab] = useState<'inflow' | 'outflow' | 'both'>('both');
-    const [hasCashFlowTabBeenClicked, setHasCashFlowTabBeenClicked] = useState(false);
+    /** Mobile: Cash Flow dialog me row tap = poora account name (truncate ke bina); dubara tap se band — hover-tooltip jaisa */
+    const [cashFlowExpandedNameKey, setCashFlowExpandedNameKey] = useState<string | null>(null);
     const [taxFilter, setTaxFilter] = useState<'all' | 'input' | 'output'>('all');
     const [selectedTaxId, setSelectedTaxId] = useState<string | null>(null);
     const [expandedTaxAccounts, setExpandedTaxAccounts] = useState<Set<string>>(new Set());
@@ -159,7 +163,6 @@ export function FinancialSummaryCards({
             }
             if (cashFlowOpen && !event.state?.cashFlow) {
                 setCashFlowOpen(false);
-                setCashFlowTab('both');
             }
             if (stockSummaryOpen && !event.state?.stockSummary) {
                 setStockSummaryOpen(false);
@@ -191,6 +194,10 @@ export function FinancialSummaryCards({
             window.history.pushState({ cashFlow: true }, '', '#cash-flow');
         }
     }, [cashFlowOpen, isMobile]);
+
+    useEffect(() => {
+        setCashFlowExpandedNameKey(null);
+    }, [cashFlowFilter, cashFlowCategoryFilter]);
 
     useEffect(() => {
         if (!isMobile) return;
@@ -498,7 +505,7 @@ export function FinancialSummaryCards({
                     });
                 }
             } else if (v.lineItems && Array.isArray(v.lineItems)) {
-                // lineIdx: itemId kabhi missing ho to id `voucher--tax` duplicate na bane (React keys / DB id clash)
+                // lineIdx: khali line.itemId par `${v.id}--${taxId}` duplicate id + React "same key" warning
                 v.lineItems.forEach((line: any, lineIdx: number) => {
                     if (line.taxAccountId) {
                         const taxId = line.taxAccountId;
@@ -509,12 +516,10 @@ export function FinancialSummaryCards({
                                 // Get party name for sale/purchase
                                 const party = processedParties?.find(p => p.id === v.partyId);
                                 const accountName = party?.name || v.partyName || 'N/A';
-                                // Stable per-line id when itemId empty/duplicate — sale vs purchase alag arrays mein bhi same string na ho jaye unnecessarily
-                                const lineDiscrim = line.itemId != null && String(line.itemId).length > 0 ? String(line.itemId) : `L${lineIdx}`;
                                 
                                 if (v.type === 'sale') {
                                     outputTransactions.push({
-                                        id: `${v.id}-${lineDiscrim}-${taxId}`,
+                                        id: `${v.id}-L${lineIdx}-i${String(line.itemId ?? 'ni')}-${taxId}`,
                                         date: v.date,
                                         voucherType: v.type,
                                         voucherNumber: v.voucherNumber || v.invoiceNumber || '',
@@ -526,7 +531,7 @@ export function FinancialSummaryCards({
                                     });
                                 } else if (v.type === 'purchase') {
                                     inputTransactions.push({
-                                        id: `${v.id}-${lineDiscrim}-${taxId}`,
+                                        id: `${v.id}-L${lineIdx}-i${String(line.itemId ?? 'ni')}-${taxId}`,
                                         date: v.date,
                                         voucherType: v.type,
                                         voucherNumber: v.voucherNumber || v.invoiceNumber || '',
@@ -542,7 +547,7 @@ export function FinancialSummaryCards({
                     }
                 });
             } else if (v.type === 'journal' && v.subType === 'add_salary' && Array.isArray(v.entries)) {
-                v.entries.forEach((entry: any) => {
+                v.entries.forEach((entry: any, entryIdx: number) => {
                     const taxId = entry.accountId;
                     if (processedTaxes?.some(t => t.id === taxId) && entry.credit > 0) {
                         if (!selectedTaxId || selectedTaxId === taxId) {
@@ -570,7 +575,7 @@ export function FinancialSummaryCards({
                             const accountName = staff?.name || 'N/A';
                             // Add salary tax is payable (liability), so it goes to outputTransactions (Receivable) as Credit
                             outputTransactions.push({
-                                id: `${v.id}-${entry.accountId}-${staffId || 'unknown'}`,
+                                id: `${v.id}-E${entryIdx}-${entry.accountId}-${staffId || 'unknown'}`,
                                 date: v.date,
                                 voucherType: v.type,
                                 voucherNumber: v.voucherNumber || '',
@@ -1918,10 +1923,7 @@ export function FinancialSummaryCards({
                             <div className="text-right pt-2">
                                 <Dialog open={cashFlowOpen} onOpenChange={(open) => {
                                     setCashFlowOpen(open);
-                                    if (!open) {
-                                        setCashFlowTab('both');
-                                        setHasCashFlowTabBeenClicked(false);
-                                    }
+                                    if (!open) setCashFlowExpandedNameKey(null);
                                 }}>
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
@@ -1996,140 +1998,89 @@ export function FinancialSummaryCards({
                                                     Print <Printer className="h-4 w-4" />
                                                 </Button>
                                             </div>
-                                            {/* Mobile only: Bottom tabs for switching between Inflow/Outflow */}
-                                            {isMobile && (
-                                                <Tabs 
-                                                    value={cashFlowTab === 'both' ? 'inflow' : cashFlowTab} 
-                                                    onValueChange={(v) => {
-                                                        setHasCashFlowTabBeenClicked(true);
-                                                        setCashFlowTab(v as 'inflow' | 'outflow');
-                                                    }} 
-                                                    className="w-full"
-                                                >
-                                                    <TabsList className="grid w-full grid-cols-2">
-                                                        <TabsTrigger value="inflow">Inflow</TabsTrigger>
-                                                        <TabsTrigger value="outflow">Outflow</TabsTrigger>
-                                                    </TabsList>
-                                                </Tabs>
-                                            )}
                                         </DialogHeader>
-                                        {/* min-w-0: flex child me table / ScrollArea horizontal clip na ho */}
-                                        <div className="flex-1 min-w-0 px-2 pt-0 pb-4 min-h-0 overflow-auto">
-                                            {isMobile && !hasCashFlowTabBeenClicked ? (
-                                                // Mobile: Show both full width separately when tab is not clicked (initial state)
-                                                <div className="space-y-4">
-                                                    <div className="flex flex-col min-h-0">
+                                        {/* Mobile: niche Inflow/Outflow tab hata; upar all/inflow/outflow + scroll (all=dono stack) */}
+                                        <div className="flex-1 px-2 pt-0 pb-4 min-h-0 min-w-0 overflow-auto">
+                                            <div className={cn("grid gap-4 flex-1 min-h-0 min-w-0", !isMobile ? "grid-cols-2" : "grid-cols-1")}>
+                                                {(cashFlowFilter === 'all' || cashFlowFilter === 'inflow') && (
+                                                    <div className="flex flex-col min-h-0 min-w-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-green-600 mt-0">Inflow</h3>
-                                                        <div className="border rounded-lg flex flex-col min-h-0">
-                                                            <ScrollArea className="flex-1 min-w-0">
-                                                                <Table className="w-full table-fixed">
-                                                                    <TableBody>
-                                                                        {Object.entries(cashFlowDetails.categorizedInflow).map(([category, items]) => { 
-                                                                            if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                            return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
-                                                                            <TableRow key={i.id}>
-                                                                              {/* Lamba naam ne amount column ko squeeze na kare — table-fixed + truncate */}
-                                                                              <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
-                                                                                {i.name}
-                                                                              </TableCell>
-                                                                              <TableCell className="w-[42%] text-right text-green-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
-                                                                                {formatCurrency(i.amount, {noSuffix: true})}
-                                                                              </TableCell>
-                                                                            </TableRow>
-                                                                          ))}</React.Fragment> )
-                                                                        })}
-                                                                    </TableBody>
-                                                                </Table>
+                                                        <div className="flex-1 border rounded-lg flex flex-col min-h-0 min-w-0 overflow-hidden">
+                                                            {/* pr-2 + table-fixed: mobile par scrollbar / tight width se amount ka digit cut na ho */}
+                                                            <ScrollArea className="flex-1 min-h-0 min-w-0">
+                                                                <div className="min-w-0 pr-2">
+                                                                    <Table className="w-full table-fixed">
+                                                                        <TableBody>
+                                                                            {Object.entries(cashFlowDetails.categorizedInflow).map(([category, items]) => {
+                                                                                if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
+                                                                                return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i, rowIdx) => {
+                                                                                    /* rowIdx: same i.id do lines me ho to bhi expand sahi row par */
+                                                                                    const cashFlowRowKey = `inflow:${category}:${i.id}:${rowIdx}`;
+                                                                                    const nameExpanded = isMobile && cashFlowExpandedNameKey === cashFlowRowKey;
+                                                                                    return (
+                                                                                        <TableRow
+                                                                                            key={i.id}
+                                                                                            className={cn(isMobile && "cursor-pointer active:bg-muted/40")}
+                                                                                            onClick={() => {
+                                                                                                if (!isMobile) return;
+                                                                                                setCashFlowExpandedNameKey((k) => (k === cashFlowRowKey ? null : cashFlowRowKey));
+                                                                                            }}
+                                                                                        >
+                                                                                            <TableCell className="pl-6 pr-2 py-1.5 text-sm max-w-0 w-[38%] align-top">
+                                                                                                <span className={cn("block", nameExpanded ? "whitespace-normal break-words" : "truncate")} title={!isMobile ? i.name : undefined}>{i.name}</span>
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-1.5 text-sm text-right text-green-600 whitespace-nowrap tabular-nums align-top pl-1 pr-1 w-[62%]">{formatCurrency(i.amount, {noSuffix: true})}</TableCell>
+                                                                                        </TableRow>
+                                                                                    );
+                                                                                })}</React.Fragment> )
+                                                                            })}
+                                                                        </TableBody>
+                                                                    </Table>
+                                                                </div>
                                                             </ScrollArea>
-                                                            <div className="p-2 border-t font-bold flex justify-between"><span>Total In</span><span className="text-green-600">{formatCurrency(cashFlowDetails.totalInflow, {noSuffix: true})}</span></div>
+                                                            <div className="p-2 border-t font-bold flex justify-between gap-2 min-w-0"><span className="min-w-0 truncate">Total In</span><span className="shrink-0 tabular-nums text-green-600">{formatCurrency(cashFlowDetails.totalInflow, {noSuffix: true})}</span></div>
                                                         </div>
                                                     </div>
-                                                    <div className="flex flex-col min-h-0">
+                                                )}
+                                                {(cashFlowFilter === 'all' || cashFlowFilter === 'outflow') && (
+                                                    <div className="flex flex-col min-h-0 min-w-0">
                                                         <h3 className="text-lg font-semibold mb-0.5 text-red-600 mt-0">Outflow</h3>
-                                                        <div className="border rounded-lg flex flex-col min-h-0">
-                                                            <ScrollArea className="flex-1 min-w-0">
-                                                                <Table className="w-full table-fixed">
-                                                                    <TableBody>
-                                                                        {Object.entries(cashFlowDetails.categorizedOutflow).map(([category, items]) => { 
-                                                                            if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                            return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
-                                                                            <TableRow key={i.id}>
-                                                                              <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
-                                                                                {i.name}
-                                                                              </TableCell>
-                                                                              <TableCell className="w-[42%] text-right text-red-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
-                                                                                {formatCurrency(i.amount, {noSuffix: true})}
-                                                                              </TableCell>
-                                                                            </TableRow>
-                                                                          ))}</React.Fragment> )
-                                                                        })}
-                                                                    </TableBody>
-                                                                </Table>
+                                                        <div className="flex-1 border rounded-lg flex flex-col min-h-0 min-w-0 overflow-hidden">
+                                                            <ScrollArea className="flex-1 min-h-0 min-w-0">
+                                                                <div className="min-w-0 pr-2">
+                                                                    <Table className="w-full table-fixed">
+                                                                        <TableBody>
+                                                                            {Object.entries(cashFlowDetails.categorizedOutflow).map(([category, items]) => {
+                                                                                if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
+                                                                                return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i, rowIdx) => {
+                                                                                    const cashFlowRowKey = `outflow:${category}:${i.id}:${rowIdx}`;
+                                                                                    const nameExpanded = isMobile && cashFlowExpandedNameKey === cashFlowRowKey;
+                                                                                    return (
+                                                                                        <TableRow
+                                                                                            key={i.id}
+                                                                                            className={cn(isMobile && "cursor-pointer active:bg-muted/40")}
+                                                                                            onClick={() => {
+                                                                                                if (!isMobile) return;
+                                                                                                setCashFlowExpandedNameKey((k) => (k === cashFlowRowKey ? null : cashFlowRowKey));
+                                                                                            }}
+                                                                                        >
+                                                                                            <TableCell className="pl-6 pr-2 py-1.5 text-sm max-w-0 w-[38%] align-top">
+                                                                                                <span className={cn("block", nameExpanded ? "whitespace-normal break-words" : "truncate")} title={!isMobile ? i.name : undefined}>{i.name}</span>
+                                                                                            </TableCell>
+                                                                                            <TableCell className="py-1.5 text-sm text-right text-red-600 whitespace-nowrap tabular-nums align-top pl-1 pr-1 w-[62%]">{formatCurrency(i.amount, {noSuffix: true})}</TableCell>
+                                                                                        </TableRow>
+                                                                                    );
+                                                                                })}</React.Fragment> )
+                                                                            })}
+                                                                        </TableBody>
+                                                                    </Table>
+                                                                </div>
                                                             </ScrollArea>
-                                                            <div className="p-2 border-t font-bold flex justify-between"><span>Total Out</span><span className="text-red-600">{formatCurrency(cashFlowDetails.totalOutflow, {noSuffix: true})}</span></div>
+                                                            <div className="p-2 border-t font-bold flex justify-between gap-2 min-w-0"><span className="min-w-0 truncate">Total Out</span><span className="shrink-0 tabular-nums text-red-600">{formatCurrency(cashFlowDetails.totalOutflow, {noSuffix: true})}</span></div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            ) : (
-                                                // Desktop: Always show side by side based on filter, Mobile: Show selected tab only
-                                                <div className={cn("grid gap-4 flex-1 min-h-0 min-w-0", !isMobile ? "grid-cols-2" : "grid-cols-1")}>
-                                                    {(!isMobile || cashFlowTab === 'inflow') && (cashFlowFilter === 'all' || cashFlowFilter === 'inflow') && (
-                                                        <div className="flex flex-col min-h-0">
-                                                            <h3 className="text-lg font-semibold mb-0.5 text-green-600 mt-0">Inflow</h3>
-                                                            <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                                <ScrollArea className="flex-1 min-w-0">
-                                                                    <Table className="w-full table-fixed">
-                                                                        <TableBody>
-                                                                            {Object.entries(cashFlowDetails.categorizedInflow).map(([category, items]) => { 
-                                                                                if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                                return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
-                                                                            <TableRow key={i.id}>
-                                                                              {/* Lamba naam ne amount column ko squeeze na kare — table-fixed + truncate */}
-                                                                              <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
-                                                                                {i.name}
-                                                                              </TableCell>
-                                                                              <TableCell className="w-[42%] text-right text-green-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
-                                                                                {formatCurrency(i.amount, {noSuffix: true})}
-                                                                              </TableCell>
-                                                                            </TableRow>
-                                                                          ))}</React.Fragment> )
-                                                                            })}
-                                                                        </TableBody>
-                                                                    </Table>
-                                                                </ScrollArea>
-                                                                <div className="p-2 border-t font-bold flex justify-between"><span>Total In</span><span className="text-green-600">{formatCurrency(cashFlowDetails.totalInflow, {noSuffix: true})}</span></div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                    {(!isMobile || cashFlowTab === 'outflow') && (cashFlowFilter === 'all' || cashFlowFilter === 'outflow') && (
-                                                        <div className="flex flex-col min-h-0">
-                                                            <h3 className="text-lg font-semibold mb-0.5 text-red-600 mt-0">Outflow</h3>
-                                                            <div className="flex-1 border rounded-lg flex flex-col min-h-0">
-                                                                <ScrollArea className="flex-1 min-w-0">
-                                                                    <Table className="w-full table-fixed">
-                                                                        <TableBody>
-                                                                            {Object.entries(cashFlowDetails.categorizedOutflow).map(([category, items]) => { 
-                                                                                if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
-                                                                                return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i) => (
-                                                                            <TableRow key={i.id}>
-                                                                              <TableCell className="pl-6 w-[58%] min-w-0 max-w-[58%] truncate align-middle" title={i.name}>
-                                                                                {i.name}
-                                                                              </TableCell>
-                                                                              <TableCell className="w-[42%] text-right text-red-600 whitespace-nowrap tabular-nums align-middle pr-3 pl-1">
-                                                                                {formatCurrency(i.amount, {noSuffix: true})}
-                                                                              </TableCell>
-                                                                            </TableRow>
-                                                                          ))}</React.Fragment> )
-                                                                            })}
-                                                                        </TableBody>
-                                                                    </Table>
-                                                                </ScrollArea>
-                                                                <div className="p-2 border-t font-bold flex justify-between"><span>Total Out</span><span className="text-red-600">{formatCurrency(cashFlowDetails.totalOutflow, {noSuffix: true})}</span></div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
+                                                )}
+                                            </div>
                                         </div>
                                     </DialogContent>
                                 </Dialog>
@@ -2311,32 +2262,19 @@ export function FinancialSummaryCards({
                                                         <ScrollArea className="flex-1 w-full">
                                                             <div className="w-full">
                                                                 <Table className="w-full table-fixed">
+                                                                {/* 4 column: Account date ke neeche — Cash Flow jaisa text-sm */}
                                                                 <TableHeader>
                                                                     <TableRow className="border-b-[0.5px] border-gray-400">
-                                                                        {isMobile ? (
-                                                                            /* Mobile "All": account body me date ke niche — 4 columns (cash flow jaisa readable text-xs) */
-                                                                            <>
-                                                                                <TableHead className="font-bold text-xs px-1 py-1 w-[38%]">Date</TableHead>
-                                                                                <TableHead className="font-bold text-xs px-1 py-1 w-[24%]">Voucher No</TableHead>
-                                                                                <TableHead className="text-right font-bold text-xs px-1 py-1 w-[19%]">Dr</TableHead>
-                                                                                <TableHead className="text-right font-bold text-xs px-1 py-1 w-[19%]">Cr</TableHead>
-                                                                            </>
-                                                                        ) : (
-                                                                            <>
-                                                                                <TableHead className="font-bold">Date</TableHead>
-                                                                                <TableHead className="font-bold">Voucher No</TableHead>
-                                                                                <TableHead className="font-bold">Account</TableHead>
-                                                                                <TableHead className="text-right font-bold">Dr</TableHead>
-                                                                                <TableHead className="text-right font-bold">Cr</TableHead>
-                                                                            </>
-                                                                        )}
+                                                                        <TableHead className={cn("font-bold text-sm", isMobile && "px-1 py-1 w-[30%]")}>Date</TableHead>
+                                                                        <TableHead className={cn("font-bold text-sm", isMobile && "px-1 py-1 w-[26%]")}>Voucher No</TableHead>
+                                                                        <TableHead className={cn("text-right font-bold text-sm", isMobile && "px-1 py-1 w-[22%]")}>Dr</TableHead>
+                                                                        <TableHead className={cn("text-right font-bold text-sm", isMobile && "px-1 py-1 w-[22%]")}>Cr</TableHead>
                                                                     </TableRow>
                                                                 </TableHeader>
                                                                 <TableBody>
                                                                     {transactionsByTaxAccount.length === 0 ? (
                                                                         <TableRow>
-                                                                            {/* Mobile layout 4 cols; desktop 5 */}
-                                                                            <TableCell colSpan={isMobile ? 4 : 5} className="text-center text-muted-foreground py-4">No transactions found</TableCell>
+                                                                            <TableCell colSpan={4} className="text-center text-muted-foreground py-4">No transactions found</TableCell>
                                                                         </TableRow>
                                                                     ) : (() => {
                                                                         // Calculate overall totals across all visible accounts
@@ -2406,104 +2344,69 @@ export function FinancialSummaryCards({
                                                                             return (
                                                                                     <React.Fragment key={taxGroup.taxId}>
                                                                                         <TableRow className="bg-muted/50 border-b-[0.5px] border-gray-400">
-                                                                                            {isMobile ? (
-                                                                                                /* 4 columns: naam + voucher span, khali Dr, balance Cr */
-                                                                                                <>
-                                                                                                    <TableCell colSpan={2} className={cn("font-semibold", "text-xs py-1 px-1")}>
-                                                                                                        <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
-                                                                                                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                                                                                                            <span>{taxGroup.taxName}</span>
-                                                                                                        </div>
-                                                                                                    </TableCell>
-                                                                                                    <TableCell className="text-xs py-1 px-1"></TableCell>
-                                                                                                    <TableCell className={cn("text-right font-semibold", "text-xs py-1 px-1 whitespace-nowrap overflow-visible")}>
-                                                                                                        {!isExpanded && balanceDisplay && (
-                                                                                                            <span className={cn(
-                                                                                                                taxFilter === 'all' ? (accountNetBalance >= 0 ? "text-green-600" : "text-red-600") : taxFilter === 'input' ? "text-green-600" : "text-red-600",
-                                                                                                                "inline-block text-right"
-                                                                                                            )}>
-                                                                                                                {balanceDisplay}
-                                                                                                            </span>
-                                                                                                        )}
-                                                                                                    </TableCell>
-                                                                                                </>
-                                                                                            ) : (
-                                                                                                <>
-                                                                                                    <TableCell className={cn("font-semibold", "py-2")}>
-                                                                                                        <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
-                                                                                                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                                                                                                            <span>{taxGroup.taxName}</span>
-                                                                                                        </div>
-                                                                                                    </TableCell>
-                                                                                                    <TableCell colSpan={3}></TableCell>
-                                                                                                    <TableCell className={cn("text-right font-semibold", "py-2")}>
-                                                                                                        {!isExpanded && balanceDisplay && (
-                                                                                                            <span className={taxFilter === 'all' ? (accountNetBalance >= 0 ? "text-green-600" : "text-red-600") : taxFilter === 'input' ? "text-green-600" : "text-red-600"}>
-                                                                                                                {balanceDisplay}
-                                                                                                            </span>
-                                                                                                        )}
-                                                                                                    </TableCell>
-                                                                                                </>
-                                                                                            )}
+                                                                                            <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-1 px-1" : "py-2")}>
+                                                                                                <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
+                                                                                                    {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                                                                                                    <span>{taxGroup.taxName}</span>
+                                                                                                </div>
+                                                                                            </TableCell>
+                                                                                            <TableCell className={cn(isMobile ? "py-1 px-1" : "py-2")}></TableCell>
+                                                                                            <TableCell className={cn("text-right font-semibold text-sm", isMobile ? "py-1 px-1 whitespace-nowrap overflow-visible" : "py-2")}>
+                                                                                                {!isExpanded && balanceDisplay && (
+                                                                                                    <span className={cn(
+                                                                                                        taxFilter === 'all' ? (accountNetBalance >= 0 ? "text-green-600" : "text-red-600") : taxFilter === 'input' ? "text-green-600" : "text-red-600",
+                                                                                                        isMobile && "inline-block text-right"
+                                                                                                    )}>
+                                                                                                        {balanceDisplay}
+                                                                                                    </span>
+                                                                                                )}
+                                                                                            </TableCell>
                                                                                         </TableRow>
                                                                                         {isExpanded && allTransactions.map((tx, txIdx) => {
                                                                                             const txDate = safeToDate(tx.date);
-                                                                                            // Row key + selection: same tx.id input/output dono me ho sakta hai — composite se duplicate React key warning fix
-                                                                                            const taxRowKey = `${taxGroup.taxId}|${tx.id}|${tx.isDebit ? 'dr' : 'cr'}|${txIdx}`;
-                                                                                            const isSelected = selectedTransactionId === taxRowKey;
+                                                                                            const isSelected = selectedTransactionId === tx.id;
+                                                                                            const rowKey = `${taxGroup.taxId}|${tx.id}|${tx.isDebit ? 'dr' : 'cr'}|${txIdx}`;
                                                                                             return (
                                                                                                 <TableRow 
-                                                                                                    key={taxRowKey} 
+                                                                                                    key={rowKey} 
                                                                                                     className={cn(
-                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer",
+                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer text-sm",
                                                                                                         isSelected ? "bg-muted" : "hover:bg-muted/50"
                                                                                                     )}
-                                                                                                    onClick={() => setSelectedTransactionId(taxRowKey)}
+                                                                                                    onClick={() => setSelectedTransactionId(tx.id)}
                                                                                                 >
-                                                                                                    {isMobile ? (
-                                                                                                        <>
-                                                                                                            <TableCell className="text-xs px-1 py-1 align-top min-w-0">
-                                                                                                                <div className="flex flex-col gap-0.5 min-w-0">
-                                                                                                                    <span className="whitespace-nowrap">{txDate ? (dateSystem === 'BS' ? formatDateBS(txDate) : dateSystem === 'AD' ? formatDate(txDate) : `${formatDateBS(txDate)} / ${formatDate(txDate)}`) : '-'}</span>
-                                                                                                                    <span className="text-muted-foreground text-xs leading-snug break-words" title={tx.account}>{tx.account}</span>
-                                                                                                                </div>
-                                                                                                            </TableCell>
-                                                                                                            <TableCell className="text-xs px-1 py-1 align-top truncate max-w-0" title={tx.voucherNumber}>{tx.voucherNumber || '-'}</TableCell>
-                                                                                                            <TableCell className="text-right text-green-600 text-xs px-1 py-1 align-top tabular-nums">{tx.isDebit && tx.debit > 0 ? formatCurrency(tx.debit, {noSuffix: true}) : '-'}</TableCell>
-                                                                                                            <TableCell className="text-right text-red-600 text-xs px-1 py-1 align-top tabular-nums">{!tx.isDebit && tx.credit > 0 ? formatCurrency(tx.credit, {noSuffix: true}) : '-'}</TableCell>
-                                                                                                        </>
-                                                                                                    ) : (
-                                                                                                        <>
-                                                                                                            <TableCell>{txDate ? (dateSystem === 'BS' ? formatDateBS(txDate) : dateSystem === 'AD' ? formatDate(txDate) : `${formatDateBS(txDate)} / ${formatDate(txDate)}`) : '-'}</TableCell>
-                                                                                                            <TableCell>{tx.voucherNumber || '-'}</TableCell>
-                                                                                                            <TableCell className="max-w-[200px] truncate" title={tx.account}>{truncateAccountName(tx.account)}</TableCell>
-                                                                                                            <TableCell className="text-right text-green-600">{tx.isDebit && tx.debit > 0 ? formatCurrency(tx.debit, {noSuffix: true}) : '-'}</TableCell>
-                                                                                                            <TableCell className="text-right text-red-600">{!tx.isDebit && tx.credit > 0 ? formatCurrency(tx.credit, {noSuffix: true}) : '-'}</TableCell>
-                                                                                                        </>
-                                                                                                    )}
+                                                                                                    <TableCell className={cn("align-top min-w-0", isMobile && "px-1 py-1")}>
+                                                                                                        <div className="flex flex-col gap-0.5 min-w-0">
+                                                                                                            <span className="whitespace-nowrap">{txDate ? (dateSystem === 'BS' ? formatDateBS(txDate) : dateSystem === 'AD' ? formatDate(txDate) : `${formatDateBS(txDate)} / ${formatDate(txDate)}`) : '-'}</span>
+                                                                                                            <span className="text-muted-foreground text-sm leading-snug break-words" title={tx.account}>{truncateAccountName(tx.account)}</span>
+                                                                                                        </div>
+                                                                                                    </TableCell>
+                                                                                                    <TableCell className={cn("align-top truncate", isMobile && "px-1 py-1")} title={tx.voucherNumber}>{tx.voucherNumber || '-'}</TableCell>
+                                                                                                    <TableCell className={cn("text-right text-green-600 tabular-nums align-top", isMobile && "px-1 py-1")}>{tx.isDebit && tx.debit > 0 ? formatCurrency(tx.debit, {noSuffix: true}) : '-'}</TableCell>
+                                                                                                    <TableCell className={cn("text-right text-red-600 tabular-nums align-top", isMobile && "px-1 py-1")}>{!tx.isDebit && tx.credit > 0 ? formatCurrency(tx.credit, {noSuffix: true}) : '-'}</TableCell>
                                                                                                 </TableRow>
                                                                                             );
                                                                                         })}
                                                                                         {isExpanded && (
-                                                                                            /* Per Account Footer — mobile 4 cols: label colSpan 2 */
+                                                                                            /* Per Account Footer — 4 cols: label x2, Dr, Cr */
                                                                                             taxFilter === 'all' ? (
                                                                                                 <>
                                                                                                     <TableRow className="bg-muted/30 border-t-[0.5px] border-gray-400">
-                                                                                                        <TableCell colSpan={isMobile ? 2 : 3} className={cn("font-semibold", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
-                                                                                                            {taxGroup.taxName} - Total
+                                                                                                        <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
+                                                                                                            {getTaxTotalLabel(taxGroup.taxName)} - Total
                                                                                                         </TableCell>
-                                                                                                        <TableCell className={cn("text-right font-semibold text-green-600", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                        <TableCell className={cn("text-right font-semibold text-green-600 text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             {accountPaid > 0 ? formatCurrency(accountPaid, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
-                                                                                                        <TableCell className={cn("text-right font-semibold text-red-600", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                        <TableCell className={cn("text-right font-semibold text-red-600 text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
                                                                                                     </TableRow>
                                                                                                     <TableRow className="bg-muted/30 border-b-[0.5px] border-gray-400">
-                                                                                                        <TableCell colSpan={isMobile ? 2 : 3} className={cn("font-semibold", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                        <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             {taxGroup.taxName} - Net Balance
                                                                                                         </TableCell>
-                                                                                                        <TableCell colSpan={2} className={cn("text-right font-semibold", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                        <TableCell colSpan={2} className={cn("text-right font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             <span className={accountNetBalance >= 0 ? "text-green-600" : "text-red-600"}>
                                                                                                                 {formatCurrency(Math.abs(accountNetBalance), {noSuffix: true})} {accountNetBalance >= 0 ? 'Dr' : 'Cr'}
                                                                                                             </span>
@@ -2512,21 +2415,21 @@ export function FinancialSummaryCards({
                                                                                                 </>
                                                                                             ) : taxFilter === 'input' ? (
                                                                                                 <TableRow className="bg-muted/30 border-t border-black">
-                                                                                                    <TableCell colSpan={isMobile ? 2 : 3} className={cn("font-semibold", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                    <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {taxGroup.taxName} - Total Paid
                                                                                                     </TableCell>
-                                                                                                    <TableCell className={cn("text-right font-semibold text-green-600", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                    <TableCell className={cn("text-right font-semibold text-green-600 text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {accountPaid > 0 ? formatCurrency(accountPaid, {noSuffix: true}) : '-'}
                                                                                                     </TableCell>
-                                                                                                    <TableCell className={cn("text-right", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>-</TableCell>
+                                                                                                    <TableCell className={cn("text-right text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>-</TableCell>
                                                                                                 </TableRow>
                                                                                             ) : (
                                                                                                 <TableRow className="bg-muted/30 border-t border-black">
-                                                                                                    <TableCell colSpan={isMobile ? 2 : 3} className={cn("font-semibold", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                    <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {taxGroup.taxName} - Total Received
                                                                                                     </TableCell>
-                                                                                                    <TableCell className={cn("text-right", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>-</TableCell>
-                                                                                                    <TableCell className={cn("text-right font-semibold text-red-600", isMobile ? "text-xs py-0.5 px-1" : "text-xs py-1")}>
+                                                                                                    <TableCell className={cn("text-right text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>-</TableCell>
+                                                                                                    <TableCell className={cn("text-right font-semibold text-red-600 text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                     </TableCell>
                                                                                                 </TableRow>
@@ -2550,19 +2453,19 @@ export function FinancialSummaryCards({
                                                         <div className="flex-1 border border-black rounded-lg flex flex-col min-h-0">
                                                             <ScrollArea className="flex-1">
                                                                 <Table>
+                                                                    {/* 4 column + account under date — pehle branch jaisa */}
                                                                     <TableHeader>
                                                                         <TableRow className="border-b-[0.5px] border-gray-400">
-                                                                            <TableHead className="font-bold">Date</TableHead>
-                                                                            <TableHead className="font-bold">Voucher No</TableHead>
-                                                                            <TableHead className="font-bold">Account</TableHead>
-                                                                            <TableHead className="text-right font-bold">Dr</TableHead>
-                                                                            <TableHead className="text-right font-bold">Cr</TableHead>
+                                                                            <TableHead className="font-bold text-sm">Date</TableHead>
+                                                                            <TableHead className="font-bold text-sm">Voucher No</TableHead>
+                                                                            <TableHead className="text-right font-bold text-sm">Dr</TableHead>
+                                                                            <TableHead className="text-right font-bold text-sm">Cr</TableHead>
                                                                         </TableRow>
                                                                     </TableHeader>
                                                                     <TableBody>
                                                                         {transactionsByTaxAccount.length === 0 ? (
                                                                             <TableRow>
-                                                                                <TableCell colSpan={5} className="text-center text-muted-foreground py-4">No transactions found</TableCell>
+                                                                                <TableCell colSpan={4} className="text-center text-muted-foreground py-4">No transactions found</TableCell>
                                                                             </TableRow>
                                                                         ) : (() => {
                                                                             // Calculate overall totals across all visible accounts
@@ -2632,14 +2535,14 @@ export function FinancialSummaryCards({
                                                                                 return (
                                                                                     <React.Fragment key={taxGroup.taxId}>
                                                                                         <TableRow className="bg-muted/50 border-b-[0.5px] border-gray-400">
-                                                                                            <TableCell className="font-semibold py-2">
+                                                                                            <TableCell colSpan={2} className="font-semibold text-sm py-2">
                                                                                                 <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
                                                                                                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                                                                                                     <span>{taxGroup.taxName}</span>
                                                                                                 </div>
                                                                                             </TableCell>
-                                                                                            <TableCell colSpan={3}></TableCell>
-                                                                                            <TableCell className="text-right font-semibold py-2">
+                                                                                            <TableCell className="py-2"></TableCell>
+                                                                                            <TableCell className="text-right font-semibold text-sm py-2">
                                                                                                 {!isExpanded && balanceDisplay && (
                                                                                                     <span className={taxFilter === 'all' ? (accountNetBalance >= 0 ? "text-green-600" : "text-red-600") : taxFilter === 'input' ? "text-green-600" : "text-red-600"}>
                                                                                                         {balanceDisplay}
@@ -2649,45 +2552,48 @@ export function FinancialSummaryCards({
                                                                                         </TableRow>
                                                                                         {isExpanded && allTransactions.map((tx, txIdx) => {
                                                                                             const txDate = safeToDate(tx.date);
-                                                                                            const taxRowKey = `${taxGroup.taxId}|${tx.id}|${tx.isDebit ? 'dr' : 'cr'}|${txIdx}`;
-                                                                                            const isSelected = selectedTransactionId === taxRowKey;
+                                                                                            const isSelected = selectedTransactionId === tx.id;
+                                                                                            const rowKey = `${taxGroup.taxId}|${tx.id}|${tx.isDebit ? 'dr' : 'cr'}|${txIdx}`;
                                                                                             return (
                                                                                                 <TableRow 
-                                                                                                    key={taxRowKey} 
+                                                                                                    key={rowKey} 
                                                                                                     className={cn(
-                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer",
+                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer text-sm",
                                                                                                         isSelected ? "bg-muted" : "hover:bg-muted/50"
                                                                                                     )}
-                                                                                                    onClick={() => setSelectedTransactionId(taxRowKey)}
+                                                                                                    onClick={() => setSelectedTransactionId(tx.id)}
                                                                                                 >
-                                                                                                    <TableCell>{txDate ? (dateSystem === 'BS' ? formatDateBS(txDate) : dateSystem === 'AD' ? formatDate(txDate) : `${formatDateBS(txDate)} / ${formatDate(txDate)}`) : '-'}</TableCell>
-                                                                                                    <TableCell>{tx.voucherNumber || '-'}</TableCell>
-                                                                                                    <TableCell className="max-w-[200px] truncate" title={tx.account}>{truncateAccountName(tx.account)}</TableCell>
-                                                                                                    <TableCell className="text-right text-green-600">{tx.isDebit && tx.debit > 0 ? formatCurrency(tx.debit, {noSuffix: true}) : '-'}</TableCell>
-                                                                                                    <TableCell className="text-right text-red-600">{!tx.isDebit && tx.credit > 0 ? formatCurrency(tx.credit, {noSuffix: true}) : '-'}</TableCell>
+                                                                                                    <TableCell className="align-top min-w-0">
+                                                                                                        <div className="flex flex-col gap-0.5 min-w-0">
+                                                                                                            <span className="whitespace-nowrap">{txDate ? (dateSystem === 'BS' ? formatDateBS(txDate) : dateSystem === 'AD' ? formatDate(txDate) : `${formatDateBS(txDate)} / ${formatDate(txDate)}`) : '-'}</span>
+                                                                                                            <span className="text-muted-foreground text-sm leading-snug break-words" title={tx.account}>{truncateAccountName(tx.account)}</span>
+                                                                                                        </div>
+                                                                                                    </TableCell>
+                                                                                                    <TableCell className="align-top truncate" title={tx.voucherNumber}>{tx.voucherNumber || '-'}</TableCell>
+                                                                                                    <TableCell className="text-right text-green-600 tabular-nums align-top">{tx.isDebit && tx.debit > 0 ? formatCurrency(tx.debit, {noSuffix: true}) : '-'}</TableCell>
+                                                                                                    <TableCell className="text-right text-red-600 tabular-nums align-top">{!tx.isDebit && tx.credit > 0 ? formatCurrency(tx.credit, {noSuffix: true}) : '-'}</TableCell>
                                                                                                 </TableRow>
                                                                                             );
                                                                                         })}
                                                                                         {isExpanded && (
-                                                                                            /* Per Account Footer */
                                                                                             taxFilter === 'all' ? (
                                                                                                 <>
                                                                                                     <TableRow className="bg-muted/30 border-t-[0.5px] border-gray-400">
-                                                                                                        <TableCell colSpan={3} className="text-xs font-semibold py-1">
-                                                                                                            {taxGroup.taxName} - Total
+                                                                                                        <TableCell colSpan={2} className="text-sm font-semibold py-1">
+                                                                                                            {getTaxTotalLabel(taxGroup.taxName)} - Total
                                                                                                         </TableCell>
-                                                                                                        <TableCell className="text-right text-xs font-semibold text-green-600 py-1">
+                                                                                                        <TableCell className="text-right text-sm font-semibold text-green-600 py-1">
                                                                                                             {accountPaid > 0 ? formatCurrency(accountPaid, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
-                                                                                                        <TableCell className="text-right text-xs font-semibold text-red-600 py-1">
+                                                                                                        <TableCell className="text-right text-sm font-semibold text-red-600 py-1">
                                                                                                             {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
                                                                                                     </TableRow>
                                                                                                     <TableRow className="bg-muted/30 border-b-[0.5px] border-gray-400">
-                                                                                                        <TableCell colSpan={3} className="text-xs font-semibold py-1">
+                                                                                                        <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                             {taxGroup.taxName} - Net Balance
                                                                                                         </TableCell>
-                                                                                                        <TableCell colSpan={2} className="text-right text-xs font-semibold py-1">
+                                                                                                        <TableCell colSpan={2} className="text-right text-sm font-semibold py-1">
                                                                                                             <span className={accountNetBalance >= 0 ? "text-green-600" : "text-red-600"}>
                                                                                                                 {formatCurrency(Math.abs(accountNetBalance), {noSuffix: true})} {accountNetBalance >= 0 ? 'Dr' : 'Cr'}
                                                                                                             </span>
@@ -2696,21 +2602,21 @@ export function FinancialSummaryCards({
                                                                                                 </>
                                                                                             ) : taxFilter === 'input' ? (
                                                                                                 <TableRow className="bg-muted/30 border-t border-black">
-                                                                                                    <TableCell colSpan={3} className="text-xs font-semibold py-1">
+                                                                                                    <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                         {taxGroup.taxName} - Total Paid
                                                                                                     </TableCell>
-                                                                                                    <TableCell className="text-right text-xs font-semibold text-green-600 py-1">
+                                                                                                    <TableCell className="text-right text-sm font-semibold text-green-600 py-1">
                                                                                                         {accountPaid > 0 ? formatCurrency(accountPaid, {noSuffix: true}) : '-'}
                                                                                                     </TableCell>
-                                                                                                    <TableCell className="text-right text-xs py-1">-</TableCell>
+                                                                                                    <TableCell className="text-right text-sm py-1">-</TableCell>
                                                                                                 </TableRow>
                                                                                             ) : (
                                                                                                 <TableRow className="bg-muted/30 border-t border-black">
-                                                                                                    <TableCell colSpan={3} className="text-xs font-semibold py-1">
+                                                                                                    <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                         {taxGroup.taxName} - Total Received
                                                                                                     </TableCell>
-                                                                                                    <TableCell className="text-right text-xs py-1">-</TableCell>
-                                                                                                    <TableCell className="text-right text-xs font-semibold text-red-600 py-1">
+                                                                                                    <TableCell className="text-right text-sm py-1">-</TableCell>
+                                                                                                    <TableCell className="text-right text-sm font-semibold text-red-600 py-1">
                                                                                                         {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                     </TableCell>
                                                                                                 </TableRow>

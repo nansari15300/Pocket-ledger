@@ -89,10 +89,24 @@ export default {
             height: '0',
           },
         },
+        // GlobalFileHoverPreviewSwitch + ui/Switch — knob 32px, ON end left = 100% − 35px (32+3 pad)
+        'file-hover-switch-on': {
+          '0%': { left: '3px', width: '32px' },
+          '45%': { left: '3px', width: 'calc(100% - 6px)' },
+          '100%': { left: 'calc(100% - 35px)', width: '32px' },
+        },
+        'file-hover-switch-off': {
+          '0%': { left: 'calc(100% - 35px)', width: '32px' },
+          '45%': { left: '3px', width: 'calc(100% - 6px)' },
+          '100%': { left: '3px', width: '32px' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        // Header GlobalFileHoverPreviewSwitch — 400ms motion (ANIM_MS se match)
+        'file-hover-switch-on': 'file-hover-switch-on 400ms linear forwards',
+        'file-hover-switch-off': 'file-hover-switch-off 400ms linear forwards',
       },
     },
   },

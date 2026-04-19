@@ -1,7 +1,7 @@
 
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { disableNetwork, enableNetwork, getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 
@@ -22,6 +22,11 @@ const auth = getAuth(app);
 // Suppress Firebase console errors for offline/unavailable; track PERMISSION_DENIED (skip when logged out)
 if (typeof window !== 'undefined') {
   const originalError = console.error;
+  const isLocalFirstEnabled = () => {
+    const mode = window.localStorage.getItem('dataSourceMode');
+    // Local-first startup: missing key is treated as local.
+    return !mode || mode === 'local';
+  };
   console.error = (...args: any[]) => {
     const errorMessage = args.join(' ');
     // Don't log Firebase offline/unavailable errors
@@ -32,6 +37,10 @@ if (typeof window !== 'undefined') {
       errorMessage.includes('operate in offline mode') ||
       (errorMessage.includes('Firestore') && errorMessage.includes('Connection failed'))
     ) {
+      return;
+    }
+    // Firebase Auth: Google endpoints tak reach nahi (Wi‑Fi flap, firewall) — dev console spam kam.
+    if (errorMessage.includes('auth/network-request-failed')) {
       return;
     }
     // PERMISSION_DENIED after logout is expected (listeners still firing with null auth) — don't log
@@ -60,6 +69,9 @@ if (typeof window !== 'undefined') {
       errorMessage.includes('PERMISSION_DENIED') ||
       errorMessage.includes('Missing or insufficient permissions')
     ) {
+      if (isLocalFirstEnabled()) {
+        return;
+      }
       const err = args.find((a) => a && typeof a === 'object' && 'code' in a) as { code?: string; message?: string; path?: string } | undefined;
       originalError.apply(console, [
         '[Firestore PERMISSION_DENIED]',
@@ -75,5 +87,68 @@ if (typeof window !== 'undefined') {
 }
 const firestore = getFirestore(app);
 const storage = getStorage(app);
+
+/**
+ * Firestore 12.8: parallel / stacked `enableNetwork` + `disableNetwork` → PersistentWriteStream INTERNAL ASSERTION (da08).
+ * Sab toggle ek hi serial chain pe — storage events, admin shell, outbox flush overlap na karein.
+ */
+let firestoreNetworkOpChain: Promise<unknown> = Promise.resolve();
+
+export function queueFirestoreNetworkOp<T>(fn: () => Promise<T>): Promise<T> {
+  const next = firestoreNetworkOpChain.then(fn, fn);
+  firestoreNetworkOpChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+/**
+ * Sirf jab `disableNetwork(firestore)` successfully apply ho chuka ho — flush tab hi `enableNetwork` chalayega.
+ * Har flush par `enableNetwork` + active `onSnapshot` race = Firestore 12.x INTERNAL ASSERTION (ca9 / ve:-1) offline→online.
+ */
+export let firestoreNetworkDisabledByApi = false;
+
+/** Admin panel / tests: `disableNetwork` yahan ke alawa bhi ho sakta hai — outbox flush ko sahi `enableNetwork` chahiye. */
+export function markFirestoreNetworkDisabledByApi(disabled: boolean): void {
+  firestoreNetworkDisabledByApi = disabled;
+}
+
+if (typeof window !== 'undefined') {
+  // Pehle yahan local-first = disableNetwork() tha — outbox flush / getDocFromServer tab server tak kabhi nahi pahunchte.
+  // Optional: NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK=1 se purani "offline-only" behaviour.
+  const applyFirestoreNetworkMode = async () => {
+    await queueFirestoreNetworkOp(async () => {
+      try {
+        const mode = window.localStorage.getItem('dataSourceMode');
+        const localFirst =
+          !mode || mode === 'local' ||
+          process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === '1' ||
+          process.env.NEXT_PUBLIC_STATIC_BUILD === '1';
+        const forceOff =
+          process.env.NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK === '1' && localFirst;
+        if (forceOff) {
+          await disableNetwork(firestore);
+          firestoreNetworkDisabledByApi = true;
+        } else {
+          // Default Firestore session is already online — har load/HMR par `enableNetwork` =
+          // PersistentWriteStream pe redundant handshake → SDK 12.8 INTERNAL ASSERTION da08.
+          if (firestoreNetworkDisabledByApi) {
+            await enableNetwork(firestore);
+          }
+          firestoreNetworkDisabledByApi = false;
+        }
+      } catch {
+        // non-blocking
+      }
+    });
+  };
+
+  void applyFirestoreNetworkMode();
+  window.addEventListener('storage', (event) => {
+    if (event.key && event.key !== 'dataSourceMode') return;
+    void applyFirestoreNetworkMode();
+  });
+}
 
 export { app, auth, firestore, storage };

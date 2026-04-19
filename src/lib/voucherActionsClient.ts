@@ -17,24 +17,196 @@ import {
 import { auth, firestore, storage } from "@/lib/firebase";
 import { ref as storageRef, deleteObject } from "firebase/storage";
 import { moveFilesToVoucherDateClient } from "./storageClient";
-import { getPlan, type PlanId } from "@/config/plans";
+import { getCompanyDocFromBrowserDb, mirrorVoucherDocToBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import {
+  enqueueVoucherOutbox,
+  isLikelyOfflineFirestoreError,
+  canSyncCompanyToServer,
+  removeOutboxRowsForCompanyDoc,
+  flushVoucherOutbox,
+} from "@/lib/localVoucherOutbox";
+import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
+import { getPlan, numericEntitlement, companyStorageIsLocal, type Entitlements, type PlanId } from "@/config/plans";
+import { getPlanFromPlans } from "@/hooks/useLivePlans";
+import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
-import { coerceVoucherDateForStamp, toIsoDateStamp } from "@/lib/voucherDateStamp";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
 
 function removeUndefined(obj: any): any {
-  if (Array.isArray(obj)) return obj.map(removeUndefined);
+  // File/Blob SQLite/outbox JSON me nahi ja sakte — agar form se leak ho to strip karo (warn: BigInt JSON me throw karta hai).
+  if (typeof obj === "bigint") return obj.toString();
+  if (typeof File !== "undefined" && obj instanceof File) return undefined;
+  if (typeof Blob !== "undefined" && obj instanceof Blob) return undefined;
+  if (Array.isArray(obj)) return obj.map(removeUndefined).filter((v) => v !== undefined);
   if (obj !== null && typeof obj === "object") {
     if (obj instanceof Date || (obj && "toDate" in obj && typeof obj.toDate === "function")) return obj;
     return Object.keys(obj).reduce((acc: any, key) => {
-      const value = obj[key];
-      if (value !== undefined) acc[key] = removeUndefined(value);
+      const value = removeUndefined(obj[key]);
+      if (value !== undefined) acc[key] = value;
       return acc;
     }, {});
   }
   return obj;
+}
+
+/** Date / Firestore Timestamp / ISO string → JS Date (update path me `new Date(ts)` galat Invalid Date deta tha) */
+function toJsDateFromVoucherField(value: unknown): Date | null {
+  if (value == null) return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  if (value instanceof Timestamp) {
+    try {
+      const d = value.toDate();
+      return isNaN(d.getTime()) ? null : d;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "string" && value.trim()) {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value === "object" && typeof (value as { toDate?: () => Date }).toDate === "function") {
+    try {
+      const d = (value as { toDate: () => Date }).toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Admin `app_settings/plans` + default bundle — sirf entitlements (voucher limit checks). */
+async function mergePlanEntitlementsForId(planId: PlanId): Promise<Entitlements> {
+  const defaultPlan = getPlan(planId);
+  try {
+    const plansSnap = await getDoc(doc(firestore, "app_settings", "plans"));
+    if (plansSnap.exists()) {
+      const plansData = plansSnap.data();
+      const fromFs = plansData[planId] as { entitlements?: Partial<Entitlements> } | undefined;
+      if (fromFs && typeof fromFs === "object") {
+        return { ...defaultPlan.entitlements, ...(fromFs.entitlements || {}) };
+      }
+      // Doc hai lekin tier missing — bundled default (purana behaviour).
+      return defaultPlan.entitlements;
+    }
+  } catch {
+    /* Firestore fail → niche cached catalog */
+  }
+  const rec = readCachedPlansRecord() ?? defaultPlansRecordFallback();
+  return getPlanFromPlans(rec, planId).entitlements;
+}
+
+/** Offline create: company row Firestore pe nahi ho sakti — planId/storage local `companies` table se. */
+async function resolvePlanIdAndStorageOption(companyId: string): Promise<{ planId: PlanId; storageOption?: string }> {
+  let planId: PlanId = "basic";
+  let storageOption: string | undefined;
+  let gotFirestoreCompany = false;
+  try {
+    const companySnap = await getDoc(doc(firestore, "companies", companyId));
+    const companyData = companySnap.data();
+    if (companyData) {
+      gotFirestoreCompany = true;
+      planId = (companyData.planId as PlanId) || "basic";
+      storageOption = companyData.storageOption as string | undefined;
+    }
+  } catch {
+    /* offline */
+  }
+  if (!gotFirestoreCompany) {
+    try {
+      const loc = await getLocalCompanyById(companyId);
+      if (loc) {
+        planId = ((loc as { planId?: string }).planId as PlanId) || planId;
+        storageOption = (loc as { storageOption?: string }).storageOption ?? storageOption;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return { planId, storageOption };
+}
+
+/** SQLite mirror vouchers: `date` field ko day/month window me count karo (cloud query jaisa). */
+function countLocalMirrorVouchersInRange(
+  vouchers: Array<Record<string, unknown>>,
+  start: Date,
+  end: Date
+): number {
+  return vouchers.filter((v) => {
+    const raw = v.date;
+    let dt: Date | null = null;
+    if (raw instanceof Timestamp) dt = raw.toDate();
+    else if (raw instanceof Date) dt = raw;
+    else if (raw && typeof raw === "object" && "toDate" in raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
+      try {
+        dt = (raw as { toDate: () => Date }).toDate();
+      } catch {
+        dt = null;
+      }
+    }
+    if (!dt || Number.isNaN(dt.getTime())) return false;
+    return dt >= start && dt <= end;
+  }).length;
+}
+
+export async function patchVoucherFields(
+  companyId: string,
+  voucherId: string,
+  partial: Record<string, unknown>
+): Promise<void> {
+  if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
+  if (isLocalOnlyMode()) {
+    // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
+    const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
+    const payload = removeUndefined({
+      ...(existing as Record<string, unknown>),
+      ...partial,
+      id: voucherId,
+      updatedAt: Timestamp.now(),
+      lastEditedAt: Timestamp.now(),
+    }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(payload);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+
+    const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
+    const canSync = await canSyncCompanyToServer(companyId);
+    const encFlag = Boolean(reg && (reg as Record<string, unknown>).encryptServerBackup === true);
+
+    if (canSync && !encFlag) {
+      const fsCompanyId =
+        String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
+      try {
+        await updateDoc(doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId), partial);
+        await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
+        await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+        return;
+      } catch (e) {
+        if (isLikelyOfflineFirestoreError(e)) {
+          await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+          return;
+        }
+        throw e;
+      }
+    }
+
+    if (canSync && encFlag) {
+      await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+      await flushVoucherOutbox();
+      return;
+    }
+
+    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    return;
+  }
+  await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId), partial);
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
 }
 
 function getChanges(oldData: any, newData: any): Record<string, { from: any; to: any }> {
@@ -53,10 +225,8 @@ function getChanges(oldData: any, newData: any): Record<string, { from: any; to:
       (oldVal instanceof Date || (oldVal?.toDate instanceof Function)) &&
       (newVal instanceof Date || (newVal?.toDate instanceof Function))
     ) {
-      const oldD = coerceVoucherDateForStamp(oldVal);
-      const newD = coerceVoucherDateForStamp(newVal);
-      const oldTime = oldD ? oldD.toISOString() : "";
-      const newTime = newD ? newD.toISOString() : "";
+      const oldTime = oldVal instanceof Date ? oldVal.toISOString() : oldVal.toDate().toISOString();
+      const newTime = newVal instanceof Date ? newVal.toISOString() : new Date(newVal).toISOString();
       if (oldTime !== newTime) changes[key] = { from: oldData?.[key] ?? null, to: newData?.[key] ?? null };
     } else if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
       changes[key] = { from: oldVal ?? null, to: newData?.[key] ?? null };
@@ -130,41 +300,180 @@ export function isVoucherLimitError(error: unknown): error is Error & { isVouche
 }
 
 /**
+ * Static + offline: naya voucher local SQLite + outbox (Firestore baad mein flush).
+ * Daily/monthly caps: `dailyVoucherLimitLocal` / `monthlyVoucherLimitLocal` jab company local storage ho.
+ */
+async function saveVoucherOfflineLocalCreate(
+  companyId: string,
+  userId: string,
+  cleanVoucherData: any,
+  voucherPath: string,
+  /** Forms ne pehle se `local:` file refs + IndexedDB ke liye id banai ho to wahi use karo */
+  preGeneratedVoucherId?: string | null
+): Promise<{ id: string }> {
+  const { planId, storageOption } = await resolvePlanIdAndStorageOption(companyId);
+  const mergedEnt = await mergePlanEntitlementsForId(planId);
+  const useLocalLim = companyStorageIsLocal(storageOption);
+  const dailyLimitOff = numericEntitlement(mergedEnt, "dailyVoucherLimit", useLocalLim);
+  const monthlyLimitOff = numericEntitlement(mergedEnt, "monthlyVoucherLimit", useLocalLim);
+  const existingVouchers = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+  const now = new Date();
+  if (dailyLimitOff > 0) {
+    const n = countLocalMirrorVouchersInRange(existingVouchers, startOfDay(now), endOfDay(now));
+    if (n >= dailyLimitOff) {
+      const err = new Error(`Daily voucher limit reached (${dailyLimitOff}). Upgrade your plan for more.`) as Error & {
+        isVoucherLimit?: boolean;
+      };
+      err.isVoucherLimit = true;
+      throw err;
+    }
+  }
+  if (monthlyLimitOff > 0) {
+    const n = countLocalMirrorVouchersInRange(existingVouchers, startOfMonth(now), endOfMonth(now));
+    if (n >= monthlyLimitOff) {
+      const err = new Error(`Monthly voucher limit reached (${monthlyLimitOff}). Upgrade your plan for more.`) as Error & {
+        isVoucherLimit?: boolean;
+      };
+      err.isVoucherLimit = true;
+      throw err;
+    }
+  }
+  // Local-first mode me ID generation Firestore dependent nahi hona chahiye.
+  const trimmed = preGeneratedVoucherId && String(preGeneratedVoucherId).trim();
+  const newId = trimmed || generateLocalVoucherIdForCreate();
+  const authUser = auth.currentUser;
+  const creatorDisplayName =
+    authUser?.displayName || authUser?.email?.split("@")?.[0] || cleanVoucherData.userDisplayName || null;
+  const creatorEmail = authUser?.email || cleanVoucherData.userEmail || null;
+  let historyEnabled = false;
+  try {
+    const { enabled } = await getEffectiveHistorySettings(companyId);
+    historyEnabled = enabled;
+  } catch {
+    historyEnabled = false;
+  }
+  // `now` upar limit window ke liye bana — history row mein wahi moment reuse (doosra `const now` duplicate error deta tha).
+  const nowTs = Timestamp.now();
+  const initialHistory = historyEnabled
+    ? [
+        {
+          changedAt: nowTs,
+          changedBy: userId,
+          changes: {
+            created: { from: "N/A", to: "Created" },
+            lastEditedByUserName: { from: "N/A", to: creatorDisplayName || userId },
+            lastEditedAt: { from: null, to: now },
+          },
+        },
+      ]
+    : [];
+  const bodyRaw = {
+    ...cleanVoucherData,
+    companyId,
+    userId,
+    isApproved: cleanVoucherData.isApproved === true,
+    userDisplayName: creatorDisplayName,
+    userEmail: creatorEmail,
+    lastEditedByUserName: creatorDisplayName || userId,
+    lastEditedAt: nowTs,
+    createdAt: nowTs,
+    history: initialHistory,
+  };
+  const body = removeUndefined(bodyRaw) as Record<string, unknown>;
+  coerceVoucherDocumentDate(body);
+  const payload = { id: newId, ...body };
+  await upsertCompanyDocInBrowserDb(companyId, "vouchers", newId, payload);
+  await enqueueVoucherOutbox(companyId, "create", newId, payload);
+  return { id: newId };
+}
+
+/**
  * Client-only: Save or update voucher. Runs in browser so Firestore uses signed-in user auth (server action has no auth → 500).
  */
 export type SaveVoucherApproveOption = { approvedByUserId: string; approvedByName?: string | null };
+
+/** Local create: attachment flow ne `generateLocalVoucherIdForCreate` pehle call kiya ho to yahan pass karo */
+export type SaveVoucherOptions = { preGeneratedVoucherId?: string };
 
 export async function saveVoucher(
   companyId: string,
   userId: string,
   voucherData: any,
   voucherId?: string | null,
-  approveAfterSave?: SaveVoucherApproveOption
+  approveAfterSave?: SaveVoucherApproveOption,
+  options?: SaveVoucherOptions
 ): Promise<{ id: string }> {
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
-  const voucherRef = voucherId ? doc(firestore, voucherPath, voucherId) : null;
 
-  if (typeof cleanVoucherData.date === "string") cleanVoucherData.date = new Date(cleanVoucherData.date);
+  // Edit: form/outbox se `date` key missing ho to pehle server/SQLite ki purani date merge — warna niche `coerceVoucherDocumentDate` `Timestamp.now()` se aaj likh deta (online update me zyada dikhta tha)
+  if (voucherId) {
+    try {
+      const snap = await getDoc(doc(firestore, voucherPath, voucherId));
+      let oldRow: Record<string, unknown> | null = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+      if (!oldRow && isLocalOnlyMode()) {
+        oldRow = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) as Record<string, unknown> | null;
+      }
+      const dMissing =
+        cleanVoucherData.date === undefined ||
+        cleanVoucherData.date === null ||
+        (typeof cleanVoucherData.date === "string" && String(cleanVoucherData.date).trim() === "");
+      if (dMissing && oldRow?.date != null) {
+        cleanVoucherData.date = oldRow.date as any;
+      }
+    } catch {
+      /* offline / permission: merge skip — niche coerce fallback */
+    }
+  }
+
+  // `Date`/string → `Timestamp`: outbox JSON + bilink partial merge dono mein stable `date` (Payment Out "new" khali column fix).
+  coerceVoucherDocumentDate(cleanVoucherData as Record<string, unknown>);
+  const voucherRef = voucherId ? doc(firestore, voucherPath, voucherId) : null;
   if (cleanVoucherData.lineItems) {
     if (cleanVoucherData.type === "sale_service" || cleanVoucherData.type === "sale") cleanVoucherData.type = "sale";
     else if (cleanVoucherData.type === "purchase_service" || cleanVoucherData.type === "purchase") cleanVoucherData.type = "purchase";
     else if (!cleanVoucherData.type) cleanVoucherData.type = "sale";
   }
 
+  if (isLocalOnlyMode()) {
+    // Static local-first: voucher writes ko direct Firebase pe mat bhejo; only local + outbox.
+    if (!voucherRef) {
+      return saveVoucherOfflineLocalCreate(
+        companyId,
+        userId,
+        cleanVoucherData,
+        voucherPath,
+        options?.preGeneratedVoucherId ?? null
+      );
+    }
+    const existingLocal = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId!);
+    const nowTs = Timestamp.now();
+    const mergedLocal = removeUndefined({
+      ...(existingLocal || {}),
+      ...cleanVoucherData,
+      id: voucherId!,
+      companyId,
+      userId: (existingLocal as any)?.userId ?? userId,
+      lastEditedBy: userId,
+      lastEditedByUserName: auth.currentUser?.displayName || auth.currentUser?.email?.split("@")?.[0] || userId,
+      lastEditedAt: nowTs,
+      updatedAt: nowTs,
+    }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(mergedLocal);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId!, mergedLocal);
+    await enqueueVoucherOutbox(companyId, "update", voucherId!, mergedLocal);
+    return { id: voucherId! };
+  }
+
   if (!voucherRef) {
+    try {
     const companySnap = await getDoc(doc(firestore, "companies", companyId));
     const companyData = companySnap.data() || {};
     const planId = (companyData?.planId as PlanId) || "basic";
-    const defaultPlan = getPlan(planId);
-    const plansSnap = await getDoc(doc(firestore, "app_settings", "plans"));
-    const plansData = plansSnap.exists() ? plansSnap.data() : {};
-    const fromFs = plansData[planId];
-    const plan = fromFs
-      ? { ...defaultPlan, ...fromFs, entitlements: { ...defaultPlan.entitlements, ...(fromFs.entitlements || {}) } }
-      : defaultPlan;
-    const dailyLimit = (plan.entitlements.dailyVoucherLimit as number) ?? 0;
-    const monthlyLimit = (plan.entitlements.monthlyVoucherLimit as number) ?? 0;
+    const mergedEntitlements = await mergePlanEntitlementsForId(planId);
+    const storageIsLocal = companyStorageIsLocal(companyData?.storageOption as string | undefined);
+    const dailyLimit = numericEntitlement(mergedEntitlements, "dailyVoucherLimit", storageIsLocal);
+    const monthlyLimit = numericEntitlement(mergedEntitlements, "monthlyVoucherLimit", storageIsLocal);
     if (dailyLimit > 0) {
       const todayStart = Timestamp.fromDate(startOfDay(new Date()));
       const todayEnd = Timestamp.fromDate(endOfDay(new Date()));
@@ -228,7 +537,7 @@ export async function saveVoucher(
     const uf = cleanVoucherData.unassignedFile as { id?: string; url?: string; path?: string; name?: string } | undefined;
     if (uf?.path && uf?.name && typeof uf.path === "string" && typeof uf.name === "string") {
       const voucherType = cleanVoucherData.type || "sale";
-      const voucherDate = cleanVoucherData.date instanceof Date ? cleanVoucherData.date : new Date(cleanVoucherData.date);
+      const voucherDate = toJsDateFromVoucherField(cleanVoucherData.date) ?? new Date();
       const companySnap = await getDoc(doc(firestore, "companies", companyId));
       const companyName = companySnap.data()?.name as string | undefined;
       const moveResult = await moveFilesToVoucherDateClient({
@@ -249,12 +558,33 @@ export async function saveVoucher(
         await updateDoc(docRef, { fileUrls: updatedFileUrls, files, unassignedFile: null });
       }
     }
+    // Static build: naya voucher + optional file move ke baad local SQLite mein mirror (offline layer).
+    await mirrorVoucherDocToBrowserDb(companyId, newId);
     return { id: newId };
+    } catch (e) {
+      if (isVoucherLimitError(e)) throw e;
+      if (!isLocalOnlyMode() || !isLikelyOfflineFirestoreError(e)) throw e;
+      return saveVoucherOfflineLocalCreate(
+        companyId,
+        userId,
+        cleanVoucherData,
+        voucherPath,
+        options?.preGeneratedVoucherId ?? null
+      );
+    }
   }
 
-  const oldSnap = await getDoc(voucherRef);
-  if (!oldSnap.exists()) throw new Error("Voucher not found");
-  const oldData = oldSnap.data();
+  const oldSnap = await getDoc(voucherRef).catch(() => null);
+  let oldData: any;
+  if (oldSnap?.exists()) {
+    oldData = oldSnap.data();
+  } else if (isLocalOnlyMode()) {
+    const loc = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId!);
+    if (!loc) throw new Error("Voucher not found");
+    oldData = loc;
+  } else {
+    throw new Error("Voucher not found");
+  }
   const { createdAt, updatedAt, ...restOfOldData } = (oldData || {}) as any;
   const changedFields = getChanges(restOfOldData, cleanVoucherData);
   if (Object.keys(changedFields).length === 0 && !approveAfterSave) return { id: voucherId! };
@@ -278,13 +608,13 @@ export async function saveVoucher(
     }
   }
 
-  const oldDate = coerceVoucherDateForStamp((oldData as any)?.date);
-  const newDate = coerceVoucherDateForStamp(cleanVoucherData?.date);
-  const oldStamp = toIsoDateStamp(oldDate);
-  const newStamp = toIsoDateStamp(newDate);
+  const oldDate = toJsDateFromVoucherField((oldData as any)?.date);
+  const newDate = toJsDateFromVoucherField(cleanVoucherData?.date);
+  const oldStamp = oldDate ? oldDate.toISOString().slice(0, 10) : "";
+  const newStamp = newDate ? newDate.toISOString().slice(0, 10) : "";
   let movedFileObjects: any[] | null = null;
 
-  if (oldDate && newDate && oldStamp && newStamp && oldStamp !== newStamp) {
+  if (oldStamp && newStamp && oldStamp !== newStamp) {
     const vType = cleanVoucherData?.type || (oldData as any)?.type || "sale";
     const filesToMove = (oldData as any)?.files || [];
     if (Array.isArray(filesToMove) && filesToMove.length > 0) {
@@ -322,19 +652,20 @@ export async function saveVoucher(
 
   const newEntry = { changedAt: now, changedBy: userId, changes: changedFields };
   const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const localTs = Timestamp.now();
   const updatePayload: any = {
     ...cleanVoucherData,
     lastEditedBy: userId,
     lastEditedByUserName: currentUserName,
-    lastEditedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+    lastEditedAt: localTs,
+    updatedAt: localTs,
     history: newHistory,
   };
   if (approveAfterSave) {
     updatePayload.isApproved = true;
     updatePayload.approvedByUserId = approveAfterSave.approvedByUserId;
     updatePayload.approvedByUserName = approveAfterSave.approvedByName ?? approveAfterSave.approvedByUserId;
-    updatePayload.approvedAt = serverTimestamp();
+    updatePayload.approvedAt = localTs;
   } else if (shouldResetApproval) {
     updatePayload.isApproved = false;
     updatePayload.approvedByUserId = null;
@@ -347,7 +678,30 @@ export async function saveVoucher(
     const serverOB = (oldData as any)?.openingBalanceAllocated;
     if (serverOB !== undefined && serverOB !== null) updatePayload.openingBalanceAllocated = Number(serverOB) || 0;
   }
-  await updateDoc(voucherRef, updatePayload);
+  const fireUpdate: any = {
+    ...updatePayload,
+    lastEditedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (approveAfterSave) fireUpdate.approvedAt = serverTimestamp();
+  else if (shouldResetApproval) fireUpdate.approvedAt = null;
+
+  try {
+    await updateDoc(voucherRef, fireUpdate);
+  } catch (e) {
+    if (!isLocalOnlyMode() || !isLikelyOfflineFirestoreError(e)) throw e;
+    const { id: _oldId, ...oldRest } = oldData as Record<string, unknown>;
+    const forLocal = removeUndefined({
+      id: voucherRef.id,
+      ...oldRest,
+      ...updatePayload,
+    }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(forLocal);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherRef.id, forLocal);
+    await enqueueVoucherOutbox(companyId, "update", voucherRef.id, forLocal);
+    return { id: voucherRef.id };
+  }
+  await mirrorVoucherDocToBrowserDb(companyId, voucherRef.id);
   return { id: voucherRef.id };
 }
 
@@ -363,6 +717,39 @@ export async function updateVoucherSpendWiseLinks(
   userId: string
 ): Promise<void> {
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
+  if (isLocalOnlyMode()) {
+    // Local-only mode me spend-wise links browser DB me update karke outbox queue karo.
+    const oldData = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+    if (!oldData) throw new Error("Voucher not found");
+    const currentUserName = auth.currentUser?.displayName || auth.currentUser?.email?.split("@")?.[0] || userId;
+    const now = new Date();
+    const existingHistory = Array.isArray((oldData as any)?.history) ? (oldData as any).history : [];
+    const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
+    const newEntry = {
+      changedAt: now,
+      changedBy: userId,
+      changes: {
+        linkedPaymentInIds: { from: (oldData as any)?.linkedPaymentInIds ?? [], to: linkedPaymentInIds },
+        linkedPaymentInAmounts: { from: (oldData as any)?.linkedPaymentInAmounts ?? {}, to: linkedPaymentInAmounts },
+        lastEditedByUserName: { from: (oldData as any)?.lastEditedByUserName ?? "N/A", to: currentUserName },
+        lastEditedAt: { from: (oldData as any)?.lastEditedAt ?? null, to: now },
+      },
+    };
+    const newHistory = historyEnabled ? [newEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+    const payload = removeUndefined({
+      ...(oldData as any),
+      id: voucherId,
+      linkedPaymentInIds,
+      linkedPaymentInAmounts,
+      lastEditedByUserName: currentUserName,
+      lastEditedAt: Timestamp.now(),
+      history: newHistory,
+    }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(payload);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    return;
+  }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const authUser = auth.currentUser;
   const currentUserName = authUser?.displayName || authUser?.email?.split("@")?.[0] || userId;
@@ -390,6 +777,7 @@ export async function updateVoucherSpendWiseLinks(
     lastEditedAt: serverTimestamp(),
     history: newHistory,
   });
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
 }
 
 /**
@@ -403,6 +791,55 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   previousAllocations: Allocation[] = []
 ): Promise<void> {
   if (!companyId || !sourceVoucherId) return;
+  if (isLocalOnlyMode()) {
+    // Local-only mode me reverse allocation links local vouchers par maintain karo.
+    const prevIds = new Set(
+      previousAllocations
+        .filter((a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID)
+        .map((a) => a.voucherId)
+    );
+    const newIds = new Set(
+      newAllocations
+        .filter((a) => a.voucherId && a.voucherId !== OPENING_BALANCE_VOUCHER_ID)
+        .map((a) => a.voucherId)
+    );
+    const toRemove = [...prevIds].filter((id) => !newIds.has(id));
+    for (const targetId of toRemove) {
+      const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId);
+      if (!data) continue;
+      const allocations: Allocation[] = Array.isArray((data as any)?.allocations) ? [...((data as any).allocations as Allocation[])] : [];
+      const filtered = allocations.filter((a) => a.voucherId !== sourceVoucherId);
+      if (filtered.length !== allocations.length) {
+        const payload = removeUndefined({ ...(data as any), id: targetId, allocations: filtered }) as Record<string, unknown>;
+        coerceVoucherDocumentDate(payload);
+        await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
+        await enqueueVoucherOutbox(companyId, "update", targetId, payload);
+      }
+    }
+    for (const a of newAllocations) {
+      if (!a.voucherId || a.voucherId === OPENING_BALANCE_VOUCHER_ID) continue;
+      const amt = getAllocationTotal(a);
+      if (amt <= 0) continue;
+      const targetId = a.voucherId;
+      const data = await getCompanyDocFromBrowserDb(companyId, "vouchers", targetId);
+      if (!data) continue;
+      const allocations: Allocation[] = Array.isArray((data as any)?.allocations) ? [...((data as any).allocations as Allocation[])] : [];
+      const idx = allocations.findIndex((x) => x.voucherId === sourceVoucherId);
+      const entry: Allocation = {
+        voucherId: sourceVoucherId,
+        amount: amt,
+        taxAmount: (a as any).taxAmount !== undefined ? Number((a as any).taxAmount) : undefined,
+        netAmount: (a as any).netAmount !== undefined ? Number((a as any).netAmount) : undefined,
+      };
+      if (idx >= 0) allocations[idx] = entry;
+      else allocations.push(entry);
+      const payload = removeUndefined({ ...(data as any), id: targetId, allocations }) as Record<string, unknown>;
+      coerceVoucherDocumentDate(payload);
+      await upsertCompanyDocInBrowserDb(companyId, "vouchers", targetId, payload);
+      await enqueueVoucherOutbox(companyId, "update", targetId, payload);
+    }
+    return;
+  }
   const voucherPath = `companies/${companyId}/vouchers`;
   const prevIds = new Set(
     previousAllocations
@@ -424,6 +861,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
     const filtered = allocations.filter((a) => a.voucherId !== sourceVoucherId);
     if (filtered.length !== allocations.length) {
       await updateDoc(ref, { allocations: filtered });
+      await mirrorVoucherDocToBrowserDb(companyId, targetId);
     }
   }
   // Sanitize allocation so Firestore never gets undefined
@@ -454,6 +892,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
     if (idx >= 0) allocations[idx] = entry;
     else allocations.push(entry);
     await updateDoc(ref, { allocations });
+    await mirrorVoucherDocToBrowserDb(companyId, a.voucherId);
   }
 }
 
@@ -471,6 +910,40 @@ export async function approveVoucherWithHistory(
     throw new Error("Missing required approval parameters.");
   }
 
+  if (isLocalOnlyMode()) {
+    // Local-only mode me approve state local voucher doc par apply karo + queue sync.
+    const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+    if (!voucher) throw new Error("Voucher not found.");
+    if ((voucher as any)?.isApproved === true) return;
+    const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
+    const existingHistory = Array.isArray((voucher as any)?.history) ? (voucher as any).history : [];
+    const approverName = approvedByName || approvedByUserId;
+    const previousApprover = (voucher as any)?.approvedByUserName || (voucher as any)?.approvedByUserId || "N/A";
+    const approvalEntry = {
+      changedAt: new Date(),
+      changedBy: approvedByUserId,
+      changes: {
+        isApproved: { from: (voucher as any)?.isApproved === true ? true : false, to: true },
+        approvedByUserName: { from: (voucher as any)?.approvedByUserName || "N/A", to: approverName },
+        approvedByUserId: { from: (voucher as any)?.approvedByUserId || "N/A", to: approvedByUserId },
+        approvedBy: { from: previousApprover, to: approverName },
+      },
+    };
+    const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+    const payload = removeUndefined({
+      ...(voucher as any),
+      id: voucherId,
+      isApproved: true,
+      approvedByUserId,
+      approvedByUserName: approverName,
+      approvedAt: Timestamp.now(),
+      history: newHistory,
+    }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(payload);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    return;
+  }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
 
@@ -506,6 +979,7 @@ export async function approveVoucherWithHistory(
       history: newHistory,
     });
   });
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
 }
 
 /**
@@ -517,6 +991,16 @@ export async function resetVoucherHistory(
   companyId: string,
   voucherId: string
 ): Promise<{ success: true }> {
+  if (isLocalOnlyMode()) {
+    // Local-only mode: history clear local voucher doc me apply karo.
+    const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+    if (!voucher) throw new Error("Voucher not found");
+    const payload = removeUndefined({ ...(voucher as any), id: voucherId, history: [] }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(payload);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    return { success: true };
+  }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const snap = await getDoc(voucherRef);
   if (!snap.exists()) throw new Error("Voucher not found");
@@ -548,6 +1032,7 @@ export async function resetVoucherHistory(
   }
 
   await updateDoc(voucherRef, { history: [] });
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
   return { success: true };
 }
 
@@ -593,6 +1078,31 @@ export async function deleteHistoryEntries(
   voucherId: string,
   changedAtMs: number[]
 ): Promise<{ success: true }> {
+  if (isLocalOnlyMode()) {
+    // Local-only mode: selected history rows local voucher se remove karo.
+    const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+    if (!voucher) throw new Error("Voucher not found");
+    const existing: any[] = Array.isArray((voucher as any).history) ? (voucher as any).history : [];
+    const toDelete = new Set(changedAtMs);
+    const tsToMs = (c: any): number | null => {
+      if (!c) return null;
+      if (c?.toDate instanceof Function) return c.toDate().getTime();
+      if (c?._seconds != null) return c._seconds * 1000;
+      if (c?.seconds != null) return c.seconds * 1000;
+      if (typeof c === "number") return c;
+      const p = new Date(c);
+      return isNaN(p.getTime()) ? null : p.getTime();
+    };
+    const filtered = existing.filter((h: any) => {
+      const ms = tsToMs(h.changedAt);
+      return ms === null || !toDelete.has(ms);
+    });
+    const payload = removeUndefined({ ...(voucher as any), id: voucherId, history: filtered }) as Record<string, unknown>;
+    coerceVoucherDocumentDate(payload);
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+    return { success: true };
+  }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const snap = await getDoc(voucherRef);
   if (!snap.exists()) throw new Error("Voucher not found");
@@ -651,5 +1161,6 @@ export async function deleteHistoryEntries(
   }
 
   await updateDoc(voucherRef, { history: filtered });
+  await mirrorVoucherDocToBrowserDb(companyId, voucherId);
   return { success: true };
 }

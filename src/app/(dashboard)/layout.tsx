@@ -11,13 +11,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { DisclaimerDialog } from "@/components/layout/DisclaimerDialog";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { signOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton } from "@/components/layout/MobileFloatingButton";
+import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
+import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
+import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
 import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
 import { SettingsListProvider } from "@/contexts/SettingsListContext";
@@ -25,6 +27,9 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
+import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
 import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/deviceLimitClient";
@@ -60,7 +65,22 @@ type DeviceItem = { id: string; userId: string; lastActive: string; ts: number; 
 function DeviceLimitOverlay() {
   const pathname = usePathname();
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, allCompanies } = useCompany();
+  const livePlansForDeviceUi = useLivePlans();
+  /** Header profile jaisa effective plan — overlay par limit explain karne ke liye */
+  const deviceOverlayAccountPlanId = useMemo(
+    () =>
+      user?.uid && company
+        ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company.planId)
+        : ("basic" as PlanId),
+    [allCompanies, user?.uid, company?.planId, company]
+  );
+  const deviceOverlayPlan = useMemo(
+    () => getPlanFromPlans(livePlansForDeviceUi, deviceOverlayAccountPlanId),
+    [livePlansForDeviceUi, deviceOverlayAccountPlanId]
+  );
+  const deviceOverlayPlanName =
+    DEFAULT_PLANS[deviceOverlayAccountPlanId]?.name ?? String(deviceOverlayAccountPlanId);
   const { toast } = useToast();
   const router = useRouter();
   const { deviceLimitReached, singleDeviceOnly, replaceOffer, noPermissionNewDevice, kickedAndBlocked, deviceCount, maxDevices, refreshDeviceCheck, performReplaceAndRefresh, clearKickedAndRefresh } = useDeviceLimitContext();
@@ -250,6 +270,16 @@ function DeviceLimitOverlay() {
       <Smartphone className="h-12 w-12 text-amber-500 shrink-0" />
       <p className="text-center font-medium text-lg">
         Device limit reached ({deviceCount}/{maxDevices})
+      </p>
+      {/* `maxDevices` hook se = profile wala effective account plan (highest owned tier) */}
+      <p className="text-center text-xs text-muted-foreground max-w-md px-2">
+        Account plan (header profile jaisa):{" "}
+        <span className="font-medium text-foreground">{deviceOverlayPlanName}</span>
+        {deviceOverlayPlan.entitlements.hasMultiDeviceSync ? (
+          <span> — {maxDevices} device slot{maxDevices !== 1 ? "s" : ""} for this account</span>
+        ) : (
+          <span> — multi-device sync is off for this plan (1 device)</span>
+        )}
       </p>
       <div className="w-full max-w-sm rounded-lg border bg-muted/50 px-3 py-2 text-left text-xs text-muted-foreground space-y-1">
         <p><span className="font-medium text-foreground">User name:</span> {(user?.displayName ?? "").toString().trim() || (user?.email ? user.email.split("@")[0] : "") || "—"}</p>
@@ -608,7 +638,7 @@ function DashboardMainWithEdgeSwipe({
 function LayoutContent({ children }: { children: React.ReactNode }) {
     const isMobile = useIsMobile();
     const pathname = usePathname();
-    const { user, loading } = useAuth();
+    const { user } = useAuth();
 
     // Settings / gallery: body scroll bandho — andar list ya grid khud scroll kare
     useEffect(() => {
@@ -622,145 +652,25 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         }
     }, [pathname]);
     useMarkMessagesDelivered();
-    const { toast } = useToast();
-    const [showDisclaimer, setShowDisclaimer] = useState(false);
-
-    // Disclaimer logic: show once per day AND on every new login session
-    useEffect(() => {
-        if (loading) return;
-
-        const today = new Date().toISOString().split('T')[0];
-        const lastShownDate = localStorage.getItem('lastDisclaimerShownDate');
-        const sessionLoginMarker = sessionStorage.getItem('disclaimerShownForSession');
-
-        const showForNewDay = lastShownDate !== today;
-        const showForNewSession = !sessionLoginMarker;
-        
-        if (user && (showForNewDay || showForNewSession)) {
-            setShowDisclaimer(true);
-            sessionStorage.setItem('disclaimerShownForSession', 'true');
-        } else if (!user) {
-            // When user logs out, clear the session marker to trigger on next login
-            sessionStorage.removeItem('disclaimerShownForSession');
-        }
-    }, [user, loading]);
-
-    // Auto-logout after 100 min with no activity. Same user multi-tab: if any tab has activity, all tabs stay logged in.
-    const INACTIVITY_LOGOUT_MS = 100 * 60 * 1000; // 100 minutes
-    const logoutDesc = "100 minutes";
-    const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const toastRef = useRef(toast);
-    toastRef.current = toast;
-    const INACTIVITY_CHANNEL = "pocket-ledger-inactivity";
-
-    useEffect(() => {
-        if (!user) {
-            if (inactivityTimerRef.current) {
-                clearTimeout(inactivityTimerRef.current);
-                inactivityTimerRef.current = null;
-            }
-            return;
-        }
-
-        const clearInactivityTimer = () => {
-            if (inactivityTimerRef.current) {
-                clearTimeout(inactivityTimerRef.current);
-                inactivityTimerRef.current = null;
-            }
-        };
-
-        const scheduleLogout = () => {
-            clearInactivityTimer();
-                inactivityTimerRef.current = setTimeout(() => {
-                inactivityTimerRef.current = null;
-                try { sessionStorage.setItem("logout_reason", "inactivity"); } catch (_) {}
-                import("@/lib/navigation-memory").then(({ clearNavigationMemory }) => clearNavigationMemory());
-                signOut(auth).then(() => {
-                    toastRef.current({ title: "Session Expired", description: `You have been logged out due to inactivity (${logoutDesc}).` });
-                });
-            }, INACTIVITY_LOGOUT_MS);
-        };
-
-        // Cross-tab: when any tab has activity, all tabs reset timer (same user multi-tab – one tab active = no logout)
-        let broadcastThrottle = 0;
-        const broadcastActivity = () => {
-            const now = Date.now();
-            if (now - broadcastThrottle < 2000) return;
-            broadcastThrottle = now;
-            try {
-                new BroadcastChannel(INACTIVITY_CHANNEL).postMessage({ type: "activity", ts: now });
-            } catch (_) {}
-        };
-
-        const onActivity = () => {
-            scheduleLogout();
-            broadcastActivity();
-        };
-
-        const onVisibilityChange = () => {
-            if (document.visibilityState === "visible") {
-                scheduleLogout();
-                broadcastActivity();
-            }
-        };
-
-        let channel: BroadcastChannel | null = null;
-        try {
-            channel = new BroadcastChannel(INACTIVITY_CHANNEL);
-            channel.onmessage = () => scheduleLogout();
-        } catch (_) {}
-
-        const activityEvents: (keyof WindowEventMap)[] = [
-            "mousemove", "keydown", "click", "scroll",
-            "touchstart", "touchmove", "touchend", "touchcancel",
-            "pointerdown", "pointermove", "wheel"
-        ];
-
-        activityEvents.forEach((event) => window.addEventListener(event, onActivity, { passive: true }));
-        document.addEventListener("visibilitychange", onVisibilityChange);
-        scheduleLogout();
-
-        return () => {
-            clearInactivityTimer();
-            activityEvents.forEach((event) => window.removeEventListener(event, onActivity));
-            document.removeEventListener("visibilitychange", onVisibilityChange);
-            try { channel?.close(); } catch (_) {}
-        };
-    }, [user, INACTIVITY_LOGOUT_MS, logoutDesc]);
-
-    const handleDisclaimerClose = () => {
-        const today = new Date().toISOString().split('T')[0];
-        localStorage.setItem('lastDisclaimerShownDate', today);
-        setShowDisclaimer(false);
-    };
 
     const noLayoutPages = ["/company", "/company/create"];
     const isEmbedRoute = pathname?.startsWith("/embed");
 
     if (noLayoutPages.includes(pathname)) {
-        return (
-            <>
-                <DisclaimerDialog isOpen={showDisclaimer} onClose={handleDisclaimerClose} />
-                {children}
-            </>
-        );
+        return <>{children}</>;
     }
 
     // Embed routes: content only (no app sidebar/header) — used when shown inside reports iframe
     if (isEmbedRoute) {
         return (
-            <>
-                <DisclaimerDialog isOpen={showDisclaimer} onClose={handleDisclaimerClose} />
-                <div className="h-full w-full overflow-hidden bg-background">
-                    {children}
-                </div>
-            </>
+            <div className="h-full w-full overflow-hidden bg-background">
+                {children}
+            </div>
         );
     }
 
     return (
          <>
-            <DisclaimerDialog isOpen={showDisclaimer} onClose={handleDisclaimerClose} />
             <AlarmPopup />
             <ReportListProvider>
               <SettingsListProvider>
@@ -769,13 +679,24 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                   <div
                     id="app-container"
                     className={cn(
-                      "relative flex h-screen bg-background",
+                      "relative flex bg-background",
+                      /** Mobile: dvh = browser chrome / gesture bar; desktop: h-screen */
+                      isMobile ? "h-dvh max-h-dvh min-h-0" : "h-screen min-h-0",
                       (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) && "overflow-hidden"
                     )}
                   >
                     <AppSidebar />
-                    <div className={cn("flex flex-1 flex-col overflow-hidden", !isMobile && "border-l app-main-border")}>
+                    <div
+                      className={cn(
+                        "flex min-h-0 flex-1 flex-col overflow-hidden",
+                        !isMobile && "border-l app-main-border",
+                        /** Sirf system safe-area — extra 1rem hata: mobile par page home button ke zyada qareeb */
+                        isMobile && "pb-[env(safe-area-inset-bottom,0px)]"
+                      )}
+                    >
                       <AppHeader />
+                      <CompanyDemotedBanner />
+                      <PlanAuthoritativeSyncBanner />
                       <DashboardMainWithEdgeSwipe
                         className={cn(
                           "flex-1 min-h-0",
@@ -807,7 +728,10 @@ export default function DashboardLayout({
     <MobileViewProvider>
       <SidebarProvider>
         <DashboardProvider>
-          <LayoutContent>{children}</LayoutContent>
+          {/* Global file + avatar hover preview — header pill se ON/OFF (AttachmentHoverPortal). */}
+          <FileHoverPreviewProvider>
+            <LayoutContent>{children}</LayoutContent>
+          </FileHoverPreviewProvider>
         </DashboardProvider>
       </SidebarProvider>
     </MobileViewProvider>

@@ -13,6 +13,7 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { useCompany } from "@/hooks/useCompany";
 import {
   Dialog,
   DialogContent,

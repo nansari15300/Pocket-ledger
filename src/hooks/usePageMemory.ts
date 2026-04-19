@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useIsMobile, isRealMobileDevice } from "@/hooks/use-mobile";
+import { useIsMobileLayoutResolved } from "@/hooks/use-mobile";
 
 export function usePageMemory<T extends { id: string }>(
   storageKey: string,
@@ -16,7 +16,8 @@ export function usePageMemory<T extends { id: string }>(
   /** When provided, use this ID for restore instead of localStorage (URL takes precedence on refresh) */
   urlSelectedId?: string | null
 ) {
-  const isMobile = useIsMobile();
+  // null = SSR/first client frame — never run desktop auto-select until we know real viewport
+  const mobileLayoutResolved = useIsMobileLayoutResolved();
   const selectionsHistory = useRef<Record<string, string>>({});
   const isInitialized = useRef(false);
 
@@ -35,7 +36,11 @@ export function usePageMemory<T extends { id: string }>(
 
           // URL wins whenever a view id is in the URL (e.g. ?view=devices); don't require it in currentItems
           // so that permission-loaded list doesn't cause localStorage to overwrite the URL tab
-          const urlWins = urlSelectedId != null && urlSelectedId !== "";
+          // Next.js `useSearchParams` kabhi pehle frame par khali — window.location se `view` check (refresh pe tab galat)
+          const hasViewInLocation =
+            typeof window !== "undefined" && new URLSearchParams(window.location.search).has("view");
+          const urlWins =
+            (urlSelectedId != null && urlSelectedId !== "") || hasViewInLocation;
           // disableAutoSelect: mobile settings list-first — localStorage se purana tab mat lao
           if (!urlWins && !disableAutoSelect && parsed.activeView && parsed.activeView !== activeView) {
             setActiveView(parsed.activeView);
@@ -55,12 +60,9 @@ export function usePageMemory<T extends { id: string }>(
   
   useEffect(() => {
     if (isLoading) return;
-    // useIsMobile() pehle client pass me false rehta hai (hydration); usi beech yeh effect desktop samajh kar pehla item select kar deta hai — mobile par sidebar se /tax etc. par aane par seedha detail khul jata hai, refresh par loading order alag hone se list sahi dikhti thi
-    const viewportActsMobile =
-      typeof window !== "undefined" &&
-      (window.innerWidth < 768 ||
-        (isRealMobileDevice() && window.innerHeight >= window.innerWidth));
-    if (disableAutoSelect || isMobile || viewportActsMobile) return;
+    if (disableAutoSelect) return;
+    if (mobileLayoutResolved === null) return;
+    if (mobileLayoutResolved) return;
 
     const viewChanged = previousActiveView.current !== activeView;
     previousActiveView.current = activeView;
@@ -110,7 +112,7 @@ export function usePageMemory<T extends { id: string }>(
     // ⚠️ CRITICAL: Dependency Array बाट 'selected' र 'setSelected' हटाइएको छ।
     // यसले गर्दा User ले क्लिक गरेर selected चेन्ज हुँदा यो इफेक्ट फेरि चल्दैन र लूप लाग्दैन।
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeView, isLoading, currentItems, disableAutoSelect, isMobile, urlSelectedId]); 
+  }, [activeView, isLoading, currentItems, disableAutoSelect, mobileLayoutResolved, urlSelectedId]); 
 
   // 3. SAVE STATE (जहिले पनि selection चेन्ज हुँदा मेमोरी अपडेट गर्ने)
   useEffect(() => {

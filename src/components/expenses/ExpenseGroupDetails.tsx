@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -128,7 +127,6 @@ export function ExpenseGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -344,8 +342,7 @@ export function ExpenseGroupDetails({
     [processedTransactions, showNotes]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -404,7 +401,9 @@ export function ExpenseGroupDetails({
       dateSystem: dateSystem,
       dateRangeText: dateRangeText,
       vouchersCount: processedTransactions.length,
-      openingBalance: openingBalanceForPeriod, 
+      openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (group as any).openingBalanceDate,
+      openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
       transactions: processedTransactions,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -505,8 +504,8 @@ export function ExpenseGroupDetails({
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               userNames={userNames}
               accountNames={Object.fromEntries(accountsInGroup.map((a) => [a.id, a.name]))}
@@ -797,11 +796,11 @@ export function ExpenseGroupDetails({
               context="group"
               contextId={group.id}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               userNames={userNames}
               onRowClick={handleEditVoucher}
               filters={filters}
@@ -829,11 +828,6 @@ export function ExpenseGroupDetails({
                 <Checkbox id="show-narration-expense-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-expense-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-expense-group"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

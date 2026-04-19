@@ -36,6 +36,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 
 export default function BankCashPage() {
@@ -86,6 +87,10 @@ export default function BankCashPage() {
 
   
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
+    if (isLocalOnlyMode()) {
+      // Local-only mode: skip Firestore users lookup to avoid offline runtime errors.
+      return "N/A";
+    }
     if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
     try {
         const userDoc = await getDoc(doc(firestore, 'users', userId));

@@ -9,6 +9,34 @@
       ]
     },
     {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "isRead", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "admin_notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipientUserId", "order": "ASCENDING" },
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "isRead", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "alarms",
       "queryScope": "COLLECTION",
       "fields": [

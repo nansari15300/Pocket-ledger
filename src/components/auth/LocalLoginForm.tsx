@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { localAuthLogin, setLocalAuthToken } from "@/lib/localApiClient";
+import { isLocalCompanyId, localAuthLogin, setLocalAuthToken } from "@/lib/localApiClient";
+import { localAuthLoginClientOnly } from "@/lib/localCompanyUsers";
 import { useDataSource } from "@/contexts/DataSourceContext";
 import { Loader2 } from "lucide-react";
 
@@ -31,7 +32,10 @@ export function LocalLoginForm({ companyId, companyName, onSuccess }: Props) {
     }
     setLoading(true);
     try {
-      const { token, user } = await localAuthLogin(localApiBaseUrl, companyId, username.trim(), password);
+      // Local company: SQLite doc me `localCompanyUsers` — bina Node server ke login (server path baad me optional).
+      const { token, user } = isLocalCompanyId(companyId)
+        ? await localAuthLoginClientOnly(companyId, username.trim(), password)
+        : await localAuthLogin(localApiBaseUrl, companyId, username.trim(), password);
       setLocalAuthToken(companyId, token, user);
       onSuccess();
     } catch (e) {

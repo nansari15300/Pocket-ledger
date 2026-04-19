@@ -11,12 +11,17 @@ import { collection, query, where, onSnapshot, getDoc, doc, DocumentData } from 
 import { firestore } from "@/lib/firebase";
 import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { useCompany } from "@/hooks/useCompany";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { filterCompaniesExcludeOnlineShared } from "@/lib/companyUnlockGate";
 
 export type Company = {
   id: string;
   name: string;
   isOwned: boolean;
   ownerId: string;
+  /** Shared-company ownership check (align with useCompany Company) */
+  ownerEmail?: string;
   isDeleted?: boolean;
   storageOption?: 'firebase' | 'drive';
 };
@@ -25,7 +30,8 @@ function SelectCompanyPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, loading: authLoading } = useAuth();
-  const { setCompanyId } = useCompany();
+  // Local mode: list Firestore snapshots se nahi, useCompany() ke local DB hydrate se aati hai (owned/shared wahi logic jo CompanySelector me).
+  const { setCompanyId, allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
   const [loading, setLoading] = useState(true);
   const [ownedCompanies, setOwnedCompanies] = useState<Company[]>([]);
   const [sharedCompanies, setSharedCompanies] = useState<Company[]>([]);
@@ -33,6 +39,10 @@ function SelectCompanyPageContent() {
   const [isCreateCompanyDialogOpen, setIsCreateCompanyDialogOpen] = useState(false);
 
   useEffect(() => {
+    // Local-only: page-level Firestore listeners skip — data companyContextLoading + contextCompanies se.
+    if (isLocalOnlyMode()) {
+      return;
+    }
     if (authLoading || !user || !user.email) {
       if (!authLoading && !user) {
         router.replace("/");
@@ -101,6 +111,19 @@ function SelectCompanyPageContent() {
       return;
     }
     let cancelled = false;
+    // Local APK/static: naya company Firestore read ke bina local row se dikhao.
+    if (isLocalOnlyMode()) {
+      getLocalCompanyById(newCompanyId)
+        .then((row) => {
+          if (cancelled || !row) return;
+          if (row.ownerId !== user?.uid) return;
+          setNewlyCreatedCompany({ id: newCompanyId, ...row, isOwned: true } as Company);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
     getDoc(doc(firestore, "companies", newCompanyId))
       .then((snap) => {
         if (cancelled || !snap.exists()) return;
@@ -115,6 +138,22 @@ function SelectCompanyPageContent() {
   }, [newCompanyId, user?.uid, ownedCompanies, sharedCompanies]);
 
   const allCompanies = useMemo(() => {
+    // Local-first: useCompany context list = local SQLite + optional cloud mirror; isOwned ownerId/email se.
+    if (isLocalOnlyMode()) {
+      const isOwnedByUser = (c: Company) =>
+        c.ownerId === user?.uid ||
+        (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+      const companyMap = new Map<string, Company>();
+      (contextCompanies || []).forEach((c) => {
+        if (c.isDeleted) return;
+        companyMap.set(c.id, { ...(c as Company), isOwned: isOwnedByUser(c as Company) });
+      });
+      if (newlyCreatedCompany && !companyMap.has(newlyCreatedCompany.id)) {
+        companyMap.set(newlyCreatedCompany.id, newlyCreatedCompany);
+      }
+      // Offline list: cloud-only shared mat dikhao (selector/header ke saath align)
+      return filterCompaniesExcludeOnlineShared(Array.from(companyMap.values()), user?.email, user?.uid);
+    }
     const companyMap = new Map<string, Company>();
     // Add owned companies first
     ownedCompanies.forEach(c => companyMap.set(c.id, { ...c, isOwned: true }));
@@ -129,15 +168,18 @@ function SelectCompanyPageContent() {
       companyMap.set(newlyCreatedCompany.id, newlyCreatedCompany);
     }
     return Array.from(companyMap.values());
-}, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany]);
+}, [ownedCompanies, sharedCompanies, user, newlyCreatedCompany, contextCompanies]);
 
   useEffect(() => {
       // Don't redirect to create when we just landed with ?new=companyId (first company created from popup)
       if (searchParams.get("new")) return;
-      if (!loading && allCompanies.length === 0) {
+      // Local: jab tak context list load ho rahi ho empty mat samjho (redirect loop avoid).
+      if (isLocalOnlyMode() && companyContextLoading) return;
+      const listReady = isLocalOnlyMode() ? !companyContextLoading : !loading;
+      if (listReady && allCompanies.length === 0) {
           router.push("/company/create");
       }
-  }, [loading, allCompanies, router, searchParams]);
+  }, [loading, allCompanies, router, searchParams, companyContextLoading]);
 
   const handleCompanyCreated = (companyId: string) => {
       setCompanyId(companyId);
@@ -145,7 +187,8 @@ function SelectCompanyPageContent() {
       router.push("/dashboard");
   }
 
-  if (loading || authLoading) {
+  // Local: company list hydrate hone tak skeleton (same source as header selector).
+  if (authLoading || (isLocalOnlyMode() ? companyContextLoading : loading)) {
     return (
         <div className="flex min-h-screen items-center justify-center">
             <Card className="w-full max-w-lg">

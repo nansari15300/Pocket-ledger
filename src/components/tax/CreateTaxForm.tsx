@@ -8,39 +8,49 @@ import type { TaxGroup } from "@/components/tax/types";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, onSnapshot } from "firebase/firestore";
+import { doc, setDoc, collection, serverTimestamp, onSnapshot, Timestamp } from "firebase/firestore";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
-import { firestore, storage } from "@/lib/firebase";
+import { firestore } from "@/lib/firebase";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import {
+  EntityProfilePhotoBlock,
+  EntityDocumentsBlock,
+  EntityOpeningBalanceNarrationField,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
+import usePermissions from "@/hooks/usePermissions";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Trash2, FileText, CalendarIcon } from "lucide-react";
+import { Loader2, Trash2, FileText, CalendarIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
 import { Combobox } from "../ui/combobox";
-import Image from "next/image";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
-import { FilePreview } from "../vouchers/FilePreview";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
-import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
-const fileSchema = z.object({
-  file: z.instanceof(File),
-  preview: z.string(),
-});
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Tax name must be at least 2 characters." }),
@@ -48,6 +58,7 @@ const formSchema = z.object({
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   groupId: z.string().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
 
 const MAX_FILE_SIZE_MB = 0.5;
@@ -56,11 +67,15 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId, triggerSync } = useCompany();
+  const { companyId, company } = useCompany();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   React.useEffect(() => { onNestedDialogOpenChange?.(isCreateGroupOpen); }, [isCreateGroupOpen, onNestedDialogOpenChange]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
+  const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const { dateSystem } = useDate();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
@@ -72,6 +87,7 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
       rate: 0,
       openingBalance: 0,
       groupId: "",
+      openingBalanceNarration: "",
     },
   });
 
@@ -85,6 +101,12 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
     let alive = true;
     (async () => {
       if (!companyId || !user?.uid) return;
+      if (isLocalOnlyMode()) {
+        // Local-only mode: keep tax default on local ungrouped without Firestore call.
+        const current = form.getValues("groupId");
+        if (!current) form.setValue("groupId", getUngroupedGroupId("tax"), { shouldDirty: false });
+        return;
+      }
       // Keep Tax create default on canonical Ungrouped bucket.
       const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "tax");
       if (!alive) return;
@@ -96,53 +118,73 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
     };
   }, [companyId, user?.uid, form]);
   
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow a profile photo." });
+      return;
+    }
     const inputFile = e.target.files[0];
-
-    if (inputFile.size > 5 * 1024 * 1024) { // 5MB pre-check
+    if (!inputFile || !isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
         variant: "destructive",
         title: "File too large",
         description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
+      e.target.value = "";
       return;
     }
-
-    if (inputFile) {
-      try {
-        const compressedFile = await compressFile(inputFile);
-         if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({
-              variant: "destructive",
-              title: "File Too Large After Compression",
-              description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-            });
-            return;
-        }
-        const preview = URL.createObjectURL(compressedFile);
-        setFileToUpload({ file: compressedFile, preview });
-      } catch (err) {
-        console.error("File compression error:", err);
+    try {
+      const compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         toast({
-            variant: "destructive",
-            title: "File Error",
-            description: "Could not process the file.",
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
         });
+        e.target.value = "";
+        return;
       }
+      const preview = URL.createObjectURL(compressedFile);
+      setAvatarToUpload({ file: compressedFile, preview });
+    } catch (err) {
+      console.error(err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
     }
+    e.target.value = "";
   };
-  
-  const removeFile = () => {
-    if (fileToUpload?.preview) {
-        URL.revokeObjectURL(fileToUpload.preview);
-    }
-    setFileToUpload(null);
-    if(fileInputRef.current) {
-        fileInputRef.current.value = "";
-    }
-  }
 
+  const handleDocumentsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
+    }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocumentFiles((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeAvatar = () => {
+    if (avatarToUpload?.preview) URL.revokeObjectURL(avatarToUpload.preview);
+    setAvatarToUpload(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const removeDocAt = (idx: number) => setDocumentFiles((prev) => prev.filter((_, i) => i !== idx));
+
+  const clearUploads = () => {
+    removeAvatar();
+    setDocumentFiles([]);
+    if (docsInputRef.current) docsInputRef.current.value = "";
+  };
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
@@ -168,6 +210,78 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
     setIsLoading(true);
     
     try {
+      if (isLocalOnlyMode()) {
+        const totalAttachBytesLocal =
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        if (totalAttachBytesLocal > 0) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalAttachBytesLocal, storageBytes: totalAttachBytesLocal },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            setIsLoading(false);
+            return;
+          }
+        }
+        const localId = createLocalEntityId("tax");
+        const stagedLocal = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "taxes",
+          entityId: localId,
+          avatarFile: avatarToUpload?.file ?? null,
+          documentFiles,
+        });
+        const payload = {
+          id: localId,
+          name: values.name.trim(),
+          rate: values.rate,
+          openingBalance: values.openingBalance || 0,
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+          groupId: values.groupId?.trim() || getUngroupedGroupId("tax"),
+          ownerId: user.uid,
+          companyId,
+          balance: values.openingBalance || 0,
+          createdAt: new Date().toISOString(),
+          fileUrl: stagedLocal.fileUrl ?? null,
+          ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "taxes", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "taxes", "create", localId, payload);
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        if (saveAndNew) {
+          form.reset({
+            name: "",
+            rate: 0,
+            openingBalance: 0,
+            openingBalanceDate: undefined,
+            groupId: getUngroupedGroupId("tax"),
+            openingBalanceNarration: "",
+          });
+          clearUploads();
+        }
+        const newTax = {
+          id: localId,
+          name: values.name.trim(),
+          rate: values.rate,
+          balance: values.openingBalance || 0,
+          companyId,
+          groupId: values.groupId || undefined,
+        };
+        onTaxCreated?.(saveAndNew, localId, newTax);
+        return;
+      }
+
       // Recycle-bin duplicate flow: restore or create-new on user choice.
       const duplicateDecision = await resolveRecycleBinDuplicate({
         companyId,
@@ -196,66 +310,168 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
           id: toastId,
           description: `"${values.name.trim()}" was restored from Recycle Bin.`,
         });
-        triggerSync();
         onTaxCreated?.(saveAndNew, duplicateDecision.restoredId, restoredTax as any);
         setIsLoading(false);
         return;
       }
       
-      let fileUrl: string | null = null;
-      if (fileToUpload) {
-          const storageRef = ref(storage, `tax-files/${companyId}/${Date.now()}_${fileToUpload.file.name}`);
-          const snapshot = await uploadBytes(storageRef, fileToUpload.file);
-          fileUrl = await getDownloadURL(snapshot.ref);
+      const totalAttachBytes =
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+      if (totalAttachBytes > 0) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalAttachBytes, storageBytes: totalAttachBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          setIsLoading(false);
+          return;
+        }
       }
-      
-      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+
       const resolvedGroupId =
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "tax"));
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/taxes`), {
+      const taxRef = doc(collection(firestore, `companies/${companyId}/taxes`));
+      const newTaxId = taxRef.id;
+      const staged = await stageEntityAvatarAndDocuments({
+        companyId: companyId!,
+        collectionSeg: "taxes",
+        entityId: newTaxId,
+        avatarFile: avatarToUpload?.file ?? null,
+        documentFiles,
+      });
+
+      await setDoc(taxRef, {
         name: values.name.trim(),
         rate: values.rate,
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
         groupId: resolvedGroupId || getUngroupedGroupId("tax"),
         ownerId: user.uid,
         companyId,
         balance: values.openingBalance || 0,
         createdAt: serverTimestamp(),
-        fileUrl: fileUrl,
+        fileUrl: staged.fileUrl,
+        ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
         isDeleted: false,
       });
 
-      // Automatically balance opening balance with Capital Account
+      if (totalAttachBytes > 0) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalAttachBytes,
+          storageBytes: totalAttachBytes,
+        });
+      }
+
       if (values.openingBalance && Math.abs(values.openingBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, "taxes", docRef.id, 0, values.openingBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "taxes", newTaxId, 0, values.openingBalance);
       }
 
       sonnerToast.success("Tax Created!", {
         id: toastId,
         description: `"${values.name}" has been added.`,
       });
-      
-      triggerSync();
 
       if (saveAndNew) {
-        // Keep default selection on Ungrouped for next quick entry.
-        form.reset({ name: "", rate: 0, openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("tax") });
-        removeFile();
+        form.reset({
+          name: "",
+          rate: 0,
+          openingBalance: 0,
+          openingBalanceDate: undefined,
+          groupId: getUngroupedGroupId("tax"),
+          openingBalanceNarration: "",
+        });
+        clearUploads();
       }
-      
-      // If a new "real" ID is created, we can call the callback again if needed
-      // but the initial optimistic close is what the user sees.
-      const newTax = { id: docRef.id, name: values.name.trim(), rate: values.rate, balance: values.openingBalance || 0, companyId, groupId: values.groupId || undefined };
-      onTaxCreated?.(saveAndNew, docRef.id, newTax);
 
+      const newTax = {
+        id: newTaxId,
+        name: values.name.trim(),
+        rate: values.rate,
+        balance: values.openingBalance || 0,
+        companyId,
+        groupId: values.groupId || undefined,
+      };
+      onTaxCreated?.(saveAndNew, newTaxId, newTax);
     } catch (error) {
       console.error("Error creating tax:", error);
-      sonnerToast.error("Error", {
-        id: toastId,
-        description: "Failed to create tax.",
-      });
+      if (isLikelyOfflineFirestoreError(error)) {
+        try {
+          if (!companyId || !user) throw new Error("Missing company or user.");
+          const totalCatch =
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          if (totalCatch > 0) {
+            const lim = await checkStorageLimit(
+              companyId,
+              company?.planId,
+              { attachmentsBytes: totalCatch, storageBytes: totalCatch },
+              company?.storageOption
+            );
+            if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
+          }
+          const localId = createLocalEntityId("tax");
+          const stagedCatch = await stageEntityAvatarAndDocuments({
+            companyId,
+            collectionSeg: "taxes",
+            entityId: localId,
+            avatarFile: avatarToUpload?.file ?? null,
+            documentFiles,
+          });
+          const nowTs = Timestamp.now();
+          const payload: Record<string, unknown> = {
+            id: localId,
+            name: values.name.trim(),
+            rate: values.rate,
+            openingBalance: values.openingBalance || 0,
+            openingBalanceDate: values.openingBalanceDate || null,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+            groupId: values.groupId?.trim() || getUngroupedGroupId("tax"),
+            ownerId: user.uid,
+            companyId,
+            balance: values.openingBalance || 0,
+            createdAt: nowTs,
+            fileUrl: stagedCatch.fileUrl ?? null,
+            ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
+            isDeleted: false,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "taxes", localId, payload as any);
+          await enqueueCompanyDocOutbox(companyId, "taxes", "create", localId, payload as any);
+          sonnerToast.success("Saved. Will sync when online.", {
+            id: toastId,
+            description: `"${values.name}" was saved locally (offline).`,
+          });
+          onTaxCreated?.(saveAndNew, localId, {
+            id: localId,
+            name: values.name.trim(),
+            rate: values.rate,
+            balance: values.openingBalance || 0,
+            companyId,
+            groupId: values.groupId || undefined,
+          });
+          if (saveAndNew) {
+            form.reset({
+              name: "",
+              rate: 0,
+              openingBalance: 0,
+              openingBalanceDate: undefined,
+              groupId: getUngroupedGroupId("tax"),
+              openingBalanceNarration: "",
+            });
+            clearUploads();
+          }
+        } catch {
+          sonnerToast.error("Error", { id: toastId, description: "Failed to create tax." });
+        }
+      } else {
+        sonnerToast.error("Error", {
+          id: toastId,
+          description: "Failed to create tax.",
+        });
+      }
     } finally {
         setIsLoading(false);
     }
@@ -402,35 +618,30 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
                   )}
                 />
              </div>
-             <FormItem>
-              <FormLabel>Icon/File (Optional)</FormLabel>
-              <div className="flex items-center gap-4">
-                {fileToUpload && (
-                  <FilePreview
-                    file={fileToUpload.file}
-                    onRemove={removeFile}
-                  />
-                )}
-                {!fileToUpload && (
-                   <FormControl>
-                    <div 
-                      className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                       <Upload className="h-6 w-6" />
-                       <span className="text-xs mt-1">Add File</span>
-                      <Input 
-                        type="file" 
-                        className="hidden"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept="image/*,application/pdf"
-                      />
-                    </div>
-                  </FormControl>
-                )}
-              </div>
-            </FormItem>
+            <EntityProfilePhotoBlock
+              file={avatarToUpload?.file ?? null}
+              onPickClick={() => avatarInputRef.current?.click()}
+              fileInputRef={avatarInputRef}
+              onAvatarChange={handleAvatarChange}
+              onRemoveAvatar={removeAvatar}
+              canAddAvatar={canAddAvatar}
+              inputId="create-tax-avatar"
+            />
+            <EntityDocumentsBlock
+              docSlots={documentFiles}
+              onRemoveDoc={removeDocAt}
+              onAddClick={() => docsInputRef.current?.click()}
+              docsInputRef={docsInputRef}
+              onDocsChange={handleDocumentsChange}
+              canAttachDocuments={canAttachDocuments}
+              entityStatementLabel="tax"
+              inputId="create-tax-docs"
+            />
+            <EntityOpeningBalanceNarrationField
+              control={form.control}
+              name="openingBalanceNarration"
+              detailLabel="tax"
+            />
         </div>
         
         <div className="flex justify-end gap-2">

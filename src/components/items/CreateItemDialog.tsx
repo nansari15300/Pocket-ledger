@@ -82,13 +82,23 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
-import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
-import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+import {
+  MAX_IMAGE_BYTES_BEFORE_COMPRESS,
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_BEFORE_COMPRESS,
+  MAX_IMAGE_MB_AFTER_COMPRESS,
+  MAX_PDF_BYTES_BEFORE_UPLOAD,
+  MAX_PDF_UPLOAD_MB,
+} from "@/lib/fileUploadLimits";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import {
   Tooltip,
   TooltipContent,
@@ -96,13 +106,25 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
-import Image from 'next/image';
+import {
+  EntityOpeningBalanceNarrationField,
+  EntityProfilePhotoBlock,
+  EntityDocumentsBlock,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
+import {
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+  stageItemAvatarAndAttachments,
+} from "@/lib/entityProfileLocalFiles";
 
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
-const fileSchema = z.object({
-  file: z.instanceof(File),
-  preview: z.string(),
-});
 
 const unitConversionSchema = z.object({
   fromUnit: z.string().min(1, "Unit name is required"),
@@ -130,9 +152,8 @@ const formSchema = z.object({
   purchasePriceUnit: z.string().optional(),
   saleTaxId: z.string().optional(),
   purchaseTaxId: z.string().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
-
-const MAX_FILE_SIZE_MB = 0.5;
 
 function getInitialFormValues(itemType: 'item' | 'service' | 'finished_good' = 'item'): z.infer<typeof formSchema> {
     return {
@@ -155,6 +176,7 @@ function getInitialFormValues(itemType: 'item' | 'service' | 'finished_good' = '
         purchasePriceUnit: "",
         saleTaxId: "",
         purchaseTaxId: "",
+        openingBalanceNarration: "",
     };
 }
 
@@ -175,23 +197,31 @@ export function CreateItemDialog({
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId, triggerSync, company } = useCompany();
-  const { canAddAvatar } = usePermissions();
+  const { companyId, company } = useCompany();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  /** Documents: plan PDF/images — avatar se alag */
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem, formatDate } = useDate();
+  const { processedItemGroups, processedTaxes } = useVouchers();
+  const processedItemGroupsRef = useRef(processedItemGroups);
+  processedItemGroupsRef.current = processedItemGroups;
   const [groups, setGroups] = useState<ItemGroup[]>([]);
   const [taxes, setTaxes] = useState<Tax[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [prefillTaxName, setPrefillTaxName] = useState("");
   const [taxRowIndex, setTaxRowIndex] = useState<number | null>(null);
-  const [files, setFiles] = useState<(File | string)[]>([]);
+  /** List thumbnail = `fileUrls[0]`; baaki opening/statement attachments */
+  const [profileFile, setProfileFile] = useState<File | string | null>(null);
+  const [docSlots, setDocSlots] = useState<(File | string)[]>([]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const isMobile = useIsMobile();
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : false;
   const setIsOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : () => {};
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
   const formValuesBackupRef = useRef<z.infer<typeof formSchema> | null>(null);
   const taxFieldToApplyRef = useRef<"purchaseTaxId" | "saleTaxId" | "openingBalanceTaxId" | null>(null);
 
@@ -236,7 +266,8 @@ export function CreateItemDialog({
     // This ensures form only resets when the main dialog first opens, not when nested dialogs open/close
     if (isOpen && !prevIsOpenRef.current) {
       form.reset(getInitialFormValues(defaultTypeRef.current));
-      setFiles([]);
+      setProfileFile(null);
+      setDocSlots([]);
     }
     prevIsOpenRef.current = isOpen;
     // Remove defaultType from dependencies to prevent reset when it changes
@@ -284,10 +315,17 @@ export function CreateItemDialog({
 
   // Hide system item groups (Stock Items, Services) from dropdown — only user-created groups
   const itemGroupOptions = React.useMemo(
-    () =>
-      groups
+    () => {
+      const ungroupedId = getUngroupedGroupId("item");
+      const filtered = groups
         .filter((g) => !isSystemParentGroup("item_groups", g.id))
-        .map((g) => ({ value: g.id, label: g.name })),
+        .map((g) => ({ value: g.id, label: g.name }));
+      // Ensure Ungrouped option is always visible in Add Item group dropdown.
+      if (!filtered.some((g) => g.value === ungroupedId)) {
+        filtered.unshift({ value: ungroupedId, label: "Ungrouped" });
+      }
+      return filtered;
+    },
     [groups]
   );
 
@@ -333,13 +371,20 @@ export function CreateItemDialog({
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
+    if (isLocalOnlyMode()) {
+      // Local-only mode: use in-memory processed collections instead of Firestore listeners.
+      setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
+      setTaxes((processedTaxes as unknown as Tax[]) || []);
+      return;
+    }
     
     const qGroups = query(collection(firestore, `companies/${companyId}/item_groups`));
     const unsubGroups = onSnapshot(qGroups, (snapshot) => {
         setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ItemGroup)));
     }, (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
+        const fb = (processedItemGroupsRef.current || []) as unknown as ItemGroup[];
+        if (fb.length > 0) setGroups(fb);
     });
 
     const qTaxes = query(collection(firestore, `companies/${companyId}/taxes`));
@@ -351,46 +396,110 @@ export function CreateItemDialog({
         unsubGroups();
         unsubTaxes();
     };
-  }, [isOpen, companyId, toast]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const inputFile = e.target.files?.[0];
+    e.target.value = "";
+    if (!inputFile) return;
     if (!canAddAvatar) {
-      e.target.value = "";
-      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding files." });
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding a profile photo." });
       return;
     }
-    const newFiles = Array.from(e.target.files);
-    for (const file of newFiles) {
+    if (!isProfileAvatarImageFile(inputFile)) {
+      toast({ variant: "destructive", title: "Invalid file", description: "Profile photo must be an image." });
+      return;
+    }
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: `Please select an image smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+      });
+      return;
+    }
+    try {
+      const compressedFile = await compressFile(inputFile);
+      // compressFile fail par original; PDF yahan nahi — sirf image
+      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+        toast({
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the image is larger than ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
+        });
+        return;
+      }
+      setProfileFile(compressedFile);
+    } catch (err) {
+      console.error("Avatar compression error:", err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the image." });
+    }
+  };
+
+  const removeAvatar = () => setProfileFile(null);
+
+  const handleDocsChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding attachments." });
+      return;
+    }
+    const picked = Array.from(e.target.files);
+    e.target.value = "";
+    let accumulated = [...docSlots];
+    for (const file of picked) {
+      if (accumulated.length >= 5) {
+        toast({ variant: "destructive", title: "Limit reached", description: "You can upload up to 5 documents." });
+        break;
+      }
+      if (!isProfileDocumentFile(file)) {
+        toast({ variant: "destructive", title: "Invalid file", description: "Use images or PDF only." });
+        continue;
+      }
+      // PDF: compressFile no-op — 0.5MB post-check pe pehle reject ho jata tha
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (isPdf) {
+        if (file.size > MAX_PDF_BYTES_BEFORE_UPLOAD) {
+          toast({
+            variant: "destructive",
+            title: "PDF too large",
+            description: `Maximum ${MAX_PDF_UPLOAD_MB} MB per PDF.`,
+          });
+          continue;
+        }
+        accumulated = [...accumulated, file];
+        continue;
+      }
       if (file.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
         toast({
           variant: "destructive",
           title: "File too large",
-          description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+          description: `Please select images smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS} MB to compress.`,
         });
         continue;
       }
       try {
         const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({ variant: "destructive", title: "File Too Large After Compression", description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.` });
-            continue;
+        if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+          toast({
+            variant: "destructive",
+            title: "File Too Large After Compression",
+            description: `After compression the image is still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
+          });
+          continue;
         }
-        if (files.length < 3) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({ variant: "destructive", title: "Limit Reached", description: "You can only upload up to 3 files."});
-          break;
-        }
+        accumulated = [...accumulated, compressedFile];
       } catch (err) {
-        console.error("File compression error:", err);
-        toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
+        console.error("Document compression error:", err);
+        toast({ variant: "destructive", title: "File Error", description: "Could not process a file." });
       }
     }
+    setDocSlots(accumulated);
   };
-  
-  const removeFile = (indexToRemove: number) => {
-    setFiles(prev => prev.filter((_, index) => index !== indexToRemove));
+
+  const removeDocSlot = (idx: number) => {
+    setDocSlots((prev) => prev.filter((_, i) => i !== idx));
   };
 
 
@@ -417,6 +526,72 @@ export function CreateItemDialog({
     setIsLoading(true);
 
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: save item in browser DB and queue backup sync.
+        const localId = createLocalEntityId("item");
+        let localFileUrls: string[] = [];
+        const avatarF = profileFile instanceof File ? profileFile : null;
+        const docFiles = docSlots.filter((x): x is File => x instanceof File);
+        if ((avatarF && canAddAvatar) || (docFiles.length > 0 && canAttachDocuments)) {
+          const staged = await stageItemAvatarAndAttachments({
+            companyId,
+            itemId: localId,
+            avatarFile: avatarF && canAddAvatar ? avatarF : null,
+            attachmentFiles: canAttachDocuments ? docFiles : [],
+            maxAttachments: 5,
+          });
+          localFileUrls = [...(staged.avatarUrl ? [staged.avatarUrl] : []), ...staged.newAttachmentUrls];
+        }
+        const payload = {
+          id: localId,
+          name: values.name,
+          type: values.type,
+          hsCode: values.hsCode || null,
+          ownerId: user.uid,
+          companyId,
+          groupId: values.groupId || null,
+          salePrice: values.salePrice,
+          purchasePrice: values.purchasePrice,
+          openingBalance: values.openingBalance,
+          openingBalanceUnit: values.openingBalanceUnit || null,
+          openingBalanceTaxId: values.openingBalanceTaxId || null,
+          isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive || false,
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceRate: values.openingBalanceRate || 0,
+          unitConversions: values.unitConversions || [],
+          fileUrls: localFileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+          debit: 0,
+          credit: 0,
+          balance: (values.openingBalance || 0) * (values.openingBalanceRate || 0),
+          stockQty: values.openingBalance || 0,
+          createdAt: new Date().toISOString(),
+          salePriceUnit: values.salePriceUnit || null,
+          purchasePriceUnit: values.purchasePriceUnit || null,
+          saleTaxId: values.saleTaxId || null,
+          purchaseTaxId: values.purchaseTaxId || null,
+          isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive || false,
+          isSalePriceTaxInclusive: values.isSalePriceTaxInclusive || false,
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "items", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "items", "create", localId, payload);
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        onItemCreated?.(localId);
+        if (saveAndNew) {
+          form.reset(getInitialFormValues(itemType));
+          setProfileFile(null);
+          setDocSlots([]);
+        }
+        return;
+      }
+
       // Recycle-bin duplicate flow: restore or create-new on user choice.
       const duplicateDecision = await resolveRecycleBinDuplicate({
         companyId,
@@ -444,19 +619,25 @@ export function CreateItemDialog({
       }
       
       const fileUrls: string[] = [];
-      const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
-      if (newFilesToUpload.length > 0 && companyId && canAddAvatar) {
-        const totalNewBytes = newFilesToUpload.slice(0, 3).reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+      const avatarUpload = profileFile instanceof File ? profileFile : null;
+      const newDocFiles = docSlots.filter((f): f is File => f instanceof File);
+      const uploadableFiles: File[] = [...(avatarUpload ? [avatarUpload] : []), ...newDocFiles];
+      if (uploadableFiles.length > 0 && companyId && (canAddAvatar || canAttachDocuments)) {
+        const totalNewBytes = uploadableFiles.reduce((s, f) => s + (f.size || 0), 0);
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
+          company?.storageOption
+        );
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
           return;
         }
-        for (const file of newFilesToUpload) {
-          if (fileUrls.length >= 3) break;
+        if (avatarUpload && canAddAvatar) {
           const res = await uploadFile(
-            { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
+            { name: avatarUpload.name, type: avatarUpload.type, arrayBuffer: await avatarUpload.arrayBuffer() },
             companyId,
             company?.name,
             "avatar",
@@ -467,7 +648,26 @@ export function CreateItemDialog({
           );
           if (res.success && res.url) {
             fileUrls.push(res.url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            await incrementCompanyStorage(companyId, { attachmentsBytes: avatarUpload.size, storageBytes: avatarUpload.size });
+          }
+        }
+        if (canAttachDocuments) {
+          for (const file of newDocFiles) {
+            if (fileUrls.length >= 6) break;
+            const res = await uploadFile(
+              { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
+              companyId,
+              company?.name,
+              "avatar",
+              undefined,
+              undefined,
+              undefined,
+              new Date()
+            );
+            if (res.success && res.url) {
+              fileUrls.push(res.url);
+              await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            }
           }
         }
       }
@@ -522,6 +722,7 @@ export function CreateItemDialog({
           isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive || false,
           isSalePriceTaxInclusive: values.isSalePriceTaxInclusive || false,
           isDeleted: false,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
       };
 
       const docRef = await addDoc(collection(firestore, `companies/${companyId}/items`), submissionData);
@@ -531,11 +732,10 @@ export function CreateItemDialog({
       if (onItemCreated) {
         onItemCreated(docRef.id);
       }
-      triggerSync();
-
       if (saveAndNew) {
         form.reset(getInitialFormValues(itemType));
-        setFiles([]);
+        setProfileFile(null);
+        setDocSlots([]);
       }
 
     } catch (error) {
@@ -1068,6 +1268,37 @@ const capitalizeFirstLetter = (str: string) => {
               </div>
               </div>
               </div>
+
+              {/* Party/bank jaisa: narration se pehle profile + documents */}
+              <RestrictedFileUploader>
+                <div className="space-y-6 rounded-md border p-4">
+                  <EntityProfilePhotoBlock
+                    file={profileFile}
+                    onPickClick={() => avatarInputRef.current?.click()}
+                    fileInputRef={avatarInputRef}
+                    onAvatarChange={handleAvatarChange}
+                    onRemoveAvatar={removeAvatar}
+                    canAddAvatar={canAddAvatar}
+                    inputId="create-item-avatar-input"
+                  />
+                  <EntityDocumentsBlock
+                    docSlots={docSlots}
+                    onRemoveDoc={removeDocSlot}
+                    onAddClick={() => docsInputRef.current?.click()}
+                    docsInputRef={docsInputRef}
+                    onDocsChange={handleDocsChange}
+                    canAttachDocuments={canAttachDocuments}
+                    entityStatementLabel="item"
+                    inputId="create-item-docs-input"
+                  />
+                </div>
+              </RestrictedFileUploader>
+
+              <EntityOpeningBalanceNarrationField
+                control={form.control}
+                name="openingBalanceNarration"
+                detailLabel="item"
+              />
 
               <DialogFooter className="mt-4 border-t pt-4">
                   <DialogClose asChild>

@@ -15,7 +15,32 @@ import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import type { Item, ItemGroup } from "@/components/items/types";
 import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  BROWSER_DB_COLLECTION_BUMP,
+  listCompanyDocsFromBrowserDb,
+  mirrorCollectionDocsToBrowserDbSilent,
+  type BrowserDbCollectionBumpDetail,
+} from "@/lib/localCompanyDocMirror";
+import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
+import {
+  mergeRemoteSnapshotWithLocalOnlyDocs,
+  pullCompanySubcollectionFromFirestoreToLocalDb,
+} from "@/lib/firestoreToLocalCompanyPull";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { decryptFirestoreCompanyDocIfNeeded } from "@/lib/serverBackupEncryption";
+import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getAllocatedByVoucherIdFromJournal, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
+
+/** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
+function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
+  const r = String(role || "")
+    .toLowerCase()
+    .trim()
+    .replace(/_/g, "-")
+    .replace(/\s+/g, "-");
+  return ["manager", "editor", "accountant", "owner"].includes(r);
+}
 
 // --- Report-only party IDs: show only in reports, never in voucher/entity dropdowns or lists ---
 export const REPORT_ONLY_PARTY_IDS = ["owners_capital", "opening_balance_ledger"] as const;
@@ -59,9 +84,50 @@ type VoucherContextType = {
   journalAccountNames: Record<string, string>;
   userNames: Record<string, string>;
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
-  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; title?: string }>;
+  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }>;
   hasOverdueTransactions: boolean;
 };
+
+/** Browser SQLite se aaye vouchers ko Firestore jaisa `date` order mein lao. */
+function sortDocsByDateField(data: any[], orderByField: string): any[] {
+  const copy = [...data];
+  copy.sort((a: any, b: any) => {
+    const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
+    const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
+    return dateA.getTime() - dateB.getTime();
+  });
+  return copy;
+}
+
+/** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
+function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
+  if (!cached.length) return prev;
+  const map = new Map<string, any>(prev.map((v: any) => [v.id, v]));
+  for (const v of cached) map.set(v.id, v);
+  const merged = [...map.values()];
+  return orderByField ? sortDocsByDateField(merged, orderByField) : merged;
+}
+
+type CloudBackedCompanyShape = {
+  storageOption?: string;
+  syncedFromCloud?: boolean;
+  syncPolicy?: string;
+  authoritativeCompanyId?: string;
+  encryptServerBackupSalt?: string | null;
+} | null;
+
+/** Local-first APK/static: ye flags Firestore realtime + server bootstrap enable karte hain */
+function isCloudBackedCompany(c: CloudBackedCompanyShape): boolean {
+  if (!c) return false;
+  const so = String(c.storageOption || "").toLowerCase();
+  // Explicit offline-first row — `isExplicitLocalRegistryRow` me ambiguous overlap avoid
+  if (so === "local") return false;
+  if (so === "firebase") return true;
+  if (c.syncedFromCloud === true) return true;
+  if (String(c.syncPolicy || "").toLowerCase() === "online") return true;
+  if (String(c.authoritativeCompanyId || "").trim().length > 0) return true;
+  return false;
+}
 
 const VoucherContext = createContext<VoucherContextType>({
   vouchers: [],
@@ -94,6 +160,15 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const { companyId, company, clearCompanyId } = useCompany();
   const { user, customUser, loading: authLoading } = useAuth();
   const { can } = usePermissions();
+  // Selected company may be local even when user is online; treat it as local-data mode.
+  const isLocalCompanySelected = isLocalOnlyMode() || company?.storageOption === "local";
+  /** Offline unlock same-tab: isCompanyReady / prefetch dubara (localStorage pehle listener ke baad update hota hai). */
+  const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
+  useEffect(() => {
+    const bump = () => setLocalAuthEpoch((n) => n + 1);
+    window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(LOCAL_AUTH_CHANGED_EVENT, bump);
+  }, []);
 
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -101,10 +176,32 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   // Apply View Own / View All Records: show only own vouchers when user doesn't have view_all_records
   const viewAllRecords = can("view_all_records");
   const vouchersForDisplay = useMemo(() => {
-    if (viewAllRecords) return vouchers;
     if (!user?.uid) return [];
+    const localUser =
+      isLocalCompanySelected && companyId ? getLocalAuthUser(companyId) : null;
+    // Local + manager/editor: permissionConfig kabhi galat ho to bhi pura ledger dikhao (voucher userId owner uid hota hai).
+    const localStaffSeeAll =
+      isLocalCompanySelected &&
+      !!localUser &&
+      localCompanyRoleAllowsViewAll(localUser.role);
+    if (viewAllRecords || localStaffSeeAll) return vouchers;
+
+    // Local + viewer/data-entry: apni rows — userId local id / `local` / Firebase uid
+    if (isLocalCompanySelected && localUser?.id) {
+      const uid = String(user.uid);
+      const lid = String(localUser.id);
+      const lname = (localUser.username || "").toLowerCase().trim();
+      return vouchers.filter((v) => {
+        const vid = v.userId != null ? String(v.userId) : "";
+        if (vid === uid || vid === lid) return true;
+        if (lname && vid.toLowerCase() === lname) return true;
+        if (vid === "local" || vid === "local_guest_user") return true;
+        return false;
+      });
+    }
+
     return vouchers.filter((v) => v.userId === user.uid);
-  }, [vouchers, viewAllRecords, user?.uid]);
+  }, [vouchers, viewAllRecords, user?.uid, isLocalCompanySelected, companyId, localAuthEpoch]);
   
   const [parties, setParties] = useState<Party[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -120,6 +217,29 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
+  /** Firestore snapshot → SQLite batch mirror debounce (static); unmount pe clear. */
+  const mirrorSnapshotTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const lastCompanyIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastCompanyIdRef.current === companyId) return;
+    // Company switch par purana company data turant clear karo (offline stale merge avoid).
+    setVouchers([]);
+    setParties([]);
+    setStaff([]);
+    setAccounts([]);
+    setTaxes([]);
+    setUnprocessedExpenseAccounts([]);
+    setItems([]);
+    setItemGroups([]);
+    setGroups([]);
+    setAccountGroups([]);
+    setStaffGroups([]);
+    setTaxGroups([]);
+    setExpenseGroups([]);
+    setJournalAccountNames({});
+    setLoading(true);
+    lastCompanyIdRef.current = companyId ?? null;
+  }, [companyId]);
 
   // Pre-fill current user name so transaction User column shows correctly (no fetch delay)
   useEffect(() => {
@@ -151,12 +271,51 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       userNames: {},
   });
 
+  /** Har render par latest company — snapshot decrypt / pull me stale closure na ho */
+  const companyRef = useRef(company);
+  companyRef.current = company;
+
+  /**
+   * Pehle poora `company` object effect deps me tha — plan sync / naam / fiscal UI se reference badalta,
+   * Firestore listeners teardown + 600ms delay → tab wapas aane par 4–5s blank. Sirf sync-relevant fields.
+   */
+  const voucherListenerCompanyKey = useMemo(() => {
+    if (!company) return "";
+    const c = company as CloudBackedCompanyShape;
+    const shared = JSON.stringify(
+      [...(company.sharedWithEmails ?? [])].map((e) => String(e).toLowerCase().trim()).sort()
+    );
+    return [
+      company.id,
+      String(c.storageOption ?? ""),
+      String(c.syncPolicy ?? ""),
+      c.syncedFromCloud === true ? "1" : "0",
+      String(c.authoritativeCompanyId ?? "").trim(),
+      String(c.encryptServerBackupSalt ?? "").trim(),
+      String(company.ownerId ?? ""),
+      String(company.ownerEmail ?? "").toLowerCase().trim(),
+      shared,
+    ].join("|");
+  }, [
+    company?.id,
+    (company as CloudBackedCompanyShape | undefined)?.storageOption,
+    (company as CloudBackedCompanyShape | undefined)?.syncPolicy,
+    (company as CloudBackedCompanyShape | undefined)?.syncedFromCloud,
+    (company as CloudBackedCompanyShape | undefined)?.authoritativeCompanyId,
+    (company as CloudBackedCompanyShape | undefined)?.encryptServerBackupSalt,
+    company?.ownerId,
+    company?.ownerEmail,
+    company?.sharedWithEmails,
+  ]);
+
   // --- Data Fetching Logic ---
   useEffect(() => {
     if (authLoading) {
       setLoading(true);
       return;
     }
+
+    const company = companyRef.current;
 
     const resetAllStates = () => {
       setVouchers([]); setParties([]); setStaff([]); setAccounts([]);
@@ -165,26 +324,101 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       setStaffGroups([]); setTaxGroups([]); setExpenseGroups([]);
     };
 
-    // सिंक पेन्डिङ भए वा कम्पनी अपूर्ण भए listener नलगाउने (permission denied रोक्न)। ownerId मिल्यो भने ownerEmail नभए पनि लगाउँछौं।
-    const isCompanyReady = company?.ownerId === user?.uid || !!company?.ownerEmail || (!!user?.email && (company?.sharedWithEmails ?? []).includes(user.email));
+    // सिंक पेन्डिङ भए वा कम्पनी अपूर्ण भए listener नलगाउने (permission denied रोक्न)।
+    // Local/offline company: sharedWithEmails Firebase share hai — SQLite wale users ke liye valid local session kaafi.
+    const shouldUseLocalCompanyData = isLocalCompanySelected;
+    const emailNorm = (e: string) => String(e || "").toLowerCase().trim();
+    const userEmailNorm = user?.email ? emailNorm(user.email) : "";
+    const sharedEmailOk =
+      !!userEmailNorm && (company?.sharedWithEmails ?? []).some((e) => emailNorm(String(e)) === userEmailNorm);
+    const hasLocalUnlockedSession =
+      shouldUseLocalCompanyData && !!companyId && !!getLocalAuthToken(companyId);
+    const isCompanyReady =
+      company?.ownerId === user?.uid ||
+      !!company?.ownerEmail ||
+      sharedEmailOk ||
+      hasLocalUnlockedSession;
     if (!companyId || !user || !isCompanyReady) {
       resetAllStates();
       setLoading(false);
       return;
     }
 
+    /** Subcollections Firestore par isi doc id ke neeche — authoritativeCompanyId upload/Stripe ke baad; `storageOption: local` par hamesha registry id (online backup → local restore ke baad purana cloud id mat use karo) */
+    const storageOptionLocal = String((company as CloudBackedCompanyShape)?.storageOption || "").toLowerCase() === "local";
+    const fsCompanyId = storageOptionLocal
+      ? String(companyId || "").trim() || companyId
+      : String(
+          (company as CloudBackedCompanyShape)?.authoritativeCompanyId || companyId || ""
+        ).trim() || companyId;
+
+    const collectionsToPrefetch: Array<{ path: string; setter: StateSetter<any>; orderByField?: string }> = [
+      { path: "vouchers", setter: setVouchers, orderByField: "date" },
+      { path: "parties", setter: setParties },
+      { path: "staff", setter: setStaff },
+      { path: "bank_accounts", setter: setAccounts },
+      { path: "taxes", setter: setTaxes },
+      { path: "expense_accounts", setter: setUnprocessedExpenseAccounts },
+      { path: "items", setter: setItems },
+      { path: "item_groups", setter: setItemGroups },
+      { path: "groups", setter: setGroups },
+      { path: "account_groups", setter: setAccountGroups },
+      { path: "staff_groups", setter: setStaffGroups },
+      { path: "tax_groups", setter: setTaxGroups },
+      { path: "expense_groups", setter: setExpenseGroups },
+    ];
+
+    // Pure offline row: Firestore try mat karo — warna getDoc fail / empty se web jaisa reset ho sakta hai
+    const isExplicitLocalRegistryRow =
+      shouldUseLocalCompanyData &&
+      String((company as CloudBackedCompanyShape)?.storageOption || "").toLowerCase() === "local" &&
+      !isCloudBackedCompany(company as CloudBackedCompanyShape);
+
+    if (isExplicitLocalRegistryRow) {
+      setLoading(true);
+      Promise.all(
+        collectionsToPrefetch.map(({ path, setter, orderByField }) =>
+          // Web par bhi restore rows dikhen: `isLocalOnlyMode` false ho to bhi SQLite read (forBackupMerge)
+          listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+            .then((cached) => {
+              setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+            })
+            .catch(() => {})
+        )
+      ).finally(() => setLoading(false));
+      return;
+    }
+
+    // Local APK: har online / ambiguous row ke liye pehle SQLite, phir server doc check — purane SQLite me syncedFromCloud missing ho to bhi cloud data milega
+    if (shouldUseLocalCompanyData) {
+      setLoading(true);
+      Promise.all(
+        collectionsToPrefetch.map(({ path, setter, orderByField }) =>
+          listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+            .then((cached) => {
+              setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+            })
+            .catch(() => {})
+        )
+      );
+    }
+
     // ४. कम्पनी को Firestore doc अस्तित्वमा छ कि छैन जाँच गर्ने (नभए rules ले subcollection deny गर्छ — यहीले permission error रोक्छ)
     let cancelled = false;
     const unsubRef = { current: [] as (() => void)[] };
 
-    const companyRef = doc(firestore, "companies", companyId);
+    // `companyRef` naam React useRef se clash — TDZ / shadow; Firestore root doc alag naam
+    const companyRootDocRef = doc(firestore, "companies", fsCompanyId);
     // Server बाट मात्र जाँच गर्ने (cache ले नयाँ company नभए पनि true दिएर listener लगाउन रोक्न)
-    getDocFromServer(companyRef).then((snap) => {
+    getDocFromServer(companyRootDocRef).then((snap) => {
       if (cancelled) return;
       if (!snap.exists()) {
         console.log("Company doc not in Firestore yet... skipping listeners.");
         setLoading(false);
-        resetAllStates();
+        // Web: nayi / galat selection — khali. Static: turant SQLite prefetch UI pe hai, use mat tododo
+        if (!shouldUseLocalCompanyData) {
+          resetAllStates();
+        }
         return;
       }
       const data = snap.data();
@@ -197,8 +431,30 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       if (!isOwner && !isShared) {
         console.log("Company doc owner mismatch or not shared with user... skipping listeners.");
         setLoading(false);
-        resetAllStates();
+        if (!shouldUseLocalCompanyData) {
+          resetAllStates();
+        }
         return;
+      }
+      // Doc mil gaya + access OK: ek baar Firestore → SQLite pull (`firestoreToLocalCompanyPull`) + React state
+      if (shouldUseLocalCompanyData) {
+        void (async () => {
+          for (const { path, setter, orderByField } of collectionsToPrefetch) {
+            try {
+              const remoteData = await pullCompanySubcollectionFromFirestoreToLocalDb(
+                fsCompanyId,
+                companyId,
+                path,
+                companyRef.current,
+                orderByField
+              );
+              if (!remoteData.length) continue;
+              setter(orderByField ? sortDocsByDateField(remoteData, orderByField) : remoteData);
+            } catch {
+              /* onSnapshot neeche retry */
+            }
+          }
+        })();
       }
       if (vouchers.length === 0) setLoading(true);
 
@@ -229,35 +485,72 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
       const unsubscribers = collectionsToFetch.map(({ path, setter, isGroup, orderByField }) => {
         const q = isGroup
-          ? query(collectionGroup(firestore, path), where("companyId", "==", companyId))
-          : query(collection(firestore, `companies/${companyId}/${path}`));
+          ? query(collectionGroup(firestore, path), where("companyId", "==", fsCompanyId))
+          : query(collection(firestore, `companies/${fsCompanyId}/${path}`));
         return onSnapshot(q, (snapshot) => {
           if (cancelled) return;
-          const data = snapshot.docs
-            .map((d) => ({ ...d.data(), id: d.id }))
-            .filter((item: any) => item.isDeleted !== true);
-          if (orderByField) {
-            data.sort((a: any, b: any) => {
-              const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
-              const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
-              return dateA.getTime() - dateB.getTime();
-            });
-          }
-          setter(data);
+          const co = companyRef.current;
+          const cryptoCtx = co ? { encryptServerBackupSalt: co.encryptServerBackupSalt } : null;
+          void (async () => {
+            const data = (
+              await Promise.all(
+                snapshot.docs.map(async (d) => {
+                  const raw = { ...d.data(), id: d.id } as Record<string, unknown> & { id: string };
+                  return decryptFirestoreCompanyDocIfNeeded(raw, cryptoCtx, companyId);
+                })
+              )
+            ).filter((x): x is NonNullable<typeof x> => x != null)
+              .filter((item: any) => item.isDeleted !== true);
+            if (cancelled) return;
+            if (orderByField) {
+              data.sort((a: any, b: any) => {
+                const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
+                const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
+                return dateA.getTime() - dateB.getTime();
+              });
+            }
+            // Firestore snapshot + SQLite extras (upload se pehle / cloud mode me bhi) — `merge` andar forBackupMerge use karti hai
+            let dataForUi = data;
+            if (!isGroup) {
+              // `storageOption: local` + authoritativeCompanyId: same id par remote purana na jeete (restore ke baad dashboard adhura na rahe)
+              const preferLocal =
+                String(companyRef.current?.storageOption || "").toLowerCase() === "local";
+              dataForUi = await mergeRemoteSnapshotWithLocalOnlyDocs(companyId, path, data, orderByField, {
+                preferLocalSqliteWhenIdsConflict: preferLocal,
+              });
+            }
+            setter(dataForUi);
+            // Local company mode: har snapshot ke baad SQLite cache update (offline + invoice relations).
+            if (shouldUseLocalCompanyData && !isGroup) {
+              const debounceKey = `${companyId}::${path}`;
+              clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
+              mirrorSnapshotTimersRef.current[debounceKey] = setTimeout(() => {
+                // Raw Firestore `data` mirror kiya to restore SQLite overwrite ho sakta tha — UI jaisa merged list mirror karo
+                void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi);
+              }, 500);
+            }
+          })();
         }, (error: any) => {
           try {
             if (error?.code === 'unavailable' || error?.code === 'deadline-exceeded' || error?.message?.includes('network')) {
+              listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                .then((cached) => {
+                  if (cancelled || !cached.length) return;
+                  setter((prev) => mergeEntityListsById(prev, cached, orderByField));
+                })
+                .catch(() => {});
               return;
             }
             // PERMISSION_DENIED: Owner भए companyId clear नगर्ने (Settings लूप रोक्न; rules/auth timing को कारण पनि deny आउन सक्छ)।
             if (error?.code === 'permission-denied' || error?.code === 'PERMISSION_DENIED' || (error?.message && String(error.message).includes('permission'))) {
               console.warn(`[PERMISSION_DENIED TRACK] source=useVouchers path=companies/${companyId}/${path}`, { companyId, path, code: error?.code });
+              const co = companyRef.current;
               // company null hone par clear na karein – ownership check nahi ho sakta, Settings redirect loop avoid
-              if (!company) {
+              if (!co) {
                 console.warn(`[Firestore] PERMISSION_DENIED but company not loaded yet – skipping clear to avoid Settings redirect.`);
                 return;
               }
-              const isOwner = company.ownerId === user?.uid || (!!company.ownerEmail && !!user?.email && company.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
+              const isOwner = co.ownerId === user?.uid || (!!co.ownerEmail && !!user?.email && co.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
               if (!isOwner) {
                 console.warn(`[Firestore] PERMISSION_DENIED for path: companies/${companyId}/${path}. Clearing invalid company selection.`, { companyId, path });
                 try { clearCompanyId(); } catch (_) {}
@@ -276,11 +569,27 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       });
       unsubRef.current = unsubscribers;
 
+      // Browser SQLite prefetch: local-first + uploaded-to-cloud (global cloud mode me bhi merge ke liye cache chahiye)
+      const coPrefetch = companyRef.current;
+      const prefetchFromSqlite =
+        shouldUseLocalCompanyData ||
+        String(coPrefetch?.storageOption || "").toLowerCase() === "firebase";
+      if (prefetchFromSqlite) {
+        for (const { path: p, setter: setCol, orderByField: obf } of collectionsToFetch) {
+          listCompanyDocsFromBrowserDb(companyId, p, { forBackupMerge: true })
+            .then((cached) => {
+              if (cancelled || !cached.length) return;
+              setCol(obf ? sortDocsByDateField(cached, obf) : cached);
+            })
+            .catch(() => {});
+        }
+      }
+
       const initialFetches = collectionsToFetch.map(({ path, isGroup }) =>
         new Promise((resolve) => {
           const q = isGroup
-            ? query(collectionGroup(firestore, path), where("companyId", "==", companyId))
-            : query(collection(firestore, `companies/${companyId}/${path}`));
+            ? query(collectionGroup(firestore, path), where("companyId", "==", fsCompanyId))
+            : query(collection(firestore, `companies/${fsCompanyId}/${path}`));
           const unsub = onSnapshot(q, () => { unsub(); resolve(true); }, (err: any) => {
             if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
               console.warn('[PERMISSION_DENIED TRACK] source=useVouchers initialFetches path=companies/' + companyId + '/' + path, { companyId, path });
@@ -297,10 +606,73 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     return () => {
       cancelled = true;
+      for (const t of Object.values(mirrorSnapshotTimersRef.current)) clearTimeout(t);
+      mirrorSnapshotTimersRef.current = {};
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, company, user, authLoading]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch]);
+
+  // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
+  useEffect(() => {
+    const shouldUseLocalCompanyData = isLocalOnlyMode() || company?.storageOption === "local";
+    if (!shouldUseLocalCompanyData || !companyId) return;
+    const onBump = (ev: Event) => {
+      const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
+      if (!d || d.companyId !== companyId || !d.collection) return;
+      const coll = d.collection;
+      listCompanyDocsFromBrowserDb(companyId, coll)
+        .then((cached) => {
+          if (!cached.length) return;
+          switch (coll) {
+            case "vouchers":
+              setVouchers((prev) => mergeEntityListsById(prev, cached, "date"));
+              break;
+            case "parties":
+              setParties((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "staff":
+              setStaff((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "bank_accounts":
+              setAccounts((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "taxes":
+              setTaxes((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "expense_accounts":
+              setUnprocessedExpenseAccounts((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "items":
+              setItems((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "item_groups":
+              setItemGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "groups":
+              setGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "account_groups":
+              setAccountGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "staff_groups":
+              setStaffGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "tax_groups":
+              setTaxGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            case "expense_groups":
+              setExpenseGroups((prev) => mergeEntityListsById(prev, cached));
+              break;
+            default:
+              break;
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+  }, [companyId, company?.storageOption]);
   
   const fetchAccountName = useCallback(async (accountId: string): Promise<string> => {
     if (!companyId || !accountId) return 'Unknown Account';
@@ -315,6 +687,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         const collectionName = collectionsToSearch[i];
         const nameField = nameFields[i];
         try {
+            if (isLocalCompanySelected) {
+              // Local-only mode: avoid Firestore reads in helper lookup.
+              return "Unknown Account";
+            }
             if (collectionName === 'users') {
                 // User doc ID may be name_uid; look up by uid field
                 const q = query(collection(firestore, 'users'), where('uid', '==', accountId));
@@ -333,7 +709,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     }
     
     return 'Unknown Account';
-}, [companyId, journalAccountNames]);
+}, [companyId, journalAccountNames, isLocalCompanySelected]);
 
 
   useEffect(() => {
@@ -360,10 +736,25 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         }
         
         const newUserNames: Record<string, string> = {};
+        const localUserNameById: Record<string, string> = {};
+        const localSessionUser = isLocalCompanySelected && companyId ? getLocalAuthUser(companyId) : null;
+        const localSessionDisplayName =
+          (localSessionUser?.displayName || localSessionUser?.username || "").trim() ||
+          (((company as any)?.adminUsername as string) || "").trim() ||
+          "Admin";
+        // Common local IDs fallback: many local vouchers may store `local`/`local_guest_user`.
+        localUserNameById["local"] = localSessionDisplayName;
+        localUserNameById["local_guest_user"] = localSessionDisplayName;
+        if (localSessionUser?.id) localUserNameById[String(localSessionUser.id)] = localSessionDisplayName;
+        if (localSessionUser?.username) localUserNameById[String(localSessionUser.username)] = localSessionDisplayName;
         // First, learn names directly from vouchers themselves (works even when users query is restricted).
         vouchersForDisplay.forEach((v: any) => {
             const uid = v?.userId;
-            const fromVoucher = v?.userDisplayName || v?.userName || null;
+            let fromVoucher = v?.userDisplayName || v?.userName || null;
+            // Local placeholder names ko human display name se replace karo.
+            if (fromVoucher && String(fromVoucher).toLowerCase().trim() === "local") {
+              fromVoucher = localSessionDisplayName;
+            }
             if (!uid || !fromVoucher) return;
             if (fromVoucher !== "Unknown" && fromVoucher !== "N/A") {
                 if ((userNames[uid] || "") !== fromVoucher) {
@@ -372,22 +763,42 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             }
         });
 
+        if (isLocalCompanySelected && companyId) {
+          try {
+            // Company users ab SQLite `localCompanyUsers` se — local Node API (3001) optional.
+            const localDoc = await getLocalCompanyById(companyId);
+            const localUsers = parseLocalCompanyUserRows(
+              (localDoc as { localCompanyUsers?: unknown } | null)?.localCompanyUsers
+            );
+            localUsers.forEach((u) => {
+              const display = (u.displayName || u.username || "").trim();
+              if (!display) return;
+              if (u.id) localUserNameById[String(u.id)] = display;
+              if (u.username) localUserNameById[String(u.username)] = display;
+            });
+          } catch {
+            // Non-blocking: voucher grid me naam fallback chain se aayega.
+          }
+        }
+
         // Bulk preload user names once (more reliable for shared users than per-uid queries).
         const bulkUserNameByUid: Record<string, string> = {};
-        try {
-            const allUsersSnap = await getDocs(collection(firestore, "users"));
-            allUsersSnap.docs.forEach((d) => {
-                const data = d.data() as any;
-                const uid = (data?.uid as string) || d.id;
-                const email = typeof data?.email === "string" ? data.email : "";
-                const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-                const name = data?.displayName || data?.name || emailPrefix || null;
-                if (uid && name && name !== "Unknown" && name !== "N/A") {
-                    bulkUserNameByUid[uid] = name;
-                }
-            });
-        } catch {
-            // ignore; fallback paths below still run
+        if (!isLocalCompanySelected) {
+          try {
+              const allUsersSnap = await getDocs(collection(firestore, "users"));
+              allUsersSnap.docs.forEach((d) => {
+                  const data = d.data() as any;
+                  const uid = (data?.uid as string) || d.id;
+                  const email = typeof data?.email === "string" ? data.email : "";
+                  const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
+                  const name = data?.displayName || data?.name || emailPrefix || null;
+                  if (uid && name && name !== "Unknown" && name !== "N/A") {
+                      bulkUserNameByUid[uid] = name;
+                  }
+              });
+          } catch {
+              // ignore; fallback paths below still run
+          }
         }
 
         const currentUserName = user ? (customUser?.displayName || user.displayName || user.email || "You") : "";
@@ -403,6 +814,14 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 if (uid === user?.uid && currentUserName) {
                     if ((userNames[uid] || "") !== currentUserName) {
                         newUserNames[uid] = currentUserName;
+                    }
+                    continue;
+                }
+                // Local company users: resolve by local user id/username map so User column doesn't show N/A.
+                if (localUserNameById[uid]) {
+                    const resolved = localUserNameById[uid];
+                    if ((userNames[uid] || "") !== resolved) {
+                        newUserNames[uid] = resolved;
                     }
                     continue;
                 }
@@ -424,6 +843,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                     continue;
                 }
                 try {
+                    if (isLocalCompanySelected) {
+                      continue;
+                    }
                     // User doc ID may be name_uid (e.g. manishshah46_AaCbiR708nhGe28Ltf217YZzpNv1), so query by uid field first
                     const q = query(collection(firestore, "users"), where("uid", "==", uid));
                     const snap = await getDocs(q);
@@ -718,7 +1140,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
     const allocatedFromJournal = getAllocatedByVoucherIdFromJournal(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
-    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; title?: string }> = [];
+    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }> = [];
     for (const v of vouchersForDisplay) {
       if ((v.type !== "sale" && v.type !== "purchase") || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
@@ -764,7 +1186,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         userId: fallbackUserId,
         userName: fallbackUserName,
         narration: (v as any).narration,
-        title: (v as any).title,
       });
     }
     return { overdueTransactions: list, hasOverdueTransactions: list.length > 0 };

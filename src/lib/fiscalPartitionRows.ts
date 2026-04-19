@@ -3,7 +3,7 @@ import { startOfDay } from "date-fns";
 /** Sirf fiscal fields — `useCompany` import avoid (heavy / circular risk). */
 type FiscalCompanyLike = {
   fiscalSplitMode?: string;
-  fiscalMergePartitionAt?: { toDate?: () => Date };
+  fiscalMergePartitionAt?: { toDate?: () => Date } | unknown;
 };
 
 /** Synthetic row type: ledger + print isi se divider dikhate hain (merge mode). */
@@ -61,11 +61,24 @@ export function insertFiscalPartitionRows(
   return out;
 }
 
-/** Company doc se merge partition date (AD start-of-day). */
+/** Timestamp / local `{ toDate }` / ISO string (localStorage merge) se Date. */
+function coercePartitionDate(raw: unknown): Date | null {
+  if (raw == null) return null;
+  if (raw instanceof Date) return !isNaN(raw.getTime()) ? startOfDay(raw) : null;
+  if (typeof raw === "object" && raw !== null && typeof (raw as { toDate?: () => Date }).toDate === "function") {
+    const d = (raw as { toDate: () => Date }).toDate();
+    return d instanceof Date && !isNaN(d.getTime()) ? startOfDay(d) : null;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const d = new Date(raw);
+    return d instanceof Date && !isNaN(d.getTime()) ? startOfDay(d) : null;
+  }
+  return null;
+}
+
+/** Company doc (+ locally merged) se merge partition date (AD start-of-day). */
 export function getFiscalMergePartitionDateFromCompany(company: FiscalCompanyLike | null | undefined): Date | null {
   if (!company || company.fiscalSplitMode !== "merge") return null;
-  const ts = company.fiscalMergePartitionAt as { toDate?: () => Date } | undefined;
-  if (!ts || typeof ts.toDate !== "function") return null;
-  const d = ts.toDate();
-  return d instanceof Date && !isNaN(d.getTime()) ? startOfDay(d) : null;
+  const d = coercePartitionDate(company.fiscalMergePartitionAt);
+  return d;
 }

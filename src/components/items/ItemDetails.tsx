@@ -4,7 +4,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { TransactionsTable, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
@@ -167,7 +166,6 @@ export default function ItemDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -452,8 +450,7 @@ export default function ItemDetails({
     [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -493,6 +490,8 @@ export default function ItemDetails({
         dateRangeText: dateRange?.from ? `${formatDate(dateRange.from)} - ${dateRange.to ? formatDate(dateRange.to) : ''}` : 'All Time',
         vouchersCount: processedTransactions.length,
         openingBalance: openingBalanceForPeriod,
+        openingBalanceDate: (currentItem as any).openingBalanceDate,
+        openingBalanceNarration: currentItem.openingBalanceNarration ?? null,
         transactions: processedTransactions,
         showNarration: showNarration,
         includeNotes: includeNotesInTable,
@@ -1004,6 +1003,9 @@ export default function ItemDetails({
                     displayUnit={displayUnit}
                     setDisplayUnit={setItemDisplayUnit ? handleUnitChange : undefined}
                     openingBalance={openingBalanceForPeriod}
+                    openingBalanceNarration={currentItem.openingBalanceNarration}
+                    openingBalanceAttachmentUrls={currentItem.fileUrls}
+                    openingBalanceDate={(currentItem as any).openingBalanceDate}
                     periodDr={periodDr}
                     periodCr={periodCr}
                     closingBalance={closingBalance}
@@ -1014,7 +1016,6 @@ export default function ItemDetails({
                     setActiveFilter={setActiveFilter}
                     
                     showNarration={showNarration}
-                    narrationNoteSearch={narrationNoteSearch}
                     visibleColumns={{ ...visibleColumns, status: false }}
                     userNames={effectiveUserNames}
                     journalAccountNames={journalAccountNames}
@@ -1035,11 +1036,6 @@ export default function ItemDetails({
                  <Checkbox id="show-narration-item" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                  <label htmlFor="show-narration-item" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
                </div>
-               <NarrationNoteSearchInput
-                 id="narration-search-item"
-                 value={narrationNoteSearch}
-                 onChange={setNarrationNoteSearch}
-               />
                <DropdownMenu>
                  <DropdownMenuTrigger asChild>
                    <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

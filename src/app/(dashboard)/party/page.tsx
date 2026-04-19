@@ -53,47 +53,68 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 function PartyPageContent() {
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  // Pehle company context: warna vouchersLoading false ho kar khali list flash, phir company aate hi dubara paint (Poora page jump).
+  const { company, companyId, loading: companyLoading, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames } = useVouchers();
+  const waitingForCompany = Boolean(companyId && (companyLoading || !company));
+  const pageDataLoading = waitingForCompany || vouchersLoading;
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByPartyId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length || !processedParties?.length) return {} as Record<string, number>;
+    // Journal/contra `partyId` ke bina bhi — ledger jaisa touch (`voucherTouchesPartyLedger`)
+    const partyIdSet = new Set(processedParties.map((p: Party) => p.id));
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
-      if (v.isApproved === true) return;
-      if (v.partyId) {
-        map[v.partyId] = (map[v.partyId] || 0) + 1;
-      }
+      const touched = collectPartyIdsTouchedByUnapprovedVoucher(v, partyIdSet);
+      touched.forEach((id) => {
+        map[id] = (map[id] || 0) + 1;
+      });
     });
     return map;
-  }, [vouchers, canApproveTransactions]);
+  }, [vouchers, showApproveOnList, processedParties]);
   const pendingApprovalByGroupId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length || !processedParties?.length) return {} as Record<string, number>;
-    const byParty: Record<string, number> = {};
-    vouchers.forEach((v: any) => {
-      if (v.isApproved === true) return;
-      if (v.partyId) byParty[v.partyId] = (byParty[v.partyId] || 0) + 1;
-    });
+    if (!showApproveOnList || !processedParties?.length) return {} as Record<string, number>;
     const byGroup: Record<string, number> = {};
     processedParties.forEach((p: Party) => {
-      if (!p.groupId) return;
-      byGroup[p.groupId] = (byGroup[p.groupId] || 0) + (byParty[p.id] || 0);
+      const n = pendingApprovalByPartyId[p.id] || 0;
+      if (!n) return;
+      // `PartyGroupList` ka synthetic row `id: 'ungrouped'` — bina groupId / `ungrouped_party` wale parties yahi pe
+      const gid =
+        p.groupId && String(p.groupId).trim() !== "" && p.groupId !== "ungrouped_party"
+          ? p.groupId
+          : "ungrouped";
+      byGroup[gid] = (byGroup[gid] || 0) + n;
     });
     return byGroup;
-  }, [vouchers, processedParties, canApproveTransactions]);
+  }, [processedParties, showApproveOnList, pendingApprovalByPartyId]);
+
+  /** Search aur + Add Party ke beech: kitne unapproved vouchers kisi party ledger ko touch karte hain (badge total) */
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedParties?.length) return 0;
+    const partyIdSet = new Set(processedParties.map((p: Party) => p.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      if (collectPartyIdsTouchedByUnapprovedVoucher(v, partyIdSet).size > 0) n += 1;
+    }
+    return n;
+  }, [vouchers, showApproveOnList, processedParties]);
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -112,8 +133,8 @@ function PartyPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
-  /** Sirf un parties jin par pending approval vouchers hon — group list par lagta nahi */
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  /** Party list: sirf un jinke paas pending approval (count box click toggle) */
+  const [showOnlyPartiesWithPendingApproval, setShowOnlyPartiesWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -140,7 +161,6 @@ function PartyPageContent() {
       return true;
     }
   });
-  const [overdueNarrationNoteSearch, setOverdueNarrationNoteSearch] = useState("");
 
   const selectedParty = activeView === 'parties' ? selected as Party : null;
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
@@ -184,7 +204,6 @@ function PartyPageContent() {
         userId: row.userId,
         userName: row.userName,
         narration: row.narration,
-        title: (v as any)?.title,
         dueDate: row.dueDate,
         isApproved: v?.isApproved,
         partyName: row.partyName,
@@ -210,7 +229,6 @@ function PartyPageContent() {
         (t.voucherNumber || "").toLowerCase().includes(q) ||
         (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
         (t.narration || "").toLowerCase().includes(q) ||
-        String((t as any).title || "").toLowerCase().includes(q) ||
         (t.partyName || "").toLowerCase().includes(q) ||
         String(amt || 0).toLowerCase().includes(q) ||
         userStr.toLowerCase().includes(q)
@@ -232,10 +250,10 @@ function PartyPageContent() {
   }, [mobileFilteredOverdue]);
 
   const partiesForList = processedPartiesForSelection;
-  const partiesForListFiltered = useMemo(
-    () => filterByPendingApproval(partiesForList, pendingApprovalByPartyId, unapprovedOnly),
-    [partiesForList, pendingApprovalByPartyId, unapprovedOnly]
-  );
+  const partiesForPartyListView = useMemo(() => {
+    if (!showOnlyPartiesWithPendingApproval || !showApproveOnList) return partiesForList;
+    return partiesForList.filter((p) => (pendingApprovalByPartyId[p.id] ?? 0) > 0);
+  }, [partiesForList, showOnlyPartiesWithPendingApproval, showApproveOnList, pendingApprovalByPartyId]);
   
    const processedGroups = useMemo(() => {
     // Show Ungrouped row only when at least one party is in the Ungrouped bucket.
@@ -275,8 +293,8 @@ function PartyPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'parties' ? partiesForListFiltered : processedGroups, 
-    vouchersLoading           
+    activeView === 'parties' ? partiesForList : processedGroups, 
+    pageDataLoading
   );
   // ==================================
 
@@ -285,12 +303,15 @@ function PartyPageContent() {
   const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
-    if (vouchersLoading) return;
+    if (pageDataLoading) return;
     if (selectedIdFromUrl === OVERDUE_ACCOUNT_ID && overdueVirtualParty) {
       setActiveView("parties");
       setSelected(overdueVirtualParty);
-      // ?selected= rakho taaki header / refresh par state URL se align rahe (bare /party se flicker kam)
-      router.replace(`/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`, { scroll: false });
+      // URL pehle se match ho to replace mat — snapshot deps se effect bar-baar chalne par double navigation
+      const overdueUrl = `/party?selected=${encodeURIComponent(OVERDUE_ACCOUNT_ID)}`;
+      if (shouldReplaceWithMasterDetailCanonical(overdueUrl)) {
+        router.replace(overdueUrl, { scroll: false });
+      }
       return;
     }
     const groupItem = processedGroups.find((i) => i.id === selectedIdFromUrl);
@@ -304,8 +325,10 @@ function PartyPageContent() {
       viewFromUrl === "groups"
         ? `/party?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/party?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
-  }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
+  }, [selectedIdFromUrl, viewFromUrl, pageDataLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown" && userNames[userId] !== "N/A") {
@@ -365,8 +388,13 @@ function PartyPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyPartiesWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "parties") setShowOnlyPartiesWithPendingApproval(false);
+  }, [activeView]);
 
   // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
   useEffect(() => {
@@ -385,17 +413,15 @@ function PartyPageContent() {
   
   const totalBalance = useMemo(() => {
     if (activeView === 'parties') {
-        // Exclude system accounts; unapproved filter on = sirf un parties ka balance jahan pending approval
-        let list = processedParties.filter((p) => !(p as any).isSystemAccount);
-        if (unapprovedOnly) {
-          list = filterByPendingApproval(list, pendingApprovalByPartyId, true);
-        }
-        return list.reduce((acc, party) => acc + party.balance, 0);
+        // Exclude system accounts from total balance
+        return processedParties
+            .filter(p => !(p as any).isSystemAccount)
+            .reduce((acc, party) => acc + party.balance, 0);
     }
     // Groups view: sum only user-defined + synthetic groups (processedGroups already excludes system parents)
     return processedGroups
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedParties, processedGroups, unapprovedOnly, pendingApprovalByPartyId]);
+  }, [activeView, processedParties, processedGroups]);
 
   const handleSelect = (item: Party | Group) => {
     if (useQueryNav) {
@@ -420,19 +446,15 @@ function PartyPageContent() {
   // Filtered count for party list (matches PartyList logic: search + exclude system accounts)
   const filteredPartyCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return (partiesForListFiltered || []).filter((p) => {
+    return (partiesForPartyListView || []).filter((p) => {
       if (!p.name) return false;
       const isSystemAccount = (p as any).isSystemAccount === true;
       const matchesSearch = searchLower ? p.name.toLowerCase().includes(searchLower) : true;
       return matchesSearch && !isSystemAccount;
     }).length;
-  }, [partiesForListFiltered, searchTerm]);
+  }, [partiesForPartyListView, searchTerm]);
 
 
-  if (vouchersLoading) {
-    return <LoadingSpinner />;
-  }
-  
   if (!companyId) {
     return (
          <div className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8 h-full">
@@ -447,17 +469,29 @@ function PartyPageContent() {
         </div>
     );
   }
+
+  if (pageDataLoading) {
+    return <LoadingSpinner />;
+  }
   
   const listView = (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={activeView === 'parties' ? 'Search parties...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
-        {activeView === "parties" && canApproveTransactions && (
-          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-        )}
+        {activeView === "parties" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyPartiesWithPendingApproval}
+            onToggle={() => setShowOnlyPartiesWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only parties with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all parties (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all parties"
+          />
+        ) : null}
         {activeView === "parties" ? (
           <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreatePartyOpen(true)}>
@@ -493,7 +527,7 @@ function PartyPageContent() {
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
                 <PartyList
-                parties={partiesForListFiltered}
+                parties={partiesForPartyListView}
                 onSelectParty={handleSelect}
                 selectedParty={selectedParty}
                 searchTerm={searchTerm}
@@ -592,7 +626,7 @@ function PartyPageContent() {
             </p>
           </div>
           {/* Search */}
-          <div className="p-2 border-b flex-shrink-0 space-y-2">
+          <div className="p-2 border-b flex-shrink-0">
             <div className="flex items-stretch gap-2">
               <div className="flex-1 min-w-0 h-9 relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
@@ -604,12 +638,6 @@ function PartyPageContent() {
                 />
               </div>
             </div>
-            <NarrationNoteSearchInput
-              id="narration-search-party-overdue-mobile"
-              value={overdueNarrationNoteSearch}
-              onChange={setOverdueNarrationNoteSearch}
-              className="w-full min-w-0"
-            />
           </div>
           {/* Transaction list – mobile cards; scroll-touch + inline for APK/WebView touch scroll */}
           <div
@@ -622,7 +650,6 @@ function PartyPageContent() {
               contextId={OVERDUE_ACCOUNT_ID}
               openingBalance={0}
               showNarration={overdueShowNarration}
-              narrationNoteSearch={overdueNarrationNoteSearch}
               userNames={mergedUserNames}
               accountNames={overduePartyNames}
               onRowClick={handleOverdueRowClick}

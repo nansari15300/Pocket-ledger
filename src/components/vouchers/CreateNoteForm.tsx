@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { addDoc, collection, serverTimestamp, doc, getDoc, updateDoc, deleteDoc, query, onSnapshot, where, getDocs } from "firebase/firestore";
@@ -12,7 +12,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +20,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
@@ -41,9 +40,11 @@ import { Calendar } from "../ui/calendar";
 import { format, startOfDay } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -64,6 +65,17 @@ const formSchema = z.object({
 });
 
 type NoteFormValues = z.infer<typeof formSchema>;
+
+/** RHF+zod errors → toast */
+function formatNoteFormValidationErrors(errors: FieldErrors<NoteFormValues>): string {
+  const errorMessages: string[] = [];
+  if (errors.voucherNumber?.message) errorMessages.push(`Note No.: ${errors.voucherNumber.message}`);
+  if (errors.date?.message) errorMessages.push(`Date: ${errors.date.message}`);
+  if (errors.title?.message) errorMessages.push(`Title: ${errors.title.message}`);
+  if (errors.context?.message) errorMessages.push(`Link to: ${errors.context.message}`);
+  if (errors.entityId?.message) errorMessages.push(`Entity: ${errors.entityId.message}`);
+  return errorMessages.length > 0 ? errorMessages.join(", ") : "Please check all fields and try again.";
+}
 
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.note && prefixes.note[0]) || "NOTE-";
 const MAX_FILE_SIZE_MB = 0.5;
@@ -109,7 +121,7 @@ export function CreateNoteForm({
     compactFooter?: boolean,
 }) {
   const { user, customUser } = useAuth();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
   const { toast } = useToast();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const { vouchers } = useVouchers();
@@ -366,7 +378,8 @@ export function CreateNoteForm({
     for (const file of filesToProcess) {
       // Check file type
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
@@ -396,41 +409,44 @@ export function CreateNoteForm({
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
             title: "File Still Too Large",
-            description: `कम्प्रेस गर्दा पनि फाइल ${MAX_FILE_SIZE_MB}MB भन्दा ठुलो भयो।`,
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-  
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Compression error:", error);
+        toast({
+          variant: "destructive",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
+        });
       }
     }
+    e.target.value = "";
   };
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
+  // Validated `data` — nested mobile date + `getValues()` से miss न हो
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; saveAndPrint?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    const isValid = await form.trigger();
-    if (!isValid) {
-        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-        return;
-    }
-    onVoucherAction?.('saved', options.saveAndNew);
-    await processAndSave(form.getValues(), options.saveAndNew, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave, options.saveAndPrint);
+    void form.handleSubmit(
+      async (data) => {
+        onVoucherAction?.("saved", options.saveAndNew);
+        await processAndSave(data, options.saveAndNew, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave, options.saveAndPrint);
+      },
+      (errors) => {
+        sonnerToast.error("Validation Failed", { description: formatNoteFormValidationErrors(errors) });
+      }
+    )(e);
   }
 
   async function processAndSave(values: NoteFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean, saveAndPrint?: boolean) {
@@ -441,7 +457,6 @@ export function CreateNoteForm({
       const isEdit = !!voucher?.id;
       const voucherDate = values.date instanceof Date ? values.date : new Date(values.date);
       
-      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -452,6 +467,7 @@ export function CreateNoteForm({
         assertCanEdit(canEditRecord, isOwnRecord);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
+        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (voucher?.id && companyId) {
@@ -469,18 +485,6 @@ export function CreateNoteForm({
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
       }
-
-      const fp = runFiscalVoucherPreflight({
-        company,
-        can,
-        isEditing: isEdit,
-        recordDate: voucherDate,
-        originalVoucherDate: isEdit ? originalVoucherDate : null,
-      });
-      if (fp.ok === false) {
-        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
-        return;
-      }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { description: error.message });
@@ -494,24 +498,44 @@ export function CreateNoteForm({
     setIsLoading(true);
 
     try {
-        const fileUrls = [...files.filter(f => typeof f === 'string')];
+        let fileUrls = [...files.filter(f => typeof f === 'string')];
+        let preGeneratedVoucherId: string | undefined;
         const toUpload = files.filter(f => typeof f !== 'string') as File[];
 
         if (toUpload.length > 0) {
           const totalNewBytes = toUpload.reduce((s, f) => s + (f.size || 0), 0);
-          const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
           if (!limitCheck.allowed) {
             sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
             setIsLoading(false);
             return;
           }
-        }
-        for (const file of toUpload) {
-            const storageRef = ref(storage, `voucher-files/${companyId}/note/${Date.now()}_${file.name}`);
-            const snapshot = await uploadBytes(storageRef, file);
-            const url = await getDownloadURL(snapshot.ref);
-            fileUrls.push(url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+          if (isLocalOnlyMode()) {
+            const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+              await appendLocalOnlyVoucherFilesToUrls({
+                companyId,
+                storageFolder: "note",
+                existingFileUrls: fileUrls,
+                newFiles: toUpload,
+                maxFileCount: fileAttachmentLimits.maxFileCount,
+                existingVoucherId: voucher?.id ?? null,
+              });
+            fileUrls = merged;
+            if (preGen) preGeneratedVoucherId = preGen;
+            try {
+              await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+            } catch {
+              /* offline */
+            }
+          } else {
+            for (const file of toUpload) {
+              const storageRef = ref(storage, `voucher-files/${companyId}/note/${Date.now()}_${file.name}`);
+              const snapshot = await uploadBytes(storageRef, file);
+              const url = await getDownloadURL(snapshot.ref);
+              fileUrls.push(url);
+              await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            }
+          }
         }
 
         const options = getEntityOptions();
@@ -537,7 +561,8 @@ export function CreateNoteForm({
           user.uid,
           submissionData,
           voucher?.id,
-          approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
+          approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+          preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 
         if (approveAfterSave && result?.id) {
@@ -548,8 +573,6 @@ export function CreateNoteForm({
         } else {
           sonnerToast.success(isEdit ? "Note updated!" : "Note Saved!", { id: toastId });
         }
-        triggerSync();
-
         if (onVoucherAction && !saveAndNew) {
           onVoucherAction('saved', false, result?.id ?? undefined);
         }
@@ -627,14 +650,14 @@ export function CreateNoteForm({
     }
     setIsLoading(true);
     try {
-      await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, voucher.id), {
+      // Local/offline compatible delete: hard delete ke badle recycle-bin mark.
+      await patchVoucherFields(companyId, voucher.id, {
         isDeleted: true,
         deletedAt: serverTimestamp(),
         deletedBy: user.uid,
       });
       sonnerToast.success("Note moved to bin.");
       onVoucherAction?.("cancelled");
-      triggerSync();
     } catch (err) {
       console.error("Error deleting note:", err);
       sonnerToast.error("Error", { description: "Failed to delete note." });
@@ -655,78 +678,86 @@ export function CreateNoteForm({
               {/* Voucher No. and Date */}
               {isMobile ? (
                 <>
-                  {/* Mobile: Prefix + Note No. + Date(s) in one row, 2/3/4 equal-sized boxes */}
+                  {/* Mobile: Prefix + Note No. + Date — `date` को `voucherNumber` के अंदर nest नहीं */}
                   {(() => {
                     const hasPrefix = isPrefixSelectionEnabled && voucherPrefixes.length > 0;
                     const hasDateBS = dateSystem === 'BS' || dateSystem === 'Both';
                     const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
                     const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
-                      <FormField
-                        control={form.control}
-                        name="voucherNumber"
-                        render={({ field: voucherField }: any) => (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name="date"
-                              render={({ field: dateField }: any) => (
-                                <>
-                                  <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
-                                    {hasPrefix && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
-                                          <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
-                                            <SelectValue />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {voucherPrefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                          </SelectContent>
-                                        </Select>
-                                      </FormItem>
-                                    )}
-                                    <FormItem className="min-w-0 w-full overflow-hidden">
-                                      <FormLabel className="text-xs truncate">Note No.</FormLabel>
-                                      <FormControl>
-                                        <Input {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
-                                      </FormControl>
-                                    </FormItem>
-                                    {hasDateBS && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
-                                        <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
-                                        </div>
-                                      </FormItem>
-                                    )}
-                                    {hasDateAD && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date</FormLabel>
-                                        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
-                                          <PopoverTrigger asChild>
-                                            <FormControl>
-                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
-                                                {dateField.value instanceof Date && !isNaN(dateField.value.getTime()) ? formatDate(dateField.value) : "Pick date"}
-                                                <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
-                                              </Button>
-                                            </FormControl>
-                                          </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0 z-[102]" align="start">
-                                            <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
-                                          </PopoverContent>
-                                        </Popover>
-                                      </FormItem>
-                                    )}
-                                  </div>
-                                  <FormMessage />
-                                </>
-                              )}
-                            />
-                            <FormMessage />
-                          </>
-                        )}
-                      />
+                      <>
+                        <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                          <FormField
+                            control={form.control}
+                            name="voucherNumber"
+                            render={({ field: voucherField }: any) => (
+                              <>
+                                {hasPrefix && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Prefix</FormLabel>
+                                    <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
+                                      <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {voucherPrefixes.map((p) => (
+                                          <SelectItem key={p} value={p}>
+                                            {p}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormItem>
+                                )}
+                                <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormLabel className="text-xs truncate">Note No.</FormLabel>
+                                  <FormControl>
+                                    <Input {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                  </FormControl>
+                                </FormItem>
+                              </>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="date"
+                            render={({ field: dateField }: any) => (
+                              <>
+                                {hasDateBS && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
+                                    <div className="min-w-0 w-full overflow-hidden">
+                                      <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
+                                    </div>
+                                  </FormItem>
+                                )}
+                                {hasDateAD && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date</FormLabel>
+                                    <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
+                                      <PopoverTrigger asChild>
+                                        <FormControl>
+                                          <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
+                                            {dateField.value instanceof Date && !isNaN(dateField.value.getTime()) ? formatDate(dateField.value) : "Pick date"}
+                                            <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
+                                          </Button>
+                                        </FormControl>
+                                      </PopoverTrigger>
+                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                        <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
+                                      </PopoverContent>
+                                    </Popover>
+                                  </FormItem>
+                                )}
+                              </>
+                            )}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-0">
+                          <FormField control={form.control} name="voucherNumber" render={() => <FormMessage />} />
+                          <FormField control={form.control} name="date" render={() => <FormMessage />} />
+                        </div>
+                      </>
                     );
                   })()}
                 </>
@@ -929,7 +960,9 @@ export function CreateNoteForm({
                     <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_PRINT_CLASS)}>Save & Print</Button>
                   </>
                 )}
+                {/* Mobile row: Cancel | Save | Approve — approve daayen (baaki forms jaisa) */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>Cancel</Button>
+                <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : canShowCreateApproveButton ? (
@@ -937,7 +970,6 @@ export function CreateNoteForm({
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
               </div>
             ) : (
               <>
@@ -969,7 +1001,7 @@ export function CreateNoteForm({
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>Cancel</Button>
                   {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
                   {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
-                  <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+                  <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}

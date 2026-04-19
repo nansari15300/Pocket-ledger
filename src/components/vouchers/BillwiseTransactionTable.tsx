@@ -27,9 +27,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
-import { useCompany } from "@/hooks/useCompany";
-import { insertFiscalPartitionRows, getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
-import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { VoucherTypeFilter } from "@/components/vouchers/VoucherTypeFilter";
 import {
   TransactionRow,
@@ -40,6 +37,9 @@ import {
   type Context,
 } from "./transactionTableShared";
 import { Badge } from "@/components/ui/badge";
+import { useCompany } from "@/hooks/useCompany";
+import { insertFiscalPartitionRows, getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 
 export type BillwiseTransactionTableProps = {
   transactions: Transaction[];
@@ -86,6 +86,8 @@ export type BillwiseTransactionTableProps = {
   onStatusFilterAll?: () => void;
   onStatusFilterChange?: (key: "paid" | "unpaid" | "partial" | "overdue", checked: boolean) => void;
   statusFilterIdPrefix?: string;
+  /** `isApproved` !== true → pink row (party/bank/report jaisa hi bill-wise table me) */
+  highlightPendingApproval?: boolean;
 };
 
 export function BillwiseTransactionTable({
@@ -128,8 +130,11 @@ export function BillwiseTransactionTable({
   onHistoryVoucher,
   onAddLink,
   onApproveVoucher,
+  highlightPendingApproval = true,
 }: BillwiseTransactionTableProps) {
+  const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const { company } = useCompany();
+  // FY merge divider — company par local fiscal already merged (`useCompany`).
   const fiscalPartitionOpts = useMemo(() => {
     if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
     return {
@@ -151,7 +156,6 @@ export function BillwiseTransactionTable({
         : transactions,
     [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
   );
-  const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const { formatDate, formatDateBS, formatCurrency, dateSystem } = useDate();
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
@@ -240,6 +244,7 @@ export function BillwiseTransactionTable({
     (showCol("user") && context !== "note" ? 1 : 0);
   const openingBalanceColSpan = visibleLabelCols;
   const totalColSpan = visibleLabelCols;
+  // Partition banner row: nested table ke saath bhi colspan = visible columns + actions.
   const fullRowColSpan =
     openingBalanceColSpan +
     (showCol("dr") && !hideDebitColumn ? 1 : 0) +
@@ -264,8 +269,10 @@ export function BillwiseTransactionTable({
         >
           <div className="flex items-center">
             <span>{label}</span>
+            {/* modal: filter input pe pehla click popover band na kare — match TransactionsTable header filters */}
             {(setFilters || (key === "type" && onVoucherTypeChange)) && (
               <Popover
+                modal
                 open={activeFilter === key}
                 onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}
               >
@@ -276,7 +283,6 @@ export function BillwiseTransactionTable({
                 </PopoverTrigger>
                 <PopoverContent
                   className="p-1 w-48"
-                  onOpenAutoFocus={(e: Event) => e.preventDefault()}
                   onCloseAutoFocus={(e: Event) => e.preventDefault()}
                 >
                   {key === "type" && onVoucherTypeChange ? (
@@ -320,8 +326,8 @@ export function BillwiseTransactionTable({
         setSelectedId(displayTransactions[currentIndex - 1].id);
       } else if (e.key === "Enter" && currentIndex >= 0) {
         e.preventDefault();
-        const row = displayTransactions[currentIndex] as any;
-        if (row?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(row);
+        const row = displayTransactions[currentIndex];
+        if ((row as any)?.type !== FISCAL_YEAR_PARTITION_ROW_TYPE) onRowClick?.(row);
       }
     },
     [displayTransactions, selectedId, onRowClick]
@@ -509,6 +515,7 @@ export function BillwiseTransactionTable({
                   isBillWise={true}
                   ensureMinGaps={ensureMinGaps}
                   statusBillWiseOnly={statusBillWiseOnly}
+                  highlightPendingApproval={highlightPendingApproval}
                 />
               ))
             ) : (

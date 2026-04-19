@@ -2,12 +2,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, PlusCircle, CalendarIcon, Upload, Trash2, FileText, Crown } from "lucide-react";
+import { Loader2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, query, onSnapshot } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { doc, setDoc, collection, serverTimestamp, query, onSnapshot, Timestamp } from "firebase/firestore";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +34,8 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
-import { firestore, storage } from "@/lib/firebase";
+import { firestore } from "@/lib/firebase";
+import Link from "next/link";
 import {
   Select,
   SelectContent,
@@ -55,7 +57,6 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
-import Image from 'next/image';
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
@@ -64,7 +65,20 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -77,6 +91,7 @@ const formSchema = z.object({
   accountNumber: z.string().optional(),
   ifscCode: z.string().optional(),
   groupId: z.string().optional(), // Group optional so accounts can start as Ungrouped
+  openingBalanceNarration: z.string().optional(),
   isSpecial: z.boolean(),
   useFor: z.object({
     in: z.array(z.string()),
@@ -102,11 +117,16 @@ export function CreateBankAccountDialog({
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const [groups, setGroups] = useState<AccountGroup[]>([]);
-  const { can } = usePermissions();
+  const { can, canAddAvatar, canAddFileImagePdf } = usePermissions();
+  // Documents: voucher-files entitlement ya avatar — party form jaisa
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [fileToUpload, setFileToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
+  /** Profile — sirf image; Firebase turant upload nahi — IndexedDB + local: id */
+  const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [compressionResult, setCompressionResult] = useState<{originalSize: number, compressedSize: number} | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
   const isMobile = useIsMobile();
@@ -128,7 +148,8 @@ export function CreateBankAccountDialog({
       useFor: { 
           in: company?.ownerEmail ? [company.ownerEmail] : [], 
           out: company?.ownerEmail ? [company.ownerEmail] : [] 
-      }
+      },
+      openingBalanceNarration: "",
     },
   });
 
@@ -171,6 +192,10 @@ export function CreateBankAccountDialog({
 
   useEffect(() => {
     if (!companyId || !isOpen) return;
+    if (isLocalOnlyMode()) {
+      // Local-only mode: skip Firestore account group listener to avoid offline runtime errors.
+      return;
+    }
     const q = query(collection(firestore, `companies/${companyId}/account_groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedGroups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AccountGroup));
@@ -183,6 +208,12 @@ export function CreateBankAccountDialog({
     let alive = true;
     (async () => {
       if (!companyId || !user?.uid || !isOpen) return;
+      if (isLocalOnlyMode()) {
+        // Local-only mode: default to local ungrouped id without Firestore ensure call.
+        const current = form.getValues("groupId");
+        if (!current) form.setValue("groupId", getUngroupedGroupId("bank"), { shouldDirty: false });
+        return;
+      }
       // Keep Bank/Cash create default on canonical Ungrouped bucket.
       const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "bank");
       if (!alive) return;
@@ -222,51 +253,80 @@ export function CreateBankAccountDialog({
     setTimeout(() => setIsCreateGroupOpen(false), 50);
   };
   
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow a profile photo." });
+      return;
+    }
     const inputFile = e.target.files[0];
-    if (!inputFile) return;
-
+    if (!inputFile || !isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
     if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+      });
+      e.target.value = "";
+      return;
+    }
+    setIsCompressing(true);
+    try {
+      const compressedFile = await compressFile(inputFile);
+      setCompressionResult({ originalSize: inputFile.size, compressedSize: compressedFile.size });
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         toast({
           variant: "destructive",
-          title: "File too large",
-          description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
         });
+        setAvatarToUpload(null);
         return;
-    }
-
-    try {
-        setIsCompressing(true);
-        const compressedFile = await compressFile(inputFile);
-        setCompressionResult({ originalSize: inputFile.size, compressedSize: compressedFile.size });
-
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({ variant: "destructive", title: "File Too Large After Compression", description: `Please select a smaller file. Max size is ${MAX_FILE_SIZE_MB}MB.` });
-            setFileToUpload(null);
-            return;
-        }
-        
-        const preview = URL.createObjectURL(compressedFile);
-        setFileToUpload({ file: compressedFile, preview });
+      }
+      const preview = URL.createObjectURL(compressedFile);
+      setAvatarToUpload({ file: compressedFile, preview });
     } catch (err) {
-        console.error("File compression error:", err);
-        toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
+      console.error("File compression error:", err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
     } finally {
-        setIsCompressing(false);
+      setIsCompressing(false);
     }
+    e.target.value = "";
   };
-  
-  const removeFile = () => {
-    if (fileToUpload?.preview) {
-        URL.revokeObjectURL(fileToUpload.preview);
+
+  const handleDocumentsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow attaching documents." });
+      return;
     }
-    setFileToUpload(null);
+    const incoming = Array.from(e.target.files).filter((f) => isProfileDocumentFile(f));
+    setDocumentFiles((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeAvatar = () => {
+    if (avatarToUpload?.preview) URL.revokeObjectURL(avatarToUpload.preview);
+    setAvatarToUpload(null);
     setCompressionResult(null);
-    if(fileInputRef.current) {
-        fileInputRef.current.value = "";
-    }
-  }
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const removeDocAt = (idx: number) => {
+    setDocumentFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const clearUploads = () => {
+    removeAvatar();
+    setDocumentFiles([]);
+    if (docsInputRef.current) docsInputRef.current.value = "";
+  };
 
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
@@ -292,6 +352,63 @@ export function CreateBankAccountDialog({
     setIsLoading(true);
 
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only: IndexedDB pending files + SQLite (online Storage upload yahin nahi)
+        const totalAttachBytesLocal =
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        if (totalAttachBytesLocal > 0) {
+          const limitCheck = await checkStorageLimit(
+            companyId!,
+            company?.planId,
+            { attachmentsBytes: totalAttachBytesLocal, storageBytes: totalAttachBytesLocal },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            setIsLoading(false);
+            return;
+          }
+        }
+        const localId = createLocalEntityId("bank");
+        const stagedLocal = await stageEntityAvatarAndDocuments({
+          companyId: companyId!,
+          collectionSeg: "bank_accounts",
+          entityId: localId,
+          avatarFile: avatarToUpload?.file ?? null,
+          documentFiles,
+        });
+        const payload = {
+          id: localId,
+          ...values,
+          groupId: values.groupId?.trim() || getUngroupedGroupId("bank"),
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+          fileUrl: stagedLocal.fileUrl ?? null,
+          ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
+          ownerId: user.uid,
+          companyId,
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "bank_accounts", "create", localId, payload);
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.accountName}" was saved locally and will sync when online.`
+            : `"${values.accountName}" was saved locally.`,
+        });
+        onAccountCreated(localId);
+        if (saveAndNew) {
+          form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
+          clearUploads();
+        } else {
+          setIsOpen(false);
+        }
+        return;
+      }
+
       // Recycle-bin duplicate flow: restore or create-new on user choice.
       const duplicateDecision = await resolveRecycleBinDuplicate({
         companyId,
@@ -319,47 +436,187 @@ export function CreateBankAccountDialog({
         return;
       }
       
-      let fileUrl: string | null = null;
-      if (fileToUpload) {
-          const storageRef = ref(storage, `account-files/${companyId}/${Date.now()}_${fileToUpload.file.name}`);
-          const snapshot = await uploadBytes(storageRef, fileToUpload.file);
-          fileUrl = await getDownloadURL(snapshot.ref);
+      const totalAttachBytes =
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+      if (totalAttachBytes > 0) {
+        const limitCheck = await checkStorageLimit(
+          companyId!,
+          company?.planId,
+          { attachmentsBytes: totalAttachBytes, storageBytes: totalAttachBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          setIsLoading(false);
+          return;
+        }
       }
-      
-      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
+
+      // Pehle doc id — staging `entityId` isi se match karega (`setDoc`, `addDoc` nahi)
       const resolvedGroupId =
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/bank_accounts`), {
+      const accountRef = doc(collection(firestore, `companies/${companyId}/bank_accounts`));
+      const newAccountId = accountRef.id;
+      const staged = await stageEntityAvatarAndDocuments({
+        companyId: companyId!,
+        collectionSeg: "bank_accounts",
+        entityId: newAccountId,
+        avatarFile: avatarToUpload?.file ?? null,
+        documentFiles,
+      });
+
+      await setDoc(accountRef, {
         ...values,
         groupId: resolvedGroupId || getUngroupedGroupId("bank"),
         openingBalanceDate: values.openingBalanceDate || null,
-        fileUrl,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+        fileUrl: staged.fileUrl,
+        ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
         ownerId: user.uid,
         companyId,
         createdAt: serverTimestamp(),
         isDeleted: false,
       });
 
+      if (totalAttachBytes > 0) {
+        await incrementCompanyStorage(companyId!, {
+          attachmentsBytes: totalAttachBytes,
+          storageBytes: totalAttachBytes,
+        });
+      }
+
       // Automatically balance opening balance with Capital Account
       if (values.openingBalance && Math.abs(values.openingBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, 'bank_accounts', docRef.id, 0, values.openingBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", newAccountId, 0, values.openingBalance);
       }
 
       sonnerToast.success("Account Created!", { id: toastId, description: `"${values.accountName}" has been successfully created.` });
-      
-      onAccountCreated(docRef.id);
+
+      onAccountCreated(newAccountId);
 
       if (saveAndNew) {
-        // Keep default selection on Ungrouped for next quick entry.
-        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("bank"), isSpecial: false });
-        removeFile();
+        form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
+        clearUploads();
       } else {
         setIsOpen(false);
       }
     } catch (error) {
       console.error("Error creating account:", error);
-      sonnerToast.error("Error Creating Account", { id: toastId, description: "Account could not be saved. Please try again." });
+      if (isLocalOnlyMode()) {
+        try {
+          if (!companyId || !user) throw new Error("Missing company or user.");
+          const totalCatch =
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          if (totalCatch > 0) {
+            const lim = await checkStorageLimit(
+              companyId!,
+              company?.planId,
+              { attachmentsBytes: totalCatch, storageBytes: totalCatch },
+              company?.storageOption
+            );
+            if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
+          }
+          const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("bank");
+          const localId = createLocalEntityId("bank");
+          const stagedCatch = await stageEntityAvatarAndDocuments({
+            companyId: companyId!,
+            collectionSeg: "bank_accounts",
+            entityId: localId,
+            avatarFile: avatarToUpload?.file ?? null,
+            documentFiles,
+          });
+          const payload = {
+            id: localId,
+            ...values,
+            groupId: resolvedGroupId,
+            openingBalanceDate: values.openingBalanceDate || null,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+            fileUrl: stagedCatch.fileUrl ?? null,
+            ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
+            ownerId: user.uid,
+            companyId,
+            createdAt: new Date().toISOString(),
+            isDeleted: false,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", localId, payload);
+          await enqueueCompanyDocOutbox(companyId, "bank_accounts", "create", localId, payload);
+          const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+          sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
+            id: toastId,
+            description: showSyncHint
+              ? `"${values.accountName}" was saved locally and will sync when online.`
+              : `"${values.accountName}" was saved locally.`,
+          });
+          onAccountCreated(localId);
+          if (saveAndNew) {
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
+            clearUploads();
+          } else {
+            setIsOpen(false);
+          }
+        } catch (offlineErr) {
+          sonnerToast.error("Error Creating Account", {
+            id: toastId,
+            description: offlineErr instanceof Error ? offlineErr.message : "Account could not be saved. Please try again.",
+          });
+        }
+      } else if (isLikelyOfflineFirestoreError(error)) {
+        try {
+          if (!companyId || !user) throw new Error("Missing company or user.");
+          const totalCatch =
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          if (totalCatch > 0) {
+            const lim = await checkStorageLimit(
+              companyId!,
+              company?.planId,
+              { attachmentsBytes: totalCatch, storageBytes: totalCatch },
+              company?.storageOption
+            );
+            if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
+          }
+          const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("bank");
+          const localId = createLocalEntityId("bank");
+          const stagedCatch = await stageEntityAvatarAndDocuments({
+            companyId: companyId!,
+            collectionSeg: "bank_accounts",
+            entityId: localId,
+            avatarFile: avatarToUpload?.file ?? null,
+            documentFiles,
+          });
+          const nowTs = Timestamp.now();
+          const payload: Record<string, unknown> = {
+            id: localId,
+            ...values,
+            groupId: resolvedGroupId,
+            openingBalanceDate: values.openingBalanceDate || null,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+            fileUrl: stagedCatch.fileUrl ?? null,
+            ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
+            ownerId: user.uid,
+            companyId,
+            createdAt: nowTs,
+            isDeleted: false,
+          };
+          await upsertCompanyDocInBrowserDb(companyId!, "bank_accounts", localId, payload);
+          await enqueueCompanyDocOutbox(companyId!, "bank_accounts", "create", localId, payload);
+          sonnerToast.success("Saved. Will sync when online.", {
+            id: toastId,
+            description: `"${values.accountName}" was saved locally (offline).`,
+          });
+          onAccountCreated(localId);
+          if (saveAndNew) {
+            form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
+            clearUploads();
+          } else {
+            setIsOpen(false);
+          }
+        } catch {
+          sonnerToast.error("Error Creating Account", { id: toastId, description: "Account could not be saved. Please try again." });
+        }
+      } else {
+        sonnerToast.error("Error Creating Account", { id: toastId, description: "Account could not be saved. Please try again." });
+      }
     } finally {
         setIsLoading(false);
     }
@@ -615,36 +872,94 @@ export function CreateBankAccountDialog({
                       </Card>
                 )}
                 <FormItem>
-                    <FormLabel>Avatar/File (Optional)</FormLabel>
-                    <div className="flex items-center gap-4">
-                        {fileToUpload && (
-                            <FilePreview
-                            file={fileToUpload.file}
-                            onRemove={removeFile}
+                  <FormLabel>Profile photo (Optional)</FormLabel>
+                  {!canAddAvatar ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade plan to add profile photo.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">
+                        Upgrade
+                      </Link>
+                    </p>
+                  ) : (
+                    <RestrictedFileUploader>
+                      <div className="flex items-center gap-4 flex-wrap">
+                        {avatarToUpload && (
+                          <FilePreview
+                            file={avatarToUpload.file}
+                            onRemove={removeAvatar}
                             isCompressing={isCompressing}
                             compressionResult={compressionResult}
-                            />
+                          />
                         )}
-                        {!fileToUpload && (
-                        <FormControl>
-                            <div 
-                            className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            onClick={() => fileInputRef.current?.click()}
+                        {!avatarToUpload && (
+                          <FormControl>
+                            <div
+                              className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              onClick={() => avatarInputRef.current?.click()}
                             >
-                            <Upload className="h-6 w-6" />
-                            <span className="text-xs mt-1">Add File</span>
-                            <Input 
-                                type="file" 
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1 text-center px-1">Add photo</span>
+                              <Input
+                                type="file"
                                 className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                            />
+                                ref={avatarInputRef}
+                                onChange={handleAvatarChange}
+                                accept="image/*"
+                              />
                             </div>
-                        </FormControl>
+                          </FormControl>
                         )}
-                    </div>
+                      </div>
+                    </RestrictedFileUploader>
+                  )}
+                  <p className="text-[10px] text-muted-foreground mt-1">Images only — shown on profile / avatar.</p>
                 </FormItem>
+
+                <FormItem>
+                  <FormLabel>Documents (Optional)</FormLabel>
+                  {!canAttachDocuments ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade plan to attach PDF/images.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">
+                        Upgrade
+                      </Link>
+                    </p>
+                  ) : (
+                    <RestrictedFileUploader>
+                      {/* PDF add box previews ke saath hi row me — party form jaisa */}
+                      <div className="flex flex-wrap items-start gap-2">
+                        {documentFiles.map((f, idx) => (
+                          <FilePreview key={`${f.name}-${idx}-${f.size}`} file={f} onRemove={() => removeDocAt(idx)} size={96} />
+                        ))}
+                        {documentFiles.length < 5 && (
+                          <FormControl>
+                            <div
+                              className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                              onClick={() => docsInputRef.current?.click()}
+                            >
+                              <Upload className="h-6 w-6" />
+                              <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                              <Input
+                                type="file"
+                                className="hidden"
+                                ref={docsInputRef}
+                                onChange={handleDocumentsChange}
+                                accept="image/*,application/pdf"
+                                multiple
+                              />
+                            </div>
+                          </FormControl>
+                        )}
+                      </div>
+                    </RestrictedFileUploader>
+                  )}
+                </FormItem>
+
+                <EntityOpeningBalanceNarrationField
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  detailLabel="bank/cash account"
+                />
 
                 <DialogFooter className="mt-4">
                   <DialogClose asChild>

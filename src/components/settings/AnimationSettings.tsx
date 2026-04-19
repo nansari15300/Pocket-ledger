@@ -20,6 +20,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useDate } from "@/hooks/useDate";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { cn } from "@/lib/utils";
+import { animationLocalStorageKey } from "@/hooks/useAnimationSettings";
 
 // 1. ZOD SCHEMA - Global settings that apply to all contexts
 const animationSettingsSchema = z.object({
@@ -59,7 +60,8 @@ const getInitials = (name: string) => {
     .toUpperCase();
 };
 
-export function AnimationSettings() {
+/** `localPersistenceOnly`: shared user — `users/{id}` Firestore update ki zaroorat nahi; sirf localStorage + tabs. */
+export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOnly?: boolean }) {
   const { user, customUser } = useAuth();
   const { toast } = useToast();
   const userDocId = customUser?.userDocId || user?.uid;
@@ -75,36 +77,48 @@ export function AnimationSettings() {
 
   const watchedSettings = form.watch();
 
-  // Load settings from user document (use same path as profile: userDocId or uid)
+  // Load: shared+blocked → localStorage; warna Firestore user doc (same path as profile).
   useEffect(() => {
-    if (userDocId) {
-      const loadUserSettings = async () => {
-        try {
-          const userDocRef = doc(firestore, "users", userDocId);
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            const settings = userData.animationSettings;
-            if (settings) {
-              const newSettings = {
-                numbers: { ...defaultAnimationSettings.numbers, ...settings.numbers },
-                rows: { ...defaultAnimationSettings.rows, ...settings.rows },
-              };
-              form.reset(newSettings);
-            } else {
-              form.reset(defaultAnimationSettings);
-            }
+    if (!userDocId) return;
+    const loadUserSettings = async () => {
+      try {
+        if (localPersistenceOnly) {
+          const raw = typeof window !== "undefined" ? localStorage.getItem(animationLocalStorageKey(userDocId)) : null;
+          if (raw) {
+            const parsed = JSON.parse(raw) as AnimationSettingsValues;
+            form.reset({
+              numbers: { ...defaultAnimationSettings.numbers, ...parsed.numbers },
+              rows: { ...defaultAnimationSettings.rows, ...parsed.rows },
+            });
           } else {
             form.reset(defaultAnimationSettings);
           }
-        } catch (error) {
-          console.error("Error loading user animation settings:", error);
+          return;
+        }
+        const userDocRef = doc(firestore, "users", userDocId);
+        const userDoc = await getDoc(userDocRef);
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          const settings = userData.animationSettings;
+          if (settings) {
+            const newSettings = {
+              numbers: { ...defaultAnimationSettings.numbers, ...settings.numbers },
+              rows: { ...defaultAnimationSettings.rows, ...settings.rows },
+            };
+            form.reset(newSettings);
+          } else {
+            form.reset(defaultAnimationSettings);
+          }
+        } else {
           form.reset(defaultAnimationSettings);
         }
-      };
-      loadUserSettings();
-    }
-  }, [userDocId, form]);
+      } catch (error) {
+        console.error("Error loading user animation settings:", error);
+        form.reset(defaultAnimationSettings);
+      }
+    };
+    void loadUserSettings();
+  }, [userDocId, form, localPersistenceOnly]);
   
 
   const handleSwitchChange = (path: 'numbers.enabled' | 'rows.enabled', checked: boolean) => {
@@ -142,16 +156,30 @@ export function AnimationSettings() {
     }
     setIsLoading(true);
     try {
+      if (localPersistenceOnly) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem(animationLocalStorageKey(userDocId), JSON.stringify(data));
+        }
+        if (typeof BroadcastChannel !== "undefined") {
+          try {
+            new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
+          } catch (_) {}
+        }
+        toast({
+          title: "Saved",
+          description: "Animation preferences saved on this device only (company owner controls other settings).",
+        });
+        handleReloadDemo();
+        return;
+      }
       const userRef = doc(firestore, "users", userDocId);
       await updateDoc(userRef, { animationSettings: data });
-      // Notify all tabs (same browser, same origin) so they update animation settings live
       if (typeof BroadcastChannel !== "undefined") {
         try {
           new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
         } catch (_) {}
       }
       toast({ title: "Success", description: "Animation settings have been updated." });
-      // Reload demo to show new settings
       handleReloadDemo();
     } catch (error) {
       console.error("Error updating animation settings:", error);
@@ -167,6 +195,11 @@ export function AnimationSettings() {
         <CardTitle>Animation & Effects Settings</CardTitle>
         <CardDescription>
           Customize animations for numbers and lists across the application to fit your preference.
+          {localPersistenceOnly ? (
+            <span className="mt-2 block text-amber-700 dark:text-amber-400">
+              These values are stored only on this browser — they do not change company settings for others.
+            </span>
+          ) : null}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -336,7 +369,11 @@ export function AnimationSettings() {
             </div>
             
             <div className="text-xs text-muted-foreground pt-2 border-t">
-              <p>Note: These settings are saved per user and will apply across all companies you work with.</p>
+              <p>
+                {localPersistenceOnly
+                  ? "Note: Saved only on this device. Other devices keep their own animation preferences."
+                  : "Note: These settings are saved per user and will apply across all companies you work with."}
+              </p>
             </div>
           </form>
         </Form>

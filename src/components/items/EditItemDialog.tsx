@@ -86,9 +86,22 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import {
+  MAX_IMAGE_BYTES_BEFORE_COMPRESS,
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_BEFORE_COMPRESS,
+  MAX_IMAGE_MB_AFTER_COMPRESS,
+  MAX_PDF_BYTES_BEFORE_UPLOAD,
+  MAX_PDF_UPLOAD_MB,
+} from "@/lib/fileUploadLimits";
 import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { isProfileDocumentFile, stageItemAvatarAndAttachments } from "@/lib/entityProfileLocalFiles";
 import {
   Tooltip,
   TooltipContent,
@@ -97,6 +110,7 @@ import {
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import Image from 'next/image';
+import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 
 const fileSchema = z.object({
@@ -130,9 +144,45 @@ const formSchema = z.object({
   purchasePriceUnit: z.string().optional(),
   saleTaxId: z.string().optional(),
   purchaseTaxId: z.string().optional(),
+  /** Statement opening row — item ledger */
+  openingBalanceNarration: z.string().optional(),
 });
 
-const MAX_FILE_SIZE_MB = 0.5;
+type ItemFormValues = z.infer<typeof formSchema>;
+
+/** CreateItemDialog jaisa — opening stock smallest unit (local `stockQty` mirror) */
+function computeItemStockQty(values: ItemFormValues): number {
+  const conversions = (values.unitConversions || []) as {
+    fromUnit: string;
+    toUnit: string;
+    conversionFactor: number;
+  }[];
+  const smallestUnit =
+    conversions.length > 0 ? conversions[conversions.length - 1].toUnit : values.openingBalanceUnit || "";
+  if (values.type !== "item") return 0;
+  let factor = 1;
+  let currentUnit = values.openingBalanceUnit;
+  if (currentUnit && currentUnit !== smallestUnit) {
+    for (let i = 0; i < 10; i++) {
+      const conv = conversions.find((c) => c.fromUnit === currentUnit);
+      if (!conv) {
+        factor = 0;
+        break;
+      }
+      factor *= Number(conv.conversionFactor) || 1;
+      currentUnit = conv.toUnit;
+      if (currentUnit === smallestUnit) break;
+    }
+  }
+  return (values.openingBalance || 0) * (factor || 1);
+}
+
+/** CreateItemDialog / list jaisa: Ungrouped bucket → combobox value `ungrouped_item` (empty / legacy null). */
+function normalizeItemEditGroupId(groupId: string | null | undefined): string {
+  const u = getUngroupedGroupId("item");
+  if (!groupId || groupId === u) return u;
+  return groupId;
+}
 
 function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
     if (!item) {
@@ -147,7 +197,7 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
             openingBalance: 0,
             openingBalanceRate: 0,
             isOpeningBalanceTaxInclusive: false,
-            groupId: "",
+            groupId: normalizeItemEditGroupId(""),
             unitConversions: [{ fromUnit: "", toUnit: "", conversionFactor: 1 }],
             openingBalanceUnit: "",
             openingBalanceTaxId: "",
@@ -156,6 +206,7 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
             purchasePriceUnit: "",
             saleTaxId: "",
             purchaseTaxId: "",
+            openingBalanceNarration: "",
         };
     }
 
@@ -173,12 +224,13 @@ function getInitialFormValues(item?: Item): z.infer<typeof formSchema> {
         openingBalanceDate: (item as any).openingBalanceDate?.toDate ? (item as any).openingBalanceDate.toDate() : (item.openingBalanceDate ? new Date(item.openingBalanceDate) : undefined),
         openingBalanceRate: (item as any).openingBalanceRate || 0,
         isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
-        groupId: item.groupId || "",
+        groupId: normalizeItemEditGroupId(item.groupId),
         unitConversions: item.unitConversions || [],
         salePriceUnit: item.salePriceUnit || "",
         purchasePriceUnit: (item as any).purchasePriceUnit || "",
         saleTaxId: item.saleTaxId || "",
         purchaseTaxId: item.purchaseTaxId || "",
+        openingBalanceNarration: item.openingBalanceNarration ?? "",
     };
 }
 
@@ -232,23 +284,33 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const watchedSaleTaxId = useWatch({ control: form.control, name: 'saleTaxId' });
   const openingStockQty = form.watch('openingBalance') || 0;
   const openingStockRate = form.watch('openingBalanceRate') || 0;
+  const { companyId, company } = useCompany();
   const { user } = useAuth();
-  const { companyId, triggerSync, company } = useCompany();
-  const { canAddAvatar } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  /** Naye file attachments — offline par `uploadFile` fail; staging yahi flag se */
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
+  const { processedItemGroups, processedTaxes } = useVouchers();
+  const processedItemGroupsRef = useRef(processedItemGroups);
+  const processedTaxesRef = useRef(processedTaxes);
+  processedItemGroupsRef.current = processedItemGroups;
+  processedTaxesRef.current = processedTaxes;
 
   const handleGroupCreated = (newGroupId: string) => {
     form.setValue('groupId', newGroupId);
     setIsCreateGroupOpen(false);
   };
 
-  // Hide system item groups (Stock Items, Services) from dropdown
-  const itemGroupOptions = React.useMemo(
-    () =>
-      groups
-        .filter((g) => !isSystemParentGroup("item_groups", g.id))
-        .map((g) => ({ value: g.id, label: g.name })),
-    [groups]
-  );
+  // CreateItemDialog jaisa: system parents chhupo + Ungrouped synthetic row (duplicate-safe)
+  const itemGroupOptions = React.useMemo(() => {
+    const ungroupedId = getUngroupedGroupId("item");
+    const filtered = groups
+      .filter((g) => !isSystemParentGroup("item_groups", g.id))
+      .map((g) => ({ value: g.id, label: g.name }));
+    if (!filtered.some((g) => g.value === ungroupedId)) {
+      filtered.unshift({ value: ungroupedId, label: "Ungrouped" });
+    }
+    return filtered;
+  }, [groups]);
   
   const handleTaxCreated = (newTaxId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
     if (newTaxId) {
@@ -266,25 +328,44 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    
+    // Local-only / static: Firestore listeners skip — useVouchers processed lists (CreateItemDialog ke barabar)
+    if (isLocalOnlyMode()) {
+      setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
+      setTaxes((processedTaxes as unknown as Tax[]) || []);
+      return;
+    }
+
     const qGroups = query(collection(firestore, `companies/${companyId}/item_groups`));
-    const unsubGroups = onSnapshot(qGroups, (querySnapshot) => {
-        setGroups(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ItemGroup)));
-    }, (error) => {
+    const unsubGroups = onSnapshot(
+      qGroups,
+      (querySnapshot) => {
+        setGroups(querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as ItemGroup)));
+      },
+      (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
-    });
+        const fallback = (processedItemGroupsRef.current || []) as unknown as ItemGroup[];
+        if (fallback.length > 0) setGroups(fallback);
+      }
+    );
 
     const qTaxes = query(collection(firestore, `companies/${companyId}/taxes`));
-    const unsubTaxes = onSnapshot(qTaxes, (snapshot) => {
-        setTaxes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Tax)));
-    });
-    
+    const unsubTaxes = onSnapshot(
+      qTaxes,
+      (snapshot) => {
+        setTaxes(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Tax)));
+      },
+      (error) => {
+        console.error("Error fetching taxes:", error);
+        const fallback = (processedTaxesRef.current || []) as unknown as Tax[];
+        if (fallback.length > 0) setTaxes(fallback);
+      }
+    );
+
     return () => {
-        unsubGroups();
-        unsubTaxes();
+      unsubGroups();
+      unsubTaxes();
     };
-  }, [isOpen, companyId, toast]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes]);
 
 
   useEffect(() => {
@@ -315,12 +396,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         openingBalanceDate: finalDate,
         openingBalanceRate: (item as any).openingBalanceRate || 0,
         isOpeningBalanceTaxInclusive: (item as any).isOpeningBalanceTaxInclusive || false,
-        groupId: item.groupId || "",
+        groupId: normalizeItemEditGroupId(item.groupId),
         unitConversions: item.unitConversions || [],
         salePriceUnit: item.salePriceUnit || "",
         purchasePriceUnit: (item as any).purchasePriceUnit || "",
         saleTaxId: item.saleTaxId || "",
         purchaseTaxId: item.purchaseTaxId || "",
+        openingBalanceNarration: item.openingBalanceNarration ?? "",
       });
       setFiles(item.fileUrls || []);
     }
@@ -331,66 +413,160 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    
-    setIsOpen(false);
-    
+
     const toastId = sonnerToast.loading("Updating item...");
     try {
-      const existingFileUrls = files.filter((f): f is string => typeof f === 'string');
+      const existingFileUrls = files.filter((f): f is string => typeof f === "string");
       const newFilesToUpload = files.filter((f): f is File => f instanceof File);
 
-      if (canAddAvatar && newFilesToUpload.length > 0) {
-        const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
-          return;
+      let fileUrls: string[] = [];
+
+      // Static / local company: Firestore `updateDoc` fail — IndexedDB + outbox (baqi entities jaisa)
+      if (isLocalOnlyMode()) {
+        fileUrls = [...existingFileUrls];
+        if (newFilesToUpload.length > 0 && canAttachDocuments) {
+          const staged = await stageItemAvatarAndAttachments({
+            companyId,
+            itemId: item.id,
+            avatarFile: null,
+            attachmentFiles: newFilesToUpload,
+            maxAttachments: 5,
+          });
+          fileUrls = [...fileUrls, ...staged.newAttachmentUrls];
         }
+      } else {
+        // Item attachments — `canAddFileImagePdf` bina sirf `canAddAvatar` pe mat roko (CreateItemDialog jaisa)
+        if (canAttachDocuments && newFilesToUpload.length > 0) {
+          const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            return;
+          }
+        }
+
+        const uploadedUrls = canAttachDocuments
+          ? await Promise.all(
+              newFilesToUpload.map(async (file) => {
+                const res = await uploadFile(
+                  { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
+                  companyId,
+                  company?.name,
+                  "avatar",
+                  undefined,
+                  undefined,
+                  undefined,
+                  new Date()
+                );
+                if (res.success && res.url) {
+                  await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+                  return res.url;
+                }
+                return null;
+              })
+            )
+          : [];
+        const filtered = uploadedUrls.filter((u): u is string => !!u);
+        fileUrls = [...existingFileUrls, ...filtered];
       }
 
-      const uploadedUrls = canAddAvatar ? await Promise.all(
-        newFilesToUpload.map(async file => {
-          const res = await uploadFile(
-            { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
-            companyId,
-            company?.name,
-            "avatar",
-            undefined,
-            undefined,
-            undefined,
-            new Date()
-          );
-          if (res.success && res.url) {
-            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-            return res.url;
-          }
-          return null;
-        })
-      ) : [];
-      const filtered = uploadedUrls.filter((u): u is string => !!u);
-      
-      const fileUrls = [...existingFileUrls, ...filtered];
-      
+      const narrationClean = values.openingBalanceNarration?.trim() || null;
+      const balance = (values.openingBalance || 0) * (values.openingBalanceRate || 0);
+      const stockQty = computeItemStockQty(values);
+
+      /** Explicit fields — `undefined` Firestore / SQLite JSON me avoid */
+      const updatePayload: Record<string, unknown> = {
+        name: values.name,
+        type: values.type,
+        hsCode: values.hsCode?.trim() || null,
+        salePrice: values.salePrice,
+        isSalePriceTaxInclusive: values.isSalePriceTaxInclusive,
+        purchasePrice: values.purchasePrice,
+        isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive,
+        openingBalance: values.openingBalance,
+        openingBalanceUnit: values.openingBalanceUnit || null,
+        openingBalanceTaxId: values.openingBalanceTaxId || null,
+        isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive || false,
+        openingBalanceDate: values.openingBalanceDate || null,
+        openingBalanceRate: values.openingBalanceRate ?? 0,
+        groupId: values.groupId || null,
+        unitConversions: values.unitConversions || [],
+        salePriceUnit: values.salePriceUnit || null,
+        purchasePriceUnit: values.purchasePriceUnit || null,
+        saleTaxId: values.saleTaxId || null,
+        purchaseTaxId: values.purchaseTaxId || null,
+        openingBalanceNarration: narrationClean,
+        fileUrls,
+      };
+
+      if (isLocalOnlyMode()) {
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", item.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: item.id,
+          companyId,
+          ownerId: user?.uid ?? (item as any).ownerId,
+          debit: item.debit ?? 0,
+          credit: item.credit ?? 0,
+          balance: item.balance ?? 0,
+          stockQty: item.stockQty ?? 0,
+          isDeleted: false,
+          createdAt: (item as any).createdAt ?? new Date().toISOString(),
+        };
+        const payload: Record<string, unknown> = {
+          ...base,
+          ...updatePayload,
+          balance,
+          stockQty,
+          id: item.id,
+          companyId,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "items", item.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "items", "update", item.id, payload);
+        const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+        const isLocalGuestUser = user?.uid === "local_guest_user";
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
+          id: toastId,
+          description: showSyncHint
+            ? `"${values.name}" saved locally.`
+            : `"${values.name}" has been successfully updated.`,
+        });
+        setIsOpen(false);
+        setTimeout(() => {
+          onItemUpdated({
+            id: item.id,
+            ...values,
+            fileUrls,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+          });
+        }, 100);
+        return;
+      }
+
       const itemRef = doc(firestore, `companies/${companyId}/items`, item.id);
-      await updateDoc(itemRef, { 
-          ...values,
-          openingBalance: values.openingBalance,
-          openingBalanceDate: values.openingBalanceDate || null,
-          fileUrls, 
-          groupId: values.groupId || null
-      });
+      await updateDoc(itemRef, updatePayload);
 
       sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      // Update happens in background via onSnapshot - callback will be triggered by Firestore listener
-      // Use setTimeout to debounce and prevent immediate re-renders that cause transaction shaking
+      setIsOpen(false);
       setTimeout(() => {
-        onItemUpdated({ id: item.id, ...values, fileUrls: fileUrls });
+        onItemUpdated({
+          id: item.id,
+          ...values,
+          fileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+        });
       }, 100);
-      triggerSync();
-
     } catch (error) {
       console.error("Error updating item:", error);
-      sonnerToast.error("Error Updating Item", { id: toastId, description: "An error occurred. Please try again." });
+      sonnerToast.error("Error Updating Item", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
+      });
     }
   }
 
@@ -407,10 +583,32 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     
     setIsLoading(true);
     try {
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", item.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: item.id,
+            companyId,
+            name: item.name,
+            ownerId: user?.uid ?? (item as any).ownerId,
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            isDeleted: true,
+            deletedAt: new Date(),
+            id: item.id,
+            companyId,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "items", item.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "items", "update", item.id, payload);
+          toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.` });
+          onItemDeleted();
+          setIsOpen(false);
+          setIsDeleteDialogOpen(false);
+          return;
+        }
         await updateDoc(doc(firestore, `companies/${companyId}/items`, item.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
+            deletedAt: serverTimestamp()
         });
         toast({ title: "Item Moved to Bin", description: `"${item.name}" has been moved to the recycle bin.`});
         onItemDeleted();
@@ -430,30 +628,63 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
-    if (!canAddAvatar) {
+    if (!canAttachDocuments) {
       e.target.value = "";
-      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding or changing files." });
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow adding attachments." });
       return;
     }
     const newFiles = Array.from(e.target.files);
-    
+    e.target.value = "";
+
+    let accumulated = [...files];
     for (const file of newFiles) {
-       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      if (accumulated.length >= 5) {
+        toast({ variant: "destructive", title: "Limit Reached", description: "You can upload up to 5 documents." });
+        break;
+      }
+      // Local staging `stageItemAvatarAndAttachments` invalid types chhod deta hai — yahan pe clear error
+      if (!isProfileDocumentFile(file)) {
+        toast({ variant: "destructive", title: "Invalid file", description: "Use images or PDF only." });
+        continue;
+      }
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (isPdf) {
+        if (file.size > MAX_PDF_BYTES_BEFORE_UPLOAD) {
           toast({
             variant: "destructive",
-            title: "File Too Large",
-            description: `Please select a file smaller than ${MAX_FILE_SIZE_MB}MB.`,
+            title: "PDF too large",
+            description: `Maximum ${MAX_PDF_UPLOAD_MB} MB per PDF.`,
           });
           continue;
         }
-      if (files.length < 3) {
+        accumulated = [...accumulated, file];
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+        toast({
+          variant: "destructive",
+          title: "File too large",
+          description: `Please select images under ${MAX_IMAGE_MB_BEFORE_COMPRESS} MB (they will be compressed).`,
+        });
+        continue;
+      }
+      try {
         const compressedFile = await compressFile(file);
-        setFiles(prev => [...prev, compressedFile]);
-      } else {
-        toast({ variant: "destructive", title: "Limit Reached", description: "You can only upload up to 3 files."});
-        break;
+        if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+          toast({
+            variant: "destructive",
+            title: "File Too Large After Compression",
+            description: `After compression the image is still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
+          });
+          continue;
+        }
+        accumulated = [...accumulated, compressedFile];
+      } catch (err) {
+        console.error("File compression error:", err);
+        toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
       }
     }
+    setFiles(accumulated);
   };
   
   const removeFile = (indexToRemove: number) => {
@@ -930,7 +1161,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 </div>
                   <FormItem>
                     <FormLabel>Attach Files (Optional)</FormLabel>
-                    {!canAddAvatar ? (
+                    {!canAttachDocuments ? (
                       <p className="text-xs text-muted-foreground">
                         Upgrade plan to add or change files.{" "}
                         <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Click here to upgrade</Link>
@@ -941,7 +1172,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         {files.map((file, index) => (
                           <FilePreview key={index} file={file} onRemove={() => removeFile(index)} />
                         ))}
-                        {files.length < 3 && (
+                        {files.length < 5 && (
                           <FormControl>
                             <div 
                               className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
@@ -964,6 +1195,11 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     </RestrictedFileUploader>
                     )}
                   </FormItem>
+                  <EntityOpeningBalanceNarrationField
+                    control={form.control}
+                    name="openingBalanceNarration"
+                    detailLabel="item"
+                  />
               </div>
                 <div className="space-y-2 border p-4 rounded-md">
                     <FormLabel className="text-base font-semibold">Opening Stock Summary</FormLabel>

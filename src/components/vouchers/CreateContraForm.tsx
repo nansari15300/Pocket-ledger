@@ -5,7 +5,7 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type Resolver, useForm } from "react-hook-form";
 import { z } from "zod";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -30,15 +30,16 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
 import { FilePreview } from "../vouchers/FilePreview";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -106,14 +107,17 @@ export function CreateContraForm({
   const { user, customUser } = useAuth();
   const { formatCurrency, formatCurrencyForPrint, formatDate, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts: allProcessedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts } = useVouchers();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
   const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  /** Sirf saved + dialog-linked par file band; nayi txn par parent flag ignore. */
+  const fileAttachLockedByDialog = !!voucher?.id && deleteDisabledWhenLinked;
   const isMobile = useIsMobile();
 
   const [isLoading, setIsLoading] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [targetFieldForNewAccount, setTargetFieldForNewAccount] = useState<'fromAccountId' | 'toAccountId' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachFileInputId = useId();
   const [files, setFiles] = useState<(File|string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
   const processAndSaveRef = useRef<((data: ContraFormValues, saveAndNew: boolean, onSuccess?: () => void, approveAfterSave?: boolean) => Promise<void>) | null>(null);
@@ -196,6 +200,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     if (typeof byRole === "boolean") return byRole;
     return byRole.contra === true;
   })();
+  // Company Spend wise ON ya role matrix: dono me link zaroori jab amount > 0 aur validation chalti ho.
+  const spendWiseLinkRequired = spendWiseEnabled || requirePaymentLink;
   // Rule: Out leg links same-account inflows; In leg links same-account outflows.
   const spendWiseInAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
   const spendWiseOutAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
@@ -498,9 +504,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const fromCardSettled = amount > 0 && fromCardLinkedTotal >= amount;
   const fromCardLinkedCount = selectedContraLeg === 'in' ? displayLinkedToMeRows.length : spendWiseDisplayRows.length;
 
-  /** Block Save when link spend wise is ON and upper card (Payment In link) not settled. */
+  /** Block Save when spend wise (company ya role) ON aur upper card (Payment In link) not settled. */
   const saveDisabledByLink =
-    requirePaymentLink &&
+    spendWiseLinkRequired &&
     ((!linkedPaymentInIds?.length) || (!!linkedPaymentInIds?.length && !amountMatched));
   const linkPayOthersDisabled = saveDisabledByLink;
 
@@ -563,17 +569,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       const nextNum = maxNum + 1;
-      // shouldDirty: false so auto numbers are not treated as user edits (otherwise hydration effect re-runs and can fight file uploads).
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum), { shouldDirty: false });
-      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum), { shouldDirty: false });
-      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum), { shouldDirty: false });
+      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextNum));
+      form.setValue("voucherNumberOut", formatVoucherNumber(`${base} Out`, nextNum));
+      form.setValue("voucherNumberIn", formatVoucherNumber(`${base} In`, nextNum));
     } catch (error) {
       console.error("Error fetching voucher count: ", error);
     }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
   useEffect(() => {
-    const buildInitialValues = () => {
+    const NEW_CONTRA = "__new_contra__";
+    if (voucher?.id) {
+      const vid = voucher.id;
+      const isSameVoucher = lastResetVoucherIdRef.current === vid;
+      if (isSameVoucher) return;
+      lastResetVoucherIdRef.current = vid;
       const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
       if (isEditingAndConverting) {
         initialValues.voucherNumber = "";
@@ -588,31 +598,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
         initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
       }
-      return initialValues;
-    };
-
-    if (voucher?.id) {
-      const vid = voucher.id;
-      const isSameVoucher = lastResetVoucherIdRef.current === vid;
-      if (isSameVoucher && isFormDirty) return;
-      lastResetVoucherIdRef.current = vid;
-      form.reset(buildInitialValues());
+      form.reset(initialValues);
       setSavedVoucherId(voucher.id);
       setFiles(voucher.fileUrls || []);
       initialFilesRef.current = voucher.fileUrls || [];
     } else if (voucher) {
-      // New contra (Add dialog always passes an object; id is undefined). Never re-reset while user is editing or files are pending — same failure mode as SalaryForm.
-      lastResetVoucherIdRef.current = null;
-      if (isFormDirty) return;
-      form.reset(buildInitialValues());
-      setSavedVoucherId(null);
-      const urls = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
-      setFiles(urls);
-      initialFilesRef.current = (urls || []).filter((u: any) => typeof u === "string");
+      // Naya Contra: template object id ke bina — vid falsy tha isliye pehle `isFormDirty` par bhi reset chalta tha; File attach mitt jati thi.
+      if (lastResetVoucherIdRef.current === NEW_CONTRA && isFormDirty) return;
+      lastResetVoucherIdRef.current = NEW_CONTRA;
+      const initialValues: any = { ...voucher, files: [], date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date) };
+      if (isEditingAndConverting) {
+        initialValues.voucherNumber = "";
+      }
+      const base = getContraBasePrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+      const prefix = getVoucherPrefix(company?.voucherPrefixes as Record<string, string[]> | undefined);
+      if (initialValues.voucherNumberOut == null || initialValues.voucherNumberOut === "") {
+        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+        initialValues.voucherNumberOut = !isNaN(num) ? formatVoucherNumber(`${base} Out`, num) : (initialValues.voucherNumber || "");
+      }
+      if (initialValues.voucherNumberIn == null || initialValues.voucherNumberIn === "") {
+        const num = parseVoucherNumberPart(initialValues.voucherNumber || "", prefix);
+        initialValues.voucherNumberIn = !isNaN(num) ? formatVoucherNumber(`${base} In`, num) : (initialValues.voucherNumber || "");
+      }
+      form.reset(initialValues);
+      setSavedVoucherId(voucher?.id ?? null);
+      setFiles(voucher.fileUrls || []);
+      initialFilesRef.current = voucher.fileUrls || [];
     } else {
       lastResetVoucherIdRef.current = null;
     }
-}, [voucher, form, isEditingAndConverting, company?.voucherPrefixes, isFormDirty]);
+  }, [voucher, form, isEditingAndConverting, company?.voucherPrefixes, isFormDirty]);
 
   
   useEffect(() => {
@@ -623,7 +638,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   const handleAccountCreated = (newAccountId: string) => {
     if (targetFieldForNewAccount) {
-      form.setValue(targetFieldForNewAccount, newAccountId, { shouldDirty: true });
+      form.setValue(targetFieldForNewAccount, newAccountId);
     }
     setTimeout(() => setIsCreateAccountOpen(false), 50);
   };
@@ -638,22 +653,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   };
 
-  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
-    e?.preventDefault?.();
-    const enteredAmount = Number(form.getValues("amount")) || 0;
-    if (isAmountExceedingSelectedFromAccount(enteredAmount)) {
-      // Stop save when typed amount is higher than selected from-account balance.
-      setIsAmountMoreThanAccountOpen(true);
-      return;
-    }
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    onVoucherAction?.('saved', options.saveAndNew);
-    await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
-  }, [form, onVoucherAction, isAmountExceedingSelectedFromAccount]);
+  // Amount guard पहले; फिर validated `data` — `getValues()` से date miss न हो
+  const handleFormSubmit = useCallback(
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+      e?.preventDefault?.();
+      const enteredAmount = Number(form.getValues("amount")) || 0;
+      if (isAmountExceedingSelectedFromAccount(enteredAmount)) {
+        setIsAmountMoreThanAccountOpen(true);
+        return;
+      }
+      void form.handleSubmit(
+        async (data) => {
+          onVoucherAction?.("saved", options.saveAndNew);
+          await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
+        },
+        () => {
+          sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        }
+      )(e);
+    },
+    [form, onVoucherAction, isAmountExceedingSelectedFromAccount]
+  );
   
   async function processAndSave(data: ContraFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -666,7 +686,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
-      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -677,6 +696,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
+        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -699,18 +719,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
       }
-
-      const fp = runFiscalVoucherPreflight({
-        company,
-        can,
-        isEditing: isEdit,
-        recordDate: voucherDate,
-        originalVoucherDate: isEdit ? originalVoucherDate : null,
-      });
-      if (fp.ok === false) {
-        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
-        return;
-      }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { description: error.message });
@@ -725,7 +733,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       form.setError("toAccountId", { message: "Cannot be same as source." });
       return;
     }
-    if (amount > 0 && requirePaymentLink) {
+    if (amount > 0 && spendWiseLinkRequired) {
       if (!linkedPaymentInIds?.length) {
         sonnerToast.error("Select Payment In", { description: "Linking is required for this role. Please choose at least one Payment In to link this contra to." });
         return;
@@ -805,21 +813,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           : {};
       
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
+      let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((sum, f) => sum + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
           return;
         }
-        for (const file of newFilesToUpload) {
-          if (submissionData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-          const storageRef = ref(storage, `voucher-files/${companyId}/contra/${Date.now()}_${file.name}`);
-          const snapshot = await uploadBytes(storageRef, file);
-          const url = await getDownloadURL(snapshot.ref);
-          submissionData.fileUrls.push(url);
-          await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+        if (isLocalOnlyMode()) {
+          const voucherIdForLocalAttachments =
+            isEditingAndConverting && voucher?.id
+              ? null
+              : (savedVoucherId ?? voucher?.id ?? null);
+          const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+            await appendLocalOnlyVoucherFilesToUrls({
+              companyId,
+              storageFolder: "contra",
+              existingFileUrls: submissionData.fileUrls as string[],
+              newFiles: newFilesToUpload,
+              maxFileCount: fileAttachmentLimits.maxFileCount,
+              existingVoucherId: voucherIdForLocalAttachments,
+            });
+          submissionData.fileUrls = merged;
+          if (preGen) preGeneratedVoucherId = preGen;
+          try {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          } catch {
+            /* offline */
+          }
+        } else {
+          for (const file of newFilesToUpload) {
+            if (submissionData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            const storageRef = ref(storage, `voucher-files/${companyId}/contra/${Date.now()}_${file.name}`);
+            const snapshot = await uploadBytes(storageRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+            submissionData.fileUrls.push(url);
+            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+          }
         }
       }
 
@@ -834,7 +866,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         user.uid,
         submissionData,
         originalVoucherIdToDelete ? null : savedVoucherId,
-        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
+        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+        preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
@@ -842,12 +875,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const savedLinkIds = Array.isArray(submissionData.linkedPaymentInIds) ? [...submissionData.linkedPaymentInIds] : [];
           initialLinkedPaymentInIdsRef.current = savedLinkIds;
           if (originalVoucherIdToDelete) {
-               await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
+              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
+              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
                 convertedToType: 'contra',
                 convertedToVoucherNumber: submissionData.voucherNumber,
-            });
+              });
           }
           if (pendingLinkedPaymentOut && user?.uid) {
             const contraId = savedDoc.id;
@@ -872,7 +906,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             }
             const openingLinked = Number(pendingLinkedPaymentOut.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
             // Persist Opening Balance spend-wise link on current contra (In leg) so it remains visible after save/reopen.
-            await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, contraId), {
+            // Spend-wise opening link patch local/offline + online helper se apply karo.
+            await patchVoucherFields(companyId, contraId, {
               linkedOpeningBalanceAmount: openingLinked,
               linkedOpeningBalanceAccountId: openingLinked > 0 ? spendWiseOutAccountId : null,
             });
@@ -890,8 +925,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         } else {
           sonnerToast.success(isEdit ? "Contra updated!" : "Contra entry created!", { id: toastId });
         }
-        triggerSync();
-
         if (companyId && company) {
           const isEdit = !!voucher?.id;
           const amount = Number(submissionData.amount) || 0;
@@ -1000,14 +1033,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     setIsLoading(true);
     try {
-        await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId), {
+        // Delete action local-first helper ke through run karo.
+        await patchVoucherFields(companyId, savedVoucherId, {
             isDeleted: true,
             deletedAt: serverTimestamp(),
             deletedBy: user?.uid || '',
         });
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
-        triggerSync();
     } catch (error) {
         console.error("Error deleting voucher:", error);
         toast({ variant: "destructive", title: "Error", description: "Failed to delete voucher." });
@@ -1046,7 +1079,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     for (const file of filesToProcess) {
       // Check file type
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
@@ -1076,33 +1110,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
             title: "File Still Too Large",
-            description: `कम्प्रेस गर्दा पनि फाइल ${MAX_FILE_SIZE_MB}MB भन्दा ठुलो भयो।`,
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-  
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Compression error:", error);
         toast({
           variant: "destructive",
-          title: "File not added",
-          description:
-            error instanceof Error ? error.message : "Could not process this file. Try another image/PDF or smaller size.",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
         });
       }
     }
@@ -1396,29 +1423,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FilePreview
                         key={index}
                         file={file}
-                        onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                        onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                       />
                     ))}
-                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <div
-                        className={cn(
-                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                        )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
-                          }
-                        }}
-                      >
-                        <PlusCircle className="h-6 w-6" />
-                        <span className="text-xs mt-1">Add File</span>
+                    {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      <>
+                        <label
+                          htmlFor={attachFileInputId}
+                          className={cn(
+                            "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                              ? "text-muted-foreground hover:border-primary cursor-pointer"
+                              : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                          )}
+                        >
+                          <PlusCircle className="h-6 w-6" />
+                          <span className="text-xs mt-1">Add File</span>
+                        </label>
                         <Input
+                          id={attachFileInputId}
                           type="file"
-                          className="hidden"
+                          className="sr-only"
                           ref={fileInputRef}
                           onChange={handleFileChange}
                           accept={[
@@ -1426,9 +1452,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                           ].filter(Boolean).join(",") || "image/*,application/pdf"}
                           multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                          disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                         />
-                      </div>
+                      </>
                     )}
                   </div>
                 </RestrictedFileUploader>
@@ -1453,7 +1479,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                       <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher</span>
                     </div>
-                    {requirePaymentLink && (
+                    {spendWiseLinkRequired && (
                       <p className="text-sm text-blue-600">
                         {spendWiseCardAvailableCount > 0
                             ? `${spendWiseCardAvailableCount} voucher${spendWiseCardAvailableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
@@ -1524,15 +1550,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2 items-center">
-                            {/* Contra In should behave like Payment In: open outflow linker; Contra Out keeps inflow linker. */}
-                            <Button
-                              type="button"
-                              onClick={() => selectedContraLeg === 'in' ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
-                              className={cn("w-fit", BTN_SAVE_CLASS)}
-                            >
-                              <Link2 className="h-4 w-4 mr-2" />
-                              {selectedContraLeg === 'in' ? 'Link Pay Out' : 'Link Pay In'}
-                            </Button>
+                            {/* From + To dono cards par same dialog — user ko green card se bhi link kholne ka option */}
+                            {showSpendWiseSection && (
+                              <Button
+                                type="button"
+                                onClick={() => selectedContraLeg === "in" ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
+                                className={cn("w-fit", BTN_SAVE_CLASS)}
+                              >
+                                <Link2 className="h-4 w-4 mr-2" />
+                                {selectedContraLeg === "in" ? "Link Pay Out" : "Link Pay In"}
+                              </Button>
+                            )}
                             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                               <Info className="h-4 w-4 shrink-0" />
                               Read me
@@ -1606,7 +1634,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       )}
                       <div className="flex flex-wrap gap-2 items-center">
-                        {/* Current-voucher card should be read-only for linking action; keep only guidance/help action here. */}
+                        {/* Same link action as From card — current voucher totals ke saath */}
+                        {showSpendWiseSection && (
+                          <Button
+                            type="button"
+                            onClick={() => selectedContraLeg === "in" ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
+                            className={cn("w-fit", BTN_SAVE_CLASS)}
+                          >
+                            <Link2 className="h-4 w-4 mr-2" />
+                            {selectedContraLeg === "in" ? "Link Pay Out" : "Link Pay In"}
+                          </Button>
+                        )}
                         <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
                           <Info className="h-4 w-4 shrink-0" />
                           Read me
@@ -1656,9 +1694,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
-                {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Link Pay (when Spend Wise) | Save */}
+                {/* Row 1: Cancel (left) | Save (middle) | Approve (right) — Link spend-wise ab To Voucher card mein */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
+                </Button>
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -1671,18 +1712,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                {showLinkPayMode && (
-                  <Button
-                    type="button"
-                    onClick={() => selectedContraLeg === 'in' ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
-                    className={cn("w-full", BTN_SAVE_CLASS)}
-                  >
-                    <Link2 className="mr-2 h-4 w-4" /> {selectedContraLeg === 'in' ? 'Link Pay Out' : 'Link Pay In'}
-                  </Button>
-                )}
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
-                </Button>
               </div>
             ) : (
               <>
@@ -1722,7 +1751,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

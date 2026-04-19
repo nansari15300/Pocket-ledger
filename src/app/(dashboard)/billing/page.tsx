@@ -44,6 +44,14 @@ import {
   daysLeftRounded,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
+import {
+  defaultPlansListFallback,
+  readCachedPlansList,
+  writeCachedPlansList,
+} from "@/lib/plansCatalogCache";
 
 /** Per-column price line using the same gross math as server `/api/payments/initiate` + proration quotes. */
 function formatTermPriceFromKey(plan: Plan, termKey: SubscriptionTermKey): string {
@@ -110,7 +118,8 @@ function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: Check
 
     setIsLoading(true);
     try {
-      const res = await fetch("/api/payments/initiate", {
+      // Online-only: server route JSON; optional NEXT_PUBLIC_BILLING_API_ORIGIN for static shell → hosted API
+      const res = await fetch(getBillingApiUrl("/api/payments/initiate"), {
         method: "POST",
         body: JSON.stringify({
           planId: plan.id,
@@ -258,10 +267,10 @@ function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: Check
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { companyId, company, loading: companyLoading } = useCompany();
+  const { companyId, company, loading: companyLoading, allCompanies } = useCompany();
   // dateFormatBS: BS display key — formatBsFromAD mirrors NepaliDate.format + datex-bs for long AD expiries.
   const { dateSystem, formatDate, formatDateBS, dateFormatBS } = useDate();
-  const [plans, setPlans] = useState<Plan[]>(Object.values(DEFAULT_PLANS));
+  const [plans, setPlans] = useState<Plan[]>(() => readCachedPlansList() ?? defaultPlansListFallback());
   const [loading, setLoading] = useState(true);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanId>("basic");
   /** Each plan column’s term (monthly … 10 yr) for Basic checkout + proration quotes. */
@@ -316,60 +325,71 @@ export default function BillingPage() {
     }
   }, [company, companyLoading, router]);
 
+  /** Account plan (all owned companies) so billing UI matches avatar/header after Stripe on another local row. */
+  const currentPlanId = useMemo(
+    (): PlanId => resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId),
+    [allCompanies, user?.uid, company?.planId]
+  );
+
   useEffect(() => {
-    if (company?.planId) {
-      const pid = company.planId as PlanId;
-      if (["basic", "advance", "pro", "pro-plus"].includes(pid)) {
-        setSelectedPlanId(pid);
-      }
+    if (["basic", "advance", "pro", "pro-plus"].includes(currentPlanId)) {
+      setSelectedPlanId(currentPlanId);
     }
-  }, [company?.planId]);
+  }, [currentPlanId]);
 
-  useEffect(() => {
-    const unsub = onSnapshot(doc(firestore, "app_settings", "plans"), (docSnap) => {
-      if (docSnap.exists()) {
-        const firestorePlans = docSnap.data() as Record<PlanId, Plan>;
-        const mergedPlans = Object.values(DEFAULT_PLANS).map((defaultPlan) => {
-          const firestorePlan = firestorePlans[defaultPlan.id];
-          const limitedTimeOfferDate = firestorePlan?.limitedTimeOfferDate;
-
-          let discountPercentage = firestorePlan?.discountPercentage;
-          if (
-            !discountPercentage &&
-            firestorePlan?.price.monthly > 0 &&
-            firestorePlan?.price.yearly > 0
-          ) {
-            discountPercentage = 100 - (firestorePlan.price.yearly * 100) / (firestorePlan.price.monthly * 12);
-          }
-
-          return {
-            ...defaultPlan,
-            ...(firestorePlan || {}),
-            entitlements: {
-              ...defaultPlan.entitlements,
-              ...(firestorePlan?.entitlements || {}),
-            },
-            price: {
-              ...defaultPlan.price,
-              ...(firestorePlan?.price || {}),
-            },
-            isFree: firestorePlan?.isFree ?? defaultPlan.isFree,
-            limitedTimeOfferDate: limitedTimeOfferDate,
-            discountPercentage: discountPercentage,
-          };
-        });
-        setPlans(mergedPlans);
-      } else {
-        setPlans(Object.values(DEFAULT_PLANS));
+  /** Admin DB se list prices (Firebase Admin) — client persistence cache se zyada trustworthy. */
+  const fetchServerPlanCatalog = useCallback(async () => {
+    try {
+      const res = await fetch(getBillingApiUrl("/api/payments/plan-catalog"), { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { plans?: Plan[] };
+      if (Array.isArray(data.plans) && data.plans.length > 0) {
+        setPlans(data.plans);
+        writeCachedPlansList(data.plans);
       }
-      setLoading(false);
-    });
-    return () => unsub();
+    } catch {
+      /* offline: onSnapshot / defaults */
+    }
   }, []);
 
-  const selectedPlanDetails = plans.find((p) => p.id === selectedPlanId);
+  // Mount + tab focus: server catalog (same amounts as `/api/payments/initiate`).
+  useEffect(() => {
+    void fetchServerPlanCatalog();
+  }, [fetchServerPlanCatalog]);
 
-  const currentPlanId = (company?.planId as PlanId) || "basic";
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") void fetchServerPlanCatalog();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [fetchServerPlanCatalog]);
+
+  // Realtime: Firestore listener — agar data cache se ho to dubara server se align karo.
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(firestore, "app_settings", "plans"),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const mergedPlans = mergeAppSettingsPlansDoc(docSnap.data() as Record<string, unknown>);
+          setPlans(mergedPlans);
+          writeCachedPlansList(mergedPlans);
+          if (docSnap.metadata.fromCache) void fetchServerPlanCatalog();
+        } else {
+          setPlans(readCachedPlansList() ?? defaultPlansListFallback());
+        }
+        setLoading(false);
+      },
+      () => {
+        const cached = readCachedPlansList();
+        if (cached) setPlans(cached);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [fetchServerPlanCatalog]);
+
+  const selectedPlanDetails = plans.find((p) => p.id === selectedPlanId);
 
   /** Resolved display name for the company’s active SKU (merged Firestore plan names). */
   const currentSubscribedPlanLabel = useMemo(() => {
@@ -413,7 +433,7 @@ export default function BillingPage() {
     setProrationLoading(loadKey);
     try {
       const token = await user.getIdToken();
-      const res = await fetch("/api/payments/plan-change-checkout", {
+      const res = await fetch(getBillingApiUrl("/api/payments/plan-change-checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ companyId, targetPlanId, term, gateway: prorationGateway }),
@@ -501,7 +521,7 @@ export default function BillingPage() {
     setDowngradeLoading(loadKey);
     try {
       const token = await user.getIdToken();
-      const res = await fetch("/api/company/downgrade-plan", {
+      const res = await fetch(getBillingApiUrl("/api/company/downgrade-plan"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ companyId, targetPlanId }),
@@ -521,12 +541,18 @@ export default function BillingPage() {
   }
 
   const allFeaturesConfig: { key: EntitlementKey; label: string }[] = [
-    { key: "maxUsers", label: "Max Users" },
-    { key: "maxCompanies", label: "Max Companies" },
-    { key: "dailyVoucherLimit", label: "Daily Vouchers" },
-    { key: "monthlyVoucherLimit", label: "Monthly Vouchers" },
-    { key: "maxAttachmentsGB", label: "Attachments (GB)" },
-    { key: "maxStorageGB", label: "Storage (GB)" },
+    { key: "maxUsers", label: "Max Users (online)" },
+    { key: "maxUsersLocal", label: "Max Users (local)" },
+    { key: "maxCompanies", label: "Max Companies (online)" },
+    { key: "maxCompaniesLocal", label: "Max Companies (local)" },
+    { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
+    { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
+    { key: "monthlyVoucherLimit", label: "Monthly Vouchers (online)" },
+    { key: "monthlyVoucherLimitLocal", label: "Monthly Vouchers (local)" },
+    { key: "maxAttachmentsGB", label: "Attachments GB (online)" },
+    { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
+    { key: "maxStorageGB", label: "Storage GB (online)" },
+    { key: "maxStorageGBLocal", label: "Storage GB (local)" },
     { key: "hasMultiDeviceSync", label: "Multi-device sync" },
     { key: "hasRoleBasedAccess", label: "Role-based access" },
     { key: "hasAuditLogs", label: "Audit logs" },

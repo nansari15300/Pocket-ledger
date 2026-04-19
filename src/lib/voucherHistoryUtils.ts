@@ -5,10 +5,26 @@
 import { doc, getDoc, getDocFromServer } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { getPlan, type PlanId } from "@/config/plans";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 export type VoucherHistoryFullBehavior = 'block_edit' | 'allow_edit_delete_last';
 
+/**
+ * Firestore / legacy docs kabhi-kabhi galat ya purana string store karte hain; form + Select sirf do valid values jaante hain.
+ * Invalid / empty ko safe default pe map karo taaki refresh ke baad bhi dropdown + zod sahi rahein.
+ */
+export function normalizeVoucherHistoryFullBehavior(raw: unknown): VoucherHistoryFullBehavior {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  if (s === "block_edit") return "block_edit";
+  if (s === "allow_edit_delete_last") return "allow_edit_delete_last";
+  return "allow_edit_delete_last";
+}
+
 export async function getEffectiveHistorySettings(companyId: string): Promise<{ enabled: boolean; limit: number; fullBehavior: VoucherHistoryFullBehavior }> {
+  if (isLocalOnlyMode()) {
+    // Local-only mode me Firestore reads avoid karo; safe defaults se edit/save flow chalne do.
+    return { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" };
+  }
   // Prefer server read so live settings (from Voucher Settings) apply immediately; fallback to cache if offline
   let companySnap;
   try {
@@ -32,12 +48,16 @@ export async function getEffectiveHistorySettings(companyId: string): Promise<{ 
   const companyLimit = Math.max(1, Math.min(100, Number((companyData as any).voucherHistoryLimit) || 10));
   const enabled = planEnabled && companyEnabled;
   const limit = enabled ? Math.min(companyLimit, planLimit) : 0;
-  const fullBehavior = ((companyData as any).voucherHistoryFullBehavior as VoucherHistoryFullBehavior) || 'allow_edit_delete_last';
+  const fullBehavior = normalizeVoucherHistoryFullBehavior((companyData as any).voucherHistoryFullBehavior);
   return { enabled, limit, fullBehavior };
 }
 
 /** Returns the plan's max voucher history limit for a company. Used to cap company settings. */
 export async function getPlanVoucherHistoryLimit(companyId: string): Promise<number> {
+  if (isLocalOnlyMode()) {
+    // Local-only mode me plan lookup Firestore se na karo; fallback cap use karo.
+    return 10;
+  }
   const companySnap = await getDoc(doc(firestore, "companies", companyId));
   const companyData = companySnap.data() || {};
   const planId = (companyData?.planId as PlanId) || "basic";

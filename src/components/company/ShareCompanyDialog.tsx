@@ -9,7 +9,7 @@ import { z } from "zod";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { doc, updateDoc, arrayUnion, getDoc, getDocs, query, collection, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import type { PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -95,7 +95,7 @@ export function ShareCompanyDialog({
     }
 
     const plan = getPlanFromPlans(livePlans, (company.planId as PlanId) || undefined);
-    const maxUsers = (plan.entitlements.maxUsers as number) ?? 1;
+    const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption)) || 1;
     const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
     const ownerEmailNorm = (company.ownerEmail || "").toLowerCase().trim();
     const sharedExcludingSuperAdminAndOwner = (company.sharedWithEmails || []).filter(

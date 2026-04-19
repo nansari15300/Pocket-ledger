@@ -52,21 +52,34 @@ import { CreateStaffDialog } from "../staff/CreateStaffDialog";
 import { useIsMobile, useMobileView } from "@/hooks/use-mobile";
 import { useCompany } from "@/hooks/useCompany";
 import { estimateUserFirestoreBytes } from "@/lib/storageUsageClient";
-import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import Link from "next/link";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { signOut } from "firebase/auth";
 import type { Company } from "@/hooks/useCompany";
-import { DEFAULT_PLANS, getPlan, type PlanId } from "@/config/plans";
+import {
+  DEFAULT_PLANS,
+  getNextPaidUpgrade,
+  numericEntitlement,
+  companyStorageIsLocal,
+  type PlanId,
+} from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { cn } from "@/lib/utils";
-import { useReportPartyView } from "@/contexts/ReportPartyViewContext";
 import { useReportList } from "@/contexts/ReportListContext";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { listLocalCompanies } from "@/lib/localCompanyStore";
+import { filterCompaniesExcludeOnlineShared } from "@/lib/companyUnlockGate";
+import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
+import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
+import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 
 /** Static export trailingSlash: URL /party/ vs /party — normalize for route checks */
 function pathRoot(pathname: string | null, segment: string): boolean {
@@ -77,7 +90,7 @@ function pathRoot(pathname: string | null, segment: string): boolean {
 
 function ScreenControls() {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  
+
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
@@ -98,6 +111,9 @@ function ScreenControls() {
       }
     }
   };
+
+  // Capacitor / static APK: app already near-fullscreen — header se expand icon hata
+  if (isStaticAppBuild()) return null;
 
   return (
     <Button
@@ -375,6 +391,22 @@ function ReportButtonForExpenseAccountOrGroup() {
   );
 }
 
+function MobileReportButtonsOnly() {
+  const isMobile = useIsMobile();
+  // User request: report shortcut buttons should be visible only on mobile layout, not desktop web/EXE header.
+  if (!isMobile) return null;
+  return (
+    <>
+      <ReportButtonForPartyOrGroup />
+      <ReportButtonForBankAccountOrGroup />
+      <ReportButtonForStaffOrGroup />
+      <ReportButtonForTaxOrGroup />
+      <ReportButtonForExpenseAccountOrGroup />
+      <ReportButtonForItemOrGroup />
+    </>
+  );
+}
+
 function HeaderActions() {
   const { isMobile } = useMobileView();
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
@@ -399,7 +431,7 @@ function HeaderActions() {
 
   return (
     <>
-      {/* ✅ Sale */}
+      {/* ✅ Sale — global preview switch ab fullscreen icon ke paas (right cluster) */}
       <AddVoucherDialog defaultTab="sale" voucher={undefined} isOpen={openSale} onOpenChange={setOpenSale}>
         <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSale(true)} data-theme-btn="add-sale">
           <ShoppingBag className="mr-1 h-4 w-4" /> Add Sale
@@ -468,78 +500,6 @@ function HeaderActions() {
   );
 }
 
-/** Balance display mode: Statement = running balance, Bill wise = per-row outstanding. */
-function BalanceModeSwitcher() {
-  const pathname = usePathname();
-  const { balanceMode, setBalanceMode } = useBalanceMode();
-  const { isMobile, hidePcIcon } = useMobileView();
-  const { showBillWiseToggle: showBillWiseOnReportParty } = useReportPartyView();
-
-  // Pages that only use statement view: hide toggle and force statement mode
-  const statementOnlyPaths = ["/items", "/incomes", "/tax", "/dashboard"];
-  const isStatementOnlyPage = statementOnlyPaths.some((p) => pathname?.startsWith(p));
-  // Bank/Cash, Party, Staff: hide header dropdown; each details page has its own Bill wise/Statement (or Spend wise) button
-  const isBankPage = pathname != null && pathname.startsWith("/bank-cash");
-  const isPartyPage = pathname != null && pathname.startsWith("/party");
-  const isStaffPage = pathname != null && pathname.startsWith("/staff");
-  const hideBalanceModeDropdown = isStatementOnlyPage || isBankPage || isPartyPage || isStaffPage;
-
-  // On reports: show toggle only when Group Statement or Accounts Statement has a party selected
-  const isReportsPage = pathname?.startsWith("/reports");
-  const isReportPartyView = isReportsPage && showBillWiseOnReportParty;
-  const hideToggleOnReports = isReportsPage && !showBillWiseOnReportParty;
-
-  // Only force statement on pages that have no bill-wise option (items, incomes, tax, dashboard). Do not override on party/staff/bank where mode is persisted in localStorage.
-  React.useEffect(() => {
-    if (isStatementOnlyPage || hideToggleOnReports) {
-      setBalanceMode("statement");
-    }
-  }, [pathname, setBalanceMode, isStatementOnlyPage, hideToggleOnReports]);
-
-  // In mobile view, hide to keep header minimal (company, date, PC, avatar, full screen only)
-  if (isMobile) return null;
-  if (hideBalanceModeDropdown) return null;
-  if (isReportsPage && !isReportPartyView) return null;
-
-  const label = balanceMode === "bill_wise" ? "Bill wise" : "Statement";
-
-  if (hidePcIcon) {
-    return (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="whitespace-nowrap h-9">
-            <span>{label}</span>
-            <ChevronDown className="ml-2 h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent>
-          <DropdownMenuItem onSelect={() => setBalanceMode("statement")}>Statement</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setBalanceMode("bill_wise")}>Bill wise</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    );
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className={cn("whitespace-nowrap h-9", isMobile && "px-3")}>
-          <span>{label}</span>
-          <ChevronDown className="ml-2 h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        <DropdownMenuItem onSelect={() => setBalanceMode("statement")}>
-          Statement (running balance)
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => setBalanceMode("bill_wise")}>
-          Bill wise (per-bill balance)
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
@@ -591,7 +551,15 @@ function UserProfileButton() {
   const handleLogout = async () => {
     const { clearNavigationMemory } = await import("@/lib/navigation-memory");
     clearNavigationMemory();
+    // Local guest logout: local no-login flag off karo so app true online login screen par aaye.
+    if (isLocalGuestEnabled()) {
+      disableLocalGuest();
+      router.replace("/");
+      return;
+    }
     await signOut(auth);
+    // Firebase logout ke baad bhi explicit redirect rakho for predictable online-login UX.
+    router.replace("/");
   };
 
   useEffect(() => {
@@ -639,24 +607,40 @@ function UserProfileButton() {
       .catch(() => setUserStorageUsedBytes(null));
   }, [profileOpen, allCompanies.length, allCompanies.map((c) => c.id).join(",")]);
 
-  const planName = company?.planId ? DEFAULT_PLANS[company.planId as PlanId]?.name : "N/A";
-  const plan = getPlanFromPlans(livePlans, (company?.planId as PlanId) || undefined);
-  const maxAttGB = (plan?.entitlements?.maxAttachmentsGB as number) ?? 0;
-  const dailyLimit = (plan?.entitlements?.dailyVoucherLimit as number) ?? 0;
-  const monthlyLimit = (plan?.entitlements?.monthlyVoucherLimit as number) ?? 0;
-  const attUsedGB = Number(company?.attachmentsUsedBytes ?? 0) / 1e9;
+  const accountPlanId = user?.uid
+    ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
+    : ((company?.planId as PlanId) || "basic");
+  const planName = DEFAULT_PLANS[accountPlanId]?.name ?? String(accountPlanId);
+  const plan = getPlanFromPlans(livePlans, accountPlanId);
+  // Profile dropdown: selected company local ho to uske liye *Local caps dikhao (admin Plans).
+  const storageIsLocal = companyStorageIsLocal(company?.storageOption);
+  const maxAttGB = numericEntitlement(plan?.entitlements, "maxAttachmentsGB", storageIsLocal);
+  const dailyLimit = numericEntitlement(plan?.entitlements, "dailyVoucherLimit", storageIsLocal);
+  const monthlyLimit = numericEntitlement(plan?.entitlements, "monthlyVoucherLimit", storageIsLocal);
+  const ownedForUsage = React.useMemo(
+    () =>
+      allCompanies.filter(
+        (c) =>
+          c.isOwned === true && !!user?.uid && String(c.ownerId || "").trim() === String(user.uid).trim()
+      ),
+    [allCompanies, user?.uid]
+  );
+  const attUsedGB =
+    ownedForUsage.reduce((s, c) => s + Number((c as Company).attachmentsUsedBytes ?? 0), 0) / 1e9;
   const attFreeGB = Math.max(0, maxAttGB - attUsedGB);
   const GB_TO_MB = 1024;
   const attUsedMB = attUsedGB * GB_TO_MB;
   const attFreeMB = attFreeGB * GB_TO_MB;
   const userStorUsedMB = userStorageUsedBytes != null ? userStorageUsedBytes / (1024 * 1024) : 0;
-  const totalMaxStorMB = allCompanies.reduce((sum, c) => {
-    const p = getPlanFromPlans(livePlans, (c.planId as PlanId) || undefined);
-    const maxGB = (p?.entitlements?.maxStorageGB as number) ?? 0;
-    return sum + maxGB * GB_TO_MB;
-  }, 0);
+  const accountMaxStorGB = numericEntitlement(plan?.entitlements, "maxStorageGB", storageIsLocal);
+  const totalMaxStorMB = accountMaxStorGB * GB_TO_MB;
   const storFreeMB = Math.max(0, totalMaxStorMB - userStorUsedMB);
-  const maxStorGB = totalMaxStorMB / GB_TO_MB;
+  const maxStorGB = accountMaxStorGB;
+  const onlineSlotMax = maxOnlineCompaniesForPlan(accountPlanId);
+  const onlineSlotUsed =
+    user?.uid != null && user.uid !== "" ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
+  /** Pro Plus ke upar koi paid tier nahi — "Upgrade" mat dikhao */
+  const accountCanUpgradeToPaidTier = getNextPaidUpgrade(accountPlanId) != null;
 
   if (!user) return null;
 
@@ -670,10 +654,13 @@ function UserProfileButton() {
             onMouseEnter={openProfileFromHover}
             onMouseLeave={scheduleProfileHoverClose}
           >
-            <div className={cn(
-              "relative h-9 w-9 rounded-full",
-              isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
-            )}>
+            {/* Header avatar: hover par bada pic preview mat dikhao — sirf chhota circle + dropdown (entity lists par `EntityFileAttachmentHover` alag). */}
+            <div
+              className={cn(
+                "relative h-9 w-9 rounded-full inline-flex [&:focus-visible]:outline-none",
+                isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
+              )}
+            >
               <Avatar className="h-full w-full">
                 <AvatarImage src={user.photoURL ?? undefined} alt={user.displayName ?? "User"} />
                 <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
@@ -720,7 +707,7 @@ function UserProfileButton() {
                         router.push("/billing");
                       }}
                     >
-                      Upgrade
+                      {accountCanUpgradeToPaidTier ? "Upgrade" : "Billing"}
                     </Button>
                   </div>
                   {company?.planExpiry && (() => {
@@ -744,6 +731,13 @@ function UserProfileButton() {
                       </div>
                     );
                   })()}
+                  {onlineSlotMax > 0 && user?.uid ? (
+                    <div className="text-xs text-muted-foreground mt-1.5">
+                      Online company slots:{" "}
+                      <span className="font-medium text-foreground">{onlineSlotUsed}</span> /{" "}
+                      <span className="font-medium text-foreground">{onlineSlotMax}</span>
+                    </div>
+                  ) : null}
                 </div>
                 )}
 
@@ -803,7 +797,7 @@ function UserProfileButton() {
 
 function DateSystemSwitcher() {
   const { dateSystem, setDateSystem } = useDate();
-  const { isMobile, hidePcIcon, forcedViewMode, setForcedMode } = useMobileView();
+  const { isMobile, forcedViewMode, setForcedMode } = useMobileView();
   const { company } = useCompany();
   const [dateFormatDialogOpen, setDateFormatDialogOpen] = React.useState(false);
   
@@ -833,28 +827,7 @@ function DateSystemSwitcher() {
     </>
   );
 
-  // Real mobile (portrait + landscape): show date and avatar only — never show PC/Mobile icons
-  if (hidePcIcon) {
-    return (
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="whitespace-nowrap h-9" data-theme-header="date-selector">
-              <span>{dateSystem}</span>
-              <ChevronDown className="ml-2 h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            {dateMenuContent}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <DateFormatSettingsDialog open={dateFormatDialogOpen} onOpenChange={setDateFormatDialogOpen} />
-        <UserProfileButton />
-      </div>
-    );
-  }
-
-  // PC only: show Calendar, date, and PC/Mobile toggle
+  // Date + BS/AD + PC/Mobile toggle (phone par bhi — PC view sirf icon se)
   return (
     <div className="flex items-center gap-2 flex-shrink-0">
       <DropdownMenu>
@@ -900,11 +873,36 @@ function DateSystemSwitcher() {
 
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
+  const { allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
 
   useEffect(() => {
+    if (isLocalOnlyMode()) {
+      // Local-only: context list; offline mode me cloud-only shared (online shared) header se hatao — CompanySelector ke saath align
+      setLoading(Boolean(companyContextLoading));
+      const mapped = (contextCompanies || []).map((c) => ({ ...c, isOwned: c.isOwned ?? true })) as Company[];
+      setCompanies(filterCompaniesExcludeOnlineShared(mapped, user?.email, user?.uid));
+      if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
+        listLocalCompanies()
+          .then((rows) => {
+            const mappedRows = rows.map((r) => {
+              const c = { ...(r as unknown as Company) };
+              const owned =
+                (!!user?.uid && c.ownerId === user?.uid) ||
+                (!!user?.email &&
+                  !!c.ownerEmail &&
+                  c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+              return { ...c, isOwned: owned } as Company;
+            });
+            setCompanies(filterCompaniesExcludeOnlineShared(mappedRows, user?.email, user?.uid));
+          })
+          .finally(() => setLoading(false));
+      }
+      return;
+    }
+
     if (!user || !user.email) {
       setLoading(false);
       setCompanies([]);
@@ -931,6 +929,10 @@ export function DesktopAppHeader() {
     let ownedCompaniesCache: Company[] = [];
     let sharedCompaniesCache: Company[] = [];
     let ownedByEmailCache: Company[] = [];
+    let localCompaniesCache: Company[] = [];
+    const isOwnedByCurrentUser = (c: Company) =>
+      c.ownerId === user?.uid ||
+      (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
     // Keep first paint stable: wait for all initial listeners before publishing header data.
     let ownedReady = false;
     let sharedReady = false;
@@ -940,7 +942,7 @@ export function DesktopAppHeader() {
       if (!ownedReady || !sharedReady || !ownedByEmailReady) return;
       const companyMap = new Map<string, Company>();
 
-      // Add owned by uid first
+      // Server-owned companies are authoritative for online ownership categorization.
       ownedCompaniesCache.forEach((c) =>
         companyMap.set(c.id, { ...c, isOwned: true })
       );
@@ -954,16 +956,39 @@ export function DesktopAppHeader() {
         if (!companyMap.has(c.id))
           companyMap.set(c.id, { ...c, isOwned: false });
       });
+      // Add local-only leftovers after server merge; this prevents shared online companies from being misclassified.
+      localCompaniesCache.forEach((c) => {
+        if (!companyMap.has(c.id)) {
+          companyMap.set(c.id, { ...c, isOwned: isOwnedByCurrentUser(c) });
+        }
+      });
 
       const next = Array.from(companyMap.values());
-      // Avoid no-op state writes to reduce extra header renders.
+      // Avoid no-op state writes — lekin sirf id/isOwned mat compare karo; rename (name) change par bhi next apply ho (selector live rahe)
       setCompanies((prev) => {
         const sameLength = prev.length === next.length;
-        const sameOrderAndIds = sameLength && prev.every((p, i) => p.id === next[i]?.id && p.isOwned === next[i]?.isOwned);
-        return sameOrderAndIds ? prev : next;
+        if (!sameLength) return next;
+        const rowSig = (c: Company) =>
+          `${c.id}\0${Boolean(c.isOwned)}\0${c.name ?? ""}\0${String((c as Company & { storageOption?: string }).storageOption ?? "")}`;
+        const same =
+          prev.length === next.length &&
+          prev.every((p, i) => rowSig(p) === rowSig(next[i] as Company));
+        return same ? prev : next;
       });
       setLoading(false);
     };
+
+    // Load local companies in parallel with Firestore so dropdown can show local + cloud together.
+    listLocalCompanies()
+      .then((rows) => {
+        localCompaniesCache = rows
+          .filter((c: any) => !c?.isDeleted)
+          .map((c) => ({ ...(c as unknown as Company), isOwned: isOwnedByCurrentUser(c as unknown as Company) }));
+        combineAndSet();
+      })
+      .catch(() => {
+        // Local list optional; ignore errors and continue with cloud/shared data.
+      });
 
     const unsubOwned = onSnapshot(
       ownedQuery,
@@ -1017,18 +1042,25 @@ export function DesktopAppHeader() {
       unsubShared();
       unsubOwnedByEmail();
     };
-  }, [user, isSuperAdmin]);
+  }, [user, isSuperAdmin, contextCompanies, companyContextLoading]);
 
   const onCompanyCreated = () => {
     // This is now handled automatically by the onSnapshot listeners.
     // The prop is still required by CompanyActions but can be a no-op.
-  }
+  };
+
+  /** Mobile: ek hi row + horizontal scroll; Sync ledger / hover switch / fullscreen yahan se hata */
+  const headerIsMobile = useIsMobile();
 
   return (
     <header className="relative sticky top-0 z-30 border-b bg-background px-2 py-2">
-      <div className="flex flex-wrap items-center gap-2 w-full">
-        
-        <div className="flex items-center gap-2 flex-shrink-0">
+      <div
+        className={cn(
+          "flex items-center gap-2 w-full min-w-0",
+          headerIsMobile ? "flex-nowrap overflow-x-auto overscroll-x-contain" : "flex-wrap"
+        )}
+      >
+        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
           <SidebarTrigger />
           {loading ? (
             <div className="h-8 w-32 animate-pulse rounded-md bg-muted" />
@@ -1036,28 +1068,26 @@ export function DesktopAppHeader() {
             <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
           )}
           <DateSystemSwitcher />
-          <BalanceModeSwitcher />
         </div>
 
         <HeaderActions />
 
-        {/* Spacer pushes Report buttons to the right; grow takes remaining space */}
-        <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" />
+        {/* Desktop: spacer; mobile par grow hata kar saari cheezein scroll row me */}
+        {!headerIsMobile ? <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" /> : null}
 
-        {/* Report buttons in flex flow (not absolute) so they stay visible on mobile/APK; absolute was getting clipped by overflow-hidden parent */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
           <AddNewButtonOnReportPage />
-          <ReportButtonForPartyOrGroup />
-          <ReportButtonForBankAccountOrGroup />
-          <ReportButtonForStaffOrGroup />
-          <ReportButtonForTaxOrGroup />
-          <ReportButtonForExpenseAccountOrGroup />
-          <ReportButtonForItemOrGroup />
-          <ScreenControls />
+          <MobileReportButtonsOnly />
+          {!headerIsMobile && (
+            <>
+              <CopyLedgerHeaderButton />
+              <GlobalFileHoverPreviewSwitch />
+              <ScreenControls />
+            </>
+          )}
           <ReportListButton />
         </div>
       </div>
-
     </header>
   );
 }

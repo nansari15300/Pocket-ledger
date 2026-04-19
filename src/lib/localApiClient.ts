@@ -131,6 +131,19 @@ export function getLocalApiBaseUrl(): string {
   return localStorage.getItem("localApiBaseUrl") || defaultBase;
 }
 
+/**
+ * Browser `fetch` fail (ERR_CONNECTION_REFUSED) → clear message; Edit Company / Add User toasts.
+ * `baseUrlHint` optional — caller pass kare (avoid extra getLocalApiBaseUrl jab zaroorat ho).
+ */
+export function describeLocalApiFetchError(e: unknown, baseUrlHint?: string): string {
+  if (isNetworkError(e)) {
+    const url = baseUrlHint ?? (typeof window !== "undefined" ? getLocalApiBaseUrl() : "");
+    return `Local API server not running or wrong URL (${url}). Start the Node server from the project (e.g. port 3001), or open Settings → Company Profile and edit the Data source card.`;
+  }
+  if (e instanceof Error && e.message && e.message !== "Failed to fetch") return e.message;
+  return "Request failed. Check the local API server and Settings → Company Profile → Data source.";
+}
+
 const STORAGE_MODE = "dataSourceMode";
 
 /** Serialize for local API: Date/Timestamp → ms number; Firestore serverTimestamp() → now. */
@@ -171,6 +184,18 @@ export function getLocalApiClientForWrite(): LocalApiClient | null {
 const LOCAL_AUTH_TOKEN_KEY = "localAuthToken_";
 const LOCAL_AUTH_USER_KEY = "localAuthUser_";
 
+/** Offline company unlock same-tab me — React hooks (permissions / voucher load) dubara chalane ke liye. */
+export const LOCAL_AUTH_CHANGED_EVENT = "pocketledgerLocalAuthChanged";
+
+function notifyLocalAuthChanged(companyId: string) {
+  if (typeof window === "undefined" || !companyId) return;
+  try {
+    window.dispatchEvent(new CustomEvent(LOCAL_AUTH_CHANGED_EVENT, { detail: { companyId } }));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getLocalAuthToken(companyId: string): string | null {
   if (typeof window === "undefined" || !companyId) return null;
   return localStorage.getItem(LOCAL_AUTH_TOKEN_KEY + companyId);
@@ -180,12 +205,17 @@ export function setLocalAuthToken(companyId: string, token: string, user?: { id:
   if (typeof window === "undefined") return;
   localStorage.setItem(LOCAL_AUTH_TOKEN_KEY + companyId, token);
   if (user) localStorage.setItem(LOCAL_AUTH_USER_KEY + companyId, JSON.stringify(user));
+  notifyLocalAuthChanged(companyId);
 }
 
 export function clearLocalAuth(companyId: string): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(LOCAL_AUTH_TOKEN_KEY + companyId);
   localStorage.removeItem(LOCAL_AUTH_USER_KEY + companyId);
+  if (companyId && typeof window !== "undefined") {
+    void import("@/lib/serverBackupEncryption").then((m) => m.clearBackupEncryptionSession(companyId)).catch(() => {});
+  }
+  notifyLocalAuthChanged(companyId);
 }
 
 export function getLocalAuthUser(companyId: string): { id: string; username: string; displayName?: string; role?: string } | null {

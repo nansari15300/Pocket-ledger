@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
-import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, getDoc, getDocs, serverTimestamp, deleteField } from "firebase/firestore";
+import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, getDoc, getDocs, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,7 +25,9 @@ import { deleteCompanyComplete } from "@/lib/actions/deleteCompanyAction";
 import { getRecycleBinConfig, subscribeRecycleBinConfig, type RecycleBinConfig } from "@/lib/recycleBinConfig";
 import { sendTransactionAlert } from "@/lib/transactionAlerts";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import type { PlanId } from "@/config/plans";
+import { numericEntitlement, type PlanId } from "@/config/plans";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getLocalCompanyById, listLocalCompanies, removeLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 
 const COLLECTIONS_TO_CHECK = [
     { path: 'parties', nameField: 'name', type: 'Party' },
@@ -53,7 +55,7 @@ export default function RecycleBinPage() {
 function RecycleBinContent() {
     const { user, customUser } = useAuth();
     const { can } = usePermissions();
-    const { companyId, company } = useCompany();
+    const { companyId, company, allCompanies } = useCompany();
     const livePlans = useLivePlans();
     const { journalAccountNames } = useVouchers();
     const [deletedItems, setDeletedItems] = useState<DeletedItem[]>([]);
@@ -74,6 +76,19 @@ function RecycleBinContent() {
             setAtMaxCompanies(false);
             return;
         }
+        if (isLocalOnlyMode()) {
+            // Local-only mode: company limit local registry se evaluate karo (non-deleted companies only).
+            listLocalCompanies()
+                .then((rows) => {
+                    const count = rows.length;
+                    const planId: PlanId = count === 0 ? "basic" : ((rows[0]?.planId as PlanId) || "basic");
+                    const plan = getPlanFromPlans(livePlans, planId);
+                    const max = numericEntitlement(plan?.entitlements, "maxCompanies", true);
+                    setAtMaxCompanies(max > 0 && count >= max);
+                })
+                .catch(() => setAtMaxCompanies(false));
+            return;
+        }
         const q = query(
             collection(firestore, "companies"),
             where("ownerId", "==", user.uid),
@@ -83,8 +98,8 @@ function RecycleBinContent() {
             const count = snap.size;
             const planId: PlanId = count === 0 ? "basic" : (snap.docs[0]?.data()?.planId as PlanId) || "basic";
             const plan = getPlanFromPlans(livePlans, planId);
-            const max = (plan?.entitlements?.maxCompanies as number) ?? 1;
-            setAtMaxCompanies(count >= max);
+            const max = numericEntitlement(plan?.entitlements, "maxCompanies", false);
+            setAtMaxCompanies(max > 0 && count >= max);
         }, () => setAtMaxCompanies(false));
         return () => unsub();
     }, [user?.uid, livePlans]);
@@ -108,6 +123,32 @@ function RecycleBinContent() {
                 setLoading(false);
                 return;
             }
+            if (isLocalOnlyMode()) {
+                // Local-only mode: deleted companies local table se read karo.
+                setLoading(true);
+                listLocalCompanies({ includeDeleted: true })
+                    .then((rows) => {
+                        const companyItems: DeletedItem[] = rows
+                            .filter((c) => c.isDeleted === true)
+                            .map((c) => ({
+                                id: c.id,
+                                name: String(c.name || "Unnamed Company"),
+                                type: "Company",
+                                deletedAt: c.deletedAt ? new Date(c.deletedAt as any) : new Date(),
+                                collectionPath: "companies",
+                                isRootCollection: true,
+                            }));
+                        setDeletedItems((prev) => {
+                            const otherItems = prev.filter((item) => item.collectionPath !== "companies");
+                            return [...otherItems, ...companyItems];
+                        });
+                    })
+                    .catch((error) => {
+                        console.error("Error fetching deleted local companies:", error);
+                    })
+                    .finally(() => setLoading(false));
+                return;
+            }
             setLoading(true);
             const qCompanies = query(
                 collection(firestore, "companies"),
@@ -126,8 +167,6 @@ function RecycleBinContent() {
                             deletedAt: data.deletedAt?.toDate ? data.deletedAt.toDate() : new Date(),
                             collectionPath: 'companies',
                             isRootCollection: true,
-                            // Kaun user ne company bin me bheja — displayName users/{uid} se
-                            deletedBy: data.deletedBy,
                         };
                     });
                 setDeletedItems(prev => {
@@ -177,11 +216,6 @@ function RecycleBinContent() {
                         collectionPath: coll.path,
                         convertedToType: data.convertedToType,
                         convertedToVoucherNumber: data.convertedToVoucherNumber,
-                        // Voucher: purane docs ke liye userId fallback; baaki collections: sirf deletedBy
-                        deletedBy:
-                            coll.path === 'vouchers'
-                                ? (data.deletedBy || data.userId)
-                                : data.deletedBy,
                     };
 
                     // For vouchers, extract additional fields
@@ -193,6 +227,7 @@ function RecycleBinContent() {
                         item.fromAccountId = data.fromAccountId;
                         item.toAccountId = data.toAccountId;
                         item.userId = data.userId;
+                        item.deletedBy = data.deletedBy || data.userId; // Use deletedBy if available, fallback to userId
                         
                         // Get account name from journalAccountNames
                         const accountIdToUse = item.accountId || item.fromAccountId || item.toAccountId;
@@ -315,10 +350,8 @@ function RecycleBinContent() {
         return deletedItems.map(item => {
             const enriched = { ...item };
             
-            // Display name: delete wale user ka — non-voucher par userId mat use karo (creator ho sakta hai)
-            const userIdToUse =
-                enriched.deletedBy ||
-                (enriched.type === 'Voucher' ? enriched.userId : undefined);
+            // Add user name
+            const userIdToUse = enriched.deletedBy || enriched.userId;
             if (userIdToUse && userNames[userIdToUse]) {
                 enriched.deletedByUserName = userNames[userIdToUse];
             }
@@ -360,36 +393,85 @@ function RecycleBinContent() {
         }
 
         if (isCompany && user?.uid) {
-            const ownedSnap = await getDocs(query(
-                collection(firestore, "companies"),
-                where("ownerId", "==", user.uid),
-                where("isDeleted", "!=", true)
-            ));
-            const currentCount = ownedSnap.size;
-            const planId: PlanId = currentCount === 0 ? "basic" : (ownedSnap.docs[0]?.data()?.planId as PlanId) || "basic";
-            const plan = getPlanFromPlans(livePlans, planId);
-            const maxCompanies = (plan?.entitlements?.maxCompanies as number) ?? 1;
-            if (currentCount >= maxCompanies) {
-                toast({
-                    variant: "destructive",
-                    title: "Plan limit reached",
-                    description: `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}. Move one to bin or upgrade to restore from recycle bin.`,
-                });
-                setItemToConfirm(null);
-                return;
+            if (isLocalOnlyMode()) {
+                const nonDeletedLocalCompanies = await listLocalCompanies();
+                const currentCount = nonDeletedLocalCompanies.length;
+                const planId: PlanId =
+                    currentCount === 0
+                        ? "basic"
+                        : ((nonDeletedLocalCompanies[0]?.planId as PlanId) || "basic");
+                const plan = getPlanFromPlans(livePlans, planId);
+                const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", true);
+                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                    toast({
+                        variant: "destructive",
+                        title: "Plan limit reached",
+                        description: `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}. Move one to bin or upgrade to restore from recycle bin.`,
+                    });
+                    setItemToConfirm(null);
+                    return;
+                }
+            } else {
+            try {
+                const ownedSnap = await getDocs(query(
+                    collection(firestore, "companies"),
+                    where("ownerId", "==", user.uid),
+                    where("isDeleted", "!=", true)
+                ));
+                const currentCount = ownedSnap.size;
+                const planId: PlanId = currentCount === 0 ? "basic" : (ownedSnap.docs[0]?.data()?.planId as PlanId) || "basic";
+                const plan = getPlanFromPlans(livePlans, planId);
+                const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", false);
+                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                    toast({
+                        variant: "destructive",
+                        title: "Plan limit reached",
+                        description: `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}. Move one to bin or upgrade to restore from recycle bin.`,
+                    });
+                    setItemToConfirm(null);
+                    return;
+                }
+            } catch (error) {
+                // Offline fallback: context list se count nikaalo so restore action runtime error na de.
+                const currentCount = (allCompanies || []).filter((c: any) => !c?.isDeleted).length;
+                const planId: PlanId = (company?.planId as PlanId) || "basic";
+                const plan = getPlanFromPlans(livePlans, planId);
+                const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", false);
+                if (maxCompanies > 0 && currentCount >= maxCompanies) {
+                    toast({
+                        variant: "destructive",
+                        title: "Plan limit reached",
+                        description: `Your plan allows up to ${maxCompanies} compan${maxCompanies === 1 ? "y" : "ies"}.`,
+                    });
+                    setItemToConfirm(null);
+                    return;
+                }
+                console.warn("Restore company count fallback used due offline Firestore:", error);
+            }
             }
         }
         
         setIsProcessing(true);
         try {
-            const docRef = isCompany
-                ? doc(firestore, 'companies', item.id)
-                : doc(firestore, `companies/${companyId}/${item.collectionPath}`, item.id);
-            await updateDoc(docRef, {
-                isDeleted: false,
-                deletedAt: null,
-                deletedBy: deleteField(),
-            });
+            if (isCompany && isLocalOnlyMode()) {
+                // Local-only mode: recycle bin se company restore local table par karo.
+                const localCompany = await getLocalCompanyById(item.id, { includeDeleted: true });
+                if (!localCompany) throw new Error("Local company not found");
+                await upsertLocalCompany({
+                    ...localCompany,
+                    id: item.id,
+                    isDeleted: false,
+                    deletedAt: null,
+                });
+            } else {
+                const docRef = isCompany
+                    ? doc(firestore, 'companies', item.id)
+                    : doc(firestore, `companies/${companyId}/${item.collectionPath}`, item.id);
+                await updateDoc(docRef, {
+                    isDeleted: false,
+                    deletedAt: null,
+                });
+            }
             toast({ title: "Restored!", description: `"${item.name}" has been restored.` });
         } catch (error) {
             console.error('Restore failed:', error);
@@ -466,6 +548,12 @@ function RecycleBinContent() {
         setIsProcessing(true);
         try {
             if (isCompany) {
+                if (isLocalOnlyMode()) {
+                    // Local-only mode: permanent delete means local company registry se purge.
+                    await removeLocalCompanyById(item.id);
+                    toast({ title: "Deleted permanently", description: `"${item.name}" has been removed from your recycle bin.` });
+                    return;
+                }
                 if (quickDelete) {
                     const result = await deleteCompanyComplete(item.id, user?.uid || "");
                     if (!result.success) throw new Error(result.error);
@@ -550,8 +638,33 @@ function RecycleBinContent() {
         }
 
         try {
-            if (quickDelete) {
+            if (isLocalOnlyMode()) {
+                // Deleted companies: SQLite registry se purge. Vouchers/bank_accounts Firestore pe hain — neeche `nonCompanyItems` loop zaroor chale.
                 for (const cid of companyIds) {
+                    await removeLocalCompanyById(cid);
+                }
+                if (companyIds.length > 0) {
+                    setDeletedItems((prev) => prev.filter((item) => item.collectionPath !== "companies"));
+                }
+                if (nonCompanyItems.length === 0) {
+                    toast({ title: "Deleted permanently", description: "All deleted companies have been removed from your recycle bin." });
+                    setUserNames({});
+                    setIsProcessing(false);
+                    return;
+                }
+            }
+
+            if (nonCompanyItems.length > 0 && !companyId) {
+                toast({ variant: "destructive", title: "Error", description: "Select a company to remove these items from the bin." });
+                setIsProcessing(false);
+                return;
+            }
+
+            // Local-only me `removeLocalCompanyById` pehle ho chuka — `companies/*` Firestore delete loop dobara mat chalao.
+            const firestoreCompanyIds = isLocalOnlyMode() ? [] : companyIds;
+
+            if (quickDelete) {
+                for (const cid of firestoreCompanyIds) {
                     const result = await deleteCompanyComplete(cid, user?.uid || "");
                     if (!result.success) {
                         toast({ variant: "destructive", title: "Error", description: result.error || "Failed to delete company." });
@@ -581,7 +694,7 @@ function RecycleBinContent() {
                 }
                 toast({ title: "Bin Emptied", description: "All items permanently deleted from server." });
             } else {
-                for (const cid of companyIds) {
+                for (const cid of firestoreCompanyIds) {
                     await updateDoc(doc(firestore, "companies", cid), { movedToAdminRecycleAt: serverTimestamp() });
                 }
                 const batch = writeBatch(firestore);

@@ -15,13 +15,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, PlusCircle, X } from "lucide-react";
+import { Loader2, PlusCircle, RefreshCw, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
-import { getPlanVoucherHistoryLimit } from "@/lib/voucherHistoryUtils";
+import { getPlanVoucherHistoryLimit, normalizeVoucherHistoryFullBehavior } from "@/lib/voucherHistoryUtils";
 import { useAuth } from "@/hooks/useAuth";
 import { useState, useEffect } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 
 const voucherPrefixSchema = z.object({
   sale: z.array(z.string()),
@@ -147,6 +148,8 @@ const voucherSettingsSchema = z.object({
   voucherPrefixes: voucherPrefixSchema,
   enableVoucherPrefixSelection: voucherPrefixSelectionSchema,
   enableLinkPaymentToTxns: z.boolean(),
+  /** Company-level: header Copy ledger + cross-company copy (permission `copy_ledger_cross_company` alag). */
+  enableCrossCompanyLedgerCopy: z.boolean(),
   spendWiseEnabled: z.boolean(),
   /** Role + voucher-type: when Spend Wise is on, require Payment In link to save. */
   requirePaymentLinkByRole: requireLinkByRoleSchema.optional(),
@@ -154,13 +157,18 @@ const voucherSettingsSchema = z.object({
   spendWiseOppositeVoucherEditable: z.boolean(),
   voucherHistoryEnabled: z.boolean(),
   voucherHistoryLimit: z.number().min(1).max(100),
-  voucherHistoryFullBehavior: z.enum(['block_edit', 'allow_edit_delete_last']),
+  /** Sirf `block_edit` / `allow_edit_delete_last` allowed; preprocess invalid ko normalize karta hai — "Invalid option" error avoid */
+  voucherHistoryFullBehavior: z.preprocess(
+    (raw) => normalizeVoucherHistoryFullBehavior(raw),
+    z.enum(["block_edit", "allow_edit_delete_last"]),
+  ),
 });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
 
 export function VoucherSettings() {
-  const { company, companyId, loading: companyLoading } = useCompany();
+  // triggerSync / reloadLocalCompanyRegistry: save ke baad header `CopyLedgerHeaderButton` + SQLite mirror jaldi align
+  const { company, companyId, loading: companyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
@@ -171,7 +179,8 @@ export function VoucherSettings() {
     );
 
   const form = useForm<VoucherSettingsValues>({
-    resolver: zodResolver(voucherSettingsSchema),
+    // zod preprocess + RHF Resolver generic mismatch — runtime OK
+    resolver: zodResolver(voucherSettingsSchema) as any,
     defaultValues: {
       autoVoucherNumbering: {
         sale: true, sale_service: true, purchase: true, purchase_service: true, payment_in: true, payment_out: true,
@@ -193,6 +202,7 @@ export function VoucherSettings() {
           add_salary: false, pay_salary: false,
         },
         enableLinkPaymentToTxns: true,
+        enableCrossCompanyLedgerCopy: false,
         spendWiseEnabled: false,
         spendWiseOppositeVoucherEditable: false,
         requirePaymentLinkByRole: ROLES_WITH_VOUCHER_CREATE.reduce(
@@ -241,6 +251,8 @@ export function VoucherSettings() {
             ...(company as any).enableVoucherPrefixSelection,
         },
         enableLinkPaymentToTxns: (company as any).enableLinkPaymentToTxns !== false,
+        // `reset` me zaroor ho — warna RHF default `false` pe wapas, company Firestore se `true` ho to header switch mismatch
+        enableCrossCompanyLedgerCopy: (company as any).enableCrossCompanyLedgerCopy === true,
         spendWiseEnabled: (company as any).spendWiseEnabled === true,
         spendWiseOppositeVoucherEditable: (company as any).spendWiseOppositeVoucherEditable === true,
         requirePaymentLinkByRole: (() => {
@@ -256,7 +268,8 @@ export function VoucherSettings() {
         })(),
         voucherHistoryEnabled: (company as any).voucherHistoryEnabled !== false,
         voucherHistoryLimit: Math.max(1, Math.min(planHistoryLimit, Number((company as any).voucherHistoryLimit) || 10)),
-        voucherHistoryFullBehavior: ((company as any).voucherHistoryFullBehavior as 'block_edit' | 'allow_edit_delete_last') || 'allow_edit_delete_last',
+        // Company se aayi value ko enum + Select ke saath align karo (invalid string → default)
+        voucherHistoryFullBehavior: normalizeVoucherHistoryFullBehavior((company as any).voucherHistoryFullBehavior),
     });
     }
   }, [company, form, planHistoryLimit]);
@@ -294,20 +307,38 @@ export function VoucherSettings() {
         toast({ title: "Plan limit applied", description: `Max history entries capped to ${planHistoryLimit} (your plan's limit).` });
       }
       const companyRef = doc(firestore, "companies", companyId);
-      await updateDoc(companyRef, {
+      const voucherSettingsPatch = {
         autoVoucherNumbering: data.autoVoucherNumbering,
         allowVoucherNumberEditing: data.allowVoucherNumberEditing,
-      allowRateEditing: data.allowRateEditing,
-      voucherPrefixes: data.voucherPrefixes,
-      enableVoucherPrefixSelection: data.enableVoucherPrefixSelection,
-      enableLinkPaymentToTxns: data.enableLinkPaymentToTxns,
-      spendWiseEnabled: data.spendWiseEnabled,
-      spendWiseOppositeVoucherEditable: data.spendWiseOppositeVoucherEditable,
-      requirePaymentLinkByRole: data.requirePaymentLinkByRole,
-      voucherHistoryEnabled: data.voucherHistoryEnabled,
-      voucherHistoryLimit: cappedHistoryLimit,
-      voucherHistoryFullBehavior: data.voucherHistoryFullBehavior,
-      });
+        allowRateEditing: data.allowRateEditing,
+        voucherPrefixes: data.voucherPrefixes,
+        enableVoucherPrefixSelection: data.enableVoucherPrefixSelection,
+        enableLinkPaymentToTxns: data.enableLinkPaymentToTxns,
+        enableCrossCompanyLedgerCopy: data.enableCrossCompanyLedgerCopy,
+        spendWiseEnabled: data.spendWiseEnabled,
+        spendWiseOppositeVoucherEditable: data.spendWiseOppositeVoucherEditable,
+        requirePaymentLinkByRole: data.requirePaymentLinkByRole,
+        voucherHistoryEnabled: data.voucherHistoryEnabled,
+        voucherHistoryLimit: cappedHistoryLimit,
+        voucherHistoryFullBehavior: data.voucherHistoryFullBehavior,
+      };
+      await updateDoc(companyRef, voucherSettingsPatch);
+      // SQLite mirror me bhi likho — refresh par company yahan se aaye to toggle + header sync rahein
+      try {
+        const localRow = await getLocalCompanyById(companyId);
+        if (localRow) {
+          await upsertLocalCompany({
+            ...(localRow as Record<string, unknown>),
+            ...voucherSettingsPatch,
+            id: companyId,
+          } as unknown as Parameters<typeof upsertLocalCompany>[0]);
+        }
+      } catch {
+        /* online-only / no local DB */
+      }
+      // Firestore snapshot se pehle bhi `company` + local registry refresh — header Sync ledger turant show/hide
+      reloadLocalCompanyRegistry();
+      triggerSync();
       toast({ title: "Success", description: "Voucher settings have been updated." });
     } catch (error) {
       console.error("Error updating voucher settings:", error);
@@ -329,7 +360,7 @@ export function VoucherSettings() {
       </CardHeader>
       <CardContent>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+          <form onSubmit={form.handleSubmit(onSubmit as any)} className="space-y-8">
             {/* Save Button at Top — blue so user spots save action */}
             <div className="flex justify-end pb-4 border-b">
               <Button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
@@ -392,6 +423,29 @@ export function VoucherSettings() {
                           <FormLabel>Link for Bill Wise</FormLabel>
                           <FormDescription className="sr-only">
                             When ON, bill-wise link section is available; when required by role, user must link to save voucher.
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                </Card>
+                <Card className="p-4">
+                  <FormField
+                    control={form.control}
+                    name="enableCrossCompanyLedgerCopy"
+                    render={({ field }: any) => (
+                      <FormItem className="flex flex-row items-center justify-between gap-4">
+                        <div>
+                          {/* Header jaisa sync icon + label — cross-company ledger sync toggle */}
+                          <FormLabel className="flex items-center gap-2">
+                            <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                            Sync ledger (cross-company)
+                          </FormLabel>
+                          <FormDescription>
+                            When ON, header shows &quot;Sync ledger&quot; with the sync icon. User role needs permission &quot;Copy Ledger to Another Company&quot;.
                           </FormDescription>
                         </div>
                         <FormControl>
@@ -548,7 +602,8 @@ export function VoucherSettings() {
                           <FormItem>
                             <FormLabel>When history is full</FormLabel>
                             <Select
-                              value={field.value ?? 'allow_edit_delete_last'}
+                              // Controlled value hamesha valid item ho — warna Radix placeholder + zod error
+                              value={normalizeVoucherHistoryFullBehavior(field.value)}
                               onValueChange={field.onChange}
                             >
                               <FormControl>

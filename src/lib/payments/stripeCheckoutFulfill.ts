@@ -6,6 +6,8 @@ import Stripe from "stripe";
 import * as admin from "firebase-admin";
 import type { PlanId } from "@/config/plans";
 import { applyPlanChangeOneTimeToFirestore } from "@/lib/payments/planChangeApply";
+import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
+import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 
 /** Paid SKUs only; basic stays free and is not granted via checkout. */
 export const PAID_PLAN_IDS = new Set<PlanId>(["advance", "pro", "pro-plus"]);
@@ -61,7 +63,7 @@ export async function shouldUpgradeCompanyAfterCheckout(
 }
 
 export type StripeCheckoutFulfillResult =
-  | { ok: true }
+  | { ok: true; mirrorLocal?: VerifiedLocalPlanApplyPayload }
   | { ok: false; reason: string };
 
 /**
@@ -78,6 +80,12 @@ async function fulfillPlanChangeOneTimePayment(
   const previousPlanId = metadata.previousPlanId?.trim() ?? "";
 
   if (!companyId) return { ok: false as const, reason: "missing_companyId" };
+  // Metadata company local-only ho to Firestore me owner ki pehli / preferred company par apply karo.
+  let effectiveCompanyId = companyId;
+  if (!(await db.collection("companies").doc(companyId).get()).exists && userId?.trim()) {
+    const resolved = await findOwnedCompanyIdForUser(db, userId.trim(), companyId);
+    if (resolved) effectiveCompanyId = resolved;
+  }
   if (!targetPlanId || !PAID_PLAN_IDS.has(targetPlanId as PlanId)) {
     return { ok: false as const, reason: "invalid_targetPlanId" };
   }
@@ -128,7 +136,7 @@ async function fulfillPlanChangeOneTimePayment(
 
   const applied = await applyPlanChangeOneTimeToFirestore({
     db,
-    companyId,
+    companyId: effectiveCompanyId,
     userId: userId || null,
     paymentId: session.id,
     gateway: "stripe",
@@ -148,7 +156,23 @@ async function fulfillPlanChangeOneTimePayment(
   if (applied.ok === false) {
     return { ok: false as const, reason: applied.reason };
   }
-  return { ok: true as const };
+  // Firestore update ho chuka — browser me SQLite / profile abhi Basic reh sakta tha; client isi payload se align karega
+  const mirrorUid = userId?.trim();
+  if (!mirrorUid) return { ok: true as const };
+  return {
+    ok: true as const,
+    mirrorLocal: {
+      companyId: metadata.companyId?.trim() || effectiveCompanyId,
+      authoritativeCompanyId: effectiveCompanyId,
+      planId: targetPlanId,
+      userId: mirrorUid,
+      planExpiryMs: newPlanExpiryMs,
+      stripeCustomerId,
+      stripeSubscriptionId: null,
+      lastStripeCheckoutSessionId: session.id,
+      source: "plan_change",
+    },
+  };
 }
 
 /**
@@ -175,7 +199,24 @@ export async function fulfillStripeCheckoutSessionCompleted(
     return { ok: false as const, reason: "missing_companyId" };
   }
 
-  const paymentRef = db.collection("companies").doc(companyId).collection("payments").doc(session.id);
+  // `companyId` checkout pe selected ho sakta hai lekin sirf local SQLite me — Firestore me owner ki company resolve karo.
+  const primaryCoRef = db.collection("companies").doc(companyId);
+  const primaryCoSnap = await primaryCoRef.get();
+  let effectiveCompanyId = companyId;
+  let companySnap = primaryCoSnap;
+  if (!primaryCoSnap.exists && userId?.trim()) {
+    const resolved = await findOwnedCompanyIdForUser(db, userId.trim(), companyId);
+    if (resolved) {
+      effectiveCompanyId = resolved;
+      companySnap = await db.collection("companies").doc(resolved).get();
+    }
+  }
+
+  const paymentRef = db
+    .collection("companies")
+    .doc(effectiveCompanyId)
+    .collection("payments")
+    .doc(session.id);
 
   const stripeCustomerId =
     typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
@@ -238,10 +279,9 @@ export async function fulfillStripeCheckoutSessionCompleted(
     }
   }
 
-  const companyRef = db.collection("companies").doc(companyId);
-  const companySnap = await companyRef.get();
+  const companyRef = db.collection("companies").doc(effectiveCompanyId);
   if (!companySnap.exists) {
-    console.error("[stripe fulfill] company not found:", companyId);
+    console.error("[stripe fulfill] company not found:", effectiveCompanyId, "metadata was", companyId);
     return { ok: false as const, reason: "company_not_found" };
   }
 
@@ -255,5 +295,100 @@ export async function fulfillStripeCheckoutSessionCompleted(
   if (stripeSubscriptionId) patch.stripeSubscriptionId = stripeSubscriptionId;
 
   await companyRef.update(patch);
-  return { ok: true as const };
+
+  const planExpiryMsForMirror = planExpiryMs ?? (planExpiry ? planExpiry.toMillis() : null);
+  const mirrorUid = userId?.trim();
+  let mirrorLocal: VerifiedLocalPlanApplyPayload | undefined;
+  if (mirrorUid && planId && planExpiryMsForMirror != null) {
+    mirrorLocal = {
+      companyId: metadata.companyId?.trim() || effectiveCompanyId,
+      authoritativeCompanyId: effectiveCompanyId,
+      planId,
+      userId: mirrorUid,
+      planExpiryMs: planExpiryMsForMirror,
+      stripeCustomerId,
+      stripeSubscriptionId: stripeSubscriptionId ?? null,
+      lastStripeCheckoutSessionId: session.id,
+      source: "subscription",
+    };
+  }
+  return { ok: true as const, mirrorLocal };
+}
+
+/**
+ * Firestore me `companies/{companyId}` na ho (offline/local-only) lekin Stripe payment verified ho —
+ * client local SQLite registry me plan apply kar sake; sirf tab return jab session + metadata valid hon.
+ */
+export async function buildVerifiedLocalPlanApplyPayload(
+  stripe: Stripe,
+  session: Stripe.Checkout.Session
+): Promise<VerifiedLocalPlanApplyPayload | null> {
+  const metadata = session.metadata || {};
+  const companyId = metadata.companyId?.trim();
+  const userId = metadata.userId?.trim();
+  if (!companyId || !userId) return null;
+
+  if (session.mode === "payment" && metadata.planChange === "true") {
+    const targetPlanId = metadata.targetPlanId?.trim();
+    const newPlanExpiryMs = Number(metadata.newPlanExpiryMs ?? "");
+    if (!targetPlanId || !PAID_PLAN_IDS.has(targetPlanId as PlanId)) return null;
+    if (!Number.isFinite(newPlanExpiryMs) || newPlanExpiryMs <= 0) return null;
+    const ps = session.payment_status;
+    if (ps !== "paid" && ps !== "no_payment_required") return null;
+    const stripeCustomerId =
+      typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    return {
+      companyId,
+      planId: targetPlanId,
+      userId,
+      planExpiryMs: newPlanExpiryMs,
+      stripeCustomerId,
+      stripeSubscriptionId: null,
+      lastStripeCheckoutSessionId: session.id,
+      source: "plan_change",
+    };
+  }
+
+  const planId = metadata.planId?.trim();
+  const billingIntent = (metadata.billingIntent?.trim() || "subscribe") as "donation" | "subscribe";
+  if (!planId || billingIntent === "donation") return null;
+  const upgrade = await shouldUpgradeCompanyAfterCheckout(stripe, session, planId, billingIntent);
+  if (!upgrade) return null;
+
+  const stripeSubscriptionId =
+    typeof session.subscription === "string" ? session.subscription : session.subscription?.id ?? null;
+  let planExpiryMs: number | null = null;
+  if (session.mode === "subscription" && stripeSubscriptionId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+      const endMs = subscriptionPeriodEndMs(sub);
+      if (endMs != null) planExpiryMs = endMs;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (planExpiryMs == null && stripeSubscriptionId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+      const endMs = subscriptionPeriodEndMs(sub);
+      if (endMs != null) planExpiryMs = endMs;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (planExpiryMs == null) return null;
+
+  const stripeCustomerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+
+  return {
+    companyId,
+    planId,
+    userId,
+    planExpiryMs,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    lastStripeCheckoutSessionId: session.id,
+    source: "subscription",
+  };
 }

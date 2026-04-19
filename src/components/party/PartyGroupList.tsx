@@ -203,27 +203,35 @@ export function PartyGroupList({
                               const cardContent = (
                               <div className="pl-master-list-row">
                                 <div className="pl-master-list-row-leading">
-                                  <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground flex-shrink-0">
-                                    {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                                  {/* PartyList jaisa: badge icon ke top-right corner pe, naam ke beech me nahi */}
+                                  <div className="relative flex-shrink-0">
+                                    <div className="h-8 w-8 flex items-center justify-center rounded-md border bg-muted text-muted-foreground">
+                                      {isSystem ? <Lock className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                                    </div>
+                                    {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
+                                      <span
+                                        className="absolute top-0 right-0 flex h-4 w-4 items-center justify-center bg-pink-500 text-[10px] font-bold text-white origin-center"
+                                        style={{ transform: "rotate(45deg) translate(25%, -25%)" }}
+                                        aria-label={`${pendingApprovalByGroupId[group.id]} pending approval`}
+                                      >
+                                        <span style={{ transform: "rotate(-45deg)" }}>
+                                          {pendingApprovalByGroupId[group.id]}
+                                        </span>
+                                      </span>
+                                    )}
                                   </div>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                        {/* naam truncate, badge shrink-0 — row overflow nahin */}
-                                        <span className="flex min-w-0 flex-1 cursor-default items-center gap-1 overflow-hidden">
-                                          <span className="min-w-0 flex-1 truncate text-left text-sm font-semibold">
-                                            {group.name}
-                                          </span>
-                                          {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                            <span className="inline-flex h-4 min-w-[1rem] flex-shrink-0 items-center justify-center rounded-full bg-pink-100 px-1 text-[10px] font-semibold text-pink-700 dark:bg-pink-950/60 dark:text-pink-200">
-                                              {pendingApprovalByGroupId[group.id]}
-                                            </span>
-                                          )}
-                                        </span>
+                                      <span className="pl-master-list-row-name min-w-0 flex-1 cursor-default truncate text-left text-sm font-semibold">
+                                        {group.name}
+                                      </span>
                                     </TooltipTrigger>
                                     <TooltipContent>
                                       <p>{group.name}</p>
                                       {(pendingApprovalByGroupId[group.id] ?? 0) > 0 && (
-                                        <p className="text-xs text-muted-foreground">{pendingApprovalByGroupId[group.id]} pending approval</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          {pendingApprovalByGroupId[group.id]} pending approval
+                                        </p>
                                       )}
                                     </TooltipContent>
                                   </Tooltip>

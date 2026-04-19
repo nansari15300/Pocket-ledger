@@ -8,6 +8,8 @@ const path = require("path");
 const { execSync } = require("child_process");
 
 const root = path.join(__dirname, "..");
+const sqlWasmSrc = path.join(root, "node_modules", "sql.js", "dist", "sql-wasm.wasm");
+const sqlWasmDest = path.join(root, "public", "sql-wasm.wasm");
 const apiPath = path.join(root, "src", "app", "api");
 const apiBakPath = path.join(root, ".build-static-bak", "api");
 const adminPath = path.join(root, "src", "app", "(admin)");
@@ -39,6 +41,15 @@ function rmDir(dir) {
 }
 
 try {
+  // Static/offline runtime ke liye sql.js wasm local public asset me copy karo.
+  if (fs.existsSync(sqlWasmSrc)) {
+    fs.mkdirSync(path.dirname(sqlWasmDest), { recursive: true });
+    fs.copyFileSync(sqlWasmSrc, sqlWasmDest);
+    console.log("[build-static] Copied public/sql-wasm.wasm for offline local DB");
+  } else {
+    console.warn("[build-static] sql-wasm.wasm not found in node_modules/sql.js/dist");
+  }
+
   if (fs.existsSync(apiPath)) {
     fs.mkdirSync(path.dirname(apiBakPath), { recursive: true });
     copyDir(apiPath, apiBakPath);

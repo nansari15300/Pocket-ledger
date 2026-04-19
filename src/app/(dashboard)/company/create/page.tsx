@@ -9,6 +9,7 @@ import { Suspense, useEffect, useState } from "react";
 import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 function CreateCompanyPageLoading() {
   return (
@@ -23,7 +24,8 @@ function CreateCompanyPageLoading() {
 
 function CreateCompanyPageContent() {
   const { user, loading: authLoading } = useAuth();
-  const { setCompanyId, allCompanies } = useCompany();
+  /** `loading`: registry hydrate — iske pehle khali list mat maanho; `companyId` orphan ho sakta hai (list 0 par bhi) → /company bounce loop. */
+  const { setCompanyId, allCompanies, loading: companyContextLoading } = useCompany();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -31,6 +33,21 @@ function CreateCompanyPageContent() {
   
   // Check if user has any companies (owned or shared)
   useEffect(() => {
+    if (isLocalOnlyMode()) {
+      // Local-first: jab tak SQLite/registry load ho rahi ho wait karo; sirf non-empty list → /company (stale companyId + empty list = ping-pong with /company page).
+      if (authLoading || companyContextLoading) {
+        setCheckingCompanies(true);
+        return;
+      }
+      setCheckingCompanies(false);
+      if ((allCompanies || []).length > 0) {
+        router.replace("/company");
+      } else {
+        setIsDialogOpen(true);
+      }
+      return;
+    }
+
     if (authLoading || !user || !user.email) {
       if (!authLoading && !user) {
         router.replace("/");
@@ -86,7 +103,7 @@ function CreateCompanyPageContent() {
       unsubShared();
       clearTimeout(timeoutId);
     };
-  }, [user, authLoading, router]);
+  }, [user, authLoading, router, allCompanies, companyContextLoading]);
 
   const returnPath = searchParams.get("returnTo") || "/company";
 

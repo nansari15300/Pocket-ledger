@@ -46,6 +46,17 @@ import {
 import type { AccountGroup } from "@/components/bank-cash/types";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const formSchema = z.object({
   name: z
@@ -53,6 +64,11 @@ const formSchema = z.object({
     .min(2, { message: "Group name must be at least 2 characters." }),
   parentId: z.string().min(1, "Parent group is required."),
 });
+
+const FALLBACK_ACCOUNT_SYSTEM_GROUPS: Array<{ id: string; name: string }> = [
+  { id: "bank_accounts_group", name: "Bank Accounts" },
+  { id: "cash_in_hand_group", name: "Cash-in-Hand" },
+];
 
 export function CreateAccountGroupDialog({
   onGroupCreated,
@@ -101,6 +117,33 @@ export function CreateAccountGroupDialog({
     setIsLoading(true);
 
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: save account group locally and queue backup sync.
+        const localId = createLocalEntityId("account_group");
+        const payload = {
+          id: localId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "account_groups", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "account_groups", "create", localId, payload);
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        toast({
+          title: showSyncHint ? "Saved. Will sync when online." : "Saved.",
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        onGroupCreated(localId);
+        if (saveAndNew) form.reset({ name: "", parentId: "" });
+        else onOpenChange?.(false);
+        return;
+      }
+
       const nameTrimmed = values.name.trim();
       
       // Check if it's a system group name
@@ -177,7 +220,20 @@ export function CreateAccountGroupDialog({
     }
   }
 
-  const systemGroups = useMemo(() => groups.filter(g => (g as any).isSystemReserved), [groups]);
+  const systemGroups = useMemo(() => {
+    const dynamicSystemGroups = groups.filter((g) => (g as any).isSystemReserved);
+    if (dynamicSystemGroups.length > 0) return dynamicSystemGroups;
+    // Local-only fallback: system parent groups may not be seeded yet; keep Parent dropdown usable.
+    return FALLBACK_ACCOUNT_SYSTEM_GROUPS as unknown as AccountGroup[];
+  }, [groups]);
+
+  useEffect(() => {
+    const currentParent = form.getValues("parentId");
+    if (!currentParent && systemGroups.length > 0) {
+      // Ensure a valid default parent is selected so save is not blocked.
+      form.setValue("parentId", systemGroups[0].id, { shouldDirty: false });
+    }
+  }, [systemGroups, form]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>

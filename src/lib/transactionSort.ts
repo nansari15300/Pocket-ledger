@@ -5,9 +5,9 @@
 
 import { startOfDay } from "date-fns";
 import type { TransactionSortBy, TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
+import { getFiscalMergePartitionDateFromCompany, FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 
-/** Pehli load / refresh: footer "Default" (By Date ↑) jaisa — purani date upar, nayi niche */
+/** Party/Bank/Staff/… statement footer: default `sortBy === "date"` ke saath ascending = purani date upar, nayi neeche. */
 export const DEFAULT_TRANSACTION_SORT_ORDER: TransactionSortOrder = "asc";
 
 function getDate(t: any): number {
@@ -115,10 +115,10 @@ export function sortTransactions<T = any>(
   return [...list].sort(compare);
 }
 
-/** Merge divider ke liye row din — fiscalPartitionRows.rowSortTime jaisa (segment split). */
+/** Merge divider ke liye din — fiscalPartitionRows.rowSortTime jaisa (segment split). */
 function transactionDayStartMs(t: any): number | null {
   if (!t || t.type === "opening_balance") return null;
-  if (t.type === "fiscal_year_partition") return null;
+  if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return null;
   const raw = t?.date;
   if (!raw) return null;
   const d =
@@ -149,7 +149,7 @@ export function sortTransactionsWithFiscalMerge<T = any>(
   const after: T[] = [];
   for (const row of list) {
     const t = row as any;
-    if (t?.type === "fiscal_year_partition") continue;
+    if (t?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) continue;
     const day = transactionDayStartMs(t);
     if (day == null) {
       noDay.push(row);
@@ -164,7 +164,7 @@ export function sortTransactionsWithFiscalMerge<T = any>(
 
 type FiscalCompanyLike = {
   fiscalSplitMode?: string;
-  fiscalMergePartitionAt?: { toDate?: () => Date };
+  fiscalMergePartitionAt?: { toDate?: () => Date } | unknown;
 };
 
 /** Company merge partition nikaal kar `sortTransactionsWithFiscalMerge` — callers ko At pass na karna pade. */
@@ -187,6 +187,10 @@ export function recomputeRunningBalanceTopToBottom<T = any>(list: T[], openingBa
       const explicit = typeof tx?.runningBalance === "number" ? Number(tx.runningBalance) : running;
       running = explicit;
       return { ...tx, runningBalance: explicit, balance: explicit } as T;
+    }
+    // Fiscal divider row: balance carry forward — na dr/cr change
+    if (tx?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
+      return { ...tx, runningBalance: running, balance: running } as T;
     }
     running += (Number(tx?.debit) || 0) - (Number(tx?.credit) || 0);
     return { ...tx, runningBalance: running, balance: running } as T;

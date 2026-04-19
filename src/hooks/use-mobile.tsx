@@ -40,7 +40,7 @@ const MobileViewContext = React.createContext<{
   isMobile: boolean;
   isRealMobile: boolean;
   isPortrait: boolean;
-  /** Hide PC/Mobile toggle: true on real mobile (portrait + landscape). Show toggle only on PC. */
+  /** Purana: mobile par PC icon chhupate the; ab hamesha false — PC/Mobile sirf icon se toggle */
   hidePcIcon: boolean;
   forcedViewMode: 'mobile' | 'pc' | null;
   setForcedMode: (mode: 'mobile' | 'pc' | null) => void;
@@ -80,22 +80,14 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     };
   }, [isClient]);
 
+  // Mount: saved PC/Mobile choice restore (phone + desktop) — landscape se auto-PC band; sirf saved / icon
   React.useEffect(() => {
     if (!isClient) return;
-    // Only clear forced view when mobile in portrait; in landscape allow saved mode (full PC view)
-    if (isRealMobileDevice() && getIsPortrait()) {
-      if (isRealMobilePhone()) {
-        localStorage.removeItem('forcedViewMode');
-        setForcedViewModeState(null);
-      }
-      return;
-    }
-    // Mobile landscape + desktop: load forced view mode
-    const savedMode = localStorage.getItem('forcedViewMode') as 'mobile' | 'pc' | null;
-    if (savedMode) {
+    const savedMode = localStorage.getItem("forcedViewMode") as "mobile" | "pc" | null;
+    if (savedMode === "mobile" || savedMode === "pc") {
       setForcedViewModeState(savedMode);
     }
-  }, [isClient])
+  }, [isClient]);
 
   React.useEffect(() => {
     if (!isClient) return;
@@ -105,23 +97,19 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
       const portrait = getIsPortrait();
       const realMobile = isRealMobileDevice();
 
-      // Real mobile in portrait: always mobile view (sidebar overlay, header simplified)
-      if (realMobile && portrait) {
-        setIsMobile(true);
-        if (isRealMobilePhone() && forcedViewMode) {
-          setForcedViewModeState(null);
-          localStorage.removeItem('forcedViewMode');
+      // Phone: landscape rotate se auto PC view NAHI — default mobile layout; PC sirf icon / saved `forcedViewMode === 'pc'`
+      if (isRealMobilePhone()) {
+        if (forcedViewMode === "pc") {
+          setIsMobile(false);
+        } else {
+          setIsMobile(true);
         }
         return;
       }
 
-      // Real mobile in landscape: full PC view (sidebar like PC, not overlay)
-      if (realMobile && !portrait) {
-        if (forcedViewMode === 'mobile') {
-          setIsMobile(true);
-        } else {
-          setIsMobile(false);
-        }
+      // Real mobile in portrait (non-phone tablet-ish rare): mobile chrome
+      if (realMobile && portrait) {
+        setIsMobile(true);
         return;
       }
 
@@ -166,18 +154,23 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     };
   }, [isClient, forcedViewMode, isPortrait])
 
-  const setForcedMode = React.useCallback((mode: 'mobile' | 'pc' | null) => {
+  const setForcedMode = React.useCallback((mode: "mobile" | "pc" | null) => {
     setForcedViewModeState(mode);
     if (mode) {
-      localStorage.setItem('forcedViewMode', mode);
+      localStorage.setItem("forcedViewMode", mode);
     } else {
-      localStorage.removeItem('forcedViewMode');
+      localStorage.removeItem("forcedViewMode");
     }
-    // Only block forced mode when mobile in portrait; allow on mobile landscape and desktop
-    if (isRealMobileDevice() && getIsPortrait()) return;
-    if (mode === 'mobile') {
+    // Phone par bhi PC/Mobile toggle ka asar ho — pehle portrait me early return se icon kaam nahi karta tha
+    if (isRealMobilePhone()) {
+      if (mode === "pc") setIsMobile(false);
+      else if (mode === "mobile") setIsMobile(true);
+      else setIsMobile(true);
+      return;
+    }
+    if (mode === "mobile") {
       setIsMobile(true);
-    } else if (mode === 'pc') {
+    } else if (mode === "pc") {
       setIsMobile(false);
     } else {
       setIsMobile(window.innerWidth < 768);
@@ -189,7 +182,7 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     // Keep SSR and first client render consistent; compute UA-dependent flags only after mount.
     isRealMobile: isClient ? isRealMobilePhone() : false,
     isPortrait,
-    hidePcIcon: isClient ? isRealMobileDevice() : false, // hide PC/Mobile toggle on real mobile (never show in portrait or landscape)
+    hidePcIcon: false,
     forcedViewMode,
     setForcedMode
   }), [isMobile, isPortrait, forcedViewMode, setForcedMode, isClient]);
@@ -260,7 +253,7 @@ function useMobileDetection() {
       isMobile,
       isRealMobile: isRealMobilePhone(),
       isPortrait,
-      hidePcIcon: isRealMobileDevice(),
+      hidePcIcon: false,
       forcedViewMode,
       setForcedMode
     };
@@ -280,6 +273,20 @@ export function useIsMobile(): boolean {
     setMounted(true);
   }, []);
   if (!mounted) return false;
+  return isMobile;
+}
+
+/**
+ * `usePageMemory` jaise hooks: SSR / pehle frame par `null` (layout abhi resolve nahi),
+ * mount ke baad `true` = mobile layout, `false` = desktop — tabhi desktop auto-select chale.
+ */
+export function useIsMobileLayoutResolved(): boolean | null {
+  const { isMobile } = useMobileDetection();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return null;
   return isMobile;
 }
 

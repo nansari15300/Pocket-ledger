@@ -3,6 +3,7 @@
 
 import * as React from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useCompany } from "@/hooks/useCompany";
 import {
   collection,
   query,
@@ -59,7 +60,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useCompany } from "@/hooks/useCompany";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { useDate } from "@/hooks/useDate";
@@ -100,9 +100,9 @@ function formatLastSeen(lastChangedMs: number): string {
 
 export function ChatTab({ conversations, allPotentialContacts, onConversationSelect, selectedConversation, allAppUsers, messages, unreadCounts, handleSendInvite, statuses, unreadAlertsCount = 0, showAlertsOnList = false, onMobileViewChange }: any) {
   const { user } = useAuth();
-  const { company } = useCompany();
+  const { effectiveNotificationSettings, company } = useCompany();
   const { dateSystem, formatDate, formatDateBS } = useDate();
-  const msgSettings = company?.notificationSettings?.message;
+  const msgSettings = effectiveNotificationSettings?.message;
   const showListNotifications = msgSettings?.on !== false && msgSettings?.onList !== false;
   const [searchTerm, setSearchTerm] = React.useState("");
   const [isInviteDialogOpen, setIsInviteDialogOpen] = React.useState(false);

@@ -74,7 +74,6 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { useTransactionVisibleColumns, COLUMN_LABELS } from "../vouchers/transactionColumnVisibility";
 import {
   DropdownMenu,
@@ -136,8 +135,6 @@ export function AccountDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  // Live filter: narration + note title (TransactionsTable)
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -165,14 +162,20 @@ export function AccountDetails({
 
   // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
   // It should show all transaction types for this account, not all transactions for all accounts
+  // Column header filters (Voucher No., User, …) — `useTransactions` mein `filteredByColumn` tabhi chale jab yahan `filters` pass ho
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
-    account, 
-    'account', 
-    dateRange, 
-    undefined, 
-    allAccounts, 
-    transactions
-);
+    account,
+    "account",
+    dateRange,
+    undefined,
+    allAccounts,
+    transactions,
+    undefined,
+    filters,
+    undefined,
+    journalAccountNames,
+    userNames
+  );
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -264,6 +267,8 @@ export function AccountDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (account as any).openingBalanceDate,
+      openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
       transactions: processedTransactions,
       showNarration: showNarration,
       visibleColumns: printVisibleColumns,
@@ -294,6 +299,8 @@ export function AccountDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (account as any).openingBalanceDate,
+      openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
       transactions: processedTransactions,
       showNarration: showNarration,
       visibleColumns: printVisibleColumns,
@@ -628,7 +635,6 @@ export function AccountDetails({
               contextId={account.id}
               openingBalance={openingBalanceForPeriod}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={visibleColumns}
               userNames={userNames}
               onRowClick={handleEditVoucher}
@@ -652,11 +658,6 @@ export function AccountDetails({
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-account-details"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

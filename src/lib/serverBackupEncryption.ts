@@ -83,7 +83,7 @@ async function deriveAesKey(passphrase: string, salt: Uint8Array): Promise<Crypt
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      // TS 5.6+ `Uint8Array<ArrayBufferLike>` vs Web Crypto `BufferSource` — narrow
+      // TS 5.7+ BufferSource narrow — runtime same bytes
       salt: salt as BufferSource,
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
@@ -115,7 +115,7 @@ export async function encryptServerBackupPayloadJson(
   const iv = new Uint8Array(12);
   crypto.getRandomValues(iv);
   const plain = new TextEncoder().encode(plainJsonUtf8);
-  const cipherBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain);
+  const cipherBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, key, plain as BufferSource);
   const cipherBytes = new Uint8Array(cipherBuf);
   return { ivBase64: base64Encode(iv), cipherTextBase64: base64Encode(cipherBytes) };
 }
@@ -131,11 +131,7 @@ export async function decryptServerBackupPayloadJson(
   const key = await deriveAesKey(passphrase, salt);
   const iv = base64Decode(ivBase64);
   const cipherBytes = base64Decode(cipherTextBase64);
-  const plainBuf = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
-    key,
-    cipherBytes as BufferSource
-  );
+  const plainBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv as BufferSource }, key, cipherBytes as BufferSource);
   return new TextDecoder().decode(plainBuf);
 }
 

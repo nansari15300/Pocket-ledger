@@ -1,17 +1,14 @@
 "use client";
 
+import { alternatePdfJsWorkerSrc, setPdfJsWorkerSrc } from "@/lib/pdfjsWorkerSrc";
+
 /**
- * compressFile — Images: A4 @150 DPI max, JPEG out, <= maxKB (default ~150KB band).
- * PDFs: pehle pdf-lib se copy+save (object streams); phir zarurat par pdf.js → JPEG per page → naya PDF (0.5MB tak).
+ * compressFile — A4 @150 DPI max, JPEG out, <= maxKB (default ~150KB band).
  * Mobile WebView: bade image par decode/canvas fail — pehle createImageBitmap se max side 4096 (PC jaisa stable).
  */
 
 const MAX_KB_DEFAULT = 150;
 const MIN_KB_DEFAULT = 75;
-/** Default post-compress ceiling (bytes) — voucher forms ke 0.5MB check par align */
-const DEFAULT_MAX_PDF_BYTES_AFTER = 512 * 1024;
-/** Bahut zyada pages par browser hang / OOM — sirf itne tak raster fallback */
-const MAX_PDF_PAGES_FOR_RASTER = 50;
 
 const A4_PORTRAIT = { w: 1240, h: 1754 };
 const A4_LANDSCAPE = { w: 1754, h: 1240 };
@@ -21,17 +18,10 @@ const MAX_DECODE_DIMENSION = 4096;
 
 export async function compressFile(
   file: File,
-  options?: { maxKB?: number; minKB?: number; maxPdfBytesAfter?: number }
+  options?: { maxKB?: number; minKB?: number }
 ): Promise<File> {
   const MAX_KB = options?.maxKB ?? MAX_KB_DEFAULT;
   const MIN_KB = options?.minKB ?? MIN_KB_DEFAULT;
-  const maxPdfBytes =
-    options?.maxPdfBytesAfter ?? DEFAULT_MAX_PDF_BYTES_AFTER;
-
-  // PDF: pehle lossless-ish re-save, phir heavy raster — taaki 0.5MB ke andar aane ki koshish ho
-  if (file.type === "application/pdf") {
-    return compressPdfFile(file, maxPdfBytes);
-  }
 
   if (!file.type.startsWith("image/")) return file;
 
@@ -190,150 +180,138 @@ function canvasToBlob(
   });
 }
 
+/** Voucher attachment cap (~0.5MB) ke liye PDF page cap — zyada pages par memory/time */
+const MAX_PDF_PAGES_COMPRESS = 32;
+/** Rasterize width cap; neeche quality / width ghatate hue maxBytes tak */
+const PDF_RASTER_MAX_WIDTH_INITIAL = 1120;
+
+async function pdfJsRenderPageToDataUrl(
+  page: { getViewport: (p: { scale: number }) => { width: number; height: number }; render: (p: unknown) => { promise: Promise<void> } },
+  maxW: number,
+  jpegQuality: number
+): Promise<{ dataUrl: string; w: number; h: number }> {
+  const baseVp = page.getViewport({ scale: 1 });
+  const scale = Math.min(1, maxW / baseVp.width);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  const w = Math.max(1, Math.floor(viewport.width));
+  const h = Math.max(1, Math.floor(viewport.height));
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not available.");
+  const task = page.render({ canvasContext: ctx, viewport, canvas } as Parameters<typeof page.render>[0]);
+  await task.promise;
+  const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
+  return { dataUrl, w, h };
+}
+
+async function buildCompressedPdfBlob(
+  pdf: { numPages: number; getPage: (i: number) => Promise<unknown> },
+  numPages: number,
+  jpegQuality: number,
+  maxW: number
+): Promise<Blob> {
+  const { jsPDF } = await import("jspdf");
+  let doc: import("jspdf").jsPDF | null = null;
+  for (let i = 1; i <= numPages; i++) {
+    const page = (await pdf.getPage(i)) as Parameters<typeof pdfJsRenderPageToDataUrl>[0];
+    const { dataUrl, w, h } = await pdfJsRenderPageToDataUrl(page, maxW, jpegQuality);
+    if (!doc) {
+      doc = new jsPDF({
+        unit: "px",
+        format: [w, h],
+        orientation: w > h ? "landscape" : "portrait",
+        compress: true,
+      });
+      doc.addImage(dataUrl, "JPEG", 0, 0, w, h, undefined, "FAST");
+    } else {
+      doc.addPage([w, h], w > h ? "l" : "p");
+      doc.addImage(dataUrl, "JPEG", 0, 0, w, h, undefined, "FAST");
+    }
+  }
+  if (!doc) throw new Error("Empty PDF.");
+  return doc.output("blob") as Blob;
+}
+
 /**
- * PDF ko chhota banane ke liye: (1) pdf-lib copy+save, (2) fail par har page ko JPEG canvas se → naya PDF.
- * Sab attempts ke baad bhi limit se upar ho to smallest file return (caller toast dikha sakta hai).
+ * PDF ko JPEG pages+jsPDF se dubara bandh kar chhota karo (path: voucher ~0.5MB).
+ * Pehle `compressFile` image-only tha — PDF pass-through hone se Payment In upload fail ho raha tha.
  */
-export async function compressPdfFile(
-  file: File,
-  maxBytes: number = DEFAULT_MAX_PDF_BYTES_AFTER
-): Promise<File> {
-  if (file.type !== "application/pdf") return file;
+export async function compressPdfForAttachment(file: File, maxBytes: number): Promise<File> {
+  const isPdf =
+    (file.type || "").toLowerCase() === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+  if (!isPdf || typeof window === "undefined") return file;
   if (file.size <= maxBytes) return file;
 
-  const candidates: File[] = [file];
+  const pdfjsLib = await import("pdfjs-dist");
+  const pdfjs = (pdfjsLib as { default?: unknown }).default ?? pdfjsLib;
+  const version =
+    (pdfjsLib as { version?: string }).version ?? (pdfjs as { version?: string }).version ?? "5.4.624";
+  setPdfJsWorkerSrc(pdfjs as never, version);
 
-  const shrunk = await tryPdfLibShrink(file);
-  if (shrunk) candidates.push(shrunk);
-
-  let bestAfterShrink = shrunk ?? file;
-  if (bestAfterShrink.size <= maxBytes) return bestAfterShrink;
-
-  const raster = await tryRasterizePdfToSmaller(file, maxBytes);
-  candidates.push(raster);
-
-  return candidates.reduce((a, b) => (a.size <= b.size ? a : b));
-}
-
-/** pdf-lib: naya document + copy pages — kai PDFs isse hi chhote ho jate hain (duplicate streams hata) */
-async function tryPdfLibShrink(file: File): Promise<File | null> {
+  const raw = new Uint8Array(await file.arrayBuffer());
+  let pdf: { numPages: number; getPage: (i: number) => Promise<unknown>; destroy: () => Promise<void> };
   try {
-    const { PDFDocument } = await import("pdf-lib");
-    const bytes = await file.arrayBuffer();
-    const src = await PDFDocument.load(bytes, {
-      ignoreEncryption: true,
-      updateMetadata: false,
-    });
-    const out = await PDFDocument.create();
-    const copied = await out.copyPages(src, src.getPageIndices());
-    copied.forEach((p) => out.addPage(p));
-    const saved = await out.save({ useObjectStreams: true });
-    // Copy: pdf-lib bytes ka type BlobPart se match (SharedArrayBuffer union avoid)
-    const bytesCopy = new Uint8Array(saved);
-    return new File([bytesCopy], file.name, {
-      type: "application/pdf",
-      lastModified: Date.now(),
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * pdf.js se render + JPEG embed (pdf-lib) — multi-pass: width/quality kam karte hue 0.5MB ke paas lane ki koshish.
- */
-async function tryRasterizePdfToSmaller(
-  file: File,
-  maxBytes: number
-): Promise<File> {
-  if (typeof document === "undefined") return file;
-
-  try {
-    const pdfjsLib = await import("pdfjs-dist");
-    const pdfjs = pdfjsLib.default || pdfjsLib;
-    const version =
-      (pdfjsLib as { version?: string }).version ??
-      (pdfjs as { version?: string }).version ??
-      "5.4.624";
-
-    const { setPdfJsWorkerSrc } = await import("@/lib/pdfjsWorkerSrc");
-    setPdfJsWorkerSrc(pdfjs, version);
-
-    const data = await file.arrayBuffer();
-    const loadingTask = pdfjs.getDocument({ data });
-    const pdfSrc = await loadingTask.promise;
-    // Truncate mat karo — 50+ pages par sirf pdf-lib shrink rely (browser hang / OOM se bachne ke liye)
-    if (pdfSrc.numPages > MAX_PDF_PAGES_FOR_RASTER) {
-      await pdfSrc.destroy();
+    const loadingTask = (pdfjs as { getDocument: (src: { data: Uint8Array }) => { promise: Promise<typeof pdf> } }).getDocument({ data: raw });
+    pdf = await loadingTask.promise;
+  } catch (firstErr) {
+    console.warn("[compressPdfForAttachment] getDocument retry", firstErr);
+    try {
+      const ns = pdfjs as { GlobalWorkerOptions?: { workerSrc?: string } };
+      const cur = ns.GlobalWorkerOptions?.workerSrc;
+      if (ns.GlobalWorkerOptions) ns.GlobalWorkerOptions.workerSrc = alternatePdfJsWorkerSrc(cur, version);
+      const loadingTask2 = (pdfjs as { getDocument: (src: { data: Uint8Array }) => { promise: Promise<typeof pdf> } }).getDocument({ data: raw });
+      pdf = await loadingTask2.promise;
+    } catch {
       return file;
     }
-    const numPages = pdfSrc.numPages;
+  }
 
-    const passes: { maxW: number; jpegQ: number }[] = [
-      { maxW: 1024, jpegQ: 0.62 },
-      { maxW: 820, jpegQ: 0.52 },
-      { maxW: 640, jpegQ: 0.44 },
-      { maxW: 480, jpegQ: 0.38 },
-    ];
-
-    let bestFile: File = file;
-
-    for (const pass of passes) {
-      const { PDFDocument } = await import("pdf-lib");
-      const outDoc = await PDFDocument.create();
-
-      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-        const page = await pdfSrc.getPage(pageNum);
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(pass.maxW / base.width, 2.0);
-        const viewport = page.getViewport({ scale });
-
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.floor(viewport.width));
-        canvas.height = Math.max(1, Math.floor(viewport.height));
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) continue;
-
-        await page.render({ canvasContext: ctx, viewport } as any).promise;
-
-        const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob((b) => resolve(b), "image/jpeg", pass.jpegQ);
-        });
-        if (!blob) continue;
-
-        const jpgBytes = await blob.arrayBuffer();
-        const image = await outDoc.embedJpg(jpgBytes);
-        const w = image.width;
-        const h = image.height;
-        const pdfPage = outDoc.addPage([w, h]);
-        pdfPage.drawImage(image, {
-          x: 0,
-          y: 0,
-          width: w,
-          height: h,
-        });
-      }
-
-      const saved = await outDoc.save({ useObjectStreams: true });
-      const bytesCopy = new Uint8Array(saved);
-      const candidate = new File([bytesCopy], file.name, {
-        type: "application/pdf",
-        lastModified: Date.now(),
-      });
-
-      if (candidate.size < bestFile.size) bestFile = candidate;
-      if (candidate.size <= maxBytes) break;
+  try {
+    if (pdf.numPages > MAX_PDF_PAGES_COMPRESS) {
+      throw new Error(
+        `This PDF has too many pages (max ${MAX_PDF_PAGES_COMPRESS}). Split the file or shorten it.`
+      );
     }
-
+    const n = pdf.numPages;
+    let quality = 0.78;
+    let maxW = PDF_RASTER_MAX_WIDTH_INITIAL;
+    let blob = await buildCompressedPdfBlob(pdf, n, quality, maxW);
+    let attempts = 0;
+    while (blob.size > maxBytes && attempts < 16) {
+      attempts += 1;
+      if (quality > 0.42) {
+        quality = Math.max(0.38, quality - 0.07);
+      } else if (maxW > 560) {
+        maxW = Math.floor(maxW * 0.82);
+        quality = 0.72;
+      } else {
+        break;
+      }
+      blob = await buildCompressedPdfBlob(pdf, n, quality, maxW);
+    }
+    const baseName = file.name.replace(/\.[^/.]+$/, "") || "document";
+    return new File([blob], `${baseName}.pdf`, { type: "application/pdf", lastModified: Date.now() });
+  } finally {
     try {
-      await pdfSrc.destroy(); // pdf.js: worker / document cleanup
+      await pdf.destroy();
     } catch {
       /* ignore */
     }
-
-    return bestFile;
-  } catch {
-    return file;
   }
+}
+
+/** Payment / voucher attachments: image → compressFile; PDF → raster+repack; baaki as-is. */
+export async function compressVoucherAttachment(file: File, maxBytes: number): Promise<File> {
+  const t = (file.type || "").toLowerCase();
+  if (t.startsWith("image/")) {
+    const maxKB = Math.max(24, Math.floor(maxBytes / 1024));
+    const minKB = Math.min(50, Math.floor(maxKB * 0.45));
+    return compressFile(file, { maxKB, minKB });
+  }
+  if (t === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    return compressPdfForAttachment(file, maxBytes);
+  }
+  return file;
 }

@@ -19,10 +19,12 @@ function normalizePrivateKey(key?: string): string | undefined {
   return k;
 }
 
-/** API routes: `getAdminApp` se pehle — env missing par 503 (throw nahi) */
+/** API routes: service account env poora hai ya nahi (503 + client fallback ke liye). */
 export function isFirebaseAdminConfigured(): boolean {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
   return !!(projectId && clientEmail && privateKey);
 }
@@ -30,7 +32,10 @@ export function isFirebaseAdminConfigured(): boolean {
 export function getAdminApp() {
   if (admin.apps.length) return admin.app();
 
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+  // Web app jis project me hai, Admin bhi wahi hona chahiye (warna likha data client ko dikhega nahi).
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 

@@ -20,6 +20,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { ExpenseGroup } from "./types";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+
+function createLocalEntityId(prefix: string): string {
+  // Local-first mode ke liye deterministic client-side id generation.
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -108,17 +120,34 @@ export function CreateExpenseGroupDialog({ onGroupCreated, children, isOpen, onO
         return;
       }
 
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_groups`), {
-        name: values.name.trim(),
-        ownerId: user.uid,
-        companyId: companyId,
-        parentId: values.parentId,
-        createdAt: serverTimestamp(),
-      });
+      let createdId = "";
+      if (isLocalOnlyMode()) {
+        // Local-only mode me group browser DB me save karke background sync queue me dalo.
+        createdId = createLocalEntityId("expense_group");
+        const payload = {
+          id: createdId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "expense_groups", createdId, payload);
+        await enqueueCompanyDocOutbox(companyId, "expense_groups", "create", createdId, payload);
+      } else {
+        const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_groups`), {
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId: companyId,
+          parentId: values.parentId,
+          createdAt: serverTimestamp(),
+        });
+        createdId = docRef.id;
+      }
 
       toast({ title: "Group Created!", description: `"${values.name}" has been successfully created.` });
-      
-      onGroupCreated(docRef.id);
+      onGroupCreated(createdId);
       if (saveAndNew) {
         form.reset({ name: "", parentId: "expenses" });
       } else {

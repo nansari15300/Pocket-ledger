@@ -29,12 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import {
-  sortTransactionsWithFiscalMergeForCompany,
-  DEFAULT_TRANSACTION_SORT_ORDER,
-} from "@/lib/transactionSort";
-import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
-import { transactionMatchesNarrationNoteSearch } from "@/lib/transactionNarrationNoteSearch";
+import { sortTransactionsWithFiscalMergeForCompany, DEFAULT_TRANSACTION_SORT_ORDER } from "@/lib/transactionSort";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AlertCircle, Filter, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, MoreVertical, Pencil, ChevronDown, Columns3, Printer, History } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -85,8 +80,6 @@ export type OverdueTransactionRow = {
   userId?: string;
   userName?: string;
   narration?: string;
-  /** Note voucher title (when source voucher is type note) */
-  title?: string;
 };
 
 const safeToDate = (date: any): Date | null => {
@@ -173,8 +166,6 @@ export function OverdueAccountView({
     sessionStorage.setItem("showNarration", String(checked));
   };
 
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
-
   const filteredRows = useMemo(() => {
     let list = overdueTransactions;
     const typeVal = (filters.type || "").toLowerCase();
@@ -200,16 +191,11 @@ export function OverdueAccountView({
         return name.includes(userQ) || (t.userId || "").toLowerCase().includes(userQ);
       });
     }
-    const narrQ = narrationNoteSearch.trim();
-    if (narrQ) {
-      list = list.filter((t) => transactionMatchesNarrationNoteSearch(t, narrQ));
-    }
     return list;
-  }, [overdueTransactions, filters, userNames, narrationNoteSearch]);
+  }, [overdueTransactions, filters, userNames]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedRows = useMemo(
     () => sortTransactionsWithFiscalMergeForCompany(filteredRows, sortBy, sortOrder, undefined, company),
     [filteredRows, sortBy, sortOrder, company]
@@ -572,11 +558,6 @@ export function OverdueAccountView({
                 />
                 <label htmlFor="show-narration-overdue" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-overdue"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

@@ -63,7 +63,8 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import {
   Dialog,
   DialogDescription,
@@ -78,7 +79,6 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -152,7 +152,6 @@ export function ExpenseAccountDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
@@ -290,8 +289,7 @@ export function ExpenseAccountDetails({
     [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -348,6 +346,8 @@ export function ExpenseAccountDetails({
       dateRangeText: dateRangeText,
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (account as any).openingBalanceDate,
+      openingBalanceNarration: account.openingBalanceNarration ?? null,
       transactions: processedTransactions,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -511,11 +511,21 @@ export function ExpenseAccountDetails({
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  <DollarSign className="h-6 w-6" />
-                </AvatarFallback>
-              </Avatar>
+              {/* `fileUrl` pehle kabhi render hi nahi hota tha; local IndexedDB refs ke liye ResolvedEntityAvatar */}
+              <EntityFileAttachmentHover fileUrl={account.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={account.fileUrl}
+                  alt={account.name}
+                  fallbackSlot={
+                    (account as any).isSystemReserved ? (
+                      <Lock className="h-6 w-6 text-muted-foreground" />
+                    ) : (
+                      <DollarSign className="h-6 w-6 text-muted-foreground" />
+                    )
+                  }
+                />
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate flex items-center gap-2">
                   {(account as any).isSystemReserved && <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
@@ -626,8 +636,10 @@ export function ExpenseAccountDetails({
               context="expense"
               contextId={account.id}
               openingBalance={openingBalanceForPeriod}
+              openingBalanceNarration={account.openingBalanceNarration}
+              openingBalanceAttachmentUrls={account.documentFileUrls}
+              openingBalanceDate={(account as any).openingBalanceDate}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               userNames={userNames}
               journalAccountNames={journalAccountNames}
@@ -652,11 +664,6 @@ export function ExpenseAccountDetails({
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-expense-account"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
@@ -859,8 +866,10 @@ export function ExpenseAccountDetails({
               context="expense"
               contextId={account.id}
               openingBalance={openingBalanceForPeriod}
+              openingBalanceNarration={account.openingBalanceNarration}
+              openingBalanceAttachmentUrls={account.documentFileUrls}
+              openingBalanceDate={(account as any).openingBalanceDate}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               userNames={userNames}
               journalAccountNames={journalAccountNames}

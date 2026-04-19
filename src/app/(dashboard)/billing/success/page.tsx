@@ -5,6 +5,10 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { applyVerifiedStripePayloadToLocalCompany } from "@/lib/applyStripePlanToLocalCompany";
+import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
+import { writePlanAuthoritativeSyncTimestamp } from "@/lib/companyPlanServerSync";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -35,7 +39,7 @@ function BillingSuccessInner() {
 
       const runSync = async (): Promise<{ ok: boolean; detail: string | null }> => {
         const idToken = await user.getIdToken();
-        const res = await fetch("/api/payments/sync-stripe-session", {
+        const res = await fetch(getBillingApiUrl("/api/payments/sync-stripe-session"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -44,11 +48,38 @@ function BillingSuccessInner() {
           body: JSON.stringify({ sessionId }),
         });
         let detail: string | null = null;
+        let data: {
+          error?: string;
+          localApply?: boolean;
+          payload?: VerifiedLocalPlanApplyPayload;
+          /** Firestore pe plan patch ho chuka — yahi local SQLite + header profile align karta hai */
+          mirrorLocal?: VerifiedLocalPlanApplyPayload;
+        } = {};
         try {
-          const data = (await res.json()) as { error?: string };
+          data = (await res.json()) as typeof data;
           if (typeof data?.error === "string") detail = data.error;
         } catch {
           /* ignore */
+        }
+        // Firestore company missing: local SQLite only
+        if (res.ok && data.localApply === true && data.payload) {
+          const applied = await applyVerifiedStripePayloadToLocalCompany(data.payload, user.uid);
+          if (applied.ok === true) {
+            writePlanAuthoritativeSyncTimestamp(data.payload.companyId);
+            return { ok: true, detail: null };
+          }
+          detail = applied.reason;
+          return { ok: false, detail };
+        }
+        // Firestore patch ke baad local mirror — pehle is branch ke bina profile Basic reh jata tha
+        if (res.ok && data.mirrorLocal) {
+          const applied = await applyVerifiedStripePayloadToLocalCompany(data.mirrorLocal, user.uid);
+          if (applied.ok === true) {
+            writePlanAuthoritativeSyncTimestamp(data.mirrorLocal.companyId);
+            return { ok: true, detail: null };
+          }
+          detail = applied.reason;
+          return { ok: false, detail };
         }
         return { ok: res.ok, detail };
       };

@@ -102,6 +102,10 @@ export type PrintPayload = {
   dateRangeText: string;
   vouchersCount: number;
   openingBalance: number;
+  /** Entity print: OB row Date column (party/bank/item…) */
+  openingBalanceDate?: unknown;
+  /** Entity print: OB ke neeche narration line */
+  openingBalanceNarration?: string | null;
   transactions: any[];
   showNarration?: boolean;
   journalAccountNames?: Record<string, string>;

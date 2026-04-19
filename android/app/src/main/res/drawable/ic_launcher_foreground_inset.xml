@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive icon: foreground PNG kabhi canvas me shift hota — symmetric inset se charo taraf background/bar barabar dikhe -->
+<!-- Adaptive icon alignment: extra horizontal nudge (~1px) to left -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:drawable="@mipmap/ic_launcher_foreground"
-    android:insetLeft="6%"
-    android:insetTop="6%"
-    android:insetRight="6%"
-    android:insetBottom="6%" />
+    android:insetLeft="3%"
+    android:insetTop="7.25%"
+    android:insetRight="9%"
+    android:insetBottom="4.75%" />

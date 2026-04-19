@@ -4,7 +4,7 @@ import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -21,14 +21,15 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { firestore } from "@/lib/firebase";
-import { collection, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { collection, query, where, getDocs, onSnapshot, serverTimestamp } from "firebase/firestore";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
@@ -41,7 +42,7 @@ import type { Item } from "@/components/items/types";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -152,7 +153,7 @@ export function CreateProductionForm({
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
   const { dateSystem, formatDate } = useDate();
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { processedItems } = useVouchers();
@@ -163,6 +164,7 @@ export function CreateProductionForm({
   const [prefillFinishedGoodName, setPrefillFinishedGoodName] = useState("");
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachFileInputId = useId();
   const [files, setFiles] = useState<(File | string)[]>([]);
   const initialFilesRef = useRef<string[]>([]);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
@@ -237,20 +239,36 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [companyId, company, form, isAutoVoucherEnabled, voucherPrefixes]);
 
   useEffect(() => {
-    if (voucher) {
+    const NEW_PRODUCTION = "__new_production__";
+    const hydrateFilesAndUnassigned = (v: any) => {
+      const urls = v.unassignedFile?.url ? [v.unassignedFile.url] : (v.fileUrls || []);
+      setFiles(urls);
+      initialFilesRef.current = urls.filter((f: any) => typeof f === "string");
+      if (v.unassignedFile) {
+        form.setValue("unassignedFile", v.unassignedFile);
+      }
+    };
+    if (voucher?.id) {
       const vid = voucher.id;
       const isSameVoucher = lastResetVoucherIdRef.current === vid;
-      if (vid && isSameVoucher && isFormDirty) return;
-      if (vid) lastResetVoucherIdRef.current = vid;
+      if (isSameVoucher) return;
+      lastResetVoucherIdRef.current = vid;
       const initialValues = getInitialFormValues(voucher);
       if (isEditingAndConverting) {
         initialValues.productionNumber = "";
       }
       form.reset(initialValues);
-      if(voucher.fileUrls) { setFiles(voucher.fileUrls); initialFilesRef.current = voucher.fileUrls; }
-      if(voucher.unassignedFile) {
-        form.setValue('unassignedFile', voucher.unassignedFile);
+      hydrateFilesAndUnassigned(voucher);
+    } else if (voucher) {
+      // Naya production: template bina `id` — pehle yahan har dirty toggle par reset; pick ki File list clear ho jati thi (Contra jaisa guard).
+      if (lastResetVoucherIdRef.current === NEW_PRODUCTION && isFormDirty) return;
+      lastResetVoucherIdRef.current = NEW_PRODUCTION;
+      const initialValues = getInitialFormValues(voucher);
+      if (isEditingAndConverting) {
+        initialValues.productionNumber = "";
       }
+      form.reset(initialValues);
+      hydrateFilesAndUnassigned(voucher);
     } else {
       lastResetVoucherIdRef.current = null;
     }
@@ -431,7 +449,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
     for (const file of filesToProcess) {
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
@@ -461,94 +480,97 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Too Large After Compression",
-            description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
+            title: "File Still Too Large",
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-        
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Error handling file:", error);
         toast({
           variant: "destructive",
-          title: "File Processing Error",
-          description: "Could not process the file. It might be corrupted.",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
         });
       }
     }
+    e.target.value = "";
   };
 
   const onSubmit = async (data: ProductionFormValues) => {
     if (!user || !companyId) return;
 
     try {
-      const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
-      let originalVoucherDate: Date = voucherDate;
       if (isEditing) {
         const isOwnRecord = voucher?.userId === user.uid;
         assertCanEdit(canEditRecord, isOwnRecord, voucher);
-        originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
+        const originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         assertCanPerformBackdated(canPerformBackdatedAction, "edit", originalVoucherDate);
       } else {
         assertCan(can, "create_records");
         assertCanPerformBackdated(canPerformBackdatedAction, "create", data.date);
       }
 
-      const fp = runFiscalVoucherPreflight({
-        company,
-        can,
-        isEditing: isEditing,
-        recordDate: voucherDate,
-        originalVoucherDate: isEditing ? originalVoucherDate : null,
-      });
-      if (fp.ok === false) {
-        if (fp.message) toast({ variant: "destructive", title: "Permission Denied", description: fp.message });
-        return;
-      }
-
       setIsLoading(true);
 
-      const existingFileUrls = files.filter((f): f is string => typeof f === 'string');
+      let existingFileUrls = files.filter((f): f is string => typeof f === 'string');
       if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
         existingFileUrls.push(data.unassignedFile.url);
       }
 
       const newFilesToUpload = files.filter((f): f is File => f instanceof File);
+      let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
         if (!limitCheck.allowed) {
           toast({ variant: "destructive", title: "Storage limit reached", description: limitCheck.message });
           setIsLoading(false);
           return;
         }
+        if (isLocalOnlyMode()) {
+          const voucherIdForLocalAttachments =
+            isEditingAndConverting && voucher?.id
+              ? null
+              : (isEditing ? voucher.id : null);
+          const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+            await appendLocalOnlyVoucherFilesToUrls({
+              companyId,
+              storageFolder: "production",
+              existingFileUrls,
+              newFiles: newFilesToUpload,
+              maxFileCount: fileAttachmentLimits.maxFileCount,
+              existingVoucherId: voucherIdForLocalAttachments,
+            });
+          existingFileUrls = merged;
+          if (preGen) preGeneratedVoucherId = preGen;
+          try {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          } catch {
+            /* offline */
+          }
+        } else {
+          const filePromises = newFilesToUpload.map(async (file) => {
+            const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
+            const { storage } = await import("@/lib/firebase");
+            const fileRef = ref(storage, `companies/${companyId}/vouchers/production/${Date.now()}_${file.name}`);
+            await uploadBytes(fileRef, file);
+            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            return getDownloadURL(fileRef);
+          });
+          const newFileUrls = await Promise.all(filePromises);
+          existingFileUrls.push(...newFileUrls);
+        }
       }
-
-      const filePromises = newFilesToUpload.map(async (file) => {
-        const { ref, uploadBytes, getDownloadURL } = await import("firebase/storage");
-        const { storage } = await import("@/lib/firebase");
-        const fileRef = ref(storage, `companies/${companyId}/vouchers/production/${Date.now()}_${file.name}`);
-        await uploadBytes(fileRef, file);
-        await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-        return getDownloadURL(fileRef);
-      });
-
-      const newFileUrls = await Promise.all(filePromises);
-      existingFileUrls.push(...newFileUrls);
 
       const voucherData = {
         type: "production",
@@ -571,11 +593,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         unassignedFile: data.unassignedFile,
       };
 
-      const result = await saveVoucher(companyId, user.uid, voucherData, isEditing ? voucher.id : null);
+      const result = await saveVoucher(
+        companyId,
+        user.uid,
+        voucherData,
+        isEditing ? voucher.id : null,
+        undefined,
+        preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
+      );
 
       toast({ title: isEditing ? "Production order updated" : "Production order created", description: "Successfully saved." });
-      triggerSync();
-
       if (companyId && company) {
         const amount = Number(voucherData.total ?? voucherData.totalCost) || 0;
         const voucherNumber = data.productionNumber ?? voucher?.productionNumber ?? "";
@@ -646,10 +673,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isOwnRecord = voucher?.userId === user.uid;
       assertCanEdit(canEditRecord, isOwnRecord, voucher);
       setIsLoading(true);
-      const { deleteDoc, doc } = await import("firebase/firestore");
-      await deleteDoc(doc(firestore, `companies/${companyId}/vouchers`, voucher.id));
-      toast({ title: "Deleted", description: "Production order deleted successfully." });
-      triggerSync();
+      // Local/offline compatible delete: production voucher ko recycle bin me move karo.
+      await patchVoucherFields(companyId, voucher.id, {
+        isDeleted: true,
+        deletedAt: serverTimestamp(),
+        deletedBy: user?.uid || "",
+      });
+      toast({ title: "Moved to Bin", description: "Production order moved to recycle bin." });
       onVoucherAction?.('cancelled');
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to delete", variant: "destructive" });
@@ -1143,36 +1173,33 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     />
                   ))}
                   {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                    <FormControl>
-                      <div 
+                    <>
+                      <label
+                        htmlFor={attachFileInputId}
                         className={cn(
                           "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                           allowAttachments && fileAttachmentLimits.maxFileCount > 0
                             ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                            : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
                         )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
-                          }
-                        }}
                       >
                         <Upload className="h-6 w-6" />
                         <span className="text-xs mt-1">Add File</span>
-                        <Input 
-                          type="file" 
-                          className="hidden"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept={[
-                            fileAttachmentLimits.allowImage ? "image/*" : "",
-                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                          multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                        />
-                      </div>
-                    </FormControl>
+                      </label>
+                      <Input
+                        id={attachFileInputId}
+                        type="file"
+                        className="sr-only"
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        accept={[
+                          fileAttachmentLimits.allowImage ? "image/*" : "",
+                          fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                        ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                        multiple={fileAttachmentLimits.maxFileCount > 1}
+                        disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                      />
+                    </>
                   )}
                 </div>
               </RestrictedFileUploader>
@@ -1207,9 +1234,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               <Button type="button" className={cn("w-full", BTN_PRINT_CLASS, "opacity-60")} disabled>
                 Save & Print
               </Button>
-              {/* Row 1: Cancel (left) | Approve (middle) | Save (right) */}
+              {/* Row 1: Cancel | Save (middle) | Approve (right) — baaki voucher forms jaisa */}
               <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                 Cancel
+              </Button>
+              <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                {isLoading ? "..." : "Save"}
               </Button>
               {voucher?.id ? (
                 <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) { approveAfterSaveRef.current = true; form.handleSubmit(onSubmit)(); } else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -1220,9 +1250,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {isLoading ? "..." : "Save & Approve"}
                 </Button>
               ) : null}
-              <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                {isLoading ? "..." : "Save"}
-              </Button>
             </div>
           ) : (
             <>
@@ -1254,7 +1281,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
                 </Button>

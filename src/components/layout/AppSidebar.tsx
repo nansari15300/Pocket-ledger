@@ -60,6 +60,12 @@ import { appNavHref } from "@/lib/appNavHref";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import type { Company as CompanyData } from "@/hooks/useCompany";
 import { Badge } from "../ui/badge";
+import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
+import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
+import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
+import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
+import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
+import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 
 
 type MenuItem = {
@@ -127,8 +133,16 @@ export function AppSidebar() {
   const router = useRouter();
   const { user, customUser } = useAuth();
   const { can } = usePermissions();
-  const { company } = useCompany();
-  const { vouchers, processedStaff, processedTaxes, processedExpenseAccounts } = useVouchers();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
+  const {
+    vouchers,
+    processedStaff,
+    processedTaxes,
+    processedExpenseAccounts,
+    processedParties,
+    processedAccounts,
+    processedItems,
+  } = useVouchers();
   const { isOpen, isMobile, setIsOpen } = useSidebar();
   /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
   const isStaticApp = process.env.NEXT_PUBLIC_STATIC_BUILD === "1";
@@ -143,7 +157,32 @@ export function AppSidebar() {
     [isStaticApp, router, isMobile, setIsOpen]
   );
   const [featureConfig, setFeatureConfig] = useState<Record<string, boolean> | null>(null);
-  const [loadingFeatures, setLoadingFeatures] = useState(true);
+  const defaultFeatureConfig = useMemo(() => {
+    // Offline fallback: basic profile ke hisaab se selected premium menus default off rakho.
+    return {
+      dashboard: true,
+      party: true,
+      "bank-cash": true,
+      staff: true,
+      tax: true,
+      incomes: true,
+      items: true,
+      reports: true,
+      gallery: true,
+      production: false,
+      "sale-note": false,
+      "purchase-note": false,
+      quotations: false,
+      messages: true,
+      billing: true,
+      "distributor-signup": false,
+      backup: true,
+      "import-export": true,
+      "recycle-bin": true,
+      settings: true,
+    } as Record<string, boolean>;
+  }, []);
+  const { featureConfig: cachedFeatureConfig, loading: loadingFeatures } = useCachedFeatureConfig(defaultFeatureConfig);
   const [pendingHandovers, setPendingHandovers] = useState(0);
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -156,8 +195,22 @@ export function AppSidebar() {
 
   const showApproveInSidebar =
     can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onEntity !== false;
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onEntity !== false;
+
+  const partyIdSetForSidebar = useMemo(
+    () => new Set((processedParties || []).map((p: { id: string }) => p.id).filter(Boolean)),
+    [processedParties]
+  );
+  // Bank/items: list-page jaisa — sirf is company ke master ids jo voucher line me dikhte hain
+  const bankAccountIdSetForSidebar = useMemo(
+    () => new Set((processedAccounts || []).map((a: { id: string }) => a.id).filter(Boolean)),
+    [processedAccounts]
+  );
+  const itemIdSetForSidebar = useMemo(
+    () => new Set((processedItems || []).map((i: { id: string }) => i.id).filter(Boolean)),
+    [processedItems]
+  );
 
   const pendingCountByEntity = useMemo(() => {
     const out: Record<string, number> = {};
@@ -174,26 +227,20 @@ export function AppSidebar() {
     out.incomes = 0;
 
     pending.forEach((v: any) => {
-      const hasParty = !!v.partyId;
-      const hasBankCash = !!(v.fromAccountId || v.toAccountId || v.accountId);
-      const isAddSalaryVoucher =
-        (v.type === "journal" && v.subType === "add_salary") || v.type === "add_salary";
+      // Party ledger jaisa: journal `entries` bina `partyId` — list/header pe count hai, sidebar pe pehle miss ho raha tha
+      const hasParty = partyIdSetForSidebar.size > 0 && collectPartyIdsTouchedByUnapprovedVoucher(v, partyIdSetForSidebar).size > 0;
+      const hasBankCash =
+        bankAccountIdSetForSidebar.size > 0 &&
+        collectBankAccountIdsTouchedByUnapprovedVoucher(v, bankAccountIdSetForSidebar).size > 0;
       const hasStaff =
-        !!v.staffId ||
-        (isAddSalaryVoucher &&
-          Array.isArray(v.entries) &&
-          v.entries.some((e: any) => {
-            const accountId = e?.accountId;
-            if (!accountId || !staffIdSet.has(accountId)) return false;
-            if (Number(e?.credit || 0) <= 0) return false;
-            return !String(e?.narration || "").includes("(Staff ID:");
-          }));
+        staffIdSet.size > 0 && collectStaffIdsTouchedByUnapprovedVoucher(v, staffIdSet).size > 0;
       const hasTax =
-        !!v.taxAccountId ||
-        (Array.isArray(v.lineItems) && v.lineItems.some((l: any) => l.taxAccountId)) ||
+        (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ||
+        (Array.isArray(v.lineItems) &&
+          v.lineItems.some((l: any) => l.taxAccountId && taxIdSet.has(l.taxAccountId))) ||
         (Array.isArray(v.entries) && v.entries.some((e: any) => e.accountId && taxIdSet.has(e.accountId)));
       const hasItems =
-        Array.isArray(v.lineItems) && v.lineItems.some((l: any) => l.itemId);
+        itemIdSetForSidebar.size > 0 && collectItemIdsTouchedByUnapprovedVoucher(v, itemIdSetForSidebar).size > 0;
       const hasIncomes =
         (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) ||
         (v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) ||
@@ -208,23 +255,21 @@ export function AppSidebar() {
       if (hasIncomes) out.incomes += 1;
     });
     return out;
-  }, [vouchers, processedStaff, processedTaxes, processedExpenseAccounts, showApproveInSidebar]);
+  }, [
+    vouchers,
+    processedStaff,
+    processedTaxes,
+    processedExpenseAccounts,
+    showApproveInSidebar,
+    partyIdSetForSidebar,
+    bankAccountIdSetForSidebar,
+    itemIdSetForSidebar,
+  ]);
 
   useEffect(() => {
-    setLoadingFeatures(true);
-    const unsub = onSnapshot(doc(firestore, "app_settings", "features"), (docSnap) => {
-      if (docSnap.exists()) {
-        setFeatureConfig(docSnap.data());
-      } else {
-        // If no config, enable all by default
-        const defaultConfig: Record<string, boolean> = {};
-        ALL_FEATURES.forEach(f => defaultConfig[f.id] = true);
-        setFeatureConfig(defaultConfig);
-      }
-      setLoadingFeatures(false);
-    });
-    return () => unsub();
-  }, []);
+    // Centralized cached feature hook use karo so super-admin settings local mode me bhi apply ho.
+    setFeatureConfig(cachedFeatureConfig || defaultFeatureConfig);
+  }, [cachedFeatureConfig, defaultFeatureConfig]);
 
   useEffect(() => {
     if (!user?.email || !user?.uid) return;
@@ -237,7 +282,7 @@ export function AppSidebar() {
     );
     const unsubHandovers = onSnapshot(handoverQuery, (snapshot) => setPendingHandovers(snapshot.size));
 
-    // Admin/Alarm notifications
+    // Admin/Alarm/transaction alerts — sirf abhi selected company (cross-company badge galat na ho).
     const unreadAlertsByRecipient: Record<string, Set<string>> = {};
     const alertsUnsubscribers: (() => void)[] = [];
     const recomputeUnreadAlerts = () => {
@@ -245,18 +290,24 @@ export function AppSidebar() {
       Object.values(unreadAlertsByRecipient).forEach((set) => set.forEach((id) => merged.add(id)));
       setUnreadAlerts(merged.size);
     };
-    myUserIds.forEach((id) => {
-      const alertsQuery = query(
-        collection(firestore, "admin_notifications"),
-        where("recipientUserId", "==", id),
-        where("isRead", "==", false)
-      );
-      const unsubAlerts = onSnapshot(alertsQuery, (snapshot) => {
-        unreadAlertsByRecipient[id] = new Set(snapshot.docs.map((d) => d.id));
-        recomputeUnreadAlerts();
+    const cid = companyId?.trim() || "";
+    if (!cid) {
+      setUnreadAlerts(0);
+    } else {
+      myUserIds.forEach((id) => {
+        const alertsQuery = query(
+          collection(firestore, "admin_notifications"),
+          where("recipientUserId", "==", id),
+          where("companyId", "==", cid),
+          where("isRead", "==", false)
+        );
+        const unsubAlerts = onSnapshot(alertsQuery, (snapshot) => {
+          unreadAlertsByRecipient[id] = new Set(snapshot.docs.map((d) => d.id));
+          recomputeUnreadAlerts();
+        });
+        alertsUnsubscribers.push(unsubAlerts);
       });
-      alertsUnsubscribers.push(unsubAlerts);
-    });
+    }
 
     // Unread Chat Messages (supports both uid + legacy userDocId participants/receiverId)
     const conversationUnreadCounts = new Map<string, number>();
@@ -312,14 +363,22 @@ export function AppSidebar() {
       conversationUnsubscribers.forEach((unsub) => unsub());
       messageUnsubscribers.forEach((unsub) => unsub());
     };
-  }, [user?.email, user?.uid, myUserIds]);
+  }, [user?.email, user?.uid, myUserIds, companyId]);
   
   const displayName = user?.displayName || user?.email?.split('@')[0] || "User";
 
   const handleLogout = async () => {
     const { clearNavigationMemory } = await import("@/lib/navigation-memory");
     clearNavigationMemory();
+    // Local guest logout: local session band karke user ko online login page par le jao.
+    if (isLocalGuestEnabled()) {
+      disableLocalGuest();
+      router.replace("/");
+      return;
+    }
     await signOut(auth);
+    // Firebase user logout ke baad explicit login redirect to avoid stale dashboard screen.
+    router.replace("/");
   };
 
   const getInitials = (name: string | null | undefined) => {
@@ -334,10 +393,10 @@ export function AppSidebar() {
   const isAdmin = customUser?.role === 'SuperAdmin';
   
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
-  const transactionAlerts = company?.notificationSettings?.transactionAlerts;
+  const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;
   const includeAlertsInSidebar = transactionAlerts?.on !== false && transactionAlerts?.onEntity !== false && company?.isOwned === true;
   const totalNotifications = unreadMessages + (includeAlertsInSidebar ? unreadAlerts : 0);
-  const messageSettings = company?.notificationSettings?.message;
+  const messageSettings = effectiveNotificationSettings?.message;
   const showMessageBadgeInSidebar =
     (messageSettings?.on !== false && messageSettings?.onEntity !== false) || includeAlertsInSidebar;
   const messagesBadgeCount = showMessageBadgeInSidebar ? totalNotifications : 0;

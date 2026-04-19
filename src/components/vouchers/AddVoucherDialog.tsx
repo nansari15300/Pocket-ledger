@@ -6,7 +6,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
 import { startOfDay } from "date-fns";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { doc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
@@ -31,10 +30,12 @@ import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { CheckCircle } from "lucide-react";
-import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId, hasJournalBillWiseLinkToVoucherId } from "@/lib/payment-allocation-utils";
+import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@/lib/payment-allocation-utils";
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -98,6 +99,10 @@ function VoucherDialogContent({
   onApprove,
   isApproving = false,
   onEffectiveLinksChange,
+  /** Tab switch: clear dialog-level link state so Contra/Journal/etc. don’t inherit stale `deleteDisabledWhenLinked` from Payment In/Out. */
+  onClearEffectiveLinksOnTabChange,
+  /** Compare-before-sync: journal account lists isi company se (`CreateJournalForm`). */
+  ledgerScopeCompanyId,
 }: { 
   voucher?: any, 
   defaultVoucherData?: any,
@@ -115,6 +120,8 @@ function VoucherDialogContent({
   isApproving?: boolean,
   /** Sale/Purchase/Payment Out/Direct Expense: report effective has-links so dialog locks fields as soon as user links (or enables after unlink). */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void,
+  onClearEffectiveLinksOnTabChange?: () => void,
+  ledgerScopeCompanyId?: string,
 }) {
   const { processedStaff } = useVouchers();
   const isEditing = !!voucher?.id;
@@ -129,21 +136,30 @@ function VoucherDialogContent({
     setActiveTab(next);
   }, [voucher, defaultVoucherData, defaultTab, allowedTabs]);
 
+  // Har tab change par parent ka `effectiveHasLinksFromForm` reset — warna Payment form ne `true` bheja ho to Contra/Salary attach band rehta hai.
+  useEffect(() => {
+    onClearEffectiveLinksOnTabChange?.();
+  }, [activeTab, onClearEffectiveLinksOnTabChange]);
+
   const initialVoucherData = useMemo(() => {
     if (isEditing) return { ...voucher };
 
+    // nayi txn: defaultVoucherData me `id` ho to spread se “edit” ban jata — savedVoucherId galat + attach band
+    const rawDefault = defaultVoucherData || {};
+    const { id: _droppedNewId, ...restDefault } = rawDefault as Record<string, unknown>;
+
     return {
-      id: undefined,
       date: startOfDay(new Date()),
       voucherNumber: "",
       narration: "",
       partyId: "",
       accountId: "",
-      amount: "", 
+      amount: "",
       total: 0,
       fileUrls: defaultVoucherData?.fileUrls || (defaultVoucherData?.unassignedFile ? [defaultVoucherData.unassignedFile.url] : []),
       unassignedFile: defaultVoucherData?.unassignedFile || null,
-      ...defaultVoucherData
+      ...restDefault,
+      id: undefined as undefined,
     };
   }, [voucher, defaultVoucherData, isEditing]);
 
@@ -160,10 +176,16 @@ function VoucherDialogContent({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="px-[2px] md:px-6 border-b bg-muted/20">
+      {/* Mobile: vertical padding ta voucher-type Select blue header / niche border se chipke na — chhota trigger = clear box */}
+      <div
+        className={cn(
+          "border-b bg-muted/20",
+          isMobile ? "px-3 py-2.5" : "px-[2px] md:px-6"
+        )}
+      >
         {isMobile ? (
           <Select value={activeTab} onValueChange={(v) => setActiveTab(v as VoucherType)}>
-            <SelectTrigger className="w-1/2">
+            <SelectTrigger className="h-9 w-full max-w-[13rem] border-border/90 bg-background text-sm shadow-sm">
               <SelectValue>
                 {activeTab.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
               </SelectValue>
@@ -231,6 +253,7 @@ function VoucherDialogContent({
               isApproving={isApproving}
               onEffectiveLinksChange={activeTab === 'sale' || activeTab === 'purchase' || activeTab === 'payment_in' || activeTab === 'direct_income' || activeTab === 'payment_out' || activeTab === 'direct_expense' || activeTab === 'add_salary' ? onEffectiveLinksChange : undefined}
               initialFocusSide={activeTab === 'journal' ? (initialVoucherData as any)?._journalFocusSide : undefined}
+              {...(activeTab === "journal" && ledgerScopeCompanyId ? { ledgerScopeCompanyId } : {})}
             />
           ) : null}
         </Suspense>
@@ -247,8 +270,16 @@ const MIN_DIALOG_H = 320;
 const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
 
 export function AddVoucherDialog(props: any) {
-  const { children, isOpen, onOpenChange, voucher, defaultVoucherData, ...rest } = props;
-  const { companyId, company } = useCompany();
+  /** Compare-before-sync jaisi jagah nested stack: `false` se parent non-modal Compare band hone par saath na band ho. */
+  const { children, isOpen, onOpenChange, voucher, defaultVoucherData, dialogRootModal = true, editCompanyId, ...rest } = props;
+  const { companyId: ctxCompanyId, company: ctxCompany, effectiveNotificationSettings, allCompanies } = useCompany();
+  /** Voucher jis company ka hai (Compare Side A/B) — header company se alag ho sakta hai. */
+  const companyId = String(editCompanyId?.trim() || ctxCompanyId || "");
+  const company = useMemo(() => {
+    const eid = editCompanyId?.trim();
+    if (eid) return allCompanies.find((c) => c.id === eid) ?? ctxCompany ?? null;
+    return ctxCompany ?? null;
+  }, [editCompanyId, allCompanies, ctxCompany]);
   const { user, customUser } = useAuth();
   const { can, canEditRecord } = usePermissions();
   const { vouchers } = useVouchers();
@@ -262,6 +293,11 @@ export function AddVoucherDialog(props: any) {
   const [historyBlocksEdit, setHistoryBlocksEdit] = useState(false);
   /** When sale/purchase form has pending link changes (e.g. user unlinked in dialog), form reports effective state so we enable edit locally. */
   const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
+
+  /** VoucherDialogContent tab switch par call — stale link flags hatao (file upload dubara chale). */
+  const clearEffectiveLinksOnTabChange = useCallback(() => {
+    setEffectiveHasLinksFromForm(null);
+  }, []);
 
   // Draggable & resizable (desktop only)
   const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
@@ -391,6 +427,19 @@ export function AddVoucherDialog(props: any) {
       setLiveVoucher(null);
       return;
     }
+    if (isLocalOnlyMode()) {
+      // Compare Side B: voucher dusri company ka — context `vouchers` me nahi; SQLite se same company id.
+      if (editCompanyId?.trim() && editCompanyId.trim() !== ctxCompanyId) {
+        void listCompanyDocsFromBrowserDb(editCompanyId.trim(), "vouchers").then((rows) => {
+          const localLive = rows.find((v: any) => v.id === voucher.id) || null;
+          setLiveVoucher(localLive);
+        });
+        return;
+      }
+      const localLive = (vouchers || []).find((v: any) => v.id === voucher.id) || null;
+      setLiveVoucher(localLive);
+      return;
+    }
     // Note vouchers: sale/journal jaisi live allocation sync nahi; snapshot har chhoti update par form reset trigger ho sakta tha
     if (voucher?.type === "note") {
       setLiveVoucher(null);
@@ -405,23 +454,27 @@ export function AddVoucherDialog(props: any) {
       unsub();
       setLiveVoucher(null);
     };
-  }, [isOpen, voucher?.id, companyId, voucher?.type]);
+  }, [isOpen, voucher?.id, companyId, voucher?.type, editCompanyId, ctxCompanyId, vouchers]);
 
   // Preserve clicked contra leg from table row even after live Firestore refresh replaces voucher object.
   const effectiveVoucher = liveVoucher
     ? { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg }
     : voucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
-  // Journal → Payment In/Out: real link is on journal.allocations; ignore payment row linkedFromVoucherNos (often table-only enrichment).
   const hasBillWiseLinks =
     !!effectiveVoucher?.id &&
     (hasPaymentLinks(effectiveVoucher) ||
-      hasJournalBillWiseLinkToVoucherId(effectiveVoucher.id, vouchers || []) ||
       ((effectiveVoucher.type === "sale" || effectiveVoucher.type === "purchase") &&
         hasAllocationsToVoucherId(effectiveVoucher.id, vouchers || [])));
   const hasSpendWise = !!effectiveVoucher?.id && hasSpendWiseLinks(effectiveVoucher, vouchers || []);
   /** Use form-reported effective state when set (local unlink); else server-based hasLinks so banner/fields follow local changes. */
   const hasLinks = effectiveHasLinksFromForm ?? (hasBillWiseLinks || hasSpendWise);
+  /**
+   * Sirf saved voucher par dialog “edit lock” bhejo — nayi txn par local link/add se `onEffectiveLinksChange(true)` aata hai
+   * aur pehle poor file input `deleteDisabledWhenLinked` se band ho jata tha (Add File kaam nahi karta).
+   * Form ke andar amount/wagaira ab bhi local `allocations` se band rehte hain.
+   */
+  const isEditLockedByLinks = !!effectiveVoucher?.id && hasLinks;
 
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
   useEffect(() => {
@@ -430,6 +483,14 @@ export function AddVoucherDialog(props: any) {
       return;
     }
     const fetchVoucher = async (cid: string, vid: string) => {
+      if (isLocalOnlyMode()) {
+        if (cid && cid !== ctxCompanyId) {
+          const rows = await listCompanyDocsFromBrowserDb(cid, "vouchers");
+          return rows.find((v: any) => v.id === vid) || null;
+        }
+        const localMatch = (vouchers || []).find((v: any) => v.id === vid);
+        return localMatch || null;
+      }
       const snap = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
     };
@@ -448,7 +509,7 @@ export function AddVoucherDialog(props: any) {
       }
     });
     return () => { cancelled = true; };
-  }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, companyId, user?.uid, vouchers, canEditRecord]);
+  }, [effectiveVoucher?.id, effectiveVoucher?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId]);
 
   // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
   // Re-run when company changes so live voucher settings (from Settings) apply immediately
@@ -475,7 +536,7 @@ export function AddVoucherDialog(props: any) {
   const showSaveAndApproveOnCreate =
     !effectiveVoucher?.id &&
     can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false;
+    effectiveNotificationSettings?.approve?.on !== false;
 
   const handleApprove = useCallback(async () => {
     if (!companyId || !effectiveVoucher?.id || isApproving || !user?.uid) return;
@@ -518,8 +579,10 @@ export function AddVoucherDialog(props: any) {
     // २. Unassigned file को cleanup (पहिलेकै लजिक)
     if (status === 'saved' && defaultVoucherData?.unassignedFile?.id && companyId) {
       try {
-        const fileDocRef = doc(firestore, `companies/${companyId}/unassigned_documents`, defaultVoucherData.unassignedFile.id);
-        await deleteDoc(fileDocRef);
+        if (!isLocalOnlyMode()) {
+          const fileDocRef = doc(firestore, `companies/${companyId}/unassigned_documents`, defaultVoucherData.unassignedFile.id);
+          await deleteDoc(fileDocRef);
+        }
       } catch (error) {
         console.error("Failed to delete unassigned document:", error);
       }
@@ -535,11 +598,20 @@ export function AddVoucherDialog(props: any) {
     }
   }, [onOpenChange, companyId, defaultVoucherData?.unassignedFile?.id, props]);
 
+  // Mobile: header padding + title + banners jitna chhota ho sake (zyada form space); desktop: purana drag header.
   const headerBlock = (
-    <DialogHeader className={cn("px-[2px] py-6 pb-2 md:p-6 md:pb-2 border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center", (hasLinks || historyBlocksEdit) && "min-h-[140px]", isDesktop && "cursor-grab active:cursor-grabbing select-none")} onMouseDown={isDesktop ? handleDragStart : undefined}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <DialogTitle className="text-2xl font-bold font-headline text-inherit">
+    <DialogHeader
+      className={cn(
+        "border-b bg-[#b8c8f5] dark:bg-[#7a8ed8] text-gray-900 dark:text-white flex flex-col justify-center shrink-0",
+        isDesktop
+          ? cn("px-[2px] py-6 pb-2 md:p-6 md:pb-2 cursor-grab active:cursor-grabbing select-none", (isEditLockedByLinks || historyBlocksEdit) && "min-h-[140px]")
+          : "px-2 py-1.5 pb-1.5 gap-1"
+      )}
+      onMouseDown={isDesktop ? handleDragStart : undefined}
+    >
+      <div className={cn("flex items-start justify-between gap-2", isDesktop && "gap-4")}>
+        <div className={cn(!isDesktop && "min-w-0 pr-8")}>
+          <DialogTitle className={cn("font-bold font-headline text-inherit", isDesktop ? "text-2xl" : "text-base leading-tight")}>
             {!!voucher?.id ? "Edit Transaction" : "New Transaction"}
           </DialogTitle>
         </div>
@@ -550,18 +622,28 @@ export function AddVoucherDialog(props: any) {
           </DialogClose>
         )}
       </div>
-      {/* Same info on PC and mobile: when bill-wise or spend-wise linked, show message and disable edit (except narration + link) */}
-      {hasLinks && (
-        <div className="w-fit max-w-full mx-auto mt-3 bg-gray-600 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
-          <p className="text-base md:text-xl font-semibold text-center text-[#ff0000] m-0">
+      {/* Saved + linked: warn; New Transaction par local links se yeh banner nahin (misleading). */}
+      {isEditLockedByLinks && (
+        <div
+          className={cn(
+            "w-full max-w-full mx-auto bg-gray-600 rounded-md flex items-center justify-center self-center",
+            isDesktop ? "mt-3 min-h-[52px] px-4 py-3 w-fit" : "mt-1 px-2 py-1"
+          )}
+        >
+          <p className={cn("font-semibold text-center text-[#ff0000] m-0", isDesktop ? "text-base md:text-xl" : "text-[11px] leading-snug")}>
             Voucher Edit disabled — To convert or edit, unlink linked transactions first.
           </p>
         </div>
       )}
       {/* Block edit rule: when history full + setting "Block edit", show message and disable Save */}
-      {historyBlocksEdit && !hasLinks && (
-        <div className="w-fit max-w-full mx-auto mt-3 bg-amber-600 rounded-md flex items-center justify-center min-h-[52px] px-4 py-3 self-center">
-          <p className="text-base md:text-xl font-semibold text-center text-white m-0">
+      {historyBlocksEdit && !isEditLockedByLinks && (
+        <div
+          className={cn(
+            "w-full max-w-full mx-auto bg-amber-600 rounded-md flex items-center justify-center self-center",
+            isDesktop ? "mt-3 min-h-[52px] px-4 py-3 w-fit" : "mt-1 px-2 py-1"
+          )}
+        >
+          <p className={cn("font-semibold text-center text-white m-0", isDesktop ? "text-base md:text-xl" : "text-[11px] leading-snug")}>
             Voucher history is full. Clear history in History dialog to edit and save changes.
           </p>
         </div>
@@ -573,6 +655,7 @@ export function AddVoucherDialog(props: any) {
     <>
       <VoucherDialogContent 
         {...rest}
+        ledgerScopeCompanyId={editCompanyId}
         voucher={effectiveVoucher}
         defaultVoucherData={defaultVoucherData}
         onVoucherAction={handleAction}
@@ -580,12 +663,13 @@ export function AddVoucherDialog(props: any) {
         showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
         editingDisabled={editingDisabled || historyBlocksEdit}
         restrictConvertWhenLinked={hasLinks}
-        deleteDisabledWhenLinked={hasLinks}
+        deleteDisabledWhenLinked={isEditLockedByLinks}
         showApproveButton={showApproveButton}
         showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
         onApprove={handleApprove}
         isApproving={isApproving}
         onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
+        onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
       />
       <HistoryDialog
         voucher={historyVoucher}
@@ -597,7 +681,7 @@ export function AddVoucherDialog(props: any) {
   );
 
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={onOpenChange} modal={dialogRootModal}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       {isDesktop ? (
         <DialogContent
@@ -617,8 +701,7 @@ export function AddVoucherDialog(props: any) {
             }}
           >
             {headerBlock}
-            {/* Inset body from window edges so resize hit-zones (esp. right/bottom strips + corners) do not steal clicks from controls like “Add File” on salary forms. */}
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden pr-4 pb-4">
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {bodyBlock}
             </div>
             {/* Resize handle - top edge */}
@@ -673,15 +756,17 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       ) : (
-        // Static APK + mobile: cnStaticMobileFullscreenDialog le 100dvh; dev par purana box
+        // Mobile: full viewport — PWA, mobile browser aur static/Capacitor APK sab par yahi layout; safe-area env() 0 ho to asar nahi.
         <DialogContent
-          className={cnStaticMobileFullscreenDialog(
-            isMobile,
-            "flex flex-col p-0 w-[min(90vw,15in)] max-w-[15in] h-[min(80vh,12in)] max-h-[12in] rounded-lg md:rounded-lg"
+          className={cn(
+            "flex min-h-0 flex-col overflow-hidden p-0 !gap-0",
+            "box-border h-[100dvh] max-h-[100dvh] w-full max-w-none !left-0 !top-0 !translate-x-0 !translate-y-0 rounded-none border-0 shadow-lg",
+            "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
           )}
         >
           {headerBlock}
-          {bodyBlock}
+          {/* Header fixed feel: form area scroll; min-h-0 ta flex child shrink ho sake */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">{bodyBlock}</div>
         </DialogContent>
       )}
     </Dialog>

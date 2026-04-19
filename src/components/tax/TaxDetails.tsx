@@ -55,7 +55,6 @@ import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -88,7 +87,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "../ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { getTaxTransactionAmounts, useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { NotificationBell } from "../vouchers/NotificationBell";
@@ -154,7 +154,6 @@ export function TaxDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode } = useBalanceMode();
@@ -319,8 +318,7 @@ export function TaxDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -442,6 +440,8 @@ export function TaxDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (tax as any).openingBalanceDate,
+      openingBalanceNarration: tax.openingBalanceNarration ?? null,
       transactions: processedTransactions,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -568,9 +568,11 @@ export function TaxDetails({
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={tax.openingBalanceNarration}
+              openingBalanceAttachmentUrls={tax.documentFileUrls}
+              openingBalanceDate={(tax as any).openingBalanceDate}
               openingBalanceActions={undefined}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
@@ -721,12 +723,15 @@ export function TaxDetails({
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarImage src={tax.fileUrl} alt={tax.name} />
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  <Receipt />
-                </AvatarFallback>
-              </Avatar>
+              {/* Local `local:…` refs + HTTPS URLs — same as bank/party; hover = voucher preview frame */}
+              <EntityFileAttachmentHover fileUrl={tax.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={tax.fileUrl}
+                  alt={tax.name}
+                  fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
+                />
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{tax.name}</h2>
                 <EditTaxDialog
@@ -834,6 +839,9 @@ export function TaxDetails({
                   openingBalance={openingBalanceForPeriod}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+                  openingBalanceNarration={tax.openingBalanceNarration}
+                  openingBalanceAttachmentUrls={tax.documentFileUrls}
+                  openingBalanceDate={(tax as any).openingBalanceDate}
                   openingBalanceActions={
                     <EditTaxDialog
                       tax={tax}
@@ -848,7 +856,6 @@ export function TaxDetails({
                     </EditTaxDialog>
                   }
                   showNarration={showNarration}
-                  narrationNoteSearch={narrationNoteSearch}
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
                   periodDr={periodDr}
                   periodCr={periodCr}
@@ -876,11 +883,6 @@ export function TaxDetails({
                 <Checkbox id="show-narration-tax" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-tax" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-tax"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

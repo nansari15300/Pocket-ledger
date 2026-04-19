@@ -6,7 +6,7 @@ import { Loader2, PlusCircle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, doc, serverTimestamp, Timestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -20,6 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { Group } from "@/components/party/types";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -31,6 +34,13 @@ const systemGroups = [
     { id: "sundry_creditors", name: "Sundry Creditors" },
 ];
 
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpen: parentIsOpen, onOpenChange: parentOnOpenChange }: { 
     onGroupCreated: (groupId: string) => void, 
@@ -44,9 +54,13 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId } = useCompany();
+  const isLocalGuestUser = user?.uid === "local_guest_user";
+  const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
+  // Dialog close ko single helper se chalao so controlled/uncontrolled dono mode mein blur overlay na atke.
+  const closeDialog = () => setOpen(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -79,6 +93,38 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
     }
     setIsLoading(true);
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: group direct local DB me save karo; Firebase write skip.
+        const localId = createLocalEntityId("group");
+        const payload = {
+          id: localId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          createdAt: Timestamp.now(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "groups", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "groups", "create", localId, payload);
+        // Show sync hint only for sync-enabled non-guest users.
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        toast({
+          title: showSyncHint ? "Saved. Will sync when online." : "Saved.",
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        onGroupCreated(localId);
+        if (saveAndNew) {
+          form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
+        } else {
+          form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
+          closeDialog();
+        }
+        return;
+      }
+
       const nameTrimmed = values.name.trim();
       
       // Check if it's a system group name
@@ -118,7 +164,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
           form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
         } else {
           form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
-          if (parentOnOpenChange) parentOnOpenChange(false);
+          closeDialog();
         }
         setIsLoading(false);
         return;
@@ -147,26 +193,41 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
         form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
       } else {
         form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
-        if (parentOnOpenChange) parentOnOpenChange(false);
+        closeDialog();
       }
     } catch (error: any) {
       console.error("Error creating group:", error);
-      const isNetworkError =
-        error?.code === "unavailable" ||
-        error?.message?.includes("network") ||
-        error?.message?.includes("offline") ||
-        (typeof navigator !== "undefined" && !navigator.onLine);
-      toast({
-        variant: isNetworkError ? "default" : "destructive",
-        title: isNetworkError ? "Saved locally" : "Error Creating Group",
-        description: isNetworkError
-          ? "Group will sync when you're back online."
-          : "Group details could not be saved. Please try again.",
-      });
-      if (isNetworkError) {
-        onGroupCreated("");
-        if (!saveAndNew && parentOnOpenChange) parentOnOpenChange(false);
+      const isOfflineFallback = isLocalOnlyMode() || isLikelyOfflineFirestoreError(error);
+      if (isOfflineFallback) {
+        // Offline/local create: local company_docs + outbox enqueue so list me turant dikhe.
+        const localId = createLocalEntityId("group");
+        const payload = {
+          id: localId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          createdAt: Timestamp.now(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "groups", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "groups", "create", localId, payload);
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        toast({
+          title: showSyncHint ? "Saved. Will sync when online." : "Saved.",
+          description: showSyncHint
+            ? `"${values.name}" was saved locally and will sync when online.`
+            : `"${values.name}" was saved locally.`,
+        });
+        onGroupCreated(localId);
+        if (!saveAndNew) closeDialog();
         form.reset({ name: "", parentId: form.getValues("parentId") || "sundry_debtors" });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Error Creating Group",
+          description: "Group details could not be saved. Please try again.",
+        });
       }
     } finally {
       setIsLoading(false);

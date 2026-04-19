@@ -3,6 +3,7 @@
 import { collection, addDoc, serverTimestamp, getDoc, doc, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { Company } from "@/hooks/useCompany";
+import { getEffectiveNotificationSettings } from "@/lib/localUserNotificationSettings";
 
 const ONE_LAKH = 100000;
 
@@ -80,10 +81,16 @@ export async function sendTransactionAlert(
   company: Company | null,
   payload: TransactionAlertPayload
 ): Promise<{ success: boolean; error?: string }> {
-  if (!company?.notificationSettings?.transactionAlerts?.on) return { success: true };
+  if (!company || !companyId?.trim()) return { success: true };
+
+  // Owner ke Firebase uid par merge: Firestore `notificationSettings` + **`localUserNotificationSettings`** (Settings → local save).
+  const ownerUid = await resolveUidFromUserRef(company.ownerId, company.ownerEmail);
+  const prefs = getEffectiveNotificationSettings(company, ownerUid, companyId);
+  // Explicit off hi roke — default merged shape me `on: true` (reference jaisa behaviour jab kuch save na ho).
+  if (prefs.transactionAlerts?.on === false) return { success: true };
+
   // Only company admin (owner) receives transaction alerts; not shared users.
   const recipientUserIds = new Set<string>();
-  const ownerUid = await resolveUidFromUserRef(company.ownerId, company.ownerEmail);
   if (ownerUid) recipientUserIds.add(ownerUid);
 
   if (recipientUserIds.size === 0) return { success: true };

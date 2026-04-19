@@ -6,6 +6,30 @@ import { firestore } from "@/lib/firebase";
 
 const FEATURE_CONFIG_STORAGE_KEY = "app_settings:features";
 
+const OFFLINE_BASE_FEATURE_CONFIG: Record<string, boolean> = {
+  // Local no-login fallback: basic/safe feature visibility defaults when no admin snapshot is cached.
+  dashboard: true,
+  party: true,
+  "bank-cash": true,
+  staff: true,
+  tax: true,
+  incomes: true,
+  items: true,
+  reports: true,
+  gallery: true,
+  production: false,
+  "sale-note": false,
+  "purchase-note": false,
+  quotations: false,
+  messages: true,
+  billing: true,
+  "distributor-signup": false,
+  backup: true,
+  "import-export": true,
+  "recycle-bin": true,
+  settings: true,
+};
+
 function readCachedFeatureConfig(): Record<string, boolean> | null {
   if (typeof window === "undefined") return null;
   try {
@@ -24,12 +48,16 @@ function writeCachedFeatureConfig(value: Record<string, boolean>) {
 }
 
 export function useCachedFeatureConfig(defaultConfig: Record<string, boolean> = {}) {
-  const [featureConfig, setFeatureConfig] = useState<Record<string, boolean>>(() => readCachedFeatureConfig() ?? defaultConfig);
-  const [loading, setLoading] = useState(() => readCachedFeatureConfig() == null);
+  // SSR + first client render must match; localStorage reads sirf mount ke baad effect me karo.
+  const [featureConfig, setFeatureConfig] = useState<Record<string, boolean>>(defaultConfig);
+  const [loading, setLoading] = useState(true);
 
   // Stabilize inline defaults like useCachedFeatureConfig({}) so the Firestore subscription effect does not loop.
   const defaultConfigKey = useMemo(() => JSON.stringify(defaultConfig), [defaultConfig]);
-  const fallbackConfig = useMemo(() => defaultConfig, [defaultConfigKey]);
+  const fallbackConfig = useMemo(
+    () => ({ ...OFFLINE_BASE_FEATURE_CONFIG, ...defaultConfig }),
+    [defaultConfigKey]
+  );
 
   useEffect(() => {
     const cached = readCachedFeatureConfig();
@@ -39,13 +67,19 @@ export function useCachedFeatureConfig(defaultConfig: Record<string, boolean> = 
       setLoading(false);
     }
 
+    // Pehle local-only + SUPER_ADMIN_SYNC=0 par yahan return tha — admin "Add/Remove Features" kabhi sync nahi hota tha.
+    // Hamesha Firestore subscribe: online jaisa; offline / deny par cached / fallback.
     const unsub = onSnapshot(doc(firestore, "app_settings", "features"), (docSnap) => {
       const nextConfig = docSnap.exists() ? (docSnap.data() as Record<string, boolean>) : fallbackConfig;
       setFeatureConfig(nextConfig);
       writeCachedFeatureConfig(nextConfig);
       setLoading(false);
     }, () => {
-      // If Firestore is unavailable, keep serving the cached config instead of clearing the UI.
+      // Offline / permission: pehle cache dikhao; warna OFFLINE_BASE taaki menu khali na rahe.
+      if (!cached) {
+        setFeatureConfig(fallbackConfig);
+        writeCachedFeatureConfig(fallbackConfig);
+      }
       setLoading(false);
     });
 

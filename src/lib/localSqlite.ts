@@ -105,6 +105,22 @@ function initSchema(db: SqlJsDatabase): void {
       UNIQUE(company_id, username)
     )
   `);
+  // Firestore sync queue (static/offline voucher create/update — demo slice)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+      outbox_id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL,
+      collection_name TEXT NOT NULL,
+      doc_id TEXT NOT NULL,
+      op TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_sync_outbox_company_created
+    ON sync_outbox(company_id, created_at)
+  `);
 }
 
 /** Server-style prepare().get/run/all wrapper; har write ke baad IndexedDB me save. */
@@ -173,7 +189,8 @@ export async function getBrowserDb(): Promise<BrowserDbWrapper | null> {
   const initSqlJs = (await import("sql.js")).default;
   const SQL = await initSqlJs({
     locateFile: (file: string) =>
-      file.endsWith(".wasm") ? "https://sql.js.org/external/sql-wasm.wasm" : file,
+      // Offline EXE/APK: wasm ko app ke local public asset se load karo (CDN dependency avoid).
+      file.endsWith(".wasm") ? "/sql-wasm.wasm" : file,
   });
 
   const data = await loadDbFromIndexedDB();
@@ -190,4 +207,11 @@ export async function getBrowserDb(): Promise<BrowserDbWrapper | null> {
 /** Cache clear karo (e.g. logout / switch data source). */
 export function clearBrowserDbCache(): void {
   cachedDb = null;
+}
+
+/** Restore / bulk write ke baad `reload` se pehle — `scheduleSave` async hai warna IndexedDB pura flush nahi hota */
+export async function flushBrowserDbToIndexedDB(): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (!cachedDb) return;
+  await saveDbToIndexedDB(cachedDb.db.export());
 }

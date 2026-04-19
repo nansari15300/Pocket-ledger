@@ -74,7 +74,8 @@ export function AlertsTab({
   onOpenHistory?: (companyId: string, voucherId: string, notificationTimestamp?: any, changedByUid?: string) => void;
 }) {
   const { user, customUser, loading: authLoading } = useAuth();
-  const { company } = useCompany();
+  /** Alerts har company alag honi chahiye — warna dusri company ke "Transaction edited" yahan dikh jate hain. */
+  const { company, companyId } = useCompany();
   const isMobile = useIsMobile();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,6 +140,12 @@ export function AlertsTab({
       return;
     }
 
+    if (!companyId?.trim()) {
+      setNotifications([]);
+      setLoading(false);
+      return;
+    }
+
     if (!recipientIds.length) {
       setNotifications([]);
       setLoading(false);
@@ -163,6 +170,7 @@ export function AlertsTab({
       const q = query(
         collection(firestore, "admin_notifications"),
         where("recipientUserId", "==", id),
+        where("companyId", "==", companyId),
         orderBy("timestamp", "desc")
       );
       const unsub = onSnapshot(
@@ -182,7 +190,7 @@ export function AlertsTab({
     });
 
     return () => unsubscribers.forEach((unsub) => unsub());
-  }, [user, authLoading, recipientIds, isCompanyOwner]);
+  }, [user, authLoading, recipientIds, isCompanyOwner, companyId]);
 
   const handleMarkAsRead = async (id: string) => {
     try {

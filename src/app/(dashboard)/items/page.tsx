@@ -42,43 +42,59 @@ import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDeta
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 type DisplayUnitState = Record<string, string>;
 
 function ItemsPageContent() {
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedItems, processedItemGroups: initialProcessedItemGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByItemId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length || !processedItems?.length) return {} as Record<string, number>;
+    const itemIdSet = new Set(processedItems.map((i: Item) => i.id));
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
-      if (v.isApproved === true) return;
-      const ids = new Set<string>();
-      (v.lineItems || []).forEach((line: any) => {
-        if (line.itemId) ids.add(line.itemId);
-      });
-      ids.forEach((id) => {
+      const touched = collectItemIdsTouchedByUnapprovedVoucher(v, itemIdSet);
+      touched.forEach((id) => {
         map[id] = (map[id] || 0) + 1;
       });
     });
     return map;
-  }, [vouchers, canApproveTransactions]);
+  }, [vouchers, showApproveOnList, processedItems]);
   const pendingApprovalByItemGroupId = useMemo(() => {
-    if (!canApproveTransactions) return {} as Record<string, number>;
+    if (!showApproveOnList) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedItems.forEach((item: any) => {
-      const groupId = item.groupId || "ungrouped";
-      map[groupId] = (map[groupId] || 0) + (pendingApprovalByItemId[item.id] || 0);
+      const n = pendingApprovalByItemId[item.id] || 0;
+      if (!n) return;
+      const gid =
+        item.groupId && String(item.groupId).trim() !== "" && item.groupId !== "ungrouped_item"
+          ? item.groupId
+          : "ungrouped";
+      map[gid] = (map[gid] || 0) + n;
     });
     return map;
-  }, [processedItems, pendingApprovalByItemId, canApproveTransactions]);
+  }, [processedItems, pendingApprovalByItemId, showApproveOnList]);
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedItems?.length) return 0;
+    const itemIdSet = new Set(processedItems.map((i: Item) => i.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      if (collectItemIdsTouchedByUnapprovedVoucher(v, itemIdSet).size > 0) n += 1;
+    }
+    return n;
+  }, [vouchers, showApproveOnList, processedItems]);
   const isMobile = useIsMobile();
   const useQueryNav = useMasterDetailQueryNav();
   const router = useRouter();
@@ -94,7 +110,7 @@ function ItemsPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [showOnlyItemsWithPendingApproval, setShowOnlyItemsWithPendingApproval] = useState(false);
   const [stockView, setStockView] = useState<StockView>("amount");
   const [itemDisplayUnits, setItemDisplayUnits] = useState<DisplayUnitState>({});
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
@@ -146,11 +162,14 @@ function ItemsPageContent() {
     () => processedItems.filter((i) => i.type === "item" || i.type === "service" || i.type === "finished_good" || !i.type),
     [processedItems]
   );
-
-  const itemsForListDisplay = useMemo(
-    () => filterByPendingApproval(allItems, pendingApprovalByItemId, unapprovedOnly),
-    [allItems, pendingApprovalByItemId, unapprovedOnly]
-  );
+  const itemsForItemList = useMemo(() => {
+    if (!showOnlyItemsWithPendingApproval || !showApproveOnList) return allItems;
+    return allItems.filter((i) => (pendingApprovalByItemId[i.id] ?? 0) > 0);
+  }, [allItems, showOnlyItemsWithPendingApproval, showApproveOnList, pendingApprovalByItemId]);
+  const filteredItemListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return itemsForItemList.filter((i) => i.name && i.name.toLowerCase().includes(searchLower)).length;
+  }, [itemsForItemList, searchTerm]);
 
   usePageMemory(
     "itemsPageState",
@@ -158,15 +177,20 @@ function ItemsPageContent() {
     setActiveView,
     selected,
     setSelected,
-    activeView === "items" ? itemsForListDisplay : processedItemGroups,
+    activeView === "items" ? allItems : processedItemGroups,
     vouchersLoading
   );
 
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyItemsWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "items") setShowOnlyItemsWithPendingApproval(false);
+  }, [activeView]);
 
   // Restore selection when returning from details (e.g. /items?selected=xyz or /items?view=groups&selected=xyz)
   const selectedIdFromUrl = searchParams.get("selected");
@@ -184,13 +208,17 @@ function ItemsPageContent() {
       viewFromUrl === "groups"
         ? `/items?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/items?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, allItems, processedItemGroups, setSelected, setActiveView, router]);
 
   const storageKey = `itemDisplayUnits_${user?.uid}`;
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
+    // Local-only mode me user-name lookup local cache se handle hota hai.
+    if (isLocalOnlyMode()) return "N/A";
     try {
       // User doc ID may be name_uid format, so query by uid field first
       const q = query(collection(firestore, "users"), where("uid", "==", userId));
@@ -271,13 +299,10 @@ function ItemsPageContent() {
 
   const totalBalance = useMemo(() => {
     if (activeView === "items") {
-      const list = unapprovedOnly
-        ? filterByPendingApproval(allItems, pendingApprovalByItemId, true)
-        : allItems;
-      return list.reduce((acc, item) => acc + item.balance, 0);
+      return allItems.reduce((acc, item) => acc + item.balance, 0);
     }
     return processedItemGroups.reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, allItems, processedItemGroups, unapprovedOnly, pendingApprovalByItemId]);
+  }, [activeView, allItems, processedItemGroups]);
 
   const selectedGroupItems = useMemo(() => {
     if (!selectedItemGroup) return [];
@@ -288,11 +313,6 @@ function ItemsPageContent() {
   }, [selectedItemGroup, processedItems]);
 
   // Filtered group count (matches ItemGroupList: exclude report-only + system groups; apply search)
-  const filteredItemCount = useMemo(() => {
-    const q = (searchTerm || "").toLowerCase();
-    return itemsForListDisplay.filter((i) => i.name && i.name.toLowerCase().includes(q)).length;
-  }, [itemsForListDisplay, searchTerm]);
-
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedItemGroups || []).filter((g) => {
@@ -335,7 +355,7 @@ function ItemsPageContent() {
   const listView = (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={activeView === "items" ? "Search items..." : "Search groups..."}
@@ -345,9 +365,17 @@ function ItemsPageContent() {
             autoComplete="off"
           />
         </div>
-        {activeView === "items" && canApproveTransactions && (
-          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-        )}
+        {activeView === "items" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyItemsWithPendingApproval}
+            onToggle={() => setShowOnlyItemsWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only items with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all items (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all items"
+          />
+        ) : null}
         {activeView === "items" ? (
           <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateItemOpen(true)}>
@@ -375,7 +403,7 @@ function ItemsPageContent() {
         <>
           <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
             <Package className="h-4 w-4" />
-            <span>Item ({filteredItemCount})</span>
+            <span>Item ({filteredItemListCount})</span>
             <Select value={stockView} onValueChange={(v) => setStockView(v as StockView)}>
               <SelectTrigger className="w-[100px] h-7 ml-auto">
                 <SelectValue />
@@ -388,7 +416,7 @@ function ItemsPageContent() {
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             <ItemList
-              items={itemsForListDisplay}
+              items={itemsForItemList}
               onSelectItem={(i) => handleSelect(i)}
               selectedItem={selectedItem}
               searchTerm={searchTerm}

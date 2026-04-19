@@ -21,17 +21,19 @@ const DataSourceContext = createContext<DataSourceContextType | undefined>(undef
 
 function readStored(): { mode: DataSourceMode; localApiBaseUrl: string } {
   if (typeof window === "undefined") {
-    return { mode: "firebase", localApiBaseUrl: DEFAULT_BASE_URL };
+    return { mode: "local", localApiBaseUrl: DEFAULT_BASE_URL };
   }
-  const mode = (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "firebase";
+  // Default to local-first so app keeps working from browser DB even when cloud rules fail.
+  const mode = (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "local";
   const localApiBaseUrl = localStorage.getItem(STORAGE_BASE_URL) || DEFAULT_BASE_URL;
   return { mode, localApiBaseUrl };
 }
 
 export function DataSourceProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<DataSourceMode>(() => {
-    if (typeof window === "undefined") return "firebase";
-    return (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "firebase";
+    if (typeof window === "undefined") return "local";
+    // Local-first default; user can still switch explicitly from settings if needed.
+    return (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "local";
   });
   const [localApiBaseUrl, setLocalApiBaseUrlState] = useState<string>(() => {
     if (typeof window === "undefined") return DEFAULT_BASE_URL;
@@ -40,6 +42,10 @@ export function DataSourceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const { mode: m, localApiBaseUrl: url } = readStored();
+    // Persist local-first default immediately so other startup modules read a stable mode value.
+    if (typeof window !== "undefined" && !localStorage.getItem(STORAGE_MODE)) {
+      localStorage.setItem(STORAGE_MODE, m);
+    }
     setModeState(m);
     setLocalApiBaseUrlState(url);
   }, []);

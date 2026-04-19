@@ -8,6 +8,8 @@ export type Staff = {
   salary?: number;
   openingBalance?: number;
   openingBalanceDate?: any;
+  openingBalanceNarration?: string;
+  documentFileUrls?: string[];
   salaryPeriod?: "Daily" | "Weekly" | "Monthly" | "Yearly";
   balance: number; 
   companyId: string;

@@ -17,7 +17,7 @@ export function VoucherOutboxFlushManager() {
     const FLUSH_AFTER_ONLINE_MS = 900;
     const ONLINE_DEBOUNCE_MS = 1200;
 
-    // Browser `setTimeout` → number; Node typings `Timeout` se clash avoid (client-only)
+    // Browser `setTimeout` id = number; Node typings use `Timeout` — yahan sirf window
     let onlineTimer: number | null = null;
     const pendingFlushTimers: number[] = [];
     const scheduleFlush = (delayMs: number) => {

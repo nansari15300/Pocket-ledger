@@ -3,12 +3,15 @@ import * as React from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Calendar as Icon } from "lucide-react";
-import { type BSDate, canConvertAdDateToBs } from "@/lib/bs-date";
+import { type BSDate, bsToAd, BS_CALENDAR_MIN_YEAR, canConvertAdDateToBs } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
+import { useCompany } from "@/hooks/useCompany";
 import { useCalendarMonths } from "@/hooks/use-mobile";
-import NepaliCalendar, { type EntryDateRangeAD } from "@/components/ui/nepali-calendar";
+import NepaliCalendar from "@/components/ui/nepali-calendar";
+import { subDays, startOfMonth, endOfMonth, subMonths } from "date-fns";
+import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
 
 type BsDatePickerBaseProps = {
   numberOfMonths?: number;
@@ -16,8 +19,6 @@ type BsDatePickerBaseProps = {
   disabled?: boolean;
   children?: React.ReactNode;
   className?: string;
-  /** Min/max voucher dates for this company — shown above BS grid when set (fiscal year edit UX). */
-  entryDateRangeAD?: EntryDateRangeAD | null;
 };
 
 type BsDatePickerConditionalProps =
@@ -42,9 +43,15 @@ function isValidForBS(date?: Date | null): boolean {
     return canConvertAdDateToBs(date);
 }
 
-export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className, entryDateRangeAD = null }: BsDatePickerProps) {
+/** AD date ko calendar noon pe — BS/ad-calendar ke saath timezone drift avoid */
+function atNoon(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+}
+
+export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
+  const { company } = useCompany();
   const calendarMonths = useCalendarMonths(); // mobile: 1 month, PC: 2 months (date range)
   const isRange = isRangeProp ?? true;
   const numberOfMonths = numberOfMonthsProp ?? (isRange ? calendarMonths : 1);
@@ -90,6 +97,49 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
     }
   }
 
+  /** Range shortcuts — top row; company country se F Y; All = BS min year se aaj tak */
+  const applyRangePreset = React.useCallback(
+    (preset: "7d" | "month" | "3m" | "6m" | "fy" | "all") => {
+      if (!isRange) return;
+      const today = new Date();
+      const onRange = onChangeAD as (date?: DateRange | undefined) => void;
+      let from: Date;
+      let to: Date = atNoon(today);
+
+      switch (preset) {
+        case "7d":
+          from = atNoon(subDays(today, 6));
+          break;
+        case "month":
+          from = atNoon(startOfMonth(today));
+          to = atNoon(endOfMonth(today));
+          break;
+        case "3m":
+          from = atNoon(startOfMonth(subMonths(today, 2)));
+          to = atNoon(endOfMonth(today));
+          break;
+        case "6m":
+          from = atNoon(startOfMonth(subMonths(today, 5)));
+          to = atNoon(endOfMonth(today));
+          break;
+        case "fy": {
+          const { start, end } = getFiscalRangeForCountry(company?.country ?? "Nepal", today);
+          from = atNoon(start);
+          to = atNoon(end);
+          break;
+        }
+        case "all":
+          from = atNoon(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 }));
+          to = atNoon(today);
+          break;
+        default:
+          return;
+      }
+      onRange({ from, to });
+      setOpen(false);
+    },
+    [isRange, onChangeAD, company?.country]
+  );
 
   const displayValue = () => {
     if (children) return children;
@@ -133,7 +183,35 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
             isRange={isRange}
             numberOfMonths={numberOfMonths}
             transactionDates={transactionDates}
-            entryDateRangeAD={entryDateRangeAD}
+            disabled={disabled}
+            rangePresetSlot={
+              isRange ? (
+                <>
+                  {(
+                    [
+                      { key: "7d" as const, label: "7 days" },
+                      { key: "month" as const, label: "Month" },
+                      { key: "3m" as const, label: "3 months" },
+                      { key: "6m" as const, label: "6 months" },
+                      { key: "fy" as const, label: "F Y" },
+                      { key: "all" as const, label: "All" },
+                    ] as const
+                  ).map(({ key, label }) => (
+                    <Button
+                      key={key}
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-xs px-2 shrink-0"
+                      disabled={disabled}
+                      onClick={() => applyRangePreset(key)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </>
+              ) : undefined
+            }
         />
       </PopoverContent>
     </Popover>

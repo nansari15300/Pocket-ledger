@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { type Resolver, useFieldArray, useForm, useWatch } from "react-hook-form";
+import { type Resolver, useFieldArray, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import {
   useState,
@@ -47,9 +47,11 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -78,7 +80,7 @@ import type { Staff } from "@/components/staff/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
@@ -91,7 +93,7 @@ import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentO
 import usePermissions from "@/hooks/usePermissions";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
+import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
@@ -163,6 +165,17 @@ const formSchema = z.object({
 
 type JournalFormValues = z.infer<typeof formSchema>;
 
+/** RHF+zod errors → toast (lines array errors generic message) */
+function formatJournalFormValidationErrors(errors: FieldErrors<JournalFormValues>): string {
+  const errorMessages: string[] = [];
+  if (errors.voucherNumber?.message) errorMessages.push(`Voucher No.: ${errors.voucherNumber.message}`);
+  if (errors.date?.message) errorMessages.push(`Date: ${errors.date.message}`);
+  if (errors.lines?.message) errorMessages.push(`Lines: ${errors.lines.message}`);
+  if (errors.narration?.message) errorMessages.push(`Narration: ${errors.narration.message}`);
+  if (errors.total?.message) errorMessages.push(`Total: ${errors.total.message}`);
+  return errorMessages.length > 0 ? errorMessages.join(", ") : "Please check all fields and try again.";
+}
+
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.journal && prefixes.journal[0]) || "JRNL-";
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -217,6 +230,8 @@ export function CreateJournalForm({
   isApproving = false,
   /** When opening journal in edit mode, auto-select this side’s bill-wise card and blink the matching row (e.g. Dr row). Pass from ledger when user clicks Dr/Cr. */
   initialFocusSide,
+  /** Compare Side A/B: voucher jis company ka hai — header company se alag ho to account dropdown `useVouchers` se nahi banta. */
+  ledgerScopeCompanyId,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -229,6 +244,7 @@ export function CreateJournalForm({
   onApprove?: () => void;
   isApproving?: boolean;
   initialFocusSide?: "debit" | "credit" | null;
+  ledgerScopeCompanyId?: string;
 }) {
   const isMounted = useRef(true);
 
@@ -240,11 +256,47 @@ export function CreateJournalForm({
   }, []);
   const { toast } = useToast();
   const { user, customUser } = useAuth();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company: ctxCompany, companyId: ctxCompanyId, allCompanies } = useCompany();
+  /** Save + numbering: Compare me jis company ka voucher edit ho raha hai (header company se alag ho sakta hai). */
+  const effectiveCompanyId = useMemo(
+    () => String(ledgerScopeCompanyId?.trim() || ctxCompanyId || ""),
+    [ledgerScopeCompanyId, ctxCompanyId]
+  );
+  const effectiveCompany = useMemo(() => {
+    const sid = ledgerScopeCompanyId?.trim();
+    if (sid) return allCompanies.find((c) => c.id === sid) ?? ctxCompany ?? null;
+    return ctxCompany ?? null;
+  }, [ledgerScopeCompanyId, allCompanies, ctxCompany]);
+  const company = effectiveCompany;
+  const companyId = effectiveCompanyId;
+
   const { dateSystem, formatDate, formatCurrencyForPrint } = useDate();
   const { can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { deviceLimitReached } = useDeviceLimitContext();
   const { vouchers, processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes } = useVouchers();
+  /** Header company ≠ compare company: Firestore/SQLite se usi company ki ledger lists. */
+  const [scopedLedger, setScopedLedger] = useState<JournalScopedLedgerSnapshot | null>(null);
+  useEffect(() => {
+    const sid = ledgerScopeCompanyId?.trim();
+    if (!sid || sid === ctxCompanyId) {
+      setScopedLedger(null);
+      return;
+    }
+    let cancelled = false;
+    void loadJournalLedgerScopeSnapshot(sid).then((snap) => {
+      if (!cancelled) setScopedLedger(snap);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ledgerScopeCompanyId, ctxCompanyId]);
+
+  const pParties = scopedLedger?.processedPartiesForSelection ?? processedPartiesForSelection;
+  const pStaff = scopedLedger?.processedStaff ?? processedStaff;
+  const pAccounts = scopedLedger?.processedAccounts ?? processedAccounts;
+  const pExpense = scopedLedger?.expenseAccounts ?? expenseAccounts;
+  const pTaxes = scopedLedger?.processedTaxes ?? processedTaxes;
+
   const isMobile = useIsMobile();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -257,9 +309,6 @@ export function CreateJournalForm({
   const [journalTaxPrefillName, setJournalTaxPrefillName] = React.useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
-  // Read latest files inside hydration effect without listing `files` in deps (avoids stale closure when accounts list refreshes).
-  const filesRef = useRef<(File | string)[]>(files);
-  filesRef.current = files;
   const initialFilesRef = useRef<string[]>([]);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
@@ -344,29 +393,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
       
       const nextVoucherNumber = maxNum + 1;
-      // shouldDirty: false so gallery-attach hydration is not blocked by auto-number being treated as an edit.
-      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber), { shouldDirty: false });
+      form.setValue("voucherNumber", formatVoucherNumber(VOUCHER_PREFIX, nextVoucherNumber));
     } catch (error) { console.error(error); }
   }, [companyId, company, form, isAutoVoucherEnabled]);
 
   // Journal line options: Party, Staff, Bank/Cash, Expense, Tax – label=full, nameOnly=for dropdown when entity selected & trigger display
   const allAccountsWithEntity = useMemo(() => {
     const parts: { value: string; label: string; nameOnly: string; balance?: number; entityType: string }[] = [];
-    (processedPartiesForSelection || []).forEach((p: any) => parts.push({ value: p.id, label: `${p.name} (Party)`, nameOnly: p.name, balance: p.balance, entityType: "party" }));
-    (processedStaff || []).forEach((s: any) => parts.push({ value: s.id, label: `${s.name} (Staff)`, nameOnly: s.name, balance: s.balance, entityType: "staff" }));
-    (processedAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.accountName || a.name || "Account"} (Account)`, nameOnly: a.accountName || a.name || "Account", balance: a.balance, entityType: "account" }));
-    (expenseAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.name || "Expense"} (Expense)`, nameOnly: a.name || "Expense", balance: (a as any).balance, entityType: "expense" }));
-    (processedTaxes || []).forEach((t: any) => parts.push({ value: t.id, label: `${t.name || "Tax"} (Tax)`, nameOnly: t.name || "Tax", balance: (t as any).balance, entityType: "tax" }));
+    (pParties || []).forEach((p: any) => parts.push({ value: p.id, label: `${p.name} (Party)`, nameOnly: p.name, balance: p.balance, entityType: "party" }));
+    (pStaff || []).forEach((s: any) => parts.push({ value: s.id, label: `${s.name} (Staff)`, nameOnly: s.name, balance: s.balance, entityType: "staff" }));
+    (pAccounts || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.accountName || a.name || "Account"} (Account)`, nameOnly: a.accountName || a.name || "Account", balance: a.balance, entityType: "account" }));
+    (pExpense || []).forEach((a: any) => parts.push({ value: a.id, label: `${a.name || "Expense"} (Expense)`, nameOnly: a.name || "Expense", balance: (a as any).balance, entityType: "expense" }));
+    (pTaxes || []).forEach((t: any) => parts.push({ value: t.id, label: `${t.name || "Tax"} (Tax)`, nameOnly: t.name || "Tax", balance: (t as any).balance, entityType: "tax" }));
     return parts.sort((a, b) => a.label.localeCompare(b.label));
-  }, [processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes]);
+  }, [pParties, pStaff, pAccounts, pExpense, pTaxes]);
   const allAccounts = useMemo(() => allAccountsWithEntity.map(({ value, label, balance }) => ({ value, label, balance })), [allAccountsWithEntity]);
 
   useEffect(() => {
-    // Only reset form when editing an existing voucher (voucher.id exists). Add-new passes voucher with id: undefined – don't reset or we wipe user's account selection.
+    const NEW_JOURNAL = "__new_journal__";
+    // Sirf saved journal (`voucher.id`) par poora form.reset; naya Add par lines mat chhedo — warna user ka account select mitt jata hai.
     if (voucher?.id) {
         const vid = voucher.id;
         const isSameVoucher = lastResetVoucherIdRef.current === vid;
-        if (vid && isSameVoucher && isFormDirty) return;
+        // Edit: har snapshot par reset se date/entries wipe — sirf `id` change par hydrate
+        if (vid && isSameVoucher) return;
         if (vid) lastResetVoucherIdRef.current = vid;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
@@ -385,9 +435,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         });
         setSavedVoucherId(voucher.id);
-        if(voucher.fileUrls) { setFiles(voucher.fileUrls); initialFilesRef.current = voucher.fileUrls; }
-        if(voucher.unassignedFile) {
-          form.setValue('unassignedFile', voucher.unassignedFile);
+        // Gallery / storage: `unassignedFile.url` bhi list me (sirf fileUrls tha to kabhi list khaali)
+        const urlsEdit = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+        setFiles(urlsEdit);
+        initialFilesRef.current = urlsEdit.filter((f: any) => typeof f === "string");
+        if (voucher.unassignedFile) {
+          form.setValue("unassignedFile", voucher.unassignedFile);
         }
         // Reset local journal allocations when a different voucher opens in edit mode; split by linkedAccountId.
         const raw = Array.isArray((voucher as any)?.allocations) ? ((voucher as any).allocations as Allocation[]) : [];
@@ -404,29 +457,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
         setJournalAllocationsBySide({ debit, credit });
         initialJournalAllocationsRef.current = { debit: [...debit], credit: [...credit] };
+    } else if (voucher) {
+        // Naya journal + Gallery `initialVoucherData`: pehle yahan files kabhi set nahi hoti thi; aur `isFormDirty` har baar allocations clear kar deta tha
+        if (lastResetVoucherIdRef.current === NEW_JOURNAL && isFormDirty) return;
+        const isFirstNewJournalHydrate = lastResetVoucherIdRef.current !== NEW_JOURNAL;
+        lastResetVoucherIdRef.current = NEW_JOURNAL;
+        if (isFirstNewJournalHydrate) {
+          setJournalAllocationsBySide({ debit: [], credit: [] });
+          initialJournalAllocationsRef.current = { debit: [], credit: [] };
+          const urlsNew = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
+          setFiles(urlsNew);
+          initialFilesRef.current = urlsNew.filter((f: any) => typeof f === "string");
+          if (voucher.unassignedFile) {
+            form.setValue("unassignedFile", voucher.unassignedFile, { shouldDirty: false });
+          }
+        }
     } else {
         lastResetVoucherIdRef.current = null;
         setJournalAllocationsBySide({ debit: [], credit: [] });
         initialJournalAllocationsRef.current = { debit: [], credit: [] };
-        // Gallery "Attach to Journal": voucher has no id but carries unassignedFile / fileUrls — mirror edit branch so the attach strip shows the image.
-        if (voucher && !voucher.id) {
-          const urlsFromPayload = voucher.unassignedFile?.url
-            ? [voucher.unassignedFile.url]
-            : (voucher.fileUrls || []);
-          const hasLocalFilePicks = filesRef.current.some((f) => f instanceof File);
-          // Fill attach strip once from payload; require isFormDirty false so removing a preview is not immediately undone.
-          const shouldSeedGalleryFiles =
-            !hasLocalFilePicks &&
-            filesRef.current.length === 0 &&
-            !isFormDirty;
-          if (Array.isArray(urlsFromPayload) && urlsFromPayload.length > 0 && shouldSeedGalleryFiles) {
-            setFiles(urlsFromPayload);
-            initialFilesRef.current = urlsFromPayload.filter((u: any) => typeof u === 'string');
-          }
-          if (voucher.unassignedFile) {
-            form.setValue('unassignedFile', voucher.unassignedFile, { shouldDirty: false });
-          }
-        }
     }
 }, [voucher, form, isEditingAndConverting, isFormDirty, allAccountsWithEntity]);
 
@@ -438,13 +487,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
-    (processedPartiesForSelection || []).forEach((p: any) => map.set(String(p.id), `${p.name} (Party)`));
-    (processedStaff || []).forEach((s: any) => map.set(String(s.id), `${s.name} (Staff)`));
-    (processedAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.accountName || a.name || "Account"} (Account)`));
-    (expenseAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.name || "Expense"} (Expense)`));
-    (processedTaxes || []).forEach((t: any) => map.set(String(t.id), `${t.name || "Tax"} (Tax)`));
+    (pParties || []).forEach((p: any) => map.set(String(p.id), `${p.name} (Party)`));
+    (pStaff || []).forEach((s: any) => map.set(String(s.id), `${s.name} (Staff)`));
+    (pAccounts || []).forEach((a: any) => map.set(String(a.id), `${a.accountName || a.name || "Account"} (Account)`));
+    (pExpense || []).forEach((a: any) => map.set(String(a.id), `${a.name || "Expense"} (Expense)`));
+    (pTaxes || []).forEach((t: any) => map.set(String(t.id), `${t.name || "Tax"} (Tax)`));
     return map;
-  }, [processedPartiesForSelection, processedStaff, processedAccounts, expenseAccounts, processedTaxes]);
+  }, [pParties, pStaff, pAccounts, pExpense, pTaxes]);
   // Source account id from account-ledger click; used to reduce two-account confusion in journal edit.
   const openedFromAccountId = String((voucher as any)?._openedFromAccountId ?? "");
 
@@ -452,13 +501,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const watchedLines = useWatch({ control: form.control, name: "lines" });
   // Build fast lookups so journal bill-wise can support both Party and Staff account rows.
   const partyIdSet = useMemo(
-    () => new Set((processedPartiesForSelection || []).map((p: any) => String(p.id))),
-    [processedPartiesForSelection]
+    () => new Set((pParties || []).map((p: any) => String(p.id))),
+    [pParties]
   );
   // Staff should also be linkable from Journal bill-wise cards (same as user-requested payment flow behavior).
   const staffIdSet = useMemo(
-    () => new Set((processedStaff || []).map((s: any) => String(s.id))),
-    [processedStaff]
+    () => new Set((pStaff || []).map((s: any) => String(s.id))),
+    [pStaff]
   );
   // Journal link source account can be either party or staff; keep one combined set for row detection.
   const journalLinkableAccountIdSet = useMemo(() => {
@@ -720,11 +769,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const getOpeningBalance = () => {
         if (!accountId) return 0;
         if (partyIdSet.has(accountId)) {
-          const p = (processedPartiesForSelection || []).find((p: any) => String(p.id) === accountId);
+          const p = (pParties || []).find((p: any) => String(p.id) === accountId);
           return Number((p as any)?.openingBalance ?? 0) || 0;
         }
         if (staffIdSet.has(accountId)) {
-          const s = (processedStaff || []).find((s: any) => String(s.id) === accountId);
+          const s = (pStaff || []).find((s: any) => String(s.id) === accountId);
           return Number((s as any)?.openingBalance ?? 0) || 0;
         }
         return 0;
@@ -1024,14 +1073,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       debit: buildSide("debit"),
       credit: buildSide("credit"),
     };
-  }, [journalBillLinesBySide, journalLinkedFromRows, journalLinkedToRowsBySide, journalAllocationsBySide, journalVoucherId, vouchers, partyIdSet, staffIdSet, processedPartiesForSelection, processedStaff]);
+  }, [journalBillLinesBySide, journalLinkedFromRows, journalLinkedToRowsBySide, journalAllocationsBySide, journalVoucherId, vouchers, partyIdSet, staffIdSet, pParties, pStaff]);
   // Resolve side-wise source account metadata so each Journal card opens the correct link dialog (Party/Staff).
   const journalLinkContextBySide = useMemo(() => {
     const resolve = (side: "debit" | "credit") => {
       const accountId = String(journalBillWiseBySide[side].sideLine?.partyId ?? "");
       if (!accountId) return { accountId: "", kind: null as "party" | "staff" | null, label: "", openingBalance: 0 };
       if (partyIdSet.has(accountId)) {
-        const party = (processedPartiesForSelection || []).find((p: any) => String(p.id) === accountId);
+        const party = (pParties || []).find((p: any) => String(p.id) === accountId);
         return {
           accountId,
           kind: "party" as const,
@@ -1040,7 +1089,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         };
       }
       if (staffIdSet.has(accountId)) {
-        const staff = (processedStaff || []).find((s: any) => String(s.id) === accountId);
+        const staff = (pStaff || []).find((s: any) => String(s.id) === accountId);
         return {
           accountId,
           kind: "staff" as const,
@@ -1054,7 +1103,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       debit: resolve("debit"),
       credit: resolve("credit"),
     };
-  }, [journalBillWiseBySide, partyIdSet, processedPartiesForSelection, staffIdSet, processedStaff, accountLabelById]);
+  }, [journalBillWiseBySide, partyIdSet, pParties, staffIdSet, pStaff, accountLabelById]);
   // Open side-specific linking dialog so Debit card links to Credit vouchers and Credit card links to Debit vouchers.
   const handleJournalAddLinkClick = useCallback((side: "debit" | "credit") => {
     setSelectedBillWiseCard(side);
@@ -1083,16 +1132,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [activeJournalLinkSide, journalLinkContextBySide, journalBillWiseBySide]);
 
 
-  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
-    e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    onVoucherAction?.('saved', options.saveAndNew);
-    await processAndSaveRef.current?.(form.getValues(), options.saveAndNew ?? false, options.approveAfterSave);
-  }, [form, onVoucherAction]);
+  // Validated `data` से save — nested mobile `date` + `getValues()` से date miss न हो
+  const handleFormSubmit = useCallback(
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
+      e.preventDefault();
+      void form.handleSubmit(
+        async (data) => {
+          onVoucherAction?.("saved", options.saveAndNew);
+          await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave);
+        },
+        (errors) => {
+          sonnerToast.error("Validation Failed", { description: formatJournalFormValidationErrors(errors) });
+        }
+      )(e);
+    },
+    [form, onVoucherAction]
+  );
   
   async function processAndSave(data: JournalFormValues, saveAndNew: boolean = false, approveAfterSave?: boolean) {
     if (!user || !companyId) {
@@ -1105,7 +1160,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
-      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -1116,6 +1170,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
+        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -1137,19 +1192,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
-      }
-
-      // Split-books prior-year permission + merge-mode divider impact confirm
-      const fp = runFiscalVoucherPreflight({
-        company,
-        can,
-        isEditing: isEdit,
-        recordDate: voucherDate,
-        originalVoucherDate: isEdit ? originalVoucherDate : null,
-      });
-      if (fp.ok === false) {
-        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
-        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
@@ -1195,7 +1237,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
       
-      const fileUrls: string[] = files.filter(f => typeof f === 'string') as string[];
+      let fileUrls: string[] = files.filter(f => typeof f === 'string') as string[];
+      let preGeneratedVoucherId: string | undefined;
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
 
       if (newFilesToUpload.length > 0) {
@@ -1203,22 +1246,48 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const limitCheck = await checkStorageLimit(companyId, company?.planId, {
           attachmentsBytes: totalNewBytes,
           storageBytes: totalNewBytes,
-        });
+        }, company?.storageOption);
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
           return;
         }
-        for (const file of newFilesToUpload) {
-          if (fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-          const storageRef = ref(storage, `voucher-files/${companyId}/journal/${Date.now()}_${file.name}`);
-          const snapshot = await uploadBytes(storageRef, file);
-          const url = await getDownloadURL(snapshot.ref);
-          fileUrls.push(url);
-          await incrementCompanyStorage(companyId, {
-            attachmentsBytes: file.size,
-            storageBytes: file.size,
-          });
+        if (isLocalOnlyMode()) {
+          const voucherIdForLocalAttachments =
+            isEditingAndConverting && voucher?.id
+              ? null
+              : (savedVoucherId ?? voucher?.id ?? null);
+          const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+            await appendLocalOnlyVoucherFilesToUrls({
+              companyId,
+              storageFolder: "journal",
+              existingFileUrls: fileUrls,
+              newFiles: newFilesToUpload,
+              maxFileCount: fileAttachmentLimits.maxFileCount,
+              existingVoucherId: voucherIdForLocalAttachments,
+            });
+          fileUrls = merged;
+          if (preGen) preGeneratedVoucherId = preGen;
+          try {
+            await incrementCompanyStorage(companyId, {
+              attachmentsBytes: totalNewBytes,
+              storageBytes: totalNewBytes,
+            });
+          } catch {
+            /* offline */
+          }
+        } else {
+          for (const file of newFilesToUpload) {
+            if (fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            const storageRef = ref(storage, `voucher-files/${companyId}/journal/${Date.now()}_${file.name}`);
+            const snapshot = await uploadBytes(storageRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+            fileUrls.push(url);
+            await incrementCompanyStorage(companyId, {
+              attachmentsBytes: file.size,
+              storageBytes: file.size,
+            });
+          }
         }
       }
       
@@ -1251,18 +1320,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         user.uid,
         submissionData,
         originalVoucherIdToDelete ? null : savedVoucherId,
-        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
+        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+        preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
           if (isMounted.current) setSavedVoucherId(savedDoc.id);
           if (originalVoucherIdToDelete) {
-               await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
+              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
+              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
                 convertedToType: 'journal',
                 convertedToVoucherNumber: submissionData.voucherNumber,
-            });
+              });
           }
       } else {
           throw new Error("Failed to save voucher and get ID.");
@@ -1276,8 +1347,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         } else {
           sonnerToast.success(isEdit ? "Journal updated!" : "Journal voucher created!", { id: toastId });
         }
-        triggerSync();
-
         if (companyId && company) {
           const isEdit = !!voucher?.id;
           const amount = Number(submissionData.total) || 0;
@@ -1384,14 +1453,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     setIsLoading(true);
     try {
-        await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId), {
+        // Delete action local-first helper ke through run karo.
+        await patchVoucherFields(companyId, savedVoucherId, {
             isDeleted: true,
             deletedAt: serverTimestamp(),
             deletedBy: user?.uid || '',
         });
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled');
-        triggerSync();
     } catch (error) {
         console.error("Error deleting voucher:", error);
         toast({ variant: "destructive", title: "Error", description: "Failed to delete voucher." });
@@ -1430,7 +1499,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     for (const file of filesToProcess) {
       // Check file type first
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
@@ -1460,30 +1530,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
             title: "File Still Too Large",
-            description: `कम्प्रेस गर्दा पनि फाइल ${MAX_FILE_SIZE_MB}MB भन्दा ठुलो भयो।`,
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Compression error:", error);
+        toast({
+          variant: "destructive",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
+        });
       }
     }
+    e.target.value = "";
   };
 
   const handleCreateNew = (type: 'party' | 'account' | 'staff' | 'expense' | 'tax', newName?: string) => {
@@ -1576,78 +1646,86 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
-                  {/* Mobile: Prefix + Voucher No. + Date(s) in one row, 2/3/4 equal-sized boxes */}
+                  {/* Mobile: Prefix + Voucher No. + Date — `date` को `voucherNumber` के अंदर nest नहीं */}
                   {(() => {
                     const hasPrefix = isPrefixSelectionEnabled && voucherPrefixes.length > 0;
                     const hasDateBS = dateSystem === 'BS' || dateSystem === 'Both';
                     const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
                     const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
-                      <FormField
-                        control={form.control}
-                        name="voucherNumber"
-                        render={({ field: voucherField }: any) => (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name="date"
-                              render={({ field: dateField }: any) => (
-                                <>
-                                  <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
-                                    {hasPrefix && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
-                                          <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
-                                            <SelectValue />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {voucherPrefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                          </SelectContent>
-                                        </Select>
-                                      </FormItem>
-                                    )}
-                                    <FormItem className="min-w-0 w-full overflow-hidden">
-                                      <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
-                                      <FormControl>
-                                        <Input placeholder="e.g. JV-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
-                                      </FormControl>
-                                    </FormItem>
-                                    {hasDateBS && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
-                                        <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
-                                        </div>
-                                      </FormItem>
-                                    )}
-                                    {hasDateAD && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date</FormLabel>
-                                        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
-                                          <PopoverTrigger asChild>
-                                            <FormControl>
-                                              <Button disabled={!isFormEditing} variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
-                                                {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
-                                                <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
-                                              </Button>
-                                            </FormControl>
-                                          </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0 z-[102]" align="start">
-                                            <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
-                                          </PopoverContent>
-                                        </Popover>
-                                      </FormItem>
-                                    )}
-                                  </div>
-                                  <FormMessage />
-                                </>
-                              )}
-                            />
-                            <FormMessage />
-                          </>
-                        )}
-                      />
+                      <>
+                        <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                          <FormField
+                            control={form.control}
+                            name="voucherNumber"
+                            render={({ field: voucherField }: any) => (
+                              <>
+                                {hasPrefix && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Prefix</FormLabel>
+                                    <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]}>
+                                      <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {voucherPrefixes.map((p) => (
+                                          <SelectItem key={p} value={p}>
+                                            {p}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormItem>
+                                )}
+                                <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
+                                  <FormControl>
+                                    <Input placeholder="e.g. JV-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers'))} />
+                                  </FormControl>
+                                </FormItem>
+                              </>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="date"
+                            render={({ field: dateField }: any) => (
+                              <>
+                                {hasDateBS && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
+                                    <div className="min-w-0 w-full overflow-hidden">
+                                      <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" />
+                                    </div>
+                                  </FormItem>
+                                )}
+                                {hasDateAD && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date</FormLabel>
+                                    <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen} modal={true}>
+                                      <PopoverTrigger asChild>
+                                        <FormControl>
+                                          <Button disabled={!isFormEditing} variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")}>
+                                            {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
+                                            <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
+                                          </Button>
+                                        </FormControl>
+                                      </PopoverTrigger>
+                                      <PopoverContent className="w-auto p-0 z-[102]" align="start">
+                                        <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
+                                      </PopoverContent>
+                                    </Popover>
+                                  </FormItem>
+                                )}
+                              </>
+                            )}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-0">
+                          <FormField control={form.control} name="voucherNumber" render={() => <FormMessage />} />
+                          <FormField control={form.control} name="date" render={() => <FormMessage />} />
+                        </div>
+                      </>
                     );
                   })()}
                 </>
@@ -2297,9 +2375,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
-                {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Save (always) - all 6 buttons */}
+                {/* Row 1: Cancel | Save | Approve (right) */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
+                </Button>
+                {/* Pehle save ke baad `savedVoucherId` — tab bhi bina change Save band */}
+                <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -2312,9 +2394,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
-                </Button>
               </div>
             ) : (
               <>
@@ -2354,7 +2433,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

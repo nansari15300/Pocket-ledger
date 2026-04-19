@@ -42,6 +42,12 @@ import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import {
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_AFTER_COMPRESS,
+  MAX_PDF_BYTES_BEFORE_UPLOAD,
+  MAX_PDF_UPLOAD_MB,
+} from "@/lib/fileUploadLimits";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 
@@ -53,8 +59,6 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
-
-const MAX_FILE_SIZE_MB = 0.5;
 
 export function CreateFinishedGoodDialog({
   isOpen,
@@ -73,7 +77,7 @@ export function CreateFinishedGoodDialog({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId, company, triggerSync } = useCompany();
+  const { companyId, company } = useCompany();
   const { canAddAvatar } = usePermissions();
   const { dateSystem } = useDate();
 
@@ -176,7 +180,7 @@ export function CreateFinishedGoodDialog({
       const toUpload = files.filter((f): f is File => f instanceof File);
       if (toUpload.length > 0 && canAddAvatar) {
         const totalBytes = toUpload.slice(0, 3).reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalBytes, storageBytes: totalBytes });
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalBytes, storageBytes: totalBytes }, company?.storageOption);
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
@@ -184,13 +188,27 @@ export function CreateFinishedGoodDialog({
         }
         for (const file of toUpload) {
           if (fileUrls.length >= 3) break;
-          const compressed = await compressFile(file);
-          if (compressed.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            sonnerToast.error("File too large", { id: toastId, description: `Max ${MAX_FILE_SIZE_MB}MB per file.` });
-            continue;
+          const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+          let toSend: File;
+          if (isPdf) {
+            if (file.size > MAX_PDF_BYTES_BEFORE_UPLOAD) {
+              sonnerToast.error("PDF too large", { id: toastId, description: `Max ${MAX_PDF_UPLOAD_MB} MB per PDF.` });
+              continue;
+            }
+            toSend = file;
+          } else {
+            const compressed = await compressFile(file);
+            if (compressed.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+              sonnerToast.error("File too large", {
+                id: toastId,
+                description: `After compression still over ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
+              });
+              continue;
+            }
+            toSend = compressed;
           }
           const res = await uploadFile(
-            { name: compressed.name, type: compressed.type, arrayBuffer: await compressed.arrayBuffer() },
+            { name: toSend.name, type: toSend.type, arrayBuffer: await toSend.arrayBuffer() },
             companyId,
             company?.name,
             "avatar",
@@ -201,7 +219,7 @@ export function CreateFinishedGoodDialog({
           );
           if (res.success && res.url) {
             fileUrls.push(res.url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: compressed.size, storageBytes: compressed.size });
+            await incrementCompanyStorage(companyId, { attachmentsBytes: toSend.size, storageBytes: toSend.size });
           }
         }
       }
@@ -243,7 +261,6 @@ export function CreateFinishedGoodDialog({
 
       sonnerToast.success("Finished good created", { id: toastId, description: `"${values.name}" added.` });
       onItemCreated?.(docRef.id);
-      triggerSync();
       onOpenChange(false);
     } catch (err: any) {
       console.error("Create finished good error:", err);
@@ -260,8 +277,21 @@ export function CreateFinishedGoodDialog({
     for (const file of list.slice(0, max)) {
       if (!file.type.startsWith("image/") && file.type !== "application/pdf") continue;
       try {
-        const compressed = await compressFile(file);
-        setFiles((prev) => [...prev, compressed]);
+        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+        if (isPdf) {
+          if (file.size > MAX_PDF_BYTES_BEFORE_UPLOAD) {
+            sonnerToast.error("PDF too large", { description: `Max ${MAX_PDF_UPLOAD_MB} MB.` });
+            continue;
+          }
+          setFiles((prev) => [...prev, file]);
+        } else {
+          const compressed = await compressFile(file);
+          if (compressed.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+            sonnerToast.error("Image too large after compress", { description: `Max ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.` });
+            continue;
+          }
+          setFiles((prev) => [...prev, compressed]);
+        }
       } catch {
         setFiles((prev) => [...prev, file]);
       }

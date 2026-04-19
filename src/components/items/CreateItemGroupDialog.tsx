@@ -23,6 +23,18 @@ import type { ItemGroup } from "@/components/items/types";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+
+function createLocalEntityId(prefix: string): string {
+  // Offline create ke liye local id generate karo; Firebase id dependency avoid hoti hai.
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Group name must be at least 2 characters." }),
@@ -108,19 +120,36 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
         return;
       }
 
-      const payload = {
-        name: values.name.trim(),
-        ownerId: user.uid,
-        companyId: companyId,
-        parentId: values.parentId,
-        isDeleted: false,
-        createdAt: serverTimestamp(),
-      };
-      const collRef = collection(firestore, `companies/${companyId}/item_groups`);
-
-      const docRef = await addDoc(collRef, payload);
+      let createdId = "";
+      if (isLocalOnlyMode()) {
+        // Local-first mode: save item group in browser DB and queue backup sync.
+        createdId = createLocalEntityId("item_group");
+        const payload = {
+          id: createdId,
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId,
+          parentId: values.parentId,
+          isDeleted: false,
+          createdAt: new Date().toISOString(),
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "item_groups", createdId, payload);
+        await enqueueCompanyDocOutbox(companyId, "item_groups", "create", createdId, payload);
+      } else {
+        const payload = {
+          name: values.name.trim(),
+          ownerId: user.uid,
+          companyId: companyId,
+          parentId: values.parentId,
+          isDeleted: false,
+          createdAt: serverTimestamp(),
+        };
+        const collRef = collection(firestore, `companies/${companyId}/item_groups`);
+        const docRef = await addDoc(collRef, payload);
+        createdId = docRef.id;
+      }
       toast({ title: "Group Created!", description: `"${values.name}" has been successfully created.` });
-      onGroupCreated(docRef.id);
+      onGroupCreated(createdId);
       if (saveAndNew) {
         form.reset({ name: "", parentId: "stock_items" });
       } else {

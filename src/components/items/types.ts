@@ -9,6 +9,7 @@ export type Item = {
   openingBalanceUnit?: string;
   openingBalanceRate?: number;
   openingBalanceDate?: any;
+  openingBalanceNarration?: string;
   stockQty?: number;
   lowStockWarning?: number;
   salePrice: number;

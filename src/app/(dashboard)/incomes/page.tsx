@@ -25,16 +25,19 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
-import { doc, getDoc, collection, query, getDocs, where, updateDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, collection, query, getDocs, where, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useMasterDetailQueryNav } from "@/hooks/useMasterDetailQueryNav";
 import { useRegisterMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId";
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { useCachedFeatureConfig } from "@/hooks/useCachedFeatureConfig";
 
 // Custom Hook Import
 import { usePageMemory } from "@/hooks/usePageMemory";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { ExpenseAccountList } from "@/components/expenses/ExpenseAccountList";
@@ -46,8 +49,7 @@ import { CreateExpenseGroupDialog } from "@/components/expenses/CreateExpenseGro
 import { PermissionButton } from "@/components/permission";
 import usePermissions from "@/hooks/usePermissions";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -55,14 +57,16 @@ function IncomeExpensePageContent() {
     []
   );
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedExpenseAccounts, processedExpenseGroups: initialProcessedExpenseGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByExpenseAccountId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     const expenseAccountIdSet = new Set((processedExpenseAccounts || []).map((a: any) => a.id));
     vouchers.forEach((v: any) => {
@@ -79,16 +83,38 @@ function IncomeExpensePageContent() {
       });
     });
     return map;
-  }, [vouchers, processedExpenseAccounts, canApproveTransactions]);
+  }, [vouchers, processedExpenseAccounts, showApproveOnList]);
   const pendingApprovalByExpenseGroupId = useMemo(() => {
-    if (!canApproveTransactions) return {} as Record<string, number>;
+    if (!showApproveOnList) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedExpenseAccounts.forEach((account: any) => {
-      const groupId = account.groupId || "ungrouped";
-      map[groupId] = (map[groupId] || 0) + (pendingApprovalByExpenseAccountId[account.id] || 0);
+      const n = pendingApprovalByExpenseAccountId[account.id] || 0;
+      if (!n) return;
+      const gid =
+        account.groupId && String(account.groupId).trim() !== "" && account.groupId !== "ungrouped_expense"
+          ? account.groupId
+          : "ungrouped";
+      map[gid] = (map[gid] || 0) + n;
     });
     return map;
-  }, [processedExpenseAccounts, pendingApprovalByExpenseAccountId, canApproveTransactions]);
+  }, [processedExpenseAccounts, pendingApprovalByExpenseAccountId, showApproveOnList]);
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !(processedExpenseAccounts || []).length) return 0;
+    const expenseAccountIdSet = new Set(processedExpenseAccounts.map((a: ExpenseAccount) => a.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      let hit = false;
+      if (v.incomeAccountId && expenseAccountIdSet.has(v.incomeAccountId)) hit = true;
+      if (!hit && v.expenseAccountId && expenseAccountIdSet.has(v.expenseAccountId)) hit = true;
+      if (!hit && v.accountId && expenseAccountIdSet.has(v.accountId)) hit = true;
+      if (!hit && Array.isArray(v.entries)) {
+        hit = v.entries.some((e: any) => e.accountId && expenseAccountIdSet.has(e.accountId));
+      }
+      if (hit) n += 1;
+    }
+    return n;
+  }, [vouchers, processedExpenseAccounts, showApproveOnList]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -104,7 +130,8 @@ function IncomeExpensePageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [showOnlyExpenseAccountsWithPendingApproval, setShowOnlyExpenseAccountsWithPendingApproval] =
+    useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -112,7 +139,8 @@ function IncomeExpensePageContent() {
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const [defaultTab, setDefaultTab] = useState<'direct_income' | 'direct_expense' | 'add_salary'>('direct_income');
-  const [featureConfig, setFeatureConfig] = useState<Record<string, boolean>>({});
+  // Feature config ko local cache se bhi read karo so offline UI consistent rahe.
+  const { featureConfig } = useCachedFeatureConfig({});
 
   const selectedAccount = activeView === 'accounts' ? selected as ExpenseAccount : null;
   const selectedGroup = activeView === 'groups' ? selected as ExpenseGroup : null;
@@ -161,13 +189,10 @@ function IncomeExpensePageContent() {
     return normalized;
   }, [processedExpenseAccounts, initialProcessedExpenseGroups, companyId, CORE_EXPENSE_GROUP_IDS]);
 
-  const expenseAccountsForListDisplay = useMemo(
-    () => filterByPendingApproval(processedExpenseAccounts, pendingApprovalByExpenseAccountId, unapprovedOnly),
-    [processedExpenseAccounts, pendingApprovalByExpenseAccountId, unapprovedOnly]
-  );
-
   useEffect(() => {
     if (!companyId) return;
+    // Offline/local-only mode me Firestore update call avoid karo.
+    if (isLocalOnlyMode()) return;
     const ids = Array.from(CORE_EXPENSE_GROUP_IDS);
     Promise.allSettled(
       ids.map((id) =>
@@ -177,17 +202,6 @@ function IncomeExpensePageContent() {
       )
     ).catch(() => {});
   }, [companyId, CORE_EXPENSE_GROUP_IDS]);
-
-  useEffect(() => {
-    const unsub = onSnapshot(doc(firestore, "app_settings", "features"), (docSnap) => {
-      if (docSnap.exists()) {
-        setFeatureConfig(docSnap.data() as Record<string, boolean>);
-      } else {
-        setFeatureConfig({});
-      }
-    });
-    return () => unsub();
-  }, []);
 
   useEffect(() => {
     if (activeView === "accounts" && !accountsTabEnabled) {
@@ -207,7 +221,7 @@ function IncomeExpensePageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'accounts' ? expenseAccountsForListDisplay : processedExpenseGroups, 
+    activeView === 'accounts' ? processedExpenseAccounts : processedExpenseGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -215,8 +229,29 @@ function IncomeExpensePageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyExpenseAccountsWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "accounts") setShowOnlyExpenseAccountsWithPendingApproval(false);
+  }, [activeView]);
+
+  const expenseAccountsForList = useMemo(() => {
+    if (!showOnlyExpenseAccountsWithPendingApproval || !showApproveOnList) return processedExpenseAccounts;
+    return processedExpenseAccounts.filter((a) => (pendingApprovalByExpenseAccountId[a.id] ?? 0) > 0);
+  }, [
+    processedExpenseAccounts,
+    showOnlyExpenseAccountsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByExpenseAccountId,
+  ]);
+  const filteredExpenseAccountListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return expenseAccountsForList.filter(
+      (a) => a.name && a.name.toLowerCase().includes(searchLower)
+    ).length;
+  }, [expenseAccountsForList, searchTerm]);
 
   // Restore selection when returning from details (e.g. /incomes?selected=xyz or /incomes?view=groups&selected=xyz)
   const selectedIdFromUrl = searchParams.get("selected");
@@ -234,11 +269,15 @@ function IncomeExpensePageContent() {
       viewFromUrl === "groups"
         ? `/incomes?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/incomes?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedExpenseAccounts, processedExpenseGroups, setSelected, setActiveView, router]);
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
+    // Local-only mode me user names ke liye Firestore read na karo.
+    if (isLocalOnlyMode()) return "N/A";
     try {
         // User doc ID may be name_uid format, so query by uid field first
         const q = query(collection(firestore, "users"), where("uid", "==", userId));
@@ -310,16 +349,12 @@ function IncomeExpensePageContent() {
   }, []);
   
   const totalBalance = useMemo(() => {
-    if (activeView === "accounts") {
-      const list = unapprovedOnly
-        ? filterByPendingApproval(processedExpenseAccounts, pendingApprovalByExpenseAccountId, true)
-        : processedExpenseAccounts;
-      return list.reduce((acc, account) => acc + account.balance, 0);
-    }
-    return processedExpenseGroups
-      .filter((g) => !["income", "expenses"].includes((g.id || "").toLowerCase()))
-      .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedExpenseAccounts, processedExpenseGroups, unapprovedOnly, pendingApprovalByExpenseAccountId]);
+    return activeView === 'accounts'
+      ? processedExpenseAccounts.reduce((acc, account) => acc + account.balance, 0)
+      : processedExpenseGroups
+          .filter((g) => !['income', 'expenses'].includes((g.id || '').toLowerCase()))
+          .reduce((acc, group) => acc + group.balance, 0);
+  }, [activeView, processedExpenseAccounts, processedExpenseGroups]);
 
   const handleSelect = (item: ExpenseAccount | ExpenseGroup, view?: 'accounts' | 'groups') => {
     const isGroup = view === 'groups';
@@ -362,13 +397,6 @@ function IncomeExpensePageContent() {
     return groupAccounts;
   }, [selectedGroup, processedExpenseAccounts]);
 
-  const filteredExpenseAccountCount = useMemo(() => {
-    const q = (searchTerm || "").toLowerCase();
-    return expenseAccountsForListDisplay.filter(
-      (a) => a.name && a.name.toLowerCase().includes(q)
-    ).length;
-  }, [expenseAccountsForListDisplay, searchTerm]);
-
   const openVoucherDialog = (type: 'direct_income' | 'direct_expense' | 'add_salary') => {
     setDefaultTab(type);
     setIsVoucherOpen(true);
@@ -397,13 +425,24 @@ function IncomeExpensePageContent() {
   const listView = (
     <div className="flex min-h-0 flex-1 flex-col">
         <div className={cn("p-3 border-b flex shrink-0 items-center gap-2", listDisabled && "pointer-events-none opacity-60")}>
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder={activeView === 'accounts' ? 'Search accounts...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
             </div>
-            {activeView === "accounts" && canApproveTransactions && (
-              <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-            )}
+            {activeView === "accounts" &&
+            showApproveOnList &&
+            totalPendingApprovalVoucherCount > 0 &&
+            !listDisabled ? (
+              <PendingApprovalListFilterBadge
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyExpenseAccountsWithPendingApproval}
+                onToggle={() => setShowOnlyExpenseAccountsWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only accounts with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all accounts (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all accounts"
+              />
+            ) : null}
             {activeView === "accounts" ? (
               <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
                 <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
@@ -436,10 +475,10 @@ function IncomeExpensePageContent() {
             <>
               <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
                 <DollarSign className="h-4 w-4" />
-                <span>Account ({filteredExpenseAccountCount})</span>
+                <span>Account ({filteredExpenseAccountListCount})</span>
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <ExpenseAccountList accounts={expenseAccountsForListDisplay} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
+                <ExpenseAccountList accounts={expenseAccountsForList} onSelectAccount={(a) => handleSelect(a, 'accounts')} selectedAccount={selectedAccount} searchTerm={searchTerm} pendingApprovalByAccountId={pendingApprovalByExpenseAccountId} disabled={listDisabled || !accountDetailsEnabled} getItemHref={useQueryNav && accountDetailsEnabled ? (a) => `/incomes?selected=${a.id}` : undefined} />
               </div>
             </>
         ) : (

@@ -7,8 +7,10 @@ import {
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
+  signInWithCredential,
   GoogleAuthProvider,
 } from "firebase/auth";
+import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -37,10 +39,14 @@ const formSchema = z.object({
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
 });
 
+const REMEMBER_EMAIL_KEY = "remembered_login_email";
+const REMEMBER_EMAIL_ENABLED_KEY = "remembered_login_email_enabled";
+
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [rememberEmail, setRememberEmail] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
 
@@ -78,12 +84,43 @@ export function LoginForm() {
       });
   }, [router, toast]);
 
+  useEffect(() => {
+    // Prefill email only when user explicitly opted in previously.
+    try {
+      const enabled = localStorage.getItem(REMEMBER_EMAIL_ENABLED_KEY) === "1";
+      setRememberEmail(enabled);
+      const savedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
+      if (enabled && savedEmail) {
+        form.setValue("email", savedEmail);
+      }
+    } catch (_) {}
+  }, [form]);
+
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
     try {
+      // Preference ko login result se independent persist karo so app restart par stable rahe.
+      try {
+        localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, rememberEmail ? "1" : "0");
+        if (rememberEmail) {
+          localStorage.setItem(REMEMBER_EMAIL_KEY, values.email.trim());
+        }
+      } catch (_) {}
+
       await (isSignUp
         ? createUserWithEmailAndPassword(auth, values.email, values.password)
         : signInWithEmailAndPassword(auth, values.email, values.password));
+
+      // Persist only email preference; never store password.
+      try {
+        if (rememberEmail) {
+          localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, "1");
+          localStorage.setItem(REMEMBER_EMAIL_KEY, values.email.trim());
+        } else {
+          localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, "0");
+          localStorage.removeItem(REMEMBER_EMAIL_KEY);
+        }
+      } catch (_) {}
 
       router.push("/company");
 
@@ -109,6 +146,27 @@ export function LoginForm() {
     provider.addScope('email');
     provider.addScope('profile');
     try {
+      // Native APK/WebView: Firebase web popup/redirect often gets stuck; use Capacitor native Google auth instead.
+      if (Capacitor.isNativePlatform()) {
+        const { GoogleAuth } = await import("@codetrix-studio/capacitor-google-auth");
+        const clientId = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
+        if (!clientId) {
+          throw new Error("NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID is missing");
+        }
+        await GoogleAuth.initialize({ clientId, scopes: ["profile", "email"], grantOfflineAccess: false });
+        const nativeUser = await GoogleAuth.signIn();
+        const idToken = nativeUser.authentication?.idToken;
+        if (!idToken) {
+          throw new Error("Google idToken missing from native sign-in");
+        }
+        const credential = GoogleAuthProvider.credential(idToken);
+        const result = await signInWithCredential(auth, credential);
+        if (result?.user) {
+          router.replace("/company");
+          return;
+        }
+      }
+
       // Prefer popup so user stays on same page; fallback to redirect if popup is blocked
       try {
         const result = await signInWithPopup(auth, provider);
@@ -131,6 +189,8 @@ export function LoginForm() {
         description = "Google Sign-In is not enabled for this project. Enable it in Firebase Console > Authentication > Sign-in method.";
       } else if (error.code === "auth/popup-blocked") {
         description = "Popup was blocked. Please allow popups for this site or try again.";
+      } else if (error.message?.includes("NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID")) {
+        description = "Google client ID missing. Set NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID in .env.local for APK login.";
       }
       toast({
         variant: "destructive",
@@ -139,7 +199,7 @@ export function LoginForm() {
       });
     }
   }
-  
+
   const GoogleIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 48 48">
       <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
@@ -179,6 +239,24 @@ export function LoginForm() {
               </FormItem>
             )}
           />
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            {/* Local remember toggle for email convenience in desktop/web login forms. */}
+            <input
+              type="checkbox"
+              checked={rememberEmail}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setRememberEmail(next);
+                // Toggle time pe hi preference save karo (login ke baad reset na lage).
+                try {
+                  localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, next ? "1" : "0");
+                  if (!next) localStorage.removeItem(REMEMBER_EMAIL_KEY);
+                } catch (_) {}
+              }}
+              className="h-4 w-4 rounded border-input"
+            />
+            Remember email
+          </label>
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {isSignUp ? "Sign Up with Email" : "Sign In with Email"}
@@ -208,6 +286,7 @@ export function LoginForm() {
         onClick={handleGoogleSignIn}
         disabled={isGoogleLoading}
       >
+        {/* Guest login removed: local-first now runs under authenticated user session only. */}
         {isGoogleLoading ? (
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         ) : (

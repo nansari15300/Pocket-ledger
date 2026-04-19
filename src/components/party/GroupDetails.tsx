@@ -35,7 +35,6 @@ import {
   Search,
 } from "lucide-react";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -62,7 +61,6 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
-import usePermissions from "@/hooks/usePermissions";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { EditGroupDialog } from "./EditGroupDialog";
 import { PartyFilterDropdown } from "./PartyFilterDropdown";
@@ -118,6 +116,8 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
+import { getLocalAuthUser } from "@/lib/localApiClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -197,23 +197,17 @@ export function GroupDetails({
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { company, companyId } = useCompany();
-  const { can } = usePermissions();
   const { vouchers, processedParties, processedAccounts, processedExpenseAccounts, processedAccountGroups, processedExpenseGroups, processedTaxGroups, processedStaffGroups, processedTaxes, processedStaff, processedItems, processedItemGroups, journalAccountNames } = useVouchers();
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
-  const showApproveOnEntity =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onEntity !== false;
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
     try {
@@ -290,14 +284,6 @@ export function GroupDetails({
     }
     return [];
   }, [allParties, group, groupType]);
-
-  const pendingApprovalCount = useMemo(() => {
-    if (!showApproveOnEntity || groupType !== "party" || !partiesInGroup.length) return 0;
-    const partyIds = new Set(partiesInGroup.map((p) => p.id));
-    return vouchers.filter(
-      (v: any) => v.partyId && partyIds.has(v.partyId) && v.isApproved !== true
-    ).length;
-  }, [vouchers, partiesInGroup, showApproveOnEntity, groupType]);
 
   // Get child groups (groups that have this group as parent)
   const childGroups = useMemo(() => {
@@ -416,6 +402,7 @@ export function GroupDetails({
   // Maintain local userNames state that merges with prop
   const [localFetchedUserNames, setLocalFetchedUserNames] = useState<Record<string, string>>({});
   const { user, customUser } = useAuth();
+  const isLocalMode = isLocalOnlyMode();
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -423,6 +410,27 @@ export function GroupDetails({
     if (!me) return;
     setLocalFetchedUserNames((prev) => (prev[user.uid] === me ? prev : { ...prev, [user.uid]: me }));
   }, [user?.uid, user?.displayName, user?.email, customUser?.displayName]);
+
+  useEffect(() => {
+    if (!isLocalMode || !companyId) return;
+    const localUser = getLocalAuthUser(companyId);
+    const localDisplayName = (
+      localUser?.displayName ||
+      localUser?.username ||
+      ((company as any)?.adminUsername as string) ||
+      "Admin"
+    ).trim();
+    if (!localDisplayName) return;
+    setLocalFetchedUserNames((prev) => {
+      // Keep a stable local-id map so transaction rows resolve local actor names.
+      const next = { ...prev };
+      next["local"] = localDisplayName;
+      next["local_guest_user"] = localDisplayName;
+      if (localUser?.id) next[String(localUser.id)] = localDisplayName;
+      if (localUser?.username) next[String(localUser.username)] = localDisplayName;
+      return next;
+    });
+  }, [isLocalMode, companyId, company]);
   
   // Merge prop userNames with locally fetched userNames
   const mergedUserNames = useMemo(() => {
@@ -454,6 +462,7 @@ export function GroupDetails({
   // Fetch missing user names directly from Firestore and store in local state
   useEffect(() => {
     if (!processedTransactions || processedTransactions.length === 0) return;
+    if (isLocalMode) return;
     
     const uids = new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[]);
     
@@ -522,7 +531,7 @@ export function GroupDetails({
         setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
       }
     });
-  }, [processedTransactions, userNames, localFetchedUserNames]);
+  }, [processedTransactions, userNames, localFetchedUserNames, isLocalMode]);
 
   // Use group balance if no date range, otherwise use calculated balance
   const closingBalance = shouldUseGroupBalance ? (group.balance || 0) : calculatedClosingBalance;
@@ -694,8 +703,7 @@ export function GroupDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -770,6 +778,8 @@ export function GroupDetails({
       dateRangeText: dateRangeText || "All Time",
       vouchersCount: transactionsToPrint.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (group as any).openingBalanceDate,
+      openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
       transactions: transactionsToPrint,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -983,13 +993,6 @@ export function GroupDetails({
           <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
             {balanceText} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
           </p>
-          {pendingApprovalCount > 0 && !isMobile && (
-            <p className="text-center mt-2">
-              <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem]">
-                {pendingApprovalCount} pending approval
-              </span>
-            </p>
-          )}
         </div>
         {/* Group dropdown + Edit icon + Search - same size as Party Details (equal width & height, edit h-9 w-8) */}
         <div className="p-2 border-b flex-shrink-0">
@@ -1031,6 +1034,7 @@ export function GroupDetails({
           style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
           <div className="pb-24">
+          {/* Unapproved: pink row — default `highlightPendingApproval` */}
           <TransactionsTable
             transactions={mobileTransactionsToShow}
             context="group"
@@ -1040,9 +1044,9 @@ export function GroupDetails({
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+            openingBalanceDate={(group as any).openingBalanceDate}
             openingBalanceActions={undefined}
             showNarration={showNarration}
-            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
             journalAccountNames={journalAccountNames}
             userNames={mergedUserNames}
@@ -1196,11 +1200,6 @@ export function GroupDetails({
               >
                 {formatCurrency(closingBalance, { showDrCr: true })}
               </div>
-              {pendingApprovalCount > 0 && !isMobile && (
-                <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 min-w-[8rem] flex-shrink-0">
-                  {pendingApprovalCount} pending approval
-                </span>
-              )}
             </div>
           </div>
           {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
@@ -1349,11 +1348,11 @@ export function GroupDetails({
             groupEntityType="party"
             contextId={group.id}
             showNarration={showNarration}
-            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+            openingBalanceDate={(group as any).openingBalanceDate}
             openingBalanceActions={
               group.id !== "ungrouped" ? (
                 <EditGroupDialog
@@ -1404,11 +1403,6 @@ export function GroupDetails({
               <Checkbox id="show-narration-party-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-party-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
             </div>
-            <NarrationNoteSearchInput
-              id="narration-search-party-group"
-              value={narrationNoteSearch}
-              onChange={setNarrationNoteSearch}
-            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

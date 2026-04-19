@@ -30,6 +30,8 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
+import { getLocalAuthUser } from "@/lib/localApiClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 export default function StaffPage() {
   const { user } = useAuth();
@@ -78,6 +80,25 @@ export default function StaffPage() {
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId]) return userNames[userId];
+    if (isLocalOnlyMode() && companyId) {
+      const localUser = getLocalAuthUser(companyId);
+      const localDisplayName = (
+        localUser?.displayName ||
+        localUser?.username ||
+        ((company as any)?.adminUsername as string) ||
+        "Admin"
+      ).trim();
+      // Local mode ke common user ids ko readable local user name me resolve karo.
+      if (
+        userId === "local" ||
+        userId === "local_guest_user" ||
+        userId === localUser?.id ||
+        userId === localUser?.username
+      ) {
+        return localDisplayName || "Admin";
+      }
+      return "N/A";
+    }
     try {
         const userDoc = await getDoc(doc(firestore, 'users', userId));
         if (userDoc.exists()) {
@@ -85,7 +106,28 @@ export default function StaffPage() {
         }
     } catch (e) {}
     return "Unknown";
-  }, [userNames]);
+  }, [userNames, companyId, company]);
+
+  useEffect(() => {
+    if (!isLocalOnlyMode() || !companyId) return;
+    const localUser = getLocalAuthUser(companyId);
+    const localDisplayName = (
+      localUser?.displayName ||
+      localUser?.username ||
+      ((company as any)?.adminUsername as string) ||
+      "Admin"
+    ).trim();
+    if (!localDisplayName) return;
+    setUserNames((prev) => {
+      // Seed local-id keys so staff/grid pages always show local actor name.
+      const next = { ...prev };
+      next["local"] = localDisplayName;
+      next["local_guest_user"] = localDisplayName;
+      if (localUser?.id) next[String(localUser.id)] = localDisplayName;
+      if (localUser?.username) next[String(localUser.username)] = localDisplayName;
+      return next;
+    });
+  }, [companyId, company]);
 
   useEffect(() => {
     const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean));

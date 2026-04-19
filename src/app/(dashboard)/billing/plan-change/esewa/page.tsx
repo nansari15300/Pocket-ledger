@@ -6,6 +6,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -46,7 +47,7 @@ function PlanChangeEsewaInner() {
       setDetail(null);
       try {
         const idToken = await user.getIdToken();
-        const res = await fetch("/api/payments/complete-plan-change-esewa", {
+        const res = await fetch(getBillingApiUrl("/api/payments/complete-plan-change-esewa"), {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
           body: JSON.stringify({ decoded }),

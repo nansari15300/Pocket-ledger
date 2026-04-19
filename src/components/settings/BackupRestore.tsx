@@ -1,12 +1,29 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, Upload, Loader2, FileWarning, KeyRound, ShieldCheck, ShieldOff, Eye, EyeOff } from "lucide-react";
+import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
-import { collection, getDocs, query, writeBatch, doc, Timestamp, setDoc, serverTimestamp, addDoc, getDoc, where } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  query,
+  writeBatch,
+  doc,
+  Timestamp,
+  setDoc,
+  serverTimestamp,
+  addDoc,
+  getDoc,
+  where,
+  orderBy,
+  limit,
+  startAfter,
+  documentId,
+} from "firebase/firestore";
+import type { QueryDocumentSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -21,15 +38,141 @@ import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermi
 import { decryptData, encryptData } from "@/lib/encryption";
 import Link from "next/link";
 import { getGoogleDriveAuthUrl } from "@/lib/drive-actions";
-import { createCompanyFromBackup } from "@/lib/actions";
 import { ToastAction } from "../ui/toast";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
+import {
+  deleteAllCompanyDocsForCompany,
+  upsertCompanyDocInBrowserDb,
+  notifyBrowserDbCollectionUpdated,
+  listCompanyDocsFromBrowserDb,
+} from "@/lib/localCompanyDocMirror";
+import { clearSyncOutboxForCompany } from "@/lib/localVoucherOutbox";
 
+/** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
+function fiscalFieldToLocalIso(val: unknown): string | null {
+  if (val == null) return null;
+  if (typeof val === "string" && val.trim()) return val;
+  if (val instanceof Timestamp) return val.toDate().toISOString();
+  if (val && typeof val === "object" && "seconds" in val) {
+    const s = Number((val as { seconds: number }).seconds);
+    const ns = Number((val as { nanoseconds?: number }).nanoseconds ?? 0);
+    if (!Number.isFinite(s)) return null;
+    return new Date(s * 1000 + ns / 1e6).toISOString();
+  }
+  try {
+    const d = (val as { toDate?: () => Date }).toDate?.();
+    if (d instanceof Date && !isNaN(d.getTime())) return d.toISOString();
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 const collectionsToBackup = [
   "parties", "groups", "bank_accounts", "account_groups",
   "staff", "staff_groups", "items", "item_groups",
   "taxes", "tax_groups", "expense_accounts", "expense_groups", "vouchers",
 ];
+
+/** Firestore ek query me ~1000 doc cap — pages se poora subcollection (warna backup adhura) */
+const BACKUP_PAGE_SIZE = 500;
+
+/** Firestore subcollections `companies/{id}/…` — cloud doc id kabhi `authoritativeCompanyId` hota hai, registry `companyId` se alag */
+async function fetchSubcollectionAllDocsPaginated(
+  firestoreCompanyId: string,
+  colName: string
+): Promise<Array<Record<string, unknown> & { id: string }>> {
+  const colRef = collection(firestore, `companies/${firestoreCompanyId}/${colName}`);
+  const out: Array<Record<string, unknown> & { id: string }> = [];
+  let last: QueryDocumentSnapshot | null = null;
+  for (;;) {
+    const q = last
+      ? query(colRef, orderBy(documentId()), startAfter(last), limit(BACKUP_PAGE_SIZE))
+      : query(colRef, orderBy(documentId()), limit(BACKUP_PAGE_SIZE));
+    const snap = await getDocs(q);
+    for (const d of snap.docs) {
+      out.push({ id: d.id, ...d.data() } as Record<string, unknown> & { id: string });
+    }
+    if (snap.docs.length < BACKUP_PAGE_SIZE) break;
+    last = snap.docs[snap.docs.length - 1];
+  }
+  return out;
+}
+
+function docRowUpdatedMs(row: Record<string, unknown>): number {
+  const u = row.updatedAt ?? row.lastEditedAt ?? row.createdAt;
+  if (u && typeof u === "object" && "toMillis" in u && typeof (u as { toMillis?: () => number }).toMillis === "function") {
+    try {
+      const ms = (u as { toMillis: () => number }).toMillis();
+      return typeof ms === "number" && Number.isFinite(ms) ? ms : 0;
+    } catch {
+      return 0;
+    }
+  }
+  if (u && typeof u === "object" && "seconds" in u) {
+    const s = Number((u as { seconds: number }).seconds);
+    return Number.isFinite(s) ? s * 1000 : 0;
+  }
+  if (typeof u === "number" && Number.isFinite(u)) return u;
+  return 0;
+}
+
+/** SQLite mirror me jo abhi Firestore pe flush nahi (journal 2 missing) — merge se backup pura */
+function mergeFirestoreRowsWithLocalMirrorForBackup(
+  fsRows: Array<Record<string, unknown> & { id: string }>,
+  localRows: Array<Record<string, unknown> & { id: string }>
+): Array<Record<string, unknown> & { id: string }> {
+  const byId = new Map<string, Record<string, unknown> & { id: string }>();
+  for (const r of fsRows) {
+    byId.set(String(r.id), { ...r });
+  }
+  for (const r of localRows) {
+    const id = String(r.id);
+    const prev = byId.get(id);
+    if (!prev) {
+      byId.set(id, { ...r });
+      continue;
+    }
+    const tFs = docRowUpdatedMs(prev);
+    const tLoc = docRowUpdatedMs(r);
+    if (tLoc > tFs) byId.set(id, { ...prev, ...r });
+  }
+  return Array.from(byId.values());
+}
+
+/**
+ * Online backup → local slot restore: backup file me purana `companyId` nested objects me rehta hai;
+ * SQLite `company_id` = naya slot — mismatch se listeners / filters galat. Sirf exact string match replace (Timestamps chhod do).
+ */
+function rewriteBackupCompanyIdsDeep(backupCompanyId: string, targetCompanyId: string, val: unknown): unknown {
+  if (!backupCompanyId || backupCompanyId === targetCompanyId) return val;
+  if (val === backupCompanyId) return targetCompanyId;
+  if (Array.isArray(val)) return val.map((v) => rewriteBackupCompanyIdsDeep(backupCompanyId, targetCompanyId, v));
+  if (val !== null && typeof val === "object") {
+    const o = val as Record<string, unknown>;
+    if (typeof o.seconds === "number" && "nanoseconds" in o) return val;
+    if (o.__fsTs === true) return val;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o)) {
+      out[k] = rewriteBackupCompanyIdsDeep(backupCompanyId, targetCompanyId, o[k]);
+    }
+    return out;
+  }
+  return val;
+}
+
+/** Restore confirm: user picks final `name` — default slot (target); ya backup file wala naam (agar khali ho to doosra fallback). */
+function resolveRestoreFinalCompanyName(
+  choice: "target" | "backup",
+  targetName: string,
+  backupName: string
+): string {
+  const t = String(targetName ?? "").trim();
+  const b = String(backupName ?? "").trim();
+  if (choice === "backup") return b || t;
+  return t || b;
+}
 
 export function BackupRestore() {
   const resolveUidFromUserRef = async (userRefId?: string, email?: string) => {
@@ -106,7 +249,7 @@ export function BackupRestore() {
     return true;
   };
 
-  const { company, companyId, setCompanyId } = useCompany();
+  const { company, companyId, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { user, customUser } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -121,8 +264,17 @@ export function BackupRestore() {
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [decryptionError, setDecryptionError] = useState<string | null>(null);
   const [backupDataToRestore, setBackupDataToRestore] = useState<any>(null);
+  /** Cloud-linked company: user choose SQLite vs Firestore — pehle default Firestore tha, local UI blank ho jati thi */
+  const [restoreToLocalSqlite, setRestoreToLocalSqlite] = useState(true);
+  /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
+  const [restoreCompanyNameChoice, setRestoreCompanyNameChoice] = useState<"target" | "backup">("target");
 
-
+  useEffect(() => {
+    if (isOverwriteConfirmOpen) {
+      setRestoreToLocalSqlite(true);
+      setRestoreCompanyNameChoice("target");
+    }
+  }, [isOverwriteConfirmOpen]);
   const handleBackupClick = () => {
     if (company?.password) {
       setIsEncryptedBackupConfirmOpen(true);
@@ -174,22 +326,31 @@ export function BackupRestore() {
         companyDetails: [{ ...company, id: companyId }],
       };
 
+      // Cloud data Firestore root id — galat `companyId` se parties pe PERMISSION_DENIED aata tha; local SQLite hamesha registry `companyId` se
+      const fsCompanyId =
+        String((company as { authoritativeCompanyId?: string }).authoritativeCompanyId || companyId || "").trim() ||
+        companyId;
+      const localOnlyBackup = String(company.storageOption || "").toLowerCase() === "local";
+
       for (const colName of collectionsToBackup) {
-        try {
-          const q = query(collection(firestore, `companies/${companyId}/${colName}`));
-          const snap = await getDocs(q);
-          backupData[colName] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        } catch (colError: any) {
-          const msg = colError?.message || String(colError);
-          const isPermission = msg.includes("permission") || colError?.code === "permission-denied";
-          console.error("Backup getDocs failed for collection:", colName, colError);
-          toast({
-            variant: "destructive",
-            title: isPermission ? "Permission Denied" : "Backup Failed",
-            description: isPermission ? `Cannot read "${colName}". Check company access.` : `Failed to read "${colName}": ${msg}`,
-          });
-          return;
+        let fsRows: Array<Record<string, unknown> & { id: string }> = [];
+        if (!localOnlyBackup) {
+          try {
+            fsRows = await fetchSubcollectionAllDocsPaginated(fsCompanyId, colName);
+          } catch (colError: unknown) {
+            // Offline / rules / path: poori backup mat todo — SQLite mirror (forBackupMerge) se jodo
+            console.warn("[Backup] Firestore subcollection read skipped, using local mirror if any:", colName, colError);
+            fsRows = [];
+          }
         }
+        const localRows = await listCompanyDocsFromBrowserDb(companyId, colName, { forBackupMerge: true });
+        backupData[colName] =
+          localRows.length > 0
+            ? mergeFirestoreRowsWithLocalMirrorForBackup(
+                fsRows,
+                localRows as Array<Record<string, unknown> & { id: string }>
+              )
+            : fsRows;
       }
 
       let jsonData: string;
@@ -382,8 +543,207 @@ export function BackupRestore() {
       }
   }
 
-  const handleOverwriteRestore = async (backupData: any) => {
-    if (!companyId || !user?.email || !backupData) return;
+  /** Static/local-first: backup → SQLite `company_docs` + `companies` row (Firebase account password nahi) */
+  const handleLocalOverwriteRestore = async (backupData: any, resolvedCompanyName: string) => {
+    if (!companyId || !user?.uid || !backupData) return;
+
+    const backupCompanyDetails = backupData?.companyDetails?.[0];
+    if (!backupCompanyDetails) {
+      toast({ variant: "destructive", title: "Invalid Backup", description: "Backup file is missing company details." });
+      return;
+    }
+
+    const backupCompanyId = backupCompanyDetails.id;
+    const backupOwnerId = backupCompanyDetails.ownerId;
+    const backupOwnerEmail = backupCompanyDetails.ownerEmail;
+
+    const currentEmail = (user.email || "").toLowerCase().trim();
+    const backupEmail = (backupOwnerEmail || "").toLowerCase().trim();
+    const isBackupOwner =
+      (!!user.uid && !!backupOwnerId && user.uid === backupOwnerId) ||
+      (!!currentEmail && !!backupEmail && currentEmail === backupEmail);
+
+    if (!isBackupOwner) {
+      toast({
+        variant: "destructive",
+        title: "Restore Blocked",
+        description: backupOwnerEmail
+          ? `This backup belongs to ${backupOwnerEmail}. Illegal restore attempt recorded.`
+          : "This backup belongs to another owner. Illegal restore attempt recorded.",
+        duration: 8000,
+      });
+      try {
+        const notified = await sendSecurityAlertClient({
+          backupOwnerId,
+          backupOwnerEmail,
+          backupSharedWith: backupCompanyDetails?.sharedWith || [],
+          attemptedByUid: user.uid,
+          attemptedByEmail: user.email ?? "",
+          attemptedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+          companyName: backupCompanyDetails.name,
+          companyId: backupCompanyId,
+        });
+        if (!notified) {
+          toast({
+            variant: "destructive",
+            title: "Owner Notification Failed",
+            description: "Attempt was blocked, but we could not resolve the original company admin to notify.",
+            duration: 7000,
+          });
+        }
+      } catch (e) {
+        console.error("Failed to send restore security alert:", e);
+      }
+      setIsOverwriteConfirmOpen(false);
+      setFileToRestore(null);
+      return;
+    }
+
+    try {
+      if (user?.uid) {
+        const userDocRef = doc(firestore, "users", user.uid);
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          const userData = userDocSnap.data();
+          const surrenderedCompanies = userData.surrenderedCompanies || {};
+          const surrenderedInfo = surrenderedCompanies[backupCompanyId];
+          if (surrenderedInfo) {
+            const formattedDate = new Date(surrenderedInfo.date.seconds * 1000).toLocaleDateString();
+            toast({
+              variant: "destructive",
+              title: "Restore Blocked",
+              description: `You surrendered this company to "${surrenderedInfo.surrenderedTo}" on ${formattedDate}. You cannot restore it.`,
+              duration: 10000,
+            });
+            setIsOverwriteConfirmOpen(false);
+            setFileToRestore(null);
+            return;
+          }
+        }
+      }
+    } catch {
+      /* offline / no Firestore — local restore allow */
+    }
+
+    try {
+      const liveCompanyRef = doc(firestore, "companies", companyId);
+      const liveCompanySnap = await getDoc(liveCompanyRef);
+      if (liveCompanySnap.exists()) {
+        const liveData = liveCompanySnap.data();
+        if (liveData.ownerId !== backupOwnerId) {
+          toast({
+            variant: "destructive",
+            title: "Restore Blocked",
+            description: `This company's ownership has changed. You cannot overwrite it.`,
+            duration: 10000,
+          });
+          setIsOverwriteConfirmOpen(false);
+          setFileToRestore(null);
+          return;
+        }
+      }
+    } catch {
+      /* offline */
+    }
+
+    setIsRestoring(true);
+    setIsOverwriteConfirmOpen(false);
+    toast({ title: "Restore Initiated", description: "Writing to local database…" });
+
+    try {
+      await deleteAllCompanyDocsForCompany(companyId);
+      await clearSyncOutboxForCompany(companyId);
+
+      const safeTimestamp = (val: any): Timestamp | null => {
+        if (!val) return null;
+        if (val.seconds !== undefined && val.nanoseconds !== undefined) {
+          return new Timestamp(val.seconds, val.nanoseconds);
+        }
+        const date = new Date(val);
+        return isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+      };
+
+      const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
+
+      for (const colName of collectionsToBackup) {
+        const docsToRestore = backupData[colName] || [];
+        for (const docData of docsToRestore) {
+          const { id: originalId, ...data } = docData;
+          const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, companyId, data) as Record<string, unknown>;
+          const rw = rewritten as { isDeleted?: boolean; date?: unknown; openingBalanceDate?: unknown; createdAt?: unknown; amount?: unknown; total?: number };
+          const finalData = {
+            ...rewritten,
+            companyId,
+            isDeleted: rw.isDeleted ?? false,
+            date: safeTimestamp(rw.date),
+            openingBalanceDate: safeTimestamp(rw.openingBalanceDate),
+            createdAt: safeTimestamp(rw.createdAt) || Timestamp.now(),
+            amount: rw.amount === "" || rw.amount === null || rw.amount === undefined ? rw.total || 0 : Number(rw.amount),
+          };
+          await upsertCompanyDocInBrowserDb(companyId, colName, originalId, finalData as Record<string, unknown>, {
+            notify: false,
+            force: true,
+          });
+        }
+        notifyBrowserDbCollectionUpdated(companyId, colName);
+      }
+
+      const existing = await getLocalCompanyById(companyId, { includeDeleted: true });
+      const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = backupData.companyDetails[0];
+      const rest = restDetails as Record<string, unknown>;
+      const fyStart = fiscalFieldToLocalIso(rest.fiscalYearStart);
+      const fyEnd = fiscalFieldToLocalIso(rest.fiscalYearEnd);
+      const { fiscalYearStart: _rfs, fiscalYearEnd: _rfe, ...restNoFiscal } = rest;
+      const {
+        authoritativeCompanyId: _dropAuthFromBackup,
+        storageOption: _dropSoFromBackup,
+        syncedFromCloud: _dropSfcFromBackup,
+        syncPolicy: _dropSpFromBackup,
+        ...restNoFiscalLocalSafe
+      } = restNoFiscal as Record<string, unknown>;
+
+      const localCompanyRow: Record<string, unknown> = {
+        ...(existing || {}),
+        ...restNoFiscalLocalSafe,
+        id: companyId,
+        ownerId: user.uid,
+        ownerEmail: user.email ?? (existing as { ownerEmail?: string })?.ownerEmail,
+        fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
+        fiscalYearEnd: fyEnd ?? fiscalFieldToLocalIso((existing as { fiscalYearEnd?: unknown })?.fiscalYearEnd),
+        localCompanyUsers:
+          (rest as { localCompanyUsers?: unknown }).localCompanyUsers ??
+          (existing as { localCompanyUsers?: unknown })?.localCompanyUsers,
+        updatedAt: Date.now(),
+        storageOption: "local",
+        syncedFromCloud: false,
+        syncPolicy: "offline",
+        // User ne confirm dialog mein jo naam choose kiya (target vs backup) — spread se backup `name` override
+        name: resolvedCompanyName.trim() || String((restNoFiscalLocalSafe as { name?: string }).name ?? (existing as { name?: string })?.name ?? ""),
+      };
+      delete localCompanyRow.authoritativeCompanyId;
+
+      await upsertLocalCompany(localCompanyRow as Parameters<typeof upsertLocalCompany>[0]);
+      await flushBrowserDbToIndexedDB();
+      reloadLocalCompanyRegistry();
+      triggerSync();
+
+      toast({ title: "Restore Successful", description: "Local data updated. Reloading…" });
+      window.location.reload();
+    } catch (error: any) {
+      console.error("Local restore failed:", error);
+      toast({
+        variant: "destructive",
+        title: "Restore Failed",
+        description: error.message || "An error occurred during local restore.",
+      });
+    } finally {
+      setIsRestoring(false);
+      setFileToRestore(null);
+    }
+  };
+
+  const handleOverwriteRestore = async (backupData: any, resolvedCompanyName: string) => {
+    if (!companyId || !user?.uid || !backupData) return;
 
     const backupCompanyDetails = backupData?.companyDetails?.[0];
     if (!backupCompanyDetails) {
@@ -539,11 +899,18 @@ export function BackupRestore() {
 
         if (backupData.companyDetails?.[0]) {
             const { id, ownerId, ownerEmail, ...details } = backupData.companyDetails[0];
-            batch.update(doc(firestore, "companies", companyId), details);
+            const finalName =
+              resolvedCompanyName.trim() || String((details as { name?: string }).name ?? "");
+            // Firestore company root: user-chosen naam taaki selector / registry backup ke saath align ho
+            batch.update(doc(firestore, "companies", companyId), { ...details, name: finalName });
         }
 
         await batch.commit();
-        
+
+        // Online restore ke baad local company registry / listeners align (static + web dono)
+        reloadLocalCompanyRegistry();
+        triggerSync();
+
         toast({ title: "Restore Successful", description: "Data overwritten successfully. Page will now reload." });
         window.location.reload();
     } catch (error: any) {
@@ -677,11 +1044,70 @@ export function BackupRestore() {
             <AlertDialogTitle className="flex items-center gap-2">
                 <FileWarning className="h-6 w-6 text-destructive" /> Are you absolutely sure?
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. This will permanently overwrite all current data in the company <strong>{company?.name}</strong>. All existing vouchers, parties, items, and settings will be deleted and replaced with the content from your backup file.
-              To confirm, type <code className="bg-muted px-2 py-1 rounded-md font-mono">{company?.name.trim().toLowerCase()}</code> in the box below.
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  This action cannot be undone. This will permanently overwrite all current data in the company{" "}
+                  <strong className="text-foreground">{company?.name}</strong>. Only the company owner can restore.
+                </p>
+                <p>
+                  Type the confirmation text below (backup decryption already verified the file). To confirm, type{" "}
+                  <code className="bg-muted px-2 py-1 rounded-md font-mono text-foreground">{company?.name.trim().toLowerCase()}</code>{" "}
+                  in the box below.
+                </p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {company && (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+              <Label className="text-sm font-medium text-foreground">Restore destination</Label>
+              <p className="text-xs text-muted-foreground">
+                Local aur online dono companies ke liye: &quot;This device&quot; = browser SQLite (offline); Firestore = cloud sync.
+              </p>
+              <RadioGroup
+                value={restoreToLocalSqlite ? "local" : "cloud"}
+                onValueChange={(v) => setRestoreToLocalSqlite(v === "local")}
+                className="grid gap-2"
+              >
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="local" id="restore-dest-local" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">This device (SQLite)</span> — full data on this browser; best for offline / local companies. Company row will stay local-first after restore.
+                  </span>
+                </label>
+                <label className="flex cursor-pointer items-start gap-2 text-left text-sm">
+                  <RadioGroupItem value="cloud" id="restore-dest-cloud" className="mt-0.5" />
+                  <span>
+                    <span className="font-medium text-foreground">Firestore (cloud)</span> — other devices can sync; use when you intentionally want cloud as source of truth.
+                  </span>
+                </label>
+              </RadioGroup>
+            </div>
+          )}
+          {backupDataToRestore?.companyDetails?.[0] && company && (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+              <Label className="text-sm font-medium text-foreground" htmlFor="restore-company-name-select">
+                Company name after restore
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Default: current company (the slot you are restoring into). You can use the name from the backup file instead.
+              </p>
+              {/* Native select: Radix Select + AlertDialog focus trap issues avoid */}
+              <select
+                id="restore-company-name-select"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={restoreCompanyNameChoice}
+                onChange={(e) => setRestoreCompanyNameChoice(e.target.value as "target" | "backup")}
+              >
+                <option value="target">
+                  {String(company.name ?? "").trim() || "(current slot)"} — this company (default)
+                </option>
+                <option value="backup">
+                  {String(backupDataToRestore.companyDetails[0].name ?? "").trim() || "(backup)"} — from backup file
+                </option>
+              </select>
+            </div>
+          )}
           <Input 
             value={confirmationText}
             onChange={(e) => setConfirmationText(e.target.value)}
@@ -690,13 +1116,41 @@ export function BackupRestore() {
           <AlertDialogFooter>
             <div className="flex justify-between items-center w-full">
                 <AlertDialogCancel onClick={() => setBackupDataToRestore(null)}>Cancel</AlertDialogCancel>
-                <AlertDialogAction 
-                onClick={() => handleOverwriteRestore(backupDataToRestore)} 
+                <AlertDialogAction
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void (async () => {
+                    if (confirmationText.trim().toLowerCase() !== company?.name.trim().toLowerCase()) return;
+                    if (!user?.uid) {
+                      toast({ variant: "destructive", title: "Not signed in", description: "Sign in again, then retry." });
+                      return;
+                    }
+                    if (!company?.isOwned) {
+                      toast({ variant: "destructive", title: "Permission denied", description: "Only the company owner can restore data." });
+                      return;
+                    }
+                    const data = backupDataToRestore;
+                    if (!data) return;
+                    const resolvedName = resolveRestoreFinalCompanyName(
+                      restoreCompanyNameChoice,
+                      company?.name ?? "",
+                      String(data?.companyDetails?.[0]?.name ?? "")
+                    );
+                    setIsOverwriteConfirmOpen(false);
+                    // Sirf radio — pehle `shouldRestoreToLocalOnly` se local company par cloud option hide + kabhi-kabhi galat branch (SQLite restore skip)
+                    if (restoreToLocalSqlite) {
+                      await handleLocalOverwriteRestore(data, resolvedName);
+                    } else {
+                      await handleOverwriteRestore(data, resolvedName);
+                    }
+                  })();
+                }}
                 disabled={isRestoring || confirmationText.trim().toLowerCase() !== company?.name.trim().toLowerCase()}
                 className="bg-destructive hover:bg-destructive/90"
                 >
                 {isRestoring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Yes, Overwrite Everything
+                Continue — restore
                 </AlertDialogAction>
             </div>
           </AlertDialogFooter>

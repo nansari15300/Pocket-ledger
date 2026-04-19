@@ -133,12 +133,10 @@ export function UploadCompanyToCloudCard() {
       await upsertLocalCompany({
         ...rest,
         id: companyId,
-        name: company.name,
-        ownerId: user.uid,
         storageOption: "firebase",
         syncPolicy: "online",
         syncedFromCloud: false,
-      } as Parameters<typeof upsertLocalCompany>[0]);
+      } as unknown as Parameters<typeof upsertLocalCompany>[0]);
       // Local SQLite me jo vouchers/parties pade hain — Firestore subcollections me bhi bhejo (sirf root pe pehle data nahi dikhta tha).
       const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(companyId);
       // Static build: company list + cloud mirror; online: listener bump.

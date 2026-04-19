@@ -8,6 +8,9 @@ export type ExpenseAccount = {
     groupId?: string;
     openingBalance?: number;
     openingBalanceDate?: any;
+    openingBalanceNarration?: string;
+    fileUrl?: string;
+    documentFileUrls?: string[];
     isDeleted?: boolean;
     type?: 'Income' | 'Expense' | 'Salary';
 };

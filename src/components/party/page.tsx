@@ -38,6 +38,8 @@ import { doc, getDoc, collection, query, getDocs, where } from "firebase/firesto
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
+import { getLocalAuthUser } from "@/lib/localApiClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 
 export default function PartyPage() {
@@ -95,7 +97,19 @@ export default function PartyPage() {
     // Check both vouchersUserNames and localUserNames
     const existingName = vouchersUserNames?.[userId] || localUserNames[userId];
     if (existingName && existingName !== "Unknown" && existingName !== "N/A") return existingName;
+    if (isLocalOnlyMode() && companyId) {
+        // Local mode user resolution: map common local ids to logged-in local user/admin display name.
+        const localUser = getLocalAuthUser(companyId);
+        const localDisplayName = (localUser?.displayName || localUser?.username || ((company as any)?.adminUsername as string) || "Admin").trim();
+        if (userId === "local" || userId === "local_guest_user" || userId === localUser?.id || userId === localUser?.username) {
+          return localDisplayName || "Admin";
+        }
+    }
     try {
+        if (isLocalOnlyMode()) {
+            // Local-only mode me Firestore user reads skip karo to avoid permission errors/noise.
+            return "N/A";
+        }
         // User doc ID may be name_uid format (e.g. manishshah46_AaCbiR708nhGe28Ltf2I7YZzpNv1), so query by uid field first
         const q = query(collection(firestore, "users"), where("uid", "==", userId));
         const snap = await getDocs(q);
@@ -135,7 +149,7 @@ export default function PartyPage() {
         console.error('[PartyPage] Error fetching userName for', userId, e);
     }
     return "N/A"; // Return N/A instead of Unknown
-  }, [vouchersUserNames, localUserNames]);
+  }, [vouchersUserNames, localUserNames, companyId, company]);
 
   // Always fetch locally if not in vouchersUserNames or if vouchersUserNames is empty
   useEffect(() => {

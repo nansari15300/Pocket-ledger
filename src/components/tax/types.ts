@@ -13,6 +13,8 @@ export type Tax = {
   isDeleted?: boolean;
   openingBalance?: number;
   openingBalanceDate?: any;
+  openingBalanceNarration?: string;
+  documentFileUrls?: string[];
 };
 
 export type TaxGroup = {

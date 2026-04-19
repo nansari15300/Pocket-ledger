@@ -22,6 +22,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getTaxFromAllocation, getNetFromAllocation, getAllocationTotal, autoLink as autoLinkUtil, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { patchVoucherFields } from "@/lib/voucherActionsClient";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 const safeToDate = (date: unknown): Date | null => {
   if (!date) return null;
@@ -31,6 +34,13 @@ const safeToDate = (date: unknown): Date | null => {
   const parsed = new Date(date as string | number);
   return isNaN(parsed.getTime()) ? null : parsed;
 };
+
+async function readVoucherDoc(companyId: string, voucherId: string): Promise<any | null> {
+  // Local-only mode me voucher doc browser DB se read karo, warna Firestore se.
+  if (isLocalOnlyMode()) return await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
+  const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
 
 export type LinkAdvancesMode = "sale" | "purchase";
 
@@ -54,10 +64,9 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
   const obAmountToSave = Number(linkedAmounts[OPENING_BALANCE_VOUCHER_ID]) || 0;
 
   // Fetch target voucher from Firestore so we derive toRemove from its allocations (Sale↔Purchase: opposite voucher may be missing from vouchers array)
-  const targetRef = doc(firestore, voucherPath, targetVoucherId);
-  const targetSnap = await getDoc(targetRef);
-  const targetAllocations: Allocation[] = targetSnap.exists()
-    ? (Array.isArray(targetSnap.data()?.allocations) ? [...targetSnap.data()!.allocations] : [])
+  const targetDoc = await readVoucherDoc(companyId, targetVoucherId);
+  const targetAllocations: Allocation[] = targetDoc
+    ? (Array.isArray((targetDoc as any)?.allocations) ? [...(targetDoc as any).allocations] : [])
     : [];
   const toRemoveFromTarget = targetAllocations.filter((a) => a.voucherId && !(Number(linkedAmounts[a.voucherId]) > 0)).map((a) => a.voucherId);
   const toRemove = toRemoveFromTarget.length > 0 ? toRemoveFromTarget : (() => {
@@ -77,33 +86,29 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
 
   if (updates.length === 0 && toRemove.length === 0 && !showOBRow) return;
   if (showOBRow || obAmountToSave > 0) {
-    await updateDoc(targetRef, { openingBalanceAllocated: obAmountToSave });
+    await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave });
   }
   for (const sourceVoucherId of toRemove) {
-    const ref = doc(firestore, voucherPath, sourceVoucherId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) continue;
-    const data = snap.data();
+    const data = await readVoucherDoc(companyId, sourceVoucherId);
+    if (!data) continue;
     const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
     const filtered = allocations.filter((a) => a.voucherId !== targetVoucherId);
-    await updateDoc(ref, { allocations: filtered });
+    await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered });
   }
   // Bilateral unlink: remove from target voucher’s allocations so opposite voucher (Sale/Pur) shows unlinked after Save
-  if (toRemove.length > 0 && targetSnap.exists()) {
-    const targetData = targetSnap.data();
+  if (toRemove.length > 0 && targetDoc) {
+    const targetData = targetDoc;
     const currentTargetAllocations: Allocation[] = Array.isArray(targetData?.allocations) ? [...targetData.allocations] : [];
     const toRemoveSet = new Set(toRemove);
     const filteredTarget = currentTargetAllocations.filter((a) => !toRemoveSet.has(a.voucherId));
     if (filteredTarget.length !== currentTargetAllocations.length) {
-      await updateDoc(targetRef, { allocations: filteredTarget });
+      await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget });
     }
   }
   for (const [sourceVoucherId, amount] of updates) {
     if (sourceVoucherId === OPENING_BALANCE_VOUCHER_ID) continue;
-    const ref = doc(firestore, voucherPath, sourceVoucherId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) continue;
-    const data = snap.data();
+    const data = await readVoucherDoc(companyId, sourceVoucherId);
+    if (!data) continue;
     const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
     const idx = allocations.findIndex((a) => a.voucherId === targetVoucherId);
     const existing = idx >= 0 ? allocations[idx] : null;
@@ -117,7 +122,7 @@ export async function applyAdvancesAllocationsToServer(params: ApplyAdvancesAllo
     if (sourceVoucher?.type === "journal") (newEntry as any).linkedAccountId = targetPartyId;
     if (idx >= 0) allocations[idx] = newEntry;
     else allocations.push(newEntry);
-    await updateDoc(ref, { allocations });
+    await patchVoucherFields(companyId, sourceVoucherId, { allocations });
   }
 }
 
@@ -340,39 +345,32 @@ export function LinkAdvancesToVoucherDialog({
     try {
       // Always persist opening balance allocation when user entered an amount (target is sale/purchase)
       if (showOBRow || obAmountToSave > 0) {
-        const targetRef = doc(firestore, voucherPath, targetVoucherId);
-        await updateDoc(targetRef, { openingBalanceAllocated: obAmountToSave });
+        await patchVoucherFields(companyId, targetVoucherId, { openingBalanceAllocated: obAmountToSave });
       }
       // Unlink from source vouchers (remove their allocation to this target)
       for (const sourceVoucherId of toRemove) {
-        const ref = doc(firestore, voucherPath, sourceVoucherId);
-        const snap = await getDoc(ref);
-        if (!snap.exists()) continue;
-        const data = snap.data();
+        const data = await readVoucherDoc(companyId, sourceVoucherId);
+        if (!data) continue;
         const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
         const filtered = allocations.filter((a) => a.voucherId !== targetVoucherId);
-        await updateDoc(ref, { allocations: filtered });
+        await patchVoucherFields(companyId, sourceVoucherId, { allocations: filtered });
       }
       // Bilateral unlink: also remove from TARGET voucher’s allocations any entry pointing to removed sources (so other voucher’s “Link for bill wise” view updates)
       if (toRemove.length > 0) {
-        const targetRef = doc(firestore, voucherPath, targetVoucherId);
-        const targetSnap = await getDoc(targetRef);
-        if (targetSnap.exists()) {
-          const targetData = targetSnap.data();
+        const targetData = await readVoucherDoc(companyId, targetVoucherId);
+        if (targetData) {
           const targetAllocations: Allocation[] = Array.isArray(targetData?.allocations) ? [...targetData.allocations] : [];
           const toRemoveSet = new Set(toRemove);
           const filteredTarget = targetAllocations.filter((a) => !toRemoveSet.has(a.voucherId));
           if (filteredTarget.length !== targetAllocations.length) {
-            await updateDoc(targetRef, { allocations: filteredTarget });
+            await patchVoucherFields(companyId, targetVoucherId, { allocations: filteredTarget });
           }
         }
       }
       for (const [sourceVoucherId, amount] of updates) {
         if (sourceVoucherId === OPENING_BALANCE_VOUCHER_ID) continue;
-        const ref = doc(firestore, voucherPath, sourceVoucherId);
-        const snap = await getDoc(ref);
-        if (!snap.exists()) continue;
-        const data = snap.data();
+        const data = await readVoucherDoc(companyId, sourceVoucherId);
+        if (!data) continue;
         const allocations: Allocation[] = Array.isArray(data?.allocations) ? [...data.allocations] : [];
         const idx = allocations.findIndex((a) => a.voucherId === targetVoucherId);
         const existing = idx >= 0 ? allocations[idx] : null;
@@ -384,7 +382,7 @@ export function LinkAdvancesToVoucherDialog({
         const newEntry: Allocation = { voucherId: targetVoucherId, amount: newTax + newNet, taxAmount: newTax, netAmount: newNet };
         if (idx >= 0) allocations[idx] = newEntry;
         else allocations.push(newEntry);
-        await updateDoc(ref, { allocations });
+        await patchVoucherFields(companyId, sourceVoucherId, { allocations });
       }
       toast.success("Advances linked successfully.");
       onDone?.();

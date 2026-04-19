@@ -22,10 +22,19 @@ export function getNextPaidUpgrade(fromPlanId?: string | null): PlanId | null {
 export type BillingCycle = "monthly" | "yearly";
 
 export type EntitlementKey =
+  /** Max companies that may be linked to Firestore (manual “upload”); 0 = local-only unlimited. Offline/local rows do not count. */
+  | "maxOnlineCompanies"
   | "maxUsers"
   | "maxCompanies"
   | "maxAttachmentsGB"
   | "maxStorageGB"
+  /** Same numeric caps as above, applied when `storageOption` is device-local (SQLite-first). Falls back to online key if unset. */
+  | "maxUsersLocal"
+  | "maxCompaniesLocal"
+  | "maxAttachmentsGBLocal"
+  | "maxStorageGBLocal"
+  | "dailyVoucherLimitLocal"
+  | "monthlyVoucherLimitLocal"
   | "hasMultiDeviceSync"
   | "maxDevices"
   | "hasPrioritySupport"
@@ -73,12 +82,19 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
     isFree: true,
     highlight: false,
     entitlements: {
+      maxOnlineCompanies: 0,
       maxUsers: 1,
       maxCompanies: 1,
       maxAttachmentsGB: 1,
       maxStorageGB: 1,
+      maxUsersLocal: 1,
+      maxCompaniesLocal: 1,
+      maxAttachmentsGBLocal: 1,
+      maxStorageGBLocal: 1,
       dailyVoucherLimit: 25,
       monthlyVoucherLimit: 500,
+      dailyVoucherLimitLocal: 25,
+      monthlyVoucherLimitLocal: 500,
       hasMultiDeviceSync: false,
       maxDevices: 1,
       hasPrioritySupport: false,
@@ -92,8 +108,9 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 0,
     },
     features: [
+      "Unlimited local (offline) companies",
+      "0 online cloud companies (local-only sync)",
       "Single user",
-      "1 company",
       "1 GB storage & attachments",
       "Single device login",
       "Local backup export",
@@ -109,12 +126,19 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
     isFree: false,
     highlight: true,
     entitlements: {
+      maxOnlineCompanies: 1,
       maxUsers: 5,
       maxCompanies: 3,
       maxAttachmentsGB: 10,
       maxStorageGB: 10,
+      maxUsersLocal: 5,
+      maxCompaniesLocal: 3,
+      maxAttachmentsGBLocal: 10,
+      maxStorageGBLocal: 10,
       dailyVoucherLimit: 100,
       monthlyVoucherLimit: 2500,
+      dailyVoucherLimitLocal: 100,
+      monthlyVoucherLimitLocal: 2500,
       hasMultiDeviceSync: true,
       maxDevices: 3,
       hasPrioritySupport: false,
@@ -128,6 +152,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 10,
     },
     features: [
+      "1 online company + unlimited offline",
       "Up to 5 users",
       "3 companies",
       "10 GB storage & attachments",
@@ -147,12 +172,19 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
     isFree: false,
     highlight: false,
     entitlements: {
+      maxOnlineCompanies: 3,
       maxUsers: 50,
       maxCompanies: 25,
       maxAttachmentsGB: 200,
       maxStorageGB: 200,
+      maxUsersLocal: 50,
+      maxCompaniesLocal: 25,
+      maxAttachmentsGBLocal: 200,
+      maxStorageGBLocal: 200,
       dailyVoucherLimit: 0, // unlimited
       monthlyVoucherLimit: 0, // unlimited
+      dailyVoucherLimitLocal: 0,
+      monthlyVoucherLimitLocal: 0,
       hasMultiDeviceSync: true,
       maxDevices: 10,
       hasPrioritySupport: true,
@@ -166,6 +198,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 20,
     },
     features: [
+      "3 online companies + unlimited offline",
       "Up to 50 users",
       "25 companies",
       "200 GB storage & attachments",
@@ -184,12 +217,19 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
     isFree: false,
     highlight: false,
     entitlements: {
+      maxOnlineCompanies: 10,
       maxUsers: 100,
       maxCompanies: 100,
       maxAttachmentsGB: 500,
       maxStorageGB: 500,
+      maxUsersLocal: 100,
+      maxCompaniesLocal: 100,
+      maxAttachmentsGBLocal: 500,
+      maxStorageGBLocal: 500,
       dailyVoucherLimit: 0, // unlimited
       monthlyVoucherLimit: 0, // unlimited
+      dailyVoucherLimitLocal: 0,
+      monthlyVoucherLimitLocal: 0,
       hasMultiDeviceSync: true,
       maxDevices: 25,
       hasPrioritySupport: true,
@@ -203,6 +243,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       voucherHistoryLimit: 50,
     },
     features: [
+      "10 online companies + unlimited offline",
       "Up to 100 users",
       "100 companies",
       "500 GB storage & attachments",
@@ -221,7 +262,23 @@ export function getPlan(planId?: PlanId | null): Plan {
 
 export function isFeatureEnabled(
   planId: PlanId,
-  key: Exclude<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices" | "voucherHistoryLimit">
+  key: Exclude<
+    EntitlementKey,
+    | "maxUsers"
+    | "maxCompanies"
+    | "maxAttachmentsGB"
+    | "maxStorageGB"
+    | "maxUsersLocal"
+    | "maxCompaniesLocal"
+    | "maxAttachmentsGBLocal"
+    | "maxStorageGBLocal"
+    | "dailyVoucherLimit"
+    | "monthlyVoucherLimit"
+    | "dailyVoucherLimitLocal"
+    | "monthlyVoucherLimitLocal"
+    | "maxDevices"
+    | "voucherHistoryLimit"
+  >
 ): boolean {
   const p = getPlan(planId);
   const v = p.entitlements[key];
@@ -230,11 +287,69 @@ export function isFeatureEnabled(
 
 export function limitFor(
   planId: PlanId,
-  key: Extract<EntitlementKey, "maxUsers" | "maxCompanies" | "maxAttachmentsGB" | "maxStorageGB" | "dailyVoucherLimit" | "monthlyVoucherLimit" | "maxDevices" | "voucherHistoryLimit">
+  key: Extract<
+    EntitlementKey,
+    | "maxOnlineCompanies"
+    | "maxUsers"
+    | "maxCompanies"
+    | "maxAttachmentsGB"
+    | "maxStorageGB"
+    | "maxUsersLocal"
+    | "maxCompaniesLocal"
+    | "maxAttachmentsGBLocal"
+    | "maxStorageGBLocal"
+    | "dailyVoucherLimit"
+    | "monthlyVoucherLimit"
+    | "dailyVoucherLimitLocal"
+    | "monthlyVoucherLimitLocal"
+    | "maxDevices"
+    | "voucherHistoryLimit"
+  >
 ): number {
   const p = getPlan(planId);
   const v = p.entitlements[key];
   return typeof v === "number" ? v : 0;
+}
+
+/** Keys that share online (`baseKey`) + local (`*Local`) entitlements — admin PlanDetails + `numericEntitlement`. */
+export type NumericEntitlementBaseKey =
+  | "maxUsers"
+  | "maxCompanies"
+  | "maxAttachmentsGB"
+  | "maxStorageGB"
+  | "dailyVoucherLimit"
+  | "monthlyVoucherLimit";
+
+const LOCAL_NUMERIC_ENTITLEMENT_KEY: Record<NumericEntitlementBaseKey, EntitlementKey> = {
+  maxUsers: "maxUsersLocal",
+  maxCompanies: "maxCompaniesLocal",
+  maxAttachmentsGB: "maxAttachmentsGBLocal",
+  maxStorageGB: "maxStorageGBLocal",
+  dailyVoucherLimit: "dailyVoucherLimitLocal",
+  monthlyVoucherLimit: "monthlyVoucherLimitLocal",
+};
+
+/** App-wide: missing `storageOption` → treat as device-local (matches `isOfflineCompanyStorage`). */
+export function companyStorageIsLocal(storageOption?: string | null): boolean {
+  return String(storageOption || "local").toLowerCase() === "local";
+}
+
+/**
+ * Read plan cap for cloud vs SQLite-first company. Local key missing (old Firestore) → use online value.
+ */
+export function numericEntitlement(
+  entitlements: Partial<Entitlements> | undefined,
+  baseKey: NumericEntitlementBaseKey,
+  useLocalLimit: boolean
+): number {
+  const e = entitlements ?? ({} as Partial<Entitlements>);
+  if (useLocalLimit) {
+    const lk = LOCAL_NUMERIC_ENTITLEMENT_KEY[baseKey];
+    const lv = e[lk];
+    if (typeof lv === "number" && Number.isFinite(lv)) return lv;
+  }
+  const v = e[baseKey];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
 export function formatPrice(plan: Plan, cycle: BillingCycle = "monthly", forceShowPrice = false): string {

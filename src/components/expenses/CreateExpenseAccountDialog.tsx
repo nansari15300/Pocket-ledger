@@ -3,10 +3,10 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { addDoc, collection, serverTimestamp, onSnapshot, query } from "firebase/firestore";
+import { doc, setDoc, collection, serverTimestamp, onSnapshot, query, Timestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -29,6 +29,28 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import {
+  EntityProfilePhotoBlock,
+  EntityDocumentsBlock,
+  EntityOpeningBalanceNarrationField,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
+import usePermissions from "@/hooks/usePermissions";
+import { compressFile } from "@/lib/compression";
+import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+
+function createLocalEntityId(prefix: string): string {
+  // Local-first mode me account create ke liye stable client-side id use karo.
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 
 const formSchema = z.object({
@@ -36,7 +58,10 @@ const formSchema = z.object({
   groupId: z.string().min(1, "A group is required."),
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
+
+const MAX_FILE_SIZE_MB = 0.5;
 
 export function CreateExpenseAccountDialog({
   onExpenseAccountCreated,
@@ -56,7 +81,13 @@ export function CreateExpenseAccountDialog({
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId, triggerSync } = useCompany();
+  const { companyId, company } = useCompany();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
+  const [avatarToUpload, setAvatarToUpload] = useState<{ file: File; preview: string } | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [groups, setGroups] = useState<ExpenseGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -68,11 +99,13 @@ export function CreateExpenseAccountDialog({
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
-    defaultValues: { name: "", openingBalance: 0, groupId: "" },
+    defaultValues: { name: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
   });
   
   useEffect(() => {
     if (!companyId || !open) return;
+    // Local-only mode me Firestore live listener avoid karo.
+    if (isLocalOnlyMode()) return;
     const q = query(collection(firestore, `companies/${companyId}/expense_groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ExpenseGroup)));
@@ -110,7 +143,9 @@ export function CreateExpenseAccountDialog({
         if (alive && firstIncomeId) form.setValue("groupId", firstIncomeId, { shouldDirty: false });
         return;
       }
-      const ungroupedId = await ensureUngroupedGroup(companyId, user.uid, "expense");
+      const ungroupedId = isLocalOnlyMode()
+        ? getUngroupedGroupId("expense")
+        : await ensureUngroupedGroup(companyId, user.uid, "expense");
       if (!alive) return;
       form.setValue("groupId", ungroupedId, { shouldDirty: false });
     })();
@@ -136,6 +171,73 @@ export function CreateExpenseAccountDialog({
     setIsCreateGroupOpen(false);
   };
 
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow a profile photo." });
+      return;
+    }
+    const inputFile = e.target.files[0];
+    if (!inputFile || !isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
+    if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
+      toast({
+        variant: "destructive",
+        title: "File too large",
+        description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
+      });
+      e.target.value = "";
+      return;
+    }
+    try {
+      const compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        toast({
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
+        });
+        e.target.value = "";
+        return;
+      }
+      const preview = URL.createObjectURL(compressedFile);
+      setAvatarToUpload({ file: compressedFile, preview });
+    } catch (err) {
+      console.error(err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
+    }
+    e.target.value = "";
+  };
+
+  const handleDocumentsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
+    }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocumentFiles((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeAvatar = () => {
+    if (avatarToUpload?.preview) URL.revokeObjectURL(avatarToUpload.preview);
+    setAvatarToUpload(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const removeDocAt = (idx: number) => setDocumentFiles((prev) => prev.filter((_, i) => i !== idx));
+
+  const clearUploads = () => {
+    removeAvatar();
+    setDocumentFiles([]);
+    if (docsInputRef.current) docsInputRef.current.value = "";
+  };
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
@@ -159,7 +261,76 @@ export function CreateExpenseAccountDialog({
     const toastId = sonnerToast.loading("Creating expense account...");
     setIsLoading(true);
     try {
-      // Recycle-bin duplicate flow: allow restore or explicit create-new.
+      // Local-first: CreatePartyForm jaisa — pehle browser DB + outbox; Firestore getDocs (duplicate) / Capital OB mat chalao.
+      if (isLocalOnlyMode()) {
+        const resolvedGroupId =
+          values.groupId?.trim() || getUngroupedGroupId("expense");
+        const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
+        const accountType =
+          (selectedGroup as any)?.type ||
+          (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
+            ? "Income"
+            : "Expense");
+        const createdId = createLocalEntityId("expense_account");
+        const totalAttachBytesLocal =
+          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        if (totalAttachBytesLocal > 0) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalAttachBytesLocal, storageBytes: totalAttachBytesLocal },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            setIsLoading(false);
+            return;
+          }
+        }
+        const stagedLocal = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "expense_accounts",
+          entityId: createdId,
+          avatarFile: avatarToUpload?.file ?? null,
+          documentFiles,
+        });
+        const payload = {
+          id: createdId,
+          name: values.name.trim(),
+          groupId: resolvedGroupId || getUngroupedGroupId("expense"),
+          openingBalance: values.openingBalance || 0,
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
+          type: accountType,
+          companyId,
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+          fileUrl: stagedLocal.fileUrl ?? null,
+          ...(stagedLocal.documentFileUrls.length ? { documentFileUrls: stagedLocal.documentFileUrls } : {}),
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", createdId, payload);
+        await enqueueCompanyDocOutbox(companyId, "expense_accounts", "create", createdId, payload);
+        sonnerToast.success("Expense Account Created!", {
+          id: toastId,
+          description: `"${values.name}" has been added (saved locally).`,
+        });
+        onExpenseAccountCreated(createdId);
+        if (saveAndNew) {
+          form.reset({
+            name: "",
+            openingBalance: 0,
+            groupId: getUngroupedGroupId("expense"),
+            openingBalanceDate: undefined,
+            openingBalanceNarration: "",
+          });
+          clearUploads();
+        } else {
+          setOpen(false);
+        }
+        return;
+      }
+
+      // Online: recycle-bin duplicate check (Firestore) — offline/local pe upar wala branch
       const duplicateDecision = await resolveRecycleBinDuplicate({
         companyId,
         collectionName: "expense_accounts",
@@ -180,55 +351,165 @@ export function CreateExpenseAccountDialog({
           description: `"${values.name.trim()}" was restored from Recycle Bin.`,
         });
         onExpenseAccountCreated(duplicateDecision.restoredId);
-        triggerSync();
         setOpen(false);
         setIsLoading(false);
         return;
       }
-      
-      // If user leaves group unchanged, auto-assign/create Ungrouped before save.
-      const resolvedGroupId =
-        values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "expense"));
-      const selectedGroup = groups.find(g => g.id === resolvedGroupId);
-      // Income group → type Income (for Sale form); else Expense
-      const accountType = (selectedGroup as any)?.type || (incomeGroupIds.has(resolvedGroupId) ? 'Income' : 'Expense');
 
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/expense_accounts`), {
+      const resolvedGroupId =
+        values.groupId?.trim() ||
+        (await ensureUngroupedGroup(companyId!, user.uid, "expense"));
+      const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
+      const accountType =
+        (selectedGroup as any)?.type ||
+        (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
+          ? "Income"
+          : "Expense");
+
+      const totalAttachBytes =
+        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+      if (totalAttachBytes > 0) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalAttachBytes, storageBytes: totalAttachBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      const accRef = doc(collection(firestore, `companies/${companyId}/expense_accounts`));
+      const createdId = accRef.id;
+      const staged = await stageEntityAvatarAndDocuments({
+        companyId: companyId!,
+        collectionSeg: "expense_accounts",
+        entityId: createdId,
+        avatarFile: avatarToUpload?.file ?? null,
+        documentFiles,
+      });
+
+      await setDoc(accRef, {
         name: values.name.trim(),
         groupId: resolvedGroupId || getUngroupedGroupId("expense"),
         openingBalance: values.openingBalance || 0,
         openingBalanceDate: values.openingBalanceDate || null,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
         type: accountType,
         companyId,
         createdAt: serverTimestamp(),
         isDeleted: false,
+        fileUrl: staged.fileUrl,
+        ...(staged.documentFileUrls.length ? { documentFileUrls: staged.documentFileUrls } : {}),
       });
 
-      // Automatically balance opening balance with Capital Account
+      if (totalAttachBytes > 0) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalAttachBytes,
+          storageBytes: totalAttachBytes,
+        });
+      }
+
       if (values.openingBalance && Math.abs(values.openingBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, 'expense_accounts', docRef.id, 0, values.openingBalance);
+        await balanceOpeningBalanceWithCapital(
+          companyId,
+          "expense_accounts",
+          createdId,
+          0,
+          values.openingBalance
+        );
       }
 
       sonnerToast.success("Expense Account Created!", {
         id: toastId,
         description: `"${values.name}" has been added.`,
       });
-      onExpenseAccountCreated(docRef.id);
-      triggerSync();
-
+      onExpenseAccountCreated(createdId);
       if (saveAndNew) {
-        // Keep default selection on Ungrouped for next quick entry.
-        form.reset({ name: "", openingBalance: 0, groupId: getUngroupedGroupId("expense"), openingBalanceDate: undefined });
+        form.reset({
+          name: "",
+          openingBalance: 0,
+          groupId: getUngroupedGroupId("expense"),
+          openingBalanceDate: undefined,
+          openingBalanceNarration: "",
+        });
+        clearUploads();
       } else {
         setOpen(false);
       }
     } catch (error) {
       console.error("Error creating expense account:", error);
-      sonnerToast.error("Error", {
-        id: toastId,
-        description: "Failed to create expense account.",
-      });
+      if (isLikelyOfflineFirestoreError(error) && companyId && user) {
+        try {
+          const totalCatch =
+            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          if (totalCatch > 0) {
+            const lim = await checkStorageLimit(
+              companyId,
+              company?.planId,
+              { attachmentsBytes: totalCatch, storageBytes: totalCatch },
+              company?.storageOption
+            );
+            if (!lim.allowed) throw new Error(lim.message || "Storage limit reached.");
+          }
+          const resolvedGroupId =
+            form.getValues("groupId")?.trim() || getUngroupedGroupId("expense");
+          const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
+          const accountType =
+            (selectedGroup as any)?.type ||
+            (defaultGroupType === "income" || incomeGroupIds.has(resolvedGroupId)
+              ? "Income"
+              : "Expense");
+          const localId = createLocalEntityId("expense_account");
+          const stagedCatch = await stageEntityAvatarAndDocuments({
+            companyId,
+            collectionSeg: "expense_accounts",
+            entityId: localId,
+            avatarFile: avatarToUpload?.file ?? null,
+            documentFiles,
+          });
+          const v = form.getValues();
+          const payload: Record<string, unknown> = {
+            id: localId,
+            name: v.name.trim(),
+            groupId: resolvedGroupId || getUngroupedGroupId("expense"),
+            openingBalance: v.openingBalance || 0,
+            openingBalanceDate: v.openingBalanceDate || null,
+            openingBalanceNarration: v.openingBalanceNarration?.trim() || null,
+            type: accountType,
+            companyId,
+            createdAt: Timestamp.now(),
+            isDeleted: false,
+            fileUrl: stagedCatch.fileUrl ?? null,
+            ...(stagedCatch.documentFileUrls.length ? { documentFileUrls: stagedCatch.documentFileUrls } : {}),
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", localId, payload as any);
+          await enqueueCompanyDocOutbox(companyId, "expense_accounts", "create", localId, payload as any);
+          sonnerToast.success("Saved. Will sync when online.", {
+            id: toastId,
+            description: `"${v.name}" was saved locally (offline).`,
+          });
+          onExpenseAccountCreated(localId);
+        } catch {
+          sonnerToast.error("Error", {
+            id: toastId,
+            description: "Failed to create expense account.",
+          });
+        }
+      } else {
+        const hint =
+          error instanceof Error && error.message
+            ? error.message
+            : "Failed to create expense account.";
+        sonnerToast.error("Error", {
+          id: toastId,
+          description: hint,
+        });
+      }
     } finally {
       setIsLoading(false);
     }
@@ -389,6 +670,30 @@ export function CreateExpenseAccountDialog({
                   )}
                 />
               </div>
+            <EntityProfilePhotoBlock
+              file={avatarToUpload?.file ?? null}
+              onPickClick={() => avatarInputRef.current?.click()}
+              fileInputRef={avatarInputRef}
+              onAvatarChange={handleAvatarChange}
+              onRemoveAvatar={removeAvatar}
+              canAddAvatar={canAddAvatar}
+              inputId="create-expense-avatar"
+            />
+            <EntityDocumentsBlock
+              docSlots={documentFiles}
+              onRemoveDoc={removeDocAt}
+              onAddClick={() => docsInputRef.current?.click()}
+              docsInputRef={docsInputRef}
+              onDocsChange={handleDocumentsChange}
+              canAttachDocuments={canAttachDocuments}
+              entityStatementLabel="income/expense account"
+              inputId="create-expense-docs"
+            />
+            <EntityOpeningBalanceNarrationField
+              control={form.control}
+              name="openingBalanceNarration"
+              detailLabel="income/expense account"
+            />
             <DialogFooter className="mt-4">
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>

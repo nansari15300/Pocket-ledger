@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Edit, Printer, Users, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, Scroll, DollarSign, ChevronDown, Crown, Columns3, Search, Info } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -33,8 +32,6 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { Checkbox } from "../ui/checkbox";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
-import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
-import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import { useTransactions } from "@/hooks/use-transactions";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -157,7 +154,6 @@ export function AccountGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
@@ -441,8 +437,7 @@ export function AccountGroupDetails({
   }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup, openingBalanceForPeriod]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
     if (spendWiseView) return displayTransactions;
     return recomputeRunningBalanceTopToBottom(
@@ -545,8 +540,14 @@ export function AccountGroupDetails({
 
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
-    const resolvedId = resolveLedgerRowToVoucherId(voucher);
-    if (voucher?.type === "opening_balance" || !resolvedId) {
+    // Resolve synthetic spend-wise row ids back to real voucher id before opening edit.
+    const rawId = typeof voucher?.id === "string" ? voucher.id : "";
+    const resolvedId =
+      voucher?._baseVoucherId ??
+      (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
+      rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
+      rawId);
+    if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
       // Opening group header is synthetic; it should not open voucher edit dialog.
       return;
     }
@@ -782,8 +783,6 @@ export function AccountGroupDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
-          country: company.country,
-          fiscalYearStart: company.fiscalYearStart,
         },
         title: spendWiseView
           ? `Spend Wise Group Statement: ${group.name}`
@@ -793,7 +792,9 @@ export function AccountGroupDetails({
         dateSystem: dateSystem,
         dateRangeText: dateRangeText,
         vouchersCount: printTransactions.length,
-        openingBalance: isBalanceMasked ? 0 : openingBalanceForPeriod, 
+        openingBalance: isBalanceMasked ? 0 : openingBalanceForPeriod,
+        openingBalanceDate: (group as any).openingBalanceDate,
+        openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
         transactions: printTransactions,
         showNarration: showNarration,
         includeNotes: includeNotesInTable,
@@ -802,8 +803,6 @@ export function AccountGroupDetails({
         spendWise: Boolean(spendWiseView),
         billWise: false,
         userNames: userNames,
-        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
-        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       }, true);
     } catch (e) {
       console.error("Print failed:", e);
@@ -906,9 +905,9 @@ export function AccountGroupDetails({
               openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={undefined}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={visibleColumns}
               journalAccountNames={journalAccountNames}
               accountNames={accountNamesMap}
@@ -1244,11 +1243,11 @@ export function AccountGroupDetails({
               groupEntityType="account"
               forceBalanceMode="statement"
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={visibleColumns}
               openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={
                 group.id !== "ungrouped" ? (
                   <EditAccountGroupDialog
@@ -1295,11 +1294,6 @@ export function AccountGroupDetails({
                 <Checkbox id="show-narration-account-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-bank-cash-group"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

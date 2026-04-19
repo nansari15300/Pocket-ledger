@@ -60,8 +60,8 @@ type CopyLedgerDialogProps = {
 type PartyOption = {
   id: string;
   name: string;
-  kind: "party" | "bank" | "staff" | "tax" | "item" | "expense";
-  collection: string;
+  kind?: "party" | "bank" | "staff" | "tax" | "item" | "expense";
+  collection?: string;
 };
 
 const LEDGER_COLLECTIONS: Array<{ collection: string; kind: PartyOption["kind"] }> = [
@@ -91,7 +91,7 @@ async function loadLedgerOptionsForCompany(companyId: string): Promise<PartyOpti
           const displayName = (data.name || data.accountName || data.itemName || d.id).trim() || d.id;
           return { id: d.id, name: displayName, kind, collection: col };
         })
-        .filter((x): x is PartyOption => x != null && !!x.kind && !!x.collection);
+        .filter((x) => x != null) as PartyOption[];
     })
   );
   const byId = new Map<string, PartyOption>();
@@ -1053,13 +1053,10 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
           loadLedgerOptionsForCompany(leftCid),
         ]);
         if (cancelled) return;
-        let rows: Array<Record<string, unknown>> = vSnap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Record<string, unknown>),
-        }));
+        let rows: Array<Record<string, unknown>> = vSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }));
         if (isLocalOnlyMode()) {
           const localRows = await listCompanyDocsFromBrowserDb(leftCid, "vouchers");
-          rows = mergeVoucherRowsById(rows, localRows as Array<Record<string, unknown>>);
+          rows = mergeVoucherRowsById(rows, localRows);
         }
         setCompareRemoteVouchers((prev) => mergeVoucherRowsById(prev, rows));
         setCompareLeftLedgerOptions(ledgerRows);
@@ -1096,13 +1093,10 @@ export function CopyLedgerDialog({ open, onOpenChange }: CopyLedgerDialogProps) 
       try {
         const snap = await getDocs(collection(firestore, `companies/${cid}/vouchers`));
         if (cancelled) return;
-        let rows: Array<Record<string, unknown>> = snap.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Record<string, unknown>),
-        }));
+        let rows: Array<Record<string, unknown>> = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }));
         if (isLocalOnlyMode()) {
           const localRows = await listCompanyDocsFromBrowserDb(cid, "vouchers");
-          rows = mergeVoucherRowsById(rows, localRows as Array<Record<string, unknown>>);
+          rows = mergeVoucherRowsById(rows, localRows);
         }
         setTargetCompanyVouchers((prev) => mergeVoucherRowsById(prev, rows));
       } catch {

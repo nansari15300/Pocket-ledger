@@ -42,7 +42,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Calendar as CalendarIcon, XCircle, UploadCloud, UserCircle, MoreVertical, Loader2, Trash2, Ruler, Search, Edit, ChevronLeft, ChevronRight, Eye, EyeOff } from "lucide-react";
+import {
+  Calendar as CalendarIcon,
+  XCircle,
+  UploadCloud,
+  UserCircle,
+  MoreVertical,
+  Loader2,
+  Trash2,
+  Ruler,
+  Search,
+  Edit,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
@@ -69,7 +86,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
+import { getAttachmentFormatLabel, getAttachmentFormatLabelFromHints } from "@/lib/attachmentFormatLabel";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getPendingFiles, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 
 
 const ATTACHABLE_VOUCHER_TYPES = [
@@ -111,6 +130,56 @@ const DEFAULT_GALLERY_FILES_PER_PAGE = 20;
 
 function isValidGalleryPageSize(n: number): n is (typeof GALLERY_FILES_PER_PAGE_OPTIONS)[number] {
   return (GALLERY_FILES_PER_PAGE_OPTIONS as readonly number[]).includes(n);
+}
+
+/** Company Files: voucher `files[]` + neeche caption ka asli naam / MIME (local: par URL = "FILE") */
+function getVoucherAttachmentMeta(
+  item: any,
+  url: string,
+  fileIndex: number
+): { storagePath?: string; fileSize?: number; sourceFileName?: string; contentType?: string } {
+  const fromParser = tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined;
+  const arr = item?.files;
+  if (Array.isArray(arr) && arr.length > 0) {
+    const match = arr.find((f: any) => f && (f.url === url || f.downloadUrl === url));
+    const at = arr[fileIndex];
+    const spRaw = match?.storagePath ?? at?.storagePath;
+    const sp = typeof spRaw === "string" && spRaw.length > 0 ? spRaw : undefined;
+    const szRaw = match?.size ?? at?.size;
+    const fileSize = typeof szRaw === "number" && szRaw > 0 ? szRaw : undefined;
+    const nameRaw = match?.name ?? at?.name ?? match?.fileName ?? at?.fileName;
+    const sourceFileName = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : undefined;
+    const ctRaw = match?.contentType ?? at?.contentType ?? match?.mimeType;
+    const contentType = typeof ctRaw === "string" && ctRaw.includes("/") ? ctRaw.trim() : undefined;
+    return { storagePath: sp ?? fromParser, fileSize, sourceFileName, contentType };
+  }
+  return { storagePath: fromParser, fileSize: undefined, sourceFileName: undefined, contentType: undefined };
+}
+
+/** Tile neeche: URL se label; warna IndexedDB pending / voucher naam — JPEG, PDF, … */
+function companyGalleryFormatCaption(
+  url: string,
+  meta: { sourceFileName?: string; contentType?: string },
+  pendingByRef: Record<string, string>
+): string {
+  const urlLbl = getAttachmentFormatLabel(url);
+  if (urlLbl !== "FILE") return urlLbl;
+  return (
+    pendingByRef[url] ||
+    getAttachmentFormatLabelFromHints(meta.sourceFileName, meta.contentType) ||
+    "FILE"
+  );
+}
+
+/** Gallery tile click: caption + data: se open kind */
+function openKindFromGalleryCaption(caption: string, url: string): "pdf" | "image" | "other" {
+  if (caption === "PDF") return "pdf";
+  if (
+    ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(caption) ||
+    String(url).startsWith("data:image/")
+  )
+    return "image";
+  return "other";
 }
 
 /** Footer card ke andar, Per page ke niche — chhota pager taaki poora footer patla rahe */
@@ -160,7 +229,7 @@ function GalleryPagerInCard({
 // --- Sub-Component: Company Files Tab ---
 function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { previewSize: number, onSizeChange: (size: string | number) => void, onEditVoucher: (voucher: any) => void }) {
   const isMobile = useIsMobile();
-  const { vouchers, loading, journalAccountNames, processedParties, processedPartiesForSelection, processedStaff, processedAccounts, processedItems, expenseAccounts, processedTaxes } = useVouchers();
+  const { vouchers, loading, journalAccountNames, processedParties, processedPartiesForSelection, processedStaff, processedAccounts, processedItems, expenseAccounts, processedTaxes, userNames: vouchersUserNames } = useVouchers();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
     const today = new Date();
@@ -174,10 +243,14 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const [selectedUserId, setSelectedUserId] = useState<string | "all">("all");
   const [selectedAccountType, setSelectedAccountType] = useState<string>("all");
   const [showAvatarsOnly, setShowAvatarsOnly] = useState(false);
+  /** Neela footer card: arrow se filters slide up/down — zyada grid dikhe mobile par */
+  const [companyFooterExpanded, setCompanyFooterExpanded] = useState(true);
   // Desktop hover: refresh ke baad pehle false jab tak PDF prewarm na ho; phir localStorage (default on)
   const [fullHoverPreview, setFullHoverPreview] = useState(false);
   // Is page ke PDF preload chal raha — is waqt hover preview band + button par spinner
   const [pdfPrewarmLoading, setPdfPrewarmLoading] = useState(false);
+  /** Local voucher refs ka JPEG/PDF label — `getAttachmentFormatLabel('local:…')` = FILE */
+  const [pendingLocalLabelsByRef, setPendingLocalLabelsByRef] = useState<Record<string, string>>({});
   const fullPreviewBootstrapDoneRef = useRef(false);
   const { companyId, company } = useCompany();
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -188,6 +261,21 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
 
   const [companyFilesPerPage, setCompanyFilesPerPage] = useState(DEFAULT_GALLERY_FILES_PER_PAGE);
   const [companyFilesPage, setCompanyFilesPage] = useState(1);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("galleryCompanyFooterExpanded") === "0") setCompanyFooterExpanded(false);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("galleryCompanyFooterExpanded", companyFooterExpanded ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [companyFooterExpanded]);
 
   useEffect(() => {
     try {
@@ -230,6 +318,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
 
   // Fetch all users (same as Unassigned) so userId resolves by doc id, uid, or userId field.
   useEffect(() => {
+    // Local-only mode me user list Firestore stream avoid karo.
+    if (isLocalOnlyMode()) return;
     const q = query(collection(firestore, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const usersData: Record<string, string> = {};
@@ -247,6 +337,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
 
   // Fallback: for voucher userIds still missing, try uid/userId queries (legacy schemas).
   useEffect(() => {
+    // Local-only mode me fallback user lookups skip karo.
+    if (isLocalOnlyMode()) return;
     const allUserIds = vouchers.flatMap((t) => [t.userId, (t as any).createdBy, (t as any).createdByUserId, (t as any).changedBy].filter(Boolean) as string[]);
     const missingIds = Array.from(new Set(allUserIds))
       .filter((id) => !userNames[id]);
@@ -279,6 +371,13 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
     })();
     return () => { cancelled = true; };
   }, [vouchers, userNames]);
+
+  useEffect(() => {
+    // Offline labels ke liye voucher hook se cached user names merge karo.
+    if (vouchersUserNames && Object.keys(vouchersUserNames).length > 0) {
+      setUserNames((prev) => ({ ...vouchersUserNames, ...prev }));
+    }
+  }, [vouchersUserNames]);
   
   // Company users only: owner + shared users (for dropdown filter).
   const companyUserIds = useMemo(() => {
@@ -429,18 +528,57 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
   const hasPdfToPrewarmOnPage = useMemo(
     () =>
       paginatedCompanyRows.some(({ url }) => {
-        const u = String(url).split("?")[0].toLowerCase();
-        return u.endsWith(".pdf") || String(url).startsWith("data:application/pdf");
+        const u = String(url);
+        // `getAttachmentFormatLabel`: Firebase download URL jahan path me `.pdf` slice se na mile
+        return (
+          u.startsWith("data:application/pdf") ||
+          getAttachmentFormatLabel(u) === "PDF" ||
+          u.split("?")[0].toLowerCase().endsWith(".pdf") ||
+          isLocalFileRef(u)
+        );
       }),
     [paginatedCompanyRows]
   );
+
+  const companyLocalRefsKey = useMemo(
+    () =>
+      [...new Set(paginatedCompanyRows.filter(({ url }) => isLocalFileRef(String(url))).map(({ url }) => String(url)))].sort().join("\0"),
+    [paginatedCompanyRows]
+  );
+  useEffect(() => {
+    let cancelled = false;
+    if (!companyLocalRefsKey) {
+      setPendingLocalLabelsByRef({});
+      return;
+    }
+    void (async () => {
+      try {
+        const rows = await getPendingFiles();
+        const map: Record<string, string> = {};
+        for (const p of rows) {
+          const ref = `${LOCAL_FILE_PREFIX}${p.id}`;
+          const lbl =
+            getAttachmentFormatLabelFromHints(p.fileName, p.contentType) ||
+            getAttachmentFormatLabelFromHints(null, p.blob?.type ?? null);
+          if (lbl) map[ref] = lbl;
+        }
+        if (!cancelled) setPendingLocalLabelsByRef(map);
+      } catch {
+        if (!cancelled) setPendingLocalLabelsByRef({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyLocalRefsKey]);
+
   useEffect(() => {
     if (!mounted) return;
     const ac = new AbortController();
-    const entries = paginatedCompanyRows.map(({ url }) => ({
-      url,
-      storagePath: tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined,
-    }));
+    const entries = paginatedCompanyRows.map(({ item, url, fileIndex }) => {
+      const meta = getVoucherAttachmentMeta(item, url, fileIndex);
+      return { url, storagePath: meta.storagePath };
+    });
 
     void (async () => {
       if (hasPdfToPrewarmOnPage) setPdfPrewarmLoading(true);
@@ -535,7 +673,11 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}
         >
         {paginatedCompanyRows.map(({ item, url, fileIndex: index }) => {
-              const cleanFileName = getCleanName(url.split('/').pop()?.split('?')[0] || '');
+              const attachMeta = getVoucherAttachmentMeta(item, url, index);
+              const formatCaption = companyGalleryFormatCaption(url, attachMeta, pendingLocalLabelsByRef);
+              const cleanFileName = getCleanName(
+                attachMeta.sourceFileName || url.split("/").pop()?.split("?")[0] || ""
+              );
               const voucherDate = item.date?.toDate ? item.date.toDate() : new Date();
               const effectiveUserId = item.userId || (item as any).createdBy || (item as any).createdByUserId || (item as any).changedBy;
               const userName = (effectiveUserId && userNames[effectiveUserId]) || 'Unknown User';
@@ -554,16 +696,20 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                             className="relative w-full aspect-square border-2 border-transparent group-hover:border-primary group-hover:shadow-lg transition-all rounded-lg overflow-hidden bg-muted/30 cursor-pointer"
                             style={{ width: `${previewSize}px`, height: `${previewSize}px` }}
                             onClick={() => {
-                                // Gallery tile: PDF/image app ke andar (static/APK/mobile); desktop par nayi tab
-                                const isPdf = String(url).toLowerCase().includes(".pdf");
-                                void openAttachmentInApp(url, {
-                                  title: cleanFileName,
-                                  kind: isPdf ? "pdf" : "image",
-                                });
+                              void openAttachmentInApp(url, {
+                                title: cleanFileName,
+                                kind: openKindFromGalleryCaption(formatCaption, url),
+                              });
                             }}
                          >
-                            {/* Gallery tile pe bahar wala tooltip hi bada preview dikhata hai — nested hover off */}
-                            <FilePreview file={url} size={Number(previewSize)} enableHoverFullPreview={false} />
+                            {/* Unassigned jaisa: storagePath + size — online getBlob / offline sniff same pipeline */}
+                            <FilePreview
+                              file={url}
+                              size={Number(previewSize)}
+                              storagePath={attachMeta.storagePath}
+                              fileSize={attachMeta.fileSize}
+                              enableHoverFullPreview={false}
+                            />
                             {!item.isAvatar && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
@@ -598,7 +744,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                             {cleanFileName}
                          </p>
                          <p className="text-[9px] text-center font-semibold uppercase tracking-wide text-muted-foreground">
-                            {getAttachmentFormatLabel(url)}
+                            {formatCaption}
                          </p>
                       </div>
               );
@@ -625,26 +771,35 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                         collisionPadding={12}
                         avoidCollisions
                         className={cn(
-                          "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] border bg-background p-0 shadow-lg",
-                          "overflow-x-hidden overflow-y-auto"
+                          // Transaction / voucher hover preview jaisa: mota neela border + 15mm round + shadow (`AttachmentHoverPortal`)
+                          "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] overflow-x-hidden overflow-y-auto p-0 text-popover-foreground",
+                          "rounded-[15mm] border-[3px] border-blue-600 bg-white shadow-2xl dark:bg-zinc-950"
                         )}
                       >
                         {/* flip: right ↔ left; andar preview 600×700 fix */}
-                        <div className="flex w-full min-w-0 max-w-full flex-col">
+                        <div className="flex w-full min-w-0 max-w-full flex-col overflow-hidden rounded-[15mm]">
+                          <div className="flex shrink-0 items-center justify-center border-b border-blue-600/25 px-2 py-1.5">
+                            <span className="text-xs font-medium text-muted-foreground">Preview</span>
+                          </div>
                           <div
-                            className="flex shrink-0 items-center justify-center overflow-auto border-b bg-muted/20 p-2"
+                            className="flex shrink-0 items-center justify-center overflow-auto border-b border-blue-600/25 bg-white p-2 dark:bg-zinc-950"
                             style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
                           >
                             {(() => {
                               const cleanU = String(url).split("?")[0].toLowerCase();
-                              const isImage =
-                                /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(url).startsWith("data:image/");
+                              // `local:` par <img src> tuta; FilePreview andar object URL banata hai
+                              const isDirectImg =
+                                !isLocalFileRef(String(url)) &&
+                                formatCaption !== "PDF" &&
+                                (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG"].includes(formatCaption) ||
+                                  String(url).startsWith("data:image/") ||
+                                  /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU));
                               const openAtt = () =>
                                 void openAttachmentInApp(url, {
                                   title: cleanFileName,
-                                  kind: isImage ? "image" : String(url).toLowerCase().includes(".pdf") ? "pdf" : "other",
+                                  kind: openKindFromGalleryCaption(formatCaption, url),
                                 });
-                              return isImage ? (
+                              return isDirectImg ? (
                                 // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
                                 <img
                                   src={url}
@@ -655,6 +810,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               ) : (
                                 <FilePreview
                                   file={url}
+                                  storagePath={attachMeta.storagePath}
+                                  fileSize={attachMeta.fileSize}
                                   size={700}
                                   previewBox={GALLERY_HOVER_PREVIEW_BOX}
                                   objectFit="contain"
@@ -664,18 +821,20 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               );
                             })()}
                           </div>
-                          <p className="border-b px-2 py-1 text-center text-[10px] font-bold text-muted-foreground">
-                            {getAttachmentFormatLabel(url)}
+                          <p className="border-b border-blue-600/25 bg-white px-2 py-1 text-center text-[10px] font-bold text-muted-foreground dark:bg-zinc-950">
+                            {formatCaption}
                           </p>
-                          <div className="space-y-1 p-2 text-xs">
+                          <div className="space-y-1 bg-white p-2 text-center text-xs dark:bg-zinc-950">
                             <p><span className="font-semibold">Voucher No:</span> {item.voucherNumber}</p>
-                            <p className="max-w-xs"><span className="font-semibold">Account:</span> {accountName}</p>
+                            <p className="mx-auto max-w-[min(100%,20rem)] break-words">
+                              <span className="font-semibold">Account:</span> {accountName}
+                            </p>
                             <p><span className="font-semibold">Date:</span> {displayDate()}</p>
                             <p><span className="font-semibold">Time:</span> {format(voucherDate, "h:mm a")}</p>
                             <p><span className="font-semibold">By:</span> {userName}</p>
                           </div>
                           {!item.isAvatar && (
-                            <div className="border-t p-2">
+                            <div className="flex justify-center border-t border-blue-600/25 bg-white p-2 dark:bg-zinc-950">
                               <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => onEditVoucher(item)}>
                                 <Edit className="mr-1 h-3 w-3" /> Edit Voucher
                               </Button>
@@ -690,6 +849,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
         </TooltipProvider>
       </div>
 
+      {companyFooterExpanded ? (
       <Card
         className={cn(
           // Halka neela footer + clear card border (charon taraf)
@@ -705,13 +865,27 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
           )}
         >
           <div className="flex w-full items-center justify-between gap-2">
-            <div className="min-w-0">
+            <div className="flex min-w-0 flex-1 items-start gap-1.5">
+              {/* Poora panel band: sirf niche center arrow up dikhega — yahan ChevronDown = hide */}
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="mt-0.5 h-8 w-8 shrink-0 border-blue-400/70 bg-background/90 dark:border-blue-600/70"
+                aria-expanded
+                aria-label="Hide gallery panel"
+                onClick={() => setCompanyFooterExpanded(false)}
+              >
+                <ChevronDown className="h-4 w-4" aria-hidden />
+              </Button>
+              <div className="min-w-0">
               <CardTitle className="text-base font-semibold leading-tight">
                 {showAvatarsOnly ? "Account Avatars" : "Company File Gallery"}
               </CardTitle>
               <CardDescription className="text-[11px] leading-snug">
                 {showAvatarsOnly ? "Profile pictures for parties, staff, etc." : "All transaction documents."}
               </CardDescription>
+              </div>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-start sm:gap-2">
               <Badge
@@ -879,6 +1053,20 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
           </div>
         </CardContent>
       </Card>
+      ) : (
+        <div className="pointer-events-auto flex shrink-0 justify-center pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-11 w-11 shrink-0 rounded-full border-2 border-blue-400/90 bg-blue-100/95 shadow-md dark:border-blue-600 dark:bg-blue-950/90"
+            aria-label="Show gallery panel"
+            onClick={() => setCompanyFooterExpanded(true)}
+          >
+            <ChevronUp className="h-5 w-5" aria-hidden />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -902,6 +1090,58 @@ type UploadingFile = {
   size: number;
 };
 
+const LOCAL_UNASSIGNED_DOCS_KEY = "local_unassigned_documents_v1";
+
+function createLocalEntityId(prefix: string): string {
+  // Local-only mode me stable client-side IDs use karo taaki CRUD consistent rahe.
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
+
+function getUploadedAtDate(input: any): Date {
+  // Firestore Timestamp, ISO string, epoch number sabko Date me normalize karo.
+  if (!input) return new Date();
+  if (typeof input?.toDate === "function") return input.toDate();
+  if (input instanceof Date) return input;
+  if (typeof input === "number") return new Date(input);
+  if (typeof input === "string") return new Date(input);
+  if (typeof input?.seconds === "number") return new Date(input.seconds * 1000);
+  return new Date();
+}
+
+function readLocalUnassignedDocs(): UnassignedFile[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_UNASSIGNED_DOCS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as UnassignedFile[]) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalUnassignedDocs(value: UnassignedFile[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LOCAL_UNASSIGNED_DOCS_KEY, JSON.stringify(value));
+  } catch {
+    // Local cache write failure ignore; UI still keeps runtime state.
+  }
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  // Offline preview/open support ke liye local unassigned docs me data URL store karo.
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 // Convert an email to the text after '@' for compact fallback labels.
 function getEmailSuffixLabel(value?: string): string | null {
   if (!value || !value.includes("@")) return null;
@@ -920,6 +1160,7 @@ function getUserLabelFromDoc(data: any): string | null {
 
 // --- Sub-Component: Unassigned Documents Tab ---
 function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChange }: { handleAttachToVoucher: any; previewSize: number; onSizeChange: any; }) {
+  const isMobile = useIsMobile();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   // Company users only: owner + shared (for user filter dropdown)
@@ -942,6 +1183,29 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   const [selectedUploaderId, setSelectedUploaderId] = useState<string | "all">("all");
   const [unassignedFilesPerPage, setUnassignedFilesPerPage] = useState(DEFAULT_GALLERY_FILES_PER_PAGE);
   const [unassignedFilesPage, setUnassignedFilesPage] = useState(1);
+  /** Footer filters row hide — company tab jaisa chevron */
+  const [unassignedFooterExpanded, setUnassignedFooterExpanded] = useState(true);
+  /** Company Files jaisa: hover par bada preview on/off; dono tabs same localStorage key share karte hain */
+  const [fullHoverPreview, setFullHoverPreview] = useState(false);
+  const [pdfPrewarmLoading, setPdfPrewarmLoading] = useState(false);
+  const fullPreviewBootstrapDoneRef = useRef(false);
+  /** Menu item select ke baad Radix portal hataane par jo click neeche tile par lagta hai — wahan `openAttachmentInApp` se khali `_blank` tab bachti hai */
+  const suppressTileOpenUntilPerfRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("galleryUnassignedFooterExpanded") === "0") setUnassignedFooterExpanded(false);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("galleryUnassignedFooterExpanded", unassignedFooterExpanded ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [unassignedFooterExpanded]);
 
   useEffect(() => {
     try {
@@ -962,6 +1226,14 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   }, [unassignedFilesPerPage]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("galleryCompanyFullHoverPreview", fullHoverPreview ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [fullHoverPreview]);
+
+  useEffect(() => {
     setUnassignedFilesPage(1);
   }, [selectedUploaderId, dateRange?.from?.getTime(), dateRange?.to?.getTime()]);
 
@@ -973,6 +1245,11 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   // Fetch unassigned files
   useEffect(() => {
     if (!companyId) return;
+    if (isLocalOnlyMode()) {
+      // Local-only mode me unassigned docs local cache se hydrate karo.
+      setUnassignedFiles(readLocalUnassignedDocs());
+      return;
+    }
     const q = query(collection(firestore, `companies/${companyId}/unassigned_documents`), orderBy('uploadedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const filesData = snapshot.docs.map(d => ({id: d.id, ...d.data()}) as UnassignedFile);
@@ -983,6 +1260,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
 
   // Fetch users separately to avoid re-fetching files when a user is added
   useEffect(() => {
+    if (isLocalOnlyMode()) return;
     const q = query(collection(firestore, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const usersData: Record<string, string> = {};
@@ -1000,6 +1278,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
   }, []);
 
   useEffect(() => {
+    if (isLocalOnlyMode()) return;
     // Fallback resolver: for any still-missing uploader id, fetch displayName directly from users collection.
     const missingUploaderIds = Array.from(new Set(unassignedFiles.map((f) => f.uploadedBy).filter(Boolean)))
       .filter((id) => !userNames[id]);
@@ -1085,19 +1364,56 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     let compressedFiles: File[] = [];
     try {
       compressedFiles = await Promise.all(acceptedFiles.map(f => compressFile(f)));
-      const totalNewBytes = compressedFiles.reduce((sum, c) => sum + c.size, 0);
-      const limitCheck = await checkStorageLimit(companyId, company?.planId, {
-        attachmentsBytes: totalNewBytes,
-        storageBytes: totalNewBytes,
-      });
-      if (!limitCheck.allowed) {
-        toast.error("Storage limit reached", { description: limitCheck.message });
-        setUploadingFiles(prev => prev.filter(p => !newUploadingFiles.some(n => n.id === p.id)));
-        return;
+      if (!isLocalOnlyMode()) {
+        const totalNewBytes = compressedFiles.reduce((sum, c) => sum + c.size, 0);
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, {
+          attachmentsBytes: totalNewBytes,
+          storageBytes: totalNewBytes,
+        }, company?.storageOption);
+        if (!limitCheck.allowed) {
+          toast.error("Storage limit reached", { description: limitCheck.message });
+          setUploadingFiles(prev => prev.filter(p => !newUploadingFiles.some(n => n.id === p.id)));
+          return;
+        }
       }
     } catch (e) {
       setUploadingFiles(prev => prev.filter(p => !newUploadingFiles.some(n => n.id === p.id)));
       toast.error("Upload failed", { description: "Could not process files. Please try again." });
+      return;
+    }
+
+    if (isLocalOnlyMode()) {
+      // Local-only mode me files ko data URL ke saath local cache me save karo.
+      const toAppend: UnassignedFile[] = [];
+      await Promise.all(
+        compressedFiles.map(async (compressedFile, idx) => {
+          try {
+            const url = await fileToDataUrl(compressedFile);
+            toAppend.push({
+              id: createLocalEntityId("unassigned"),
+              name: compressedFile.name,
+              url,
+              path: "",
+              type: compressedFile.type.startsWith("image/") ? "image" : compressedFile.type.includes("pdf") ? "pdf" : "other",
+              size: compressedFile.size,
+              uploadedAt: new Date().toISOString() as unknown as Timestamp,
+              uploadedBy: user.uid,
+              status: "FREE",
+            });
+          } finally {
+            const uploadingFile = newUploadingFiles[idx];
+            if (uploadingFile) {
+              setUploadingFiles((prev) => prev.filter((f) => f.id !== uploadingFile.id));
+            }
+          }
+        })
+      );
+      const nextDocs = [...toAppend, ...readLocalUnassignedDocs()].sort(
+        (a, b) => getUploadedAtDate(b.uploadedAt).getTime() - getUploadedAtDate(a.uploadedAt).getTime()
+      );
+      writeLocalUnassignedDocs(nextDocs);
+      setUnassignedFiles(nextDocs);
+      toast.success("Upload complete", { description: `${toAppend.length} file(s) saved locally.` });
       return;
     }
 
@@ -1170,6 +1486,17 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     }
     setIsRenaming(true);
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode me rename local cache me update karo.
+        const next = readLocalUnassignedDocs().map((f) =>
+          f.id === fileToRename.id ? { ...f, name: newName } : f
+        );
+        writeLocalUnassignedDocs(next);
+        setUnassignedFiles(next);
+        toast.success("File renamed successfully");
+        setFileToRename(null);
+        return;
+      }
       await updateDoc(doc(firestore, `companies/${companyId}/unassigned_documents`, fileToRename.id), { name: newName });
       toast.success("File renamed successfully");
       setFileToRename(null);
@@ -1185,6 +1512,14 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     if (!fileToDelete || !companyId) return;
     setIsDeleting(true);
     try {
+        if (isLocalOnlyMode()) {
+          // Local-only mode me delete operation local cache par hi run karo.
+          const next = readLocalUnassignedDocs().filter((f) => f.id !== fileToDelete.id);
+          writeLocalUnassignedDocs(next);
+          setUnassignedFiles(next);
+          toast.success("File deleted successfully");
+          return;
+        }
         await deleteFileFromStorageClient(fileToDelete.path);
         await decrementCompanyStorage(companyId, {
           attachmentsBytes: fileToDelete.size,
@@ -1212,7 +1547,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
         const toDate = dateRange.to ? endOfDay(dateRange.to) : endOfDay(fromDate);
         filtered = filtered.filter(f => {
             if (!f.uploadedAt) return false;
-            const uploadedAt = f.uploadedAt.toDate();
+            const uploadedAt = getUploadedAtDate(f.uploadedAt);
             return uploadedAt >= fromDate && uploadedAt <= toDate;
         });
     }
@@ -1226,6 +1561,53 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     () => filteredFiles.slice(unassignedSliceStart, unassignedSliceStart + unassignedFilesPerPage),
     [filteredFiles, unassignedSliceStart, unassignedFilesPerPage]
   );
+
+  const unassignedPdfPrewarmKey = useMemo(
+    () => paginatedUnassignedFiles.map((f) => f.url).join("\0"),
+    [paginatedUnassignedFiles]
+  );
+  const hasPdfToPrewarmUnassignedPage = useMemo(
+    () =>
+      paginatedUnassignedFiles.some((f) => {
+        const u = String(f.url);
+        // Local company: `data:application/pdf`; Firestore doc me `type: "pdf"` bhi
+        return (
+          u.startsWith("data:application/pdf") ||
+          getAttachmentFormatLabel(u) === "PDF" ||
+          f.type === "pdf" ||
+          u.split("?")[0].toLowerCase().endsWith(".pdf")
+        );
+      }),
+    [paginatedUnassignedFiles]
+  );
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    const ac = new AbortController();
+    const entries = paginatedUnassignedFiles.map((f) => ({
+      url: f.url,
+      storagePath: f.path || tryGetStoragePathFromFirebaseDownloadUrl(f.url) || undefined,
+    }));
+    void (async () => {
+      if (hasPdfToPrewarmUnassignedPage) setPdfPrewarmLoading(true);
+      try {
+        await prewarmPdfThumbnailsForGallery(entries, ac.signal);
+      } finally {
+        setPdfPrewarmLoading(false);
+        if (ac.signal.aborted) return;
+        if (!fullPreviewBootstrapDoneRef.current) {
+          fullPreviewBootstrapDoneRef.current = true;
+          try {
+            const v = localStorage.getItem("galleryCompanyFullHoverPreview");
+            setFullHoverPreview(v !== "0");
+          } catch {
+            setFullHoverPreview(true);
+          }
+        }
+      }
+    })();
+    return () => ac.abort();
+  }, [isHydrated, unassignedPdfPrewarmKey, hasPdfToPrewarmUnassignedPage]);
 
   useEffect(() => {
     if (unassignedFilesPage !== unassignedPageClamped) setUnassignedFilesPage(unassignedPageClamped);
@@ -1253,6 +1635,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
           <p className="mt-2 text-sm text-slate-500">Drag or click to upload</p>
         </div>
 
+        <TooltipProvider delayDuration={100}>
         <div className="grid gap-x-8 gap-y-12" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${previewSize}px, 1fr))` }}>
             {uploadingFiles.map((file) => (
               <div key={file.id} className="relative w-full flex flex-col gap-2">
@@ -1266,127 +1649,202 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
               </div>
             ))}
             {paginatedUnassignedFiles.map((file) => {
-              const uploadDate = file.uploadedAt?.toDate ? file.uploadedAt.toDate() : new Date();
-              // Keep tooltip/uploader text consistent with dropdown fallback behavior.
+              const uploadDate = getUploadedAtDate(file.uploadedAt);
               const resolved = userNames[file.uploadedBy];
               const uploaderName = resolved && resolved !== "Unknown"
                 ? (getEmailSuffixLabel(resolved) || resolved)
                 : (getEmailSuffixLabel(file.uploadedBy) || "Unknown User");
               const cleanFileName = getCleanName(file.name);
-              
+
               const displayDate = () => {
                 if (dateSystem === 'AD') return formatDate(uploadDate);
                 if (dateSystem === 'BS') return formatDateBS(uploadDate);
                 return `${formatDate(uploadDate)} (${formatDateBS(uploadDate)})`;
               };
 
-              return (
-                <TooltipProvider key={file.id} delayDuration={100}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                       <div className="relative group w-full flex flex-col gap-2">
-                            <div className="relative w-full aspect-square border-2 border-transparent group-hover:border-primary group-hover:shadow-lg transition-all rounded-lg overflow-hidden bg-muted/30" style={{ width: `${previewSize}px`, height: `${previewSize}px` }}>
-                                <FilePreview
-                                  file={file.url}
-                                  size={Number(previewSize)}
-                                  fileSize={file.size}
-                                  storagePath={file.path}
-                                  enableHoverFullPreview={false}
-                                />
-                                <div className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Button variant="destructive" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setFileToDelete(file); }}>
-                                        <Trash2 className="h-4 w-4"/>
-                                    </Button>
-                                </div>
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                    <Button variant="outline" size="icon" className="absolute top-1 right-1 h-7 w-7 opacity-0 group-hover:opacity-100">
-                                        <MoreVertical className="h-4 w-4"/>
-                                    </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                    <DropdownMenuItem onClick={() => setFileToRename(file)}>
-                                        <Edit className="h-3.5 w-3.5 mr-2" /> Rename
-                                    </DropdownMenuItem>
-                                    {ATTACHABLE_VOUCHER_TYPES.map((type) => (
-                                        <DropdownMenuItem key={type.id} onClick={() => handleAttachToVoucher(type.id, file)}>Attach to {type.label}</DropdownMenuItem>
-                                    ))}
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-                            </div>
-                            <p className="text-[10px] text-center truncate px-2 text-muted-foreground">{cleanFileName}</p>
-                            <p className="text-[9px] text-center font-semibold uppercase tracking-wide text-muted-foreground">
-                              {getAttachmentFormatLabel(file.url)}
-                            </p>
-                        </div>
-                    </TooltipTrigger>
-                    <TooltipContent
-                      side="right"
-                      align="center"
-                      sideOffset={10}
-                      collisionPadding={12}
-                      avoidCollisions
-                      className={cn(
-                        "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] border bg-background p-0 shadow-lg",
-                        "overflow-x-hidden overflow-y-auto"
-                      )}
-                    >
-                      <div className="flex w-full min-w-0 max-w-full flex-col">
-                        <div
-                          className="flex shrink-0 items-center justify-center overflow-auto border-b bg-muted/20 p-2"
-                          style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
+              const markDropdownMenuAction = () => {
+                if (typeof performance !== "undefined") {
+                  suppressTileOpenUntilPerfRef.current = performance.now() + 550;
+                }
+              };
+
+              const openAtt = () => {
+                if (typeof performance !== "undefined" && performance.now() < suppressTileOpenUntilPerfRef.current) {
+                  return;
+                }
+                const fmt = getAttachmentFormatLabel(file.url);
+                const kind: "pdf" | "image" | "other" =
+                  fmt === "PDF"
+                    ? "pdf"
+                    : ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG"].includes(fmt) ||
+                        String(file.url).startsWith("data:image/")
+                      ? "image"
+                      : "other";
+                void openAttachmentInApp(file.url, { title: cleanFileName, kind });
+              };
+
+              const tileEl = (
+                <div className="relative group w-full flex flex-col gap-2">
+                  <div
+                    className="relative w-full aspect-square border-2 border-transparent group-hover:border-primary group-hover:shadow-lg transition-all rounded-lg overflow-hidden bg-muted/30 cursor-pointer"
+                    style={{ width: `${previewSize}px`, height: `${previewSize}px` }}
+                    onClick={openAtt}
+                  >
+                    <FilePreview
+                      file={file.url}
+                      size={Number(previewSize)}
+                      fileSize={file.size}
+                      storagePath={file.path}
+                      enableHoverFullPreview={false}
+                    />
+                    <div className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button variant="destructive" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setFileToDelete(file); }}>
+                        <Trash2 className="h-4 w-4"/>
+                      </Button>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="icon" className="absolute top-1 right-1 h-7 w-7 opacity-0 group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+                          <MoreVertical className="h-4 w-4"/>
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            markDropdownMenuAction();
+                            setFileToRename(file);
+                          }}
                         >
-                          {(() => {
-                            const cleanU = String(file.url).split("?")[0].toLowerCase();
-                            const isImage =
-                              /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/");
-                            return isImage ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={file.url}
-                                alt=""
-                                className="h-auto max-h-full w-full max-w-full object-contain"
-                              />
-                            ) : (
-                              <FilePreview
-                                file={file.url}
-                                storagePath={file.path}
-                                size={700}
-                                previewBox={GALLERY_HOVER_PREVIEW_BOX}
-                                objectFit="contain"
-                                enableHoverFullPreview={false}
-                                showFormatBadge={false}
-                                fileSize={file.size}
-                              />
-                            );
-                          })()}
-                        </div>
-                        <p className="border-b px-2 py-1 text-center text-[10px] font-bold text-muted-foreground">
-                          {getAttachmentFormatLabel(file.url)}
-                        </p>
-                        <div className="space-y-1 p-2 text-xs">
-                          <p><span className="font-semibold">File:</span> {cleanFileName}</p>
-                          {file.size ? <p><span className="font-semibold">Size:</span> {formatBytes(file.size)}</p> : null}
-                          <p><span className="font-semibold">Date:</span> {displayDate()}</p>
-                          <p><span className="font-semibold">Time:</span> {format(uploadDate, "h:mm a")}</p>
-                          <p><span className="font-semibold">By:</span> {uploaderName}</p>
-                        </div>
+                          <Edit className="h-3.5 w-3.5 mr-2" /> Rename
+                        </DropdownMenuItem>
+                        {ATTACHABLE_VOUCHER_TYPES.map((type) => (
+                          <DropdownMenuItem
+                            key={type.id}
+                            onSelect={() => {
+                              markDropdownMenuAction();
+                              handleAttachToVoucher(type.id, file);
+                            }}
+                          >
+                            Attach to {type.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <p className="text-[10px] text-center truncate px-2 text-muted-foreground">{cleanFileName}</p>
+                  <p className="text-[9px] text-center font-semibold uppercase tracking-wide text-muted-foreground">
+                    {getAttachmentFormatLabel(file.url)}
+                  </p>
+                </div>
+              );
+
+              const hoverPreviewActive = fullHoverPreview && !pdfPrewarmLoading;
+              if (isMobile || !hoverPreviewActive) {
+                return (
+                  <div key={file.id}>
+                    {tileEl}
+                  </div>
+                );
+              }
+
+              return (
+                <Tooltip key={file.id}>
+                  <TooltipTrigger asChild>
+                    {tileEl}
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="right"
+                    align="center"
+                    sideOffset={10}
+                    collisionPadding={12}
+                    avoidCollisions
+                    className={cn(
+                      // Company Files tab jaisa — voucher AttachmentHoverPortal frame
+                      "z-[9999] max-h-[calc(100dvh-10px)] max-w-[min(calc(100vw-20px),96vw)] overflow-x-hidden overflow-y-auto p-0 text-popover-foreground",
+                      "rounded-[15mm] border-[3px] border-blue-600 bg-white shadow-2xl dark:bg-zinc-950"
+                    )}
+                  >
+                    <div className="flex w-full min-w-0 max-w-full flex-col overflow-hidden rounded-[15mm]">
+                      <div className="flex shrink-0 items-center justify-center border-b border-blue-600/25 px-2 py-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">Preview</span>
                       </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-            )})}
+                      <div
+                        className="flex shrink-0 items-center justify-center overflow-auto border-b border-blue-600/25 bg-white p-2 dark:bg-zinc-950"
+                        style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
+                      >
+                        {(() => {
+                          const cleanU = String(file.url).split("?")[0].toLowerCase();
+                          const isImage =
+                            /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/");
+                          return isImage ? (
+                            // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
+                            <img
+                              src={file.url}
+                              alt=""
+                              className="h-auto max-h-full w-full max-w-full cursor-pointer object-contain"
+                              onClick={openAtt}
+                            />
+                          ) : (
+                            <FilePreview
+                              file={file.url}
+                              storagePath={file.path}
+                              size={700}
+                              previewBox={GALLERY_HOVER_PREVIEW_BOX}
+                              objectFit="contain"
+                              enableHoverFullPreview={false}
+                              showFormatBadge={false}
+                              fileSize={file.size}
+                            />
+                          );
+                        })()}
+                      </div>
+                      <p className="border-b border-blue-600/25 bg-white px-2 py-1 text-center text-[10px] font-bold text-muted-foreground dark:bg-zinc-950">
+                        {getAttachmentFormatLabel(file.url)}
+                      </p>
+                      <div className="space-y-1 bg-white p-2 text-center text-xs dark:bg-zinc-950">
+                        <p className="break-words">
+                          <span className="font-semibold">File:</span> {cleanFileName}
+                        </p>
+                        {file.size ? (
+                          <p>
+                            <span className="font-semibold">Size:</span> {formatBytes(file.size)}
+                          </p>
+                        ) : null}
+                        <p><span className="font-semibold">Date:</span> {displayDate()}</p>
+                        <p><span className="font-semibold">Time:</span> {format(uploadDate, "h:mm a")}</p>
+                        <p><span className="font-semibold">By:</span> {uploaderName}</p>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
         </div>
+        </TooltipProvider>
       </div>
 
+      {unassignedFooterExpanded ? (
       <Card className="shrink-0 rounded-b-none border-b-0 shadow-[0_-4px_12px_-4px_rgba(0,0,0,0.08)] sm:rounded-b-lg sm:border-b">
         <CardHeader className="space-y-0 !p-3 pb-2">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
+            <div className="flex min-w-0 flex-1 items-start gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="mt-0.5 h-8 w-8 shrink-0"
+                aria-expanded
+                aria-label="Hide unassigned panel"
+                onClick={() => setUnassignedFooterExpanded(false)}
+              >
+                <ChevronDown className="h-4 w-4" aria-hidden />
+              </Button>
+              <div className="min-w-0">
               <CardTitle className="text-base font-bold leading-tight">Unassigned Documents</CardTitle>
               <CardDescription className="text-[11px] leading-snug">
                 Drag or click to upload. Attach them to vouchers later.
               </CardDescription>
+              </div>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:items-start sm:gap-2">
               <Badge
@@ -1476,6 +1934,36 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
               Clear
             </Button>
 
+            {isHydrated ? (
+              <Button
+                type="button"
+                variant={fullHoverPreview ? "secondary" : "outline"}
+                className={cn("inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 text-xs", isMobile && "min-w-[100px] flex-1")}
+                disabled={pdfPrewarmLoading}
+                onClick={() => setFullHoverPreview((v) => !v)}
+                aria-pressed={fullHoverPreview}
+                aria-busy={pdfPrewarmLoading}
+                title={
+                  pdfPrewarmLoading
+                    ? "PDF preview load ho raha hai…"
+                    : fullHoverPreview
+                      ? "Hover preview on"
+                      : "Hover preview off"
+                }
+              >
+                {pdfPrewarmLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                ) : fullHoverPreview ? (
+                  <Eye className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5 shrink-0" />
+                )}
+                Full preview
+              </Button>
+            ) : (
+              <Skeleton className="h-9 w-[100px] shrink-0 rounded-md" />
+            )}
+
             <div className="ml-auto flex h-9 items-center gap-2 rounded-md border-2 border-primary/20 bg-background px-2 shadow-sm">
               <Ruler className="h-3.5 w-3.5 text-primary" />
               <div className="flex items-center">
@@ -1491,6 +1979,20 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
           </div>
         </CardHeader>
       </Card>
+      ) : (
+        <div className="pointer-events-auto flex shrink-0 justify-center pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-11 w-11 shrink-0 rounded-full border-2 border-primary/30 bg-background shadow-md"
+            aria-label="Show unassigned panel"
+            onClick={() => setUnassignedFooterExpanded(true)}
+          >
+            <ChevronUp className="h-5 w-5" aria-hidden />
+          </Button>
+        </div>
+      )}
 
         <AlertDialog open={!!fileToDelete} onOpenChange={(open) => !open && setFileToDelete(null)}>
             <AlertDialogContent>
@@ -1651,7 +2153,7 @@ function GalleryPageContent() {
   }, [isEditVoucherOpen]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden px-0.5 py-4 sm:p-6 md:p-8">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden px-0.5 pt-4 pb-0 sm:p-6 md:p-8">
        <div className="mb-6 grid shrink-0 grid-cols-2 gap-4">
           <Button
             onClick={() => setGalleryTab('company-files')}

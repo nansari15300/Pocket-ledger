@@ -19,6 +19,17 @@ import type { AccountGroup } from "@/components/bank-cash/types";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+
+function createLocalEntityId(prefix: string): string {
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
+}
 
 const formSchema = z.object({
   accountName: z.string().min(2, "Account name must be at least 2 characters."),
@@ -67,6 +78,34 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
 
     setIsLoading(true);
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: save account in browser DB and queue cloud backup sync.
+        const localId = createLocalEntityId("bank");
+        const payload = {
+          id: localId,
+          ...values,
+          ownerId: user.uid,
+          companyId,
+          groupId: values.groupId?.trim() || getUngroupedGroupId("bank"),
+          balance: values.openingBalance,
+          createdAt: new Date().toISOString(),
+          isDeleted: false,
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", localId, payload);
+        await enqueueCompanyDocOutbox(companyId, "bank_accounts", "create", localId, payload);
+        // Local save success toast keeps wording consistent across local-first forms.
+        const showSyncHint = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1" && user.uid !== "local_guest_user";
+        toast({
+          title: showSyncHint ? "Saved. Will sync when online." : "Saved.",
+          description: showSyncHint
+            ? `"${values.accountName}" was saved locally and will sync when online.`
+            : `"${values.accountName}" was saved locally.`,
+        });
+        form.reset({ accountName: "", accountType: "Bank", openingBalance: 0, bankName: "", accountNumber: "", ifscCode: "", groupId: getUngroupedGroupId("bank") });
+        onAccountCreated?.();
+        return;
+      }
+
       // If user leaves group unchanged, auto-assign/create Ungrouped before save.
       const resolvedGroupId =
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));

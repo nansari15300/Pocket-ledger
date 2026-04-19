@@ -37,47 +37,56 @@ import { cn } from "@/lib/utils";
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 function StaffPageContent() {
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency, formatRunning } = useDate();
   const { vouchers, loading: vouchersLoading, processedStaff, processedStaffGroups: initialProcessedStaffGroups, userNames } = useVouchers();
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByStaffId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length || !processedStaff?.length) return {} as Record<string, number>;
+    const staffIdSet = new Set(processedStaff.map((s: Staff) => s.id));
     const map: Record<string, number> = {};
     vouchers.forEach((v: any) => {
-      if (v.isApproved === true) return;
-      if (v.staffId) map[v.staffId] = (map[v.staffId] || 0) + 1;
-      const isAddSalaryVoucher =
-        (v.type === "journal" && v.subType === "add_salary") || v.type === "add_salary";
-      if (isAddSalaryVoucher && Array.isArray(v.entries)) {
-        const staffIds = new Set<string>();
-        v.entries.forEach((e: any) => {
-          const isStaffEntry = Number(e.credit || 0) > 0 && !String(e.narration || "").includes("(Staff ID:");
-          if (isStaffEntry && e.accountId) staffIds.add(e.accountId);
-        });
-        staffIds.forEach((id) => {
-          map[id] = (map[id] || 0) + 1;
-        });
-      }
+      const touched = collectStaffIdsTouchedByUnapprovedVoucher(v, staffIdSet);
+      touched.forEach((id) => {
+        map[id] = (map[id] || 0) + 1;
+      });
     });
     return map;
-  }, [vouchers, canApproveTransactions]);
+  }, [vouchers, showApproveOnList, processedStaff]);
   const pendingApprovalByStaffGroupId = useMemo(() => {
-    if (!canApproveTransactions) return {} as Record<string, number>;
+    if (!showApproveOnList) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedStaff.forEach((s: any) => {
-      const groupId = s.groupId || "ungrouped";
-      map[groupId] = (map[groupId] || 0) + (pendingApprovalByStaffId[s.id] || 0);
+      const n = pendingApprovalByStaffId[s.id] || 0;
+      if (!n) return;
+      const gid =
+        s.groupId && String(s.groupId).trim() !== "" && s.groupId !== "ungrouped_staff"
+          ? s.groupId
+          : "ungrouped";
+      map[gid] = (map[gid] || 0) + n;
     });
     return map;
-  }, [processedStaff, pendingApprovalByStaffId, canApproveTransactions]);
+  }, [processedStaff, pendingApprovalByStaffId, showApproveOnList]);
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !processedStaff?.length) return 0;
+    const staffIdSet = new Set(processedStaff.map((s: Staff) => s.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      if (collectStaffIdsTouchedByUnapprovedVoucher(v, staffIdSet).size > 0) n += 1;
+    }
+    return n;
+  }, [vouchers, showApproveOnList, processedStaff]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isInitialMount = useRef(true);
@@ -93,7 +102,7 @@ function StaffPageContent() {
   const useQueryNav = useMasterDetailQueryNav();
   
   const [searchTerm, setSearchTerm] = useState("");
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [showOnlyStaffWithPendingApproval, setShowOnlyStaffWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -130,11 +139,6 @@ function StaffPageContent() {
     return baseGroups;
   }, [processedStaff, initialProcessedStaffGroups, companyId]);
 
-  const staffForListDisplay = useMemo(
-    () => filterByPendingApproval(processedStaff, pendingApprovalByStaffId, unapprovedOnly),
-    [processedStaff, pendingApprovalByStaffId, unapprovedOnly]
-  );
-
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "staffPageState", 
@@ -142,7 +146,7 @@ function StaffPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'staff' ? staffForListDisplay : processedStaffGroups, 
+    activeView === 'staff' ? processedStaff : processedStaffGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -150,8 +154,22 @@ function StaffPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyStaffWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "staff") setShowOnlyStaffWithPendingApproval(false);
+  }, [activeView]);
+
+  const staffForStaffList = useMemo(() => {
+    if (!showOnlyStaffWithPendingApproval || !showApproveOnList) return processedStaff;
+    return processedStaff.filter((s) => (pendingApprovalByStaffId[s.id] ?? 0) > 0);
+  }, [processedStaff, showOnlyStaffWithPendingApproval, showApproveOnList, pendingApprovalByStaffId]);
+  const filteredStaffListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return staffForStaffList.filter((s) => s.name && s.name.toLowerCase().includes(searchLower)).length;
+  }, [staffForStaffList, searchTerm]);
 
   // Restore selection when returning from details (e.g. /staff?selected=xyz or /staff?view=groups&selected=xyz)
   const selectedIdFromUrl = searchParams.get("selected");
@@ -169,7 +187,9 @@ function StaffPageContent() {
       viewFromUrl === "groups"
         ? `/staff?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/staff?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedStaff, processedStaffGroups, setSelected, setActiveView, router]);
 
   const openVoucherDialog = (mode: 'add_salary' | 'payment_out') => {
@@ -186,10 +206,7 @@ function StaffPageContent() {
 
   const totalBalance = useMemo(() => {
     if (activeView === 'staff') {
-      const list = unapprovedOnly
-        ? filterByPendingApproval(processedStaff, pendingApprovalByStaffId, true)
-        : processedStaff;
-      return list.reduce((acc, staff) => acc + staff.balance, 0);
+      return processedStaff.reduce((acc, staff) => acc + staff.balance, 0);
     }
     // Groups view: exclude system parent groups so balances are not double-counted
     return processedStaffGroups
@@ -201,14 +218,9 @@ function StaffPageContent() {
         return !isSystem;
       })
       .reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedStaff, processedStaffGroups, unapprovedOnly, pendingApprovalByStaffId]);
+  }, [activeView, processedStaff, processedStaffGroups]);
 
   // Filtered group count (matches StaffGroupList: exclude system/report-only + search)
-  const filteredStaffCount = useMemo(() => {
-    const q = (searchTerm || "").toLowerCase();
-    return staffForListDisplay.filter((s) => s.name && s.name.toLowerCase().includes(q)).length;
-  }, [staffForListDisplay, searchTerm]);
-
   const filteredStaffGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedStaffGroups || []).filter((g) => {
@@ -262,7 +274,7 @@ function StaffPageContent() {
  const listView = (
     <div className="flex flex-col h-full">
         <div className="p-3 border-b flex items-center gap-2">
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                     placeholder={activeView === 'staff' ? 'Search staff...' : 'Search groups...'}
@@ -272,9 +284,17 @@ function StaffPageContent() {
                     autoComplete="off"
                 />
             </div>
-            {activeView === "staff" && canApproveTransactions && (
-              <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-            )}
+            {activeView === "staff" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+              <PendingApprovalListFilterBadge
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyStaffWithPendingApproval}
+                onToggle={() => setShowOnlyStaffWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only staff with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all staff (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all staff"
+              />
+            ) : null}
             {activeView === "staff" ? (
                 <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
                     <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateStaffOpen(true)}>
@@ -303,11 +323,11 @@ function StaffPageContent() {
           <>
             <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
               <Briefcase className="h-4 w-4" />
-              <span>Staff ({filteredStaffCount})</span>
+              <span>Staff ({filteredStaffListCount})</span>
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
               <StaffList
-                staff={staffForListDisplay}
+                staff={staffForStaffList}
                 onSelectStaff={handleSelect as any}
                 selectedStaff={selectedStaff}
                 searchTerm={searchTerm}

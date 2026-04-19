@@ -13,6 +13,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
+import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 
 function PresenceManager() {
     usePresence();
@@ -32,6 +33,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                     <BalanceModeProvider>
                         <DialogBackHandlerProvider>
                             <VoucherProvider>
+                                <VoucherOutboxFlushManager />
                                 <TooltipProvider>
                                     {children}
                                 </TooltipProvider>

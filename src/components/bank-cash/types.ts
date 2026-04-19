@@ -5,6 +5,9 @@ export type Account = {
   accountType: 'Bank' | 'Cash';
   openingBalance: number;
   openingBalanceDate?: any;
+  /** OB ke saath text + multi-doc slots (Firestore) */
+  openingBalanceNarration?: string;
+  documentFileUrls?: string[];
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;

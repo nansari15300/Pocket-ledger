@@ -4,8 +4,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
-import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
-import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import type { Account } from "@/components/bank-cash/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -66,7 +64,9 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { FilePreview } from "../vouchers/FilePreview";
 import {
   Dialog,
   DialogContent,
@@ -79,7 +79,6 @@ import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -153,7 +152,6 @@ export function AccountDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { spendWiseBlinkMode, setSpendWiseBlinkMode, toggleSpendWiseBlinkMode } = useSpendWiseBlinkMode();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
@@ -285,9 +283,14 @@ export function AccountDetails({
   };
 
   const handleEditVoucher = (voucher: any) => {
-    // Synthetic ledger row id -> Firestore voucher id (same rules as table Approve).
-    const resolvedId = resolveLedgerRowToVoucherId(voucher);
-    if (voucher?.type === "opening_balance" || !resolvedId) {
+    // Resolve synthetic spend-wise row ids back to real voucher id before opening edit.
+    const rawId = typeof voucher?.id === "string" ? voucher.id : "";
+    const resolvedId =
+      voucher?._baseVoucherId ??
+      (rawId.includes("-in-") ? rawId.substring(0, rawId.indexOf("-in-")) :
+      rawId.endsWith("-ob-link") ? rawId.substring(0, rawId.length - "-ob-link".length) :
+      rawId);
+    if (voucher?.type === "opening_balance" || resolvedId === "__opening_balance_group__") {
       // Opening group header is synthetic; it should not open voucher edit dialog.
       return;
     }
@@ -312,7 +315,6 @@ export function AccountDetails({
       closingBalance = periodDr - periodCr;
   }
 
-  const spendWiseEnabled = (company as any)?.spendWiseEnabled === true;
   // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
     if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
@@ -541,8 +543,7 @@ export function AccountDetails({
 
   // Sort only in statement view; spend-wise keeps group order
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(() => {
     if (spendWiseView) return displayTransactions;
     return recomputeRunningBalanceTopToBottom(
@@ -666,8 +667,6 @@ export function AccountDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
-          country: company.country,
-          fiscalYearStart: company.fiscalYearStart,
         },
         title: spendWiseView
           ? `Spend Wise Account Statement: ${account.accountName}`
@@ -678,6 +677,8 @@ export function AccountDetails({
         dateRangeText: buildDateRangeText(),
         vouchersCount: printTransactions.length,
         openingBalance: openingBalanceForPeriod,
+        openingBalanceDate: (account as any).openingBalanceDate,
+        openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
         transactions: printTransactions,
         showNarration: showNarration,
         includeNotes: includeNotesInTable,
@@ -686,8 +687,6 @@ export function AccountDetails({
         preserveOrder: spendWiseView,
         spendWise: Boolean(spendWiseView),
         billWise: false,
-        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
-        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       }, true);
       toast.dismiss(toastId);
     } catch (e) {
@@ -714,8 +713,6 @@ export function AccountDetails({
           showDrCr: company.showDrCr,
           showCurrencySymbol: company.showCurrencySymbol,
           logoUrl: company.logoUrl,
-          country: company.country,
-          fiscalYearStart: company.fiscalYearStart,
         },
         title: `Bill Wise Account Statement: ${account.accountName}`,
         context: "account",
@@ -724,6 +721,8 @@ export function AccountDetails({
         dateRangeText: buildDateRangeText(),
         vouchersCount: printTransactions.length,
         openingBalance: openingBalanceForPeriod,
+        openingBalanceDate: (account as any).openingBalanceDate,
+        openingBalanceNarration: (account as any).openingBalanceNarration ?? null,
         transactions: printTransactions,
         showNarration: showNarration,
         includeNotes: includeNotesInTable,
@@ -733,8 +732,6 @@ export function AccountDetails({
         billWise: true,
         openingBalanceOutstanding: showMaskedBalance ? undefined : openingBalanceOutstanding,
         openingBalanceLinkedVoucherNos: showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos,
-        fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
-        fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       }, true);
       toast.dismiss(toastId);
     } catch (e) {
@@ -774,7 +771,6 @@ export function AccountDetails({
         t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
         (t.type ?? "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
         t.narration?.toLowerCase().includes(lowerCaseSearch) ||
-        String((t as any).title || "").toLowerCase().includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -993,8 +989,11 @@ export function AccountDetails({
             openingBalance={openingBalanceForPeriod}
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
+            openingBalanceNarration={(account as any).openingBalanceNarration}
+            openingBalanceAttachmentUrls={account.documentFileUrls}
+            /* entity form "As on" — TransactionsTable date column opening row */
+            openingBalanceDate={(account as any).openingBalanceDate}
             showNarration={showNarration}
-            narrationNoteSearch={narrationNoteSearch}
             visibleColumns={visibleColumns}
             journalAccountNames={journalAccountNames}
             userNames={userNames}
@@ -1115,12 +1114,20 @@ export function AccountDetails({
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarImage src={account.fileUrl} alt={account.accountName} />
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {account.isSpecial ? <Crown className="h-6 w-6 text-amber-500" /> : <Landmark className="h-6 w-6" />}
-                </AvatarFallback>
-              </Avatar>
+              <EntityFileAttachmentHover fileUrl={account.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0 border"
+                  src={account.fileUrl}
+                  alt={account.accountName}
+                  fallbackSlot={
+                    account.isSpecial ? (
+                      <Crown className="h-6 w-6 text-amber-500" />
+                    ) : (
+                      <Landmark className="h-6 w-6 text-muted-foreground" />
+                    )
+                  }
+                />
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
                 {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
@@ -1233,6 +1240,17 @@ export function AccountDetails({
             </div>
           </div>
         </div>
+        {/* Bank account PDF/images — party Details jaisa preview strip */}
+        {account.documentFileUrls && account.documentFileUrls.length > 0 && account.id !== "all" && (
+          <div className="border-b px-3 py-2 flex flex-wrap gap-2 items-start bg-muted/15">
+            <span className="text-xs font-medium text-muted-foreground pt-1">Documents:</span>
+            <div className="flex flex-wrap gap-2">
+              {account.documentFileUrls.map((url, i) => (
+                <FilePreview key={`${url}-${i}`} file={url} size={56} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
@@ -1247,6 +1265,9 @@ export function AccountDetails({
               openingBalance={showMaskedBalance ? 0 : openingBalanceForPeriod}
               openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={(account as any).openingBalanceNarration}
+              openingBalanceAttachmentUrls={account.documentFileUrls}
+              openingBalanceDate={(account as any).openingBalanceDate}
               openingBalanceActions={
                 account.id !== "all" && (!account.isSpecial || can("manage_special_bank_accounts")) ? (
                   <EditAccountDialog
@@ -1263,7 +1284,6 @@ export function AccountDetails({
                 ) : null
               }
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
@@ -1291,11 +1311,6 @@ export function AccountDetails({
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-bank-cash"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

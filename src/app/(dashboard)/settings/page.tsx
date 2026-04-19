@@ -16,12 +16,12 @@ import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { AnimationSettings } from "@/components/settings/AnimationSettings";
 import { HandoverManager } from "@/components/settings/HandoverManager";
 import { CompanySettings } from "@/components/settings/CompanySettings";
-import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { DangerZone } from "@/components/settings/DangerZone";
 import { CurrencySettings } from "@/components/settings/CurrencySettings";
 import { DisplaySettings } from "@/components/settings/DisplaySettings";
 import { IdSettings } from "@/components/settings/IdSettings";
 import { NotificationSettings } from "@/components/settings/NotificationSettings";
+import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { ManageDevices } from "@/components/settings/ManageDevices";
 import { usePageMemory } from "@/hooks/usePageMemory";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
@@ -33,7 +33,6 @@ import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
-    { id: "fiscal_split", title: "Fiscal year & split", icon: CalendarRange, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     { id: "devices", title: "Synced devices", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
@@ -42,20 +41,17 @@ const settingsNavItems = [
     { id: "id_settings", title: "ID Settings", icon: Fingerprint, permission: "configure_company_settings" as const, href: null },
     { id: "decimals", title: "Decimal Settings", icon: Hash, permission: "configure_company_settings" as const, href: null },
     { id: "display", title: "Display Settings", icon: Eye, permission: "configure_company_settings" as const, href: null },
+    { id: "fiscal_split", title: "Fiscal year & split", icon: CalendarRange, permission: "configure_company_settings" as const, href: null },
     { id: "notification", title: "Notification", icon: Bell, permission: "configure_company_settings" as const, href: null },
     { id: "danger-zone", title: "Danger Zone", icon: ShieldAlert, permission: "configure_company_settings" as const, href: null, isDanger: true },
 ];
 
 const SETTINGS_STORAGE_KEY = "settingsPageState";
 
-/**
- * Narrow viewport (≤767px). Initial state hamesha false — SSR pe `window` nahi; warna server = desktop,
- * client hydrate = mobile → React hydration mismatch (settings tree alag).
- * `useIsMobile` jaisa: mount ke baad hi matchMedia.
- */
+/** Narrow viewport — must match SSR (false) on first client paint or hydration breaks (grid+aside vs mobile chrome). */
 function useLayoutNarrow767(): boolean {
     const [narrow, setNarrow] = useState(false);
-    useEffect(() => {
+    useLayoutEffect(() => {
         const mq = window.matchMedia("(max-width: 767px)");
         const fn = () => setNarrow(mq.matches);
         fn();
@@ -82,22 +78,57 @@ function SettingsPageContent() {
 
     const [activeView, setActiveView] = useState<string>("company");
 
-    const availableNavItems = useMemo(() => settingsNavItems.filter(item => can(item.permission)), [can]);
+    const canConfigureCompany = can("configure_company_settings");
+    /** Owner ne company settings band kiya ho — shared user ko theme/animation phir bhi (local-only). */
+    const sharedLocalAppearanceOnly = Boolean(
+        companyId && company && company.isOwned === false && !canConfigureCompany
+    );
+    const availableNavItems = useMemo(() => {
+        const allowed = settingsNavItems.filter((item) => can(item.permission));
+        if (!sharedLocalAppearanceOnly) return allowed;
+        const extra = settingsNavItems.filter(
+            (item) =>
+                (item.id === "theme" || item.id === "animation") && !allowed.some((a) => a.id === item.id)
+        );
+        return [...allowed, ...extra];
+    }, [can, sharedLocalAppearanceOnly]);
+    const canOpenThemeOrAnimation = canConfigureCompany || sharedLocalAppearanceOnly;
 
     // URL ↔ state: paint se pehle sync — mobile par bina ?view= list-only (company detail flash na ho)
+    // `searchParams` pehle tick par khali ho sakta hai; refresh pe `?view=sharing` ke liye window.location fallback
     useLayoutEffect(() => {
-        if (viewFromUrl && availableNavItems.some((item) => item.id === viewFromUrl)) {
-            setActiveView(viewFromUrl);
+        const fromReact = searchParams.get("view");
+        const fromWindow =
+            typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null;
+        const view = fromReact ?? fromWindow;
+
+        if (view && availableNavItems.some((item) => item.id === view)) {
+            setActiveView(view);
+            if (!fromReact && fromWindow && !mobileSettingsUx) {
+                router.replace(`${pathname}?view=${encodeURIComponent(fromWindow)}`, { scroll: false });
+            }
             return;
         }
-        if (mobileSettingsUx && !viewFromUrl) {
+        if (mobileSettingsUx && !view) {
             setActiveView("");
             return;
         }
-        if (!mobileSettingsUx && !viewFromUrl) {
-            setActiveView((prev) => (prev === "" ? "company" : prev));
+        if (!mobileSettingsUx && !view) {
+            const first = availableNavItems[0]?.id ?? "company";
+            setActiveView((prev) => (prev === "" ? first : prev));
         }
-    }, [viewFromUrl, availableNavItems, mobileSettingsUx]);
+    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router]);
+
+    // Shared user: URL / memory me `company` ho sakta hai jab wo ab nav me nahi — pehli allowed tab par le aao.
+    useEffect(() => {
+        if (availableNavItems.length === 0) return;
+        if (availableNavItems.some((i) => i.id === activeView)) return;
+        const next = availableNavItems[0].id;
+        setActiveView(next);
+        if (!mobileSettingsUx) {
+            router.replace(`${pathname}?view=${encodeURIComponent(next)}`, { scroll: false });
+        }
+    }, [availableNavItems, activeView, mobileSettingsUx, pathname, router]);
 
     const setActiveViewWithUrl = useCallback(
         (id: string) => {
@@ -189,8 +220,6 @@ function SettingsPageContent() {
         switch (activeView) {
             case "company":
                 return can('configure_company_settings') ? <CompanySettings /> : null;
-            case "fiscal_split":
-                return can('configure_company_settings') ? <FiscalSplitSettings /> : null;
             case "sharing":
                 return can('manage_users_roles') ? (
                     <PermissionRouteGuard permission="manage_users_roles">
@@ -202,15 +231,21 @@ function SettingsPageContent() {
             case "voucher":
                 return can('configure_company_settings') ? <VoucherSettings /> : null;
             case "theme":
-                return can('configure_company_settings') ? <ThemeSettings /> : null;
+                return canOpenThemeOrAnimation ? (
+                    <ThemeSettings localOnlyHint={sharedLocalAppearanceOnly} />
+                ) : null;
             case "animation":
-                return can('configure_company_settings') ? <AnimationSettings /> : null;
+                return canOpenThemeOrAnimation ? (
+                    <AnimationSettings localPersistenceOnly={sharedLocalAppearanceOnly} />
+                ) : null;
             case "id_settings":
                 return can('configure_company_settings') ? <IdSettings /> : null;
             case "decimals":
                  return can('configure_company_settings') ? <CurrencySettings /> : null;
             case "display":
                  return can('configure_company_settings') ? <DisplaySettings /> : null;
+            case "fiscal_split":
+                return can("configure_company_settings") ? <FiscalSplitSettings /> : null;
             case "notification":
                 return can('configure_company_settings') ? <NotificationSettings /> : null;
             case "danger-zone":

@@ -6,14 +6,29 @@ import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { useLivePlans, getPlanFromPlans } from "./useLivePlans";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCreateDeviceId, setKickedForCompany, clearKickedForCompany, getWasKicked, enforceDeviceLimitByPlan } from "@/lib/deviceLimitClient";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 const runCheckRef = { current: (() => Promise.resolve()) as () => void | Promise<void> };
 
 export function useDeviceLimit() {
-  const { companyId, company } = useCompany();
+  const { companyId, company, allCompanies } = useCompany();
   const { user } = useAuth();
   const livePlans = useLivePlans();
+  const [isOffline, setIsOffline] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Static bundle me offline mode par device-limit blocking overlay disable rakho.
+    const update = () => setIsOffline(typeof navigator !== "undefined" && navigator.onLine === false);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
 
   const [result, setResult] = useState<{
     allowed: boolean;
@@ -27,6 +42,12 @@ export function useDeviceLimit() {
   const myDeviceWasInListRef = useRef<boolean | null>(null);
 
   useEffect(() => {
+    if (isStaticAppBuild() && isOffline) {
+      // Offline UX: company ke local data access ko device-limit gate se block mat karo.
+      setResult({ allowed: true, count: 0, limit: 1 });
+      myDeviceWasInListRef.current = null;
+      return;
+    }
     if (!companyId || !user?.uid || !company) {
       setResult(null);
       myDeviceWasInListRef.current = null;
@@ -34,7 +55,9 @@ export function useDeviceLimit() {
     }
     myDeviceWasInListRef.current = null;
 
-    const plan = getPlanFromPlans(livePlans, company.planId as any);
+    // Profile dropdown jaisa: account-level highest owned plan — sirf `company.planId` nahi
+    const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
+    const plan = getPlanFromPlans(livePlans, accountPlanId);
     const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
     const planMaxDevices = Math.max(1, Number(plan.entitlements.maxDevices) || 1);
     const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
@@ -86,7 +109,18 @@ export function useDeviceLimit() {
       unsubDevices();
       clearInterval(interval);
     };
-  }, [companyId, user?.uid, company?.planId, company?.ownerId, company?.ownerEmail, company?.userCanUseMultiDevice, livePlans, company]);
+  }, [
+    companyId,
+    user?.uid,
+    company?.planId,
+    company?.ownerId,
+    company?.ownerEmail,
+    company?.userCanUseMultiDevice,
+    livePlans,
+    company,
+    isOffline,
+    allCompanies,
+  ]);
 
   const refreshDeviceCheck = useCallback(() => {
     runCheckRef.current?.();

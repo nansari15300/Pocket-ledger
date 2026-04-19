@@ -78,7 +78,6 @@ import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { TransactionsTable, type VisibleColumns, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -170,7 +169,6 @@ export function PayeeDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -247,8 +245,7 @@ export function PayeeDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -455,7 +452,6 @@ export function PayeeDetails({
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               journalAccountNames={journalAccountNames}
               userNames={userNames}
               onRowClick={handleEditVoucher}
@@ -480,11 +476,6 @@ export function PayeeDetails({
               <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
             </div>
-            <NarrationNoteSearchInput
-              id="narration-search-payee"
-              value={narrationNoteSearch}
-              onChange={setNarrationNoteSearch}
-            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

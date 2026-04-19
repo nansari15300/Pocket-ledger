@@ -17,7 +17,8 @@ const themes = [
   { name: "Colorfull", themeValue: "theme-colorfull", primaryValue: "primary-colorfull", color: "hsl(270, 70%, 55%)" },
 ];
 
-export function ThemeSettings() {
+/** `localOnlyHint`: shared user — theme pehle se localStorage me; sirf is browser/device par. */
+export function ThemeSettings({ localOnlyHint }: { localOnlyHint?: boolean }) {
   const { theme, setTheme, primaryColor, setPrimaryColor } = useTheme();
 
   return (
@@ -27,6 +28,11 @@ export function ThemeSettings() {
           <CardTitle>Background Theme</CardTitle>
           <CardDescription>
             Choose a color theme for the application background.
+            {localOnlyHint ? (
+              <span className="mt-2 block text-amber-700 dark:text-amber-400">
+                Company settings are managed by the owner — theme changes here stay only on this device for you.
+              </span>
+            ) : null}
           </CardDescription>
         </CardHeader>
         <CardContent>

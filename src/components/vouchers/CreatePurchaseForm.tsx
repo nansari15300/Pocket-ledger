@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm, useWatch, type Resolver } from "react-hook-form";
+import { useFieldArray, useForm, useWatch, type Resolver, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
 import {
   useState,
@@ -43,18 +43,25 @@ import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 
 import { useToast } from "@/hooks/use-toast";
+import {
+  mergeUnitsForDropdown,
+  parseCustomUnitsArray,
+  persistCustomUnitIfNew,
+  unitListHas,
+} from "@/lib/companyCustomUnits";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@/components/vouchers/LinkAdvancesToVoucherDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
@@ -85,7 +92,7 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
@@ -139,6 +146,32 @@ const formSchema = z.object({
 });
 
 export type PurchaseFormValues = z.infer<typeof formSchema>;
+
+/** RHF+zod errors को save पर toast description के लिए एक string में बाँधता है */
+function formatPurchaseFormValidationErrors(errors: FieldErrors<PurchaseFormValues>): string {
+  const errorMessages: string[] = [];
+  if (errors.partyId?.message) errorMessages.push(`Supplier: ${errors.partyId.message}`);
+  if (errors.date?.message) errorMessages.push(`Date: ${errors.date.message}`);
+  if (errors.voucherNumber?.message) errorMessages.push(`Voucher No.: ${errors.voucherNumber.message}`);
+  if (errors.lineItems) {
+    const lineItems = errors.lineItems as Record<
+      number,
+      { itemId?: { message?: string }; quantity?: { message?: string }; rate?: { message?: string }; amount?: { message?: string } }
+    > | undefined;
+    Object.entries(lineItems ?? {}).forEach(([idxStr, itemError]) => {
+      const index = parseInt(idxStr, 10);
+      if (itemError) {
+        if (itemError.itemId?.message) errorMessages.push(`Item ${index + 1}: ${itemError.itemId.message}`);
+        if (itemError.quantity?.message) errorMessages.push(`Item ${index + 1} Quantity: ${itemError.quantity.message}`);
+        if (itemError.rate?.message) errorMessages.push(`Item ${index + 1} Rate: ${itemError.rate.message}`);
+        if (itemError.amount?.message) errorMessages.push(`Item ${index + 1} Amount: ${itemError.amount.message}`);
+      }
+    });
+  }
+  if (errors.subTotal?.message) errorMessages.push(`Sub Total: ${errors.subTotal.message}`);
+  if (errors.total?.message) errorMessages.push(`Total: ${errors.total.message}`);
+  return errorMessages.length > 0 ? errorMessages.join(", ") : "Please check the form and try again.";
+}
 
 /* --------------------------------- CONSTS -------------------------------- */
 
@@ -258,13 +291,13 @@ export function CreatePurchaseForm({
   const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { user, customUser } = useAuth();
   const { role, can, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
   const { dateSystem, formatCurrency, formatCurrencyForPrint, formatDate, formatDateBS } = useDate();
   const router = useRouter();
   const isMobile = useIsMobile();
-
+  const fileAttachLockedByDialog = !!voucher?.id && deleteDisabledWhenLinked;
 
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -312,8 +345,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
   const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
-  const isFormDirtyRef = useRef(isFormDirty);
-  isFormDirtyRef.current = isFormDirty;
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
   const partyId = form.watch("partyId");
@@ -329,27 +360,40 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [partyId, processedParties]);
   
   const selectedTax = useMemo(() => processedTaxes.find((t) => t.id === lineItemTaxId), [lineItemTaxId, processedTaxes]);
+  // Expense subtree: nested groups (parent = UUID under Direct/Indirect Expense) pehle filter se cut ho rahe the — parent chain se "expenses" tak walk (Sale / Income jaisa)
   const expenseGroupIds = useMemo(() => {
-    // Use group hierarchy (not account.type) so Purchase Account list always maps to Expense groups.
-    return new Set(
-      (processedExpenseGroups || [])
-        .filter((g: any) => {
-          const id = String(g.id || "").toLowerCase();
-          const parentId = String(g.parentId || "").toLowerCase();
-          const type = String(g.type || "").toLowerCase();
-          return parentId === "expenses" || type === "expense" || id === "direct_expense" || id === "indirect_expense";
-        })
-        .map((g: any) => g.id)
-    );
+    const groups = processedExpenseGroups || [];
+    const groupMap = new Map(groups.map((g: any) => [g.id, g]));
+    const ids = new Set<string>();
+    const isExpenseRoot = (id: string) => {
+      const s = String(id || "").toLowerCase();
+      return s === "expenses" || s === "direct_expense" || s === "indirect_expense";
+    };
+    const hasExpenseAncestor = (g: any, visited = new Set<string>()): boolean => {
+      if (!g || visited.has(g.id)) return false;
+      visited.add(g.id);
+      const parentId = String(g.parentId || "").toLowerCase();
+      const type = String(g.type || "").toLowerCase();
+      if (isExpenseRoot(g.id) || parentId === "expenses" || type === "expense") return true;
+      if (g.parentId && groupMap.has(g.parentId)) return hasExpenseAncestor(groupMap.get(g.parentId), visited);
+      return false;
+    };
+    groups.forEach((g: any) => {
+      if (hasExpenseAncestor(g)) ids.add(g.id);
+    });
+    return ids;
   }, [processedExpenseGroups]);
   const purchaseAccountOptions = useMemo(
     () =>
       expenseAccounts
-        .filter((a: any) => expenseGroupIds.has(a.groupId))
+        .filter(
+          (a: any) =>
+            (a.groupId && expenseGroupIds.has(a.groupId)) || String((a as any).type || "").toLowerCase() === "expense"
+        )
         .map((p: any) => ({ value: p.id, label: p.name })),
     [expenseAccounts, expenseGroupIds]
   );
-  // All unique units from all items – used when no item selected (creatable unit dropdown)
+  // All unique units from all items — merged with `company.customUnits` for blank-item rows
   const allCompanyUnits = useMemo(() => {
     const units = new Set<string>();
     (items || []).forEach((item: any) => {
@@ -360,9 +404,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
       const ob = item.openingBalanceUnit;
       if (ob) units.add(ob);
+      if (item.salePriceUnit) units.add(String(item.salePriceUnit));
+      if (item.purchasePriceUnit) units.add(String(item.purchasePriceUnit));
     });
     return Array.from(units).sort();
   }, [items]);
+  const companyUnitsMerged = useMemo(
+    () => mergeUnitsForDropdown(allCompanyUnits, parseCustomUnitsArray(company?.customUnits)),
+    [allCompanyUnits, company?.customUnits]
+  );
+  const onPersistNewUnit = useCallback(
+    (comboboxVal: string, unitLabel: string) => {
+      if (comboboxVal !== "add-new" || !unitLabel.trim()) return;
+      void persistCustomUnitIfNew({
+        companyId,
+        unitLabel,
+        reloadLocalCompanyRegistry,
+        triggerSync,
+      }).catch((e) => {
+        console.error("persistCustomUnitIfNew", e);
+        toast({ variant: "destructive", title: "Could not save unit list", description: "Check connection and try again." });
+      });
+    },
+    [companyId, reloadLocalCompanyRegistry, triggerSync, toast]
+  );
 
   const voucherIdForLinks = voucher?.id ?? savedVoucherId;
   // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
@@ -551,7 +616,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     if (voucher?.id) {
       const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
-      if (isSameVoucher && isFormDirtyRef.current) return;
+      // Sale jaisa: edit par snapshot se bar‑bar `form.reset` — date save / field edit wipe
+      if (isSameVoucher) return;
       lastResetVoucherIdRef.current = voucher.id;
       form.reset(getInitialFormValues(voucher));
       setSavedVoucherId(voucher.id);
@@ -566,7 +632,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (voucher.partyId != null && String(voucher.partyId).trim() !== "") {
         form.setValue("partyId", voucher.partyId);
       }
-      if (voucher.date != null) form.setValue("date", voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date));
+      // Sale jaisa: template `voucher` ref dubara aane par `date` overwrite mat karo — user ki chuni date save rahe.
       const urlsToSet = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
@@ -744,49 +810,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   
   const processAndSaveRef = useRef<((data: any, opts?: any) => Promise<any>) | null>(null);
 
-  const handleFormSubmit = useCallback(async (e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) => {
+  // Validated payload `data` से save — `getValues()` से date कभी-कभी miss होकर coerce में "आज" भर जाता था
+  const handleFormSubmit = useCallback(
+    (e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) => {
       e.preventDefault();
-      const isValid = await form.trigger();
-      if (!isValid) {
-          const errors = form.formState.errors;
-          const errorMessages: string[] = [];
-          
-          // Collect all validation errors
-          if (errors.partyId) errorMessages.push(`Supplier: ${errors.partyId.message}`);
-          if (errors.date) errorMessages.push(`Date: ${errors.date.message}`);
-          if (errors.voucherNumber) errorMessages.push(`Voucher No.: ${errors.voucherNumber.message}`);
-          if (errors.lineItems) {
-            const lineItems = errors.lineItems as Record<number, { itemId?: { message?: string }; quantity?: { message?: string }; rate?: { message?: string }; amount?: { message?: string } }> | undefined;
-            Object.entries(lineItems ?? {}).forEach(([idxStr, itemError]) => {
-              const index = parseInt(idxStr, 10);
-              if (itemError) {
-                if (itemError.itemId) errorMessages.push(`Item ${index + 1}: ${itemError.itemId.message}`);
-                if (itemError.quantity) errorMessages.push(`Item ${index + 1} Quantity: ${itemError.quantity.message}`);
-                if (itemError.rate) errorMessages.push(`Item ${index + 1} Rate: ${itemError.rate.message}`);
-                if (itemError.amount) errorMessages.push(`Item ${index + 1} Amount: ${itemError.amount.message}`);
-              }
-            });
-          }
-          if (errors.subTotal) errorMessages.push(`Sub Total: ${errors.subTotal.message}`);
-          if (errors.total) errorMessages.push(`Total: ${errors.total.message}`);
-          
-          const errorText = errorMessages.length > 0 
-            ? errorMessages.join(", ") 
-            : "Please check the form and try again.";
-          
-          sonnerToast.error("Validation Failed", { description: errorText });
-          return;
-      }
-      
-      // Debounce callback to prevent multiple re-renders and transaction shaking
-      // Update happens in background via Firestore onSnapshot listeners
-      setTimeout(() => {
-        onVoucherAction?.('saved', options.saveAndNew);
-      }, 100);
-
-      processAndSaveRef.current?.(form.getValues(), options);
-      
-  }, [form, onVoucherAction]);
+      void form.handleSubmit(
+        async (data) => {
+          setTimeout(() => {
+            onVoucherAction?.("saved", options.saveAndNew);
+          }, 100);
+          await processAndSaveRef.current?.(data, options);
+        },
+        (errors) => {
+          sonnerToast.error("Validation Failed", { description: formatPurchaseFormValidationErrors(errors) });
+        }
+      )(e);
+    },
+    [form, onVoucherAction]
+  );
 
    const processAndSave = useCallback(
     async (
@@ -808,9 +849,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       try {
         // Permission check: create or edit
         const isEdit = !!voucher?.id || !!savedVoucherId;
-        const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
+        const voucherDateRaw = data.date;
+        const voucherDate =
+          voucherDateRaw instanceof Date ? voucherDateRaw : new Date(voucherDateRaw as unknown as string);
+        // zod-validated values में valid Date आनी चाहिए; invalid पर coerce "आज" न हो
+        if (Number.isNaN(voucherDate.getTime())) {
+          sonnerToast.error("Error", {
+            id: toastId,
+            description: "Invalid transaction date. Please pick the date again.",
+          });
+          if (isMounted.current) setIsLoading(false);
+          return null;
+        }
         
-        let originalVoucherDate: Date = voucherDate;
         if (isEdit) {
           // Check edit permission - determine ownership
           const fetchVoucher = async (cid: string, vid: string) => {
@@ -822,6 +873,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           assertCanEdit(canEditRecord, isOwnRecord, currentVoucher);
           
           // Check backdate limit for edit - use ORIGINAL voucher date, not form date
+          let originalVoucherDate = voucherDate;
           if (voucher?.date) {
             originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
           } else if (savedVoucherId) {
@@ -844,18 +896,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           // Check backdate limit for create
           assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
         }
-        const fp = runFiscalVoucherPreflight({
-          company,
-          can,
-          isEditing: isEdit,
-          recordDate: voucherDate,
-          originalVoucherDate: isEdit ? originalVoucherDate : null,
-        });
-        if (fp.ok === false) {
-          if (fp.message) sonnerToast.error("Permission Denied", { id: toastId, description: fp.message });
-          if (isMounted.current) setIsLoading(false);
-          return null;
-        }
         const lineItemsWithTax = data.lineItems.map((li) => ({
           ...li,
           quantity: Number(li.quantity),
@@ -868,10 +908,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           type: "purchase",
         };
 
-        const existingFileUrls = files.filter(
+        let existingFileUrls = files.filter(
           (f): f is string => typeof f === "string"
         );
-        
+        let preGeneratedVoucherId: string | undefined;
+
         // If an unassignedFile is present, add its URL
         if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
             existingFileUrls.push(data.unassignedFile.url);
@@ -883,22 +924,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         if (newFilesToUpload.length > 0) {
           const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-          const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
           if (!limitCheck.allowed) {
             sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
             setIsLoading(false);
             return null;
           }
-          for (const file of newFilesToUpload) {
-            if (existingFileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-            const storageRef = ref(
-              storage,
-              `voucher-files/${companyId}/purchase/${Date.now()}_${file.name}`
-            );
-            const snapshot = await uploadBytes(storageRef, file);
-            const url = await getDownloadURL(snapshot.ref);
-            existingFileUrls.push(url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+          if (isLocalOnlyMode()) {
+            const voucherIdForLocalAttachments =
+              isEditingAndConverting && voucher?.id
+                ? null
+                : (savedVoucherId ?? voucher?.id ?? null);
+            const { fileUrls: mergedUrls, preGeneratedVoucherId: preGen } =
+              await appendLocalOnlyVoucherFilesToUrls({
+                companyId,
+                storageFolder: "purchase",
+                existingFileUrls,
+                newFiles: newFilesToUpload,
+                maxFileCount: fileAttachmentLimits.maxFileCount,
+                existingVoucherId: voucherIdForLocalAttachments,
+              });
+            existingFileUrls = mergedUrls;
+            if (preGen) preGeneratedVoucherId = preGen;
+            try {
+              await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+            } catch {
+              /* offline */
+            }
+          } else {
+            for (const file of newFilesToUpload) {
+              if (existingFileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+              const storageRef = ref(
+                storage,
+                `voucher-files/${companyId}/purchase/${Date.now()}_${file.name}`
+              );
+              const snapshot = await uploadBytes(storageRef, file);
+              const url = await getDownloadURL(snapshot.ref);
+              existingFileUrls.push(url);
+              await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+            }
           }
         }
 
@@ -930,14 +994,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           user.uid,
           finalData,
           originalVoucherIdToDelete ? null : docId,
-          approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
+          approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+          preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 
         if (savedDoc && savedDoc.id) {
             docId = savedDoc.id;
             if (isMounted.current) setSavedVoucherId(docId);
             if (originalVoucherIdToDelete) {
-                await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
+                // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
+                await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                     isDeleted: true,
                     deletedAt: serverTimestamp(),
                     convertedToType: 'purchase',
@@ -985,12 +1051,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           });
         }
 
-        // Debounce triggerSync to prevent multiple rapid updates
-        // Firestore onSnapshot will handle updates in background
-        setTimeout(() => {
-          triggerSync();
-        }, 150);
-
+        // Company triggerSync hata: save ke baad registry reload se poora layout hilta tha; vouchers BUMP/snapshot se update.
         if (companyId && company) {
           const isEdit = !!voucher?.id;
           const amount = Number((finalData as any).total) || 0;
@@ -1061,7 +1122,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     },
     // pendingLinkAllocations, vouchers, processedParties: required so link data is persisted to server on Save (avoids stale closure)
-    [companyId, user, files, onVoucherAction, triggerSync, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
+    [companyId, user, files, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
   );
 
 
@@ -1116,7 +1177,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         title: "Voucher Moved to Bin",
         description: "The purchase bill has been moved to the recycle bin.",
       });
-      triggerSync();
       if (onVoucherAction) onVoucherAction('cancelled');
     } catch (err) {
       console.error("delete purchase error:", err);
@@ -1160,7 +1220,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     for (const file of filesToProcess) {
       // Check file type
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
@@ -1190,35 +1251,30 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Too Large After Compression",
-            description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
+            title: "File Still Too Large",
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-        
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Error handling file:", error);
         toast({
           variant: "destructive",
-          title: "File Processing Error",
-          description: "Could not process the file. It might be corrupted.",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
         });
       }
     }
+    e.target.value = "";
   };
 
   const handleTaxCreated = (newTaxId: string) => {
@@ -1277,78 +1333,86 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
-                  {/* Mobile: Prefix + Invoice No. + Date(s) in one row, 2/3/4 equal-sized boxes */}
+                  {/* Mobile: Prefix + Invoice + Date एक row में; `date` को `voucherNumber` के अंदर nest नहीं — वरना RHF में date submit तक bind नहीं होती */}
                   {(() => {
                     const hasPrefix = isPrefixSelectionEnabled && voucherPrefixes.length > 0;
                     const hasDateBS = dateSystem === 'BS' || dateSystem === 'Both';
                     const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
                     const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
-                      <FormField
-                        control={form.control}
-                        name="voucherNumber"
-                        render={({ field: voucherField }: any) => (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name="date"
-                              render={({ field: dateField }: any) => (
-                                <>
-                                  <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
-                                    {hasPrefix && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
-                                          <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
-                                            <SelectValue />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {voucherPrefixes.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                          </SelectContent>
-                                        </Select>
-                                      </FormItem>
-                                    )}
-                                    <FormItem className="min-w-0 w-full overflow-hidden">
-                                      <FormLabel className="text-xs truncate">Invoice No.</FormLabel>
-                                      <FormControl>
-                                        <Input placeholder="e.g. PUR-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
-                                      </FormControl>
-                                    </FormItem>
-                                    {hasDateBS && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
-                                        <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
-                                        </div>
-                                      </FormItem>
-                                    )}
-                                    {hasDateAD && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date</FormLabel>
-                                        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                                          <PopoverTrigger asChild>
-                                            <FormControl>
-                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
-                                                {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
-                                                <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
-                                              </Button>
-                                            </FormControl>
-                                          </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0 z-50" align="start">
-                                            <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
-                                          </PopoverContent>
-                                        </Popover>
-                                      </FormItem>
-                                    )}
-                                  </div>
-                                  <FormMessage />
-                                </>
-                              )}
-                            />
-                            <FormMessage />
-                          </>
-                        )}
-                      />
+                      <>
+                        <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                          <FormField
+                            control={form.control}
+                            name="voucherNumber"
+                            render={({ field: voucherField }: any) => (
+                              <>
+                                {hasPrefix && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Prefix</FormLabel>
+                                    <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
+                                      <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {voucherPrefixes.map((p) => (
+                                          <SelectItem key={p} value={p}>
+                                            {p}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormItem>
+                                )}
+                                <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormLabel className="text-xs truncate">Invoice No.</FormLabel>
+                                  <FormControl>
+                                    <Input placeholder="e.g. PUR-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                                  </FormControl>
+                                </FormItem>
+                              </>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="date"
+                            render={({ field: dateField }: any) => (
+                              <>
+                                {hasDateBS && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
+                                    <div className="min-w-0 w-full overflow-hidden">
+                                      <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
+                                    </div>
+                                  </FormItem>
+                                )}
+                                {hasDateAD && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date</FormLabel>
+                                    <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                                      <PopoverTrigger asChild>
+                                        <FormControl>
+                                          <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
+                                            {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
+                                            <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
+                                          </Button>
+                                        </FormControl>
+                                      </PopoverTrigger>
+                                      <PopoverContent className="w-auto p-0 z-50" align="start">
+                                        <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
+                                      </PopoverContent>
+                                    </Popover>
+                                  </FormItem>
+                                )}
+                              </>
+                            )}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-0">
+                          <FormField control={form.control} name="voucherNumber" render={() => <FormMessage />} />
+                          <FormField control={form.control} name="date" render={() => <FormMessage />} />
+                        </div>
+                      </>
                     );
                   })()}
                   {/* Mobile: Party and Purchase Account - 2 columns */}
@@ -1617,7 +1681,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       const unitOptions =
                         selectedItem
                           ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
-                          : allCompanyUnits;
+                          : companyUnitsMerged;
                         // New voucher: never lock item fields; existing: lock when payment linked
                         const itemFieldsDisabled = (voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false;
 
@@ -1759,13 +1823,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       <Combobox
                                         options={[
                                           ...unitOptions.map((u) => ({ value: u, label: u })),
-                                          ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                          ...(field.value && !unitListHas(unitOptions, field.value) ? [{ value: field.value, label: field.value }] : []),
                                         ]}
                                         value={field.value}
                                         disabled={itemFieldsDisabled}
                                         onChange={(val, newName) => {
                                           const unitVal = val === "add-new" ? (newName || "").trim() : val;
                                           field.onChange(unitVal);
+                                          onPersistNewUnit(val, unitVal);
                                           const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
                                           if (sel && unitVal) {
                                             const newRate = getUnitBasedPrice(sel, unitVal, 'purchase');
@@ -1955,7 +2020,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         const unitOptions =
                           selectedItem
                             ? (selectedItem.unitConversions as any[])?.flatMap((uc) => [uc.fromUnit, uc.toUnit])?.filter((v, i, a) => a.indexOf(v) === i && v) || []
-                            : allCompanyUnits;
+                            : companyUnitsMerged;
                         // New voucher: never lock item fields; existing: lock when payment linked
                         const itemFieldsDisabled = (voucher?.id || savedVoucherId) ? (hasItemEditLock || deleteDisabledWhenLinked) : false;
 
@@ -2025,13 +2090,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     <Combobox
                                       options={[
                                         ...unitOptions.map((u) => ({ value: u, label: u })),
-                                        ...(field.value && !unitOptions.includes(field.value) ? [{ value: field.value, label: field.value }] : []),
+                                        ...(field.value && !unitListHas(unitOptions, field.value) ? [{ value: field.value, label: field.value }] : []),
                                       ]}
                                       value={field.value}
                                       disabled={itemFieldsDisabled}
                                       onChange={(val, newName) => {
                                         const unitVal = val === "add-new" ? (newName || "").trim() : val;
                                         field.onChange(unitVal);
+                                        onPersistNewUnit(val, unitVal);
                                         const sel = allProcessedItems.find((i) => i.id === form.getValues(`lineItems.${index}.itemId`));
                                         if (sel && unitVal) {
                                           const newRate = getUnitBasedPrice(sel, unitVal, 'purchase');
@@ -2348,14 +2414,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FilePreview 
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
-                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
+                              onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
                                 "h-16"
                               )}
                             />
                           ))}
-                          {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                          {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
                               <div 
                                 className={cn(
@@ -2382,7 +2448,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                                   ].filter(Boolean).join(",") || "image/*,application/pdf"}
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </div>
                             </FormControl>
@@ -2607,11 +2673,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FilePreview 
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
-                              onRemove={allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
+                              onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />
                           ))}
-                          {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                          {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
                               <div 
                                 className={cn(
@@ -2638,7 +2704,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     fileAttachmentLimits.allowPDF ? "application/pdf" : ""
                                   ].filter(Boolean).join(",") || "image/*,application/pdf"}
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
                               </div>
                             </FormControl>
@@ -2808,15 +2874,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
-                {/* Row 1: Cancel (left) | Approve (middle) | Save (right) */}
+                {/* Row 1: Cancel | Save (middle) | Approve — CreateSaleForm jaisa mobile layout */}
                 <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
+                <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : "Save"}
+                </Button>
                 <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : (showSaveAndApproveOnCreate && !voucher?.id ? "Save & Approve" : (isFormDirty ? "Save & Approve" : "Approve"))}
-                </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
                 </Button>
               </div>
             ) : (
@@ -2857,7 +2923,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

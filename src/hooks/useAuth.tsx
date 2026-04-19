@@ -4,13 +4,14 @@
 import type { User } from "firebase/auth";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter, usePathname } from "next/navigation";
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { auth, firestore } from "@/lib/firebase";
 import { slugify } from "@/lib/slugify";
 import { getCountryByIP } from "@/lib/getCountryByIP";
 import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc, collection, query, where, getDocs, writeBatch, getDoc } from "firebase/firestore";
 import { logFirestorePermissionDenied } from "@/lib/firestoreRuleDebug";
 import type { Role } from "@/utils/rbac";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 
 export type AppUser = {
@@ -54,16 +55,43 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
   const pathname = usePathname();
   const unsubUserDocRef = useRef<(() => void) | null>(null);
   const countryFetchedForRef = useRef<Set<string>>(new Set());
+  /** Capacitor/static WebView: kabhi pehle `null` aata hai jabki IndexedDB session abhi restore ho raha ho — turant sign-out mat mano. */
+  const pendingNullAuthTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      if (!firebaseUser) {
-        if (unsubUserDocRef.current) {
-          unsubUserDocRef.current();
-          unsubUserDocRef.current = null;
-        }
-        setCustomUser(null);
+    // Auth flow is strictly login-based now; local guest bootstrap path intentionally removed.
+    const clearPendingNullAuthTimer = () => {
+      if (pendingNullAuthTimerRef.current) {
+        clearTimeout(pendingNullAuthTimerRef.current);
+        pendingNullAuthTimerRef.current = null;
+      }
+    };
+
+    const finalizeSignedOut = () => {
+      clearPendingNullAuthTimer();
+      if (unsubUserDocRef.current) {
+        unsubUserDocRef.current();
+        unsubUserDocRef.current = null;
+      }
+      setUser(null);
+      setCustomUser(null);
+      setLoading(false);
+    };
+
+    const bootstrapUserSession = (firebaseUser: User) => {
+      if (isLocalOnlyMode()) {
+        // Local-first mode: avoid Firestore user-doc listeners to prevent permission-denied snapshot noise.
+        const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
+        setCustomUser({
+          id: firebaseUser.uid,
+          uid: firebaseUser.uid,
+          userDocId: firebaseUser.uid,
+          displayName,
+          email: firebaseUser.email || "",
+          role: (firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User") as Role,
+          companyId: null,
+          isActive: true,
+        });
         setLoading(false);
         return;
       }
@@ -284,9 +312,48 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
           setLoading(false);
         }
       })();
-    });
+    };
+
+    const NULL_AUTH_DEBOUNCE_MS = 500;
+    // Teesra arg: token refresh / identity toolkit par network fail → kabhi-kabhi observer ke bagair error;
+    // `auth/network-request-failed` pe session IndexedDB me ho to currentUser zinda rehta hai — logout mat karo.
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (firebaseUser) => {
+        clearPendingNullAuthTimer();
+        if (!firebaseUser) {
+          pendingNullAuthTimerRef.current = setTimeout(() => {
+            pendingNullAuthTimerRef.current = null;
+            const cu = auth.currentUser;
+            if (cu) {
+              setUser(cu);
+              bootstrapUserSession(cu);
+              return;
+            }
+            finalizeSignedOut();
+          }, NULL_AUTH_DEBOUNCE_MS);
+          return;
+        }
+        setUser(firebaseUser);
+        bootstrapUserSession(firebaseUser);
+      },
+      (err) => {
+        const code = err && typeof err === "object" && "code" in err ? String((err as { code?: string }).code) : "";
+        if (code === "auth/network-request-failed") {
+          const cu = auth.currentUser;
+          if (cu) {
+            setUser(cu);
+            bootstrapUserSession(cu);
+            return;
+          }
+        }
+        console.warn("useAuth: onAuthStateChanged error", err);
+        setLoading(false);
+      }
+    );
 
     return () => {
+      clearPendingNullAuthTimer();
       unsubscribe();
       if (unsubUserDocRef.current) {
         unsubUserDocRef.current();

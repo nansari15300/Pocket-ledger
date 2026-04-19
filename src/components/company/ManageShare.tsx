@@ -8,6 +8,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -42,9 +43,13 @@ import { Permission, PermissionGroups } from "@/lib/permissions";
 import usePermissions, { type PermissionConfig, type UserRole, initialPermissionConfig } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
+import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
-import type { PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 
 type SharedUser = {
@@ -72,9 +77,28 @@ const getInitials = (nameOrEmail: string) => {
 
 const flattenedPermissions = PermissionGroups.flatMap(g => g.permissions.map(p => p.key));
 
+/** Firestore / local company doc se aayi `permissionConfig` ko UI shape me merge — ek hi function dono path. */
+function buildMergedPermissionConfig(currentConfig: PermissionConfig | undefined | null): PermissionConfig {
+  const needsReset = !currentConfig || !currentConfig.roles || !currentConfig.dateLimits;
+  const base = needsReset ? initialPermissionConfig : currentConfig;
+  const merged: PermissionConfig = {
+    ...initialPermissionConfig,
+    ...base,
+    fileAttachmentLimits: {
+      ...initialPermissionConfig.fileAttachmentLimits,
+      ...(base.fileAttachmentLimits || {}),
+    },
+    allowAttachments:
+      base.allowAttachments !== undefined ? base.allowAttachments : initialPermissionConfig.allowAttachments,
+  };
+  if (merged.roles.owner) {
+    merged.roles.owner = Array(flattenedPermissions.length).fill(true);
+  }
+  return merged;
+}
 
 export function ManageShare() {
-  const { company: companyData, companyId } = useCompany();
+  const { company: companyData, companyId, allCompanies } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -146,71 +170,86 @@ export function ManageShare() {
     localStorage.setItem("selectedRoleForPermissions", selectedRoleForPermissions);
   }, [selectedRoleForPermissions]);
 
+  /** Local company: sirf tab permission reload jab SQLite/context me nested config badle — har `companyData` reference par Firestore dubara subscribe na ho. */
+  const localPermissionSyncKey = useMemo(() => {
+    if (!companyData || !isOfflineCompanyStorage(companyData)) return "";
+    try {
+      return JSON.stringify((companyData as { permissionConfig?: PermissionConfig }).permissionConfig ?? null);
+    } catch {
+      return String(Date.now());
+    }
+  }, [companyData]);
+
   useEffect(() => {
     if (!companyId) {
       setLoading(false);
       return;
     }
+
+    // Device-local company: Firestore share/permission doc nahi — SQLite / context se config.
+    if (companyData && isOfflineCompanyStorage(companyData)) {
+      setLoading(true);
+      const raw = (companyData as { permissionConfig?: PermissionConfig }).permissionConfig;
+      const merged = buildMergedPermissionConfig(raw ?? null);
+      setFirestorePermissionConfig(merged);
+      setEditablePermissionConfig(merged);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     const companyRef = doc(firestore, "companies", companyId);
 
     const unsubscribe = onSnapshot(companyRef, async (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        let currentConfig = data.permissionConfig;
+        let currentConfig = data.permissionConfig as PermissionConfig | undefined;
 
         if (!currentConfig || !currentConfig.roles || !currentConfig.dateLimits) {
-            console.log("Permission schema mismatch or missing. Resetting to default.");
-            currentConfig = initialPermissionConfig;
-            // Check if company is pending sync before updating
-            try {
-                await updateDoc(companyRef, { permissionConfig: currentConfig });
-              } catch (error: any) {
-                const isNotFoundError = error?.code === "not-found" || error?.message?.includes("No document to update");
-                if (isNotFoundError) {
-                  console.warn("Cannot update permission config: company not synced yet");
-                } else {
-                  console.error("Error updating permission config:", error);
-                }
-              }
+          console.log("Permission schema mismatch or missing. Resetting to default.");
+          currentConfig = initialPermissionConfig;
+          try {
+            await updateDoc(companyRef, { permissionConfig: currentConfig });
+          } catch (error: any) {
+            const isNotFoundError = error?.code === "not-found" || error?.message?.includes("No document to update");
+            if (isNotFoundError) {
+              console.warn("Cannot update permission config: company not synced yet");
+            } else {
+              console.error("Error updating permission config:", error);
+            }
+          }
         }
-        
-        // Merge with defaults for file attachment settings
-        const mergedConfig: PermissionConfig = {
-          ...initialPermissionConfig,
-          ...currentConfig,
-          fileAttachmentLimits: {
-            ...initialPermissionConfig.fileAttachmentLimits,
-            ...(currentConfig.fileAttachmentLimits || {}),
-          },
-          allowAttachments: currentConfig.allowAttachments !== undefined ? currentConfig.allowAttachments : initialPermissionConfig.allowAttachments,
-        };
-        
-        // Ensure owner role always has all permissions set to true
-        if (mergedConfig.roles.owner) {
-          mergedConfig.roles.owner = Array(flattenedPermissions.length).fill(true);
-        }
-        
+
+        const mergedConfig = buildMergedPermissionConfig(currentConfig);
         setFirestorePermissionConfig(mergedConfig);
         setEditablePermissionConfig(mergedConfig);
-
-      } 
+      } else {
+        const mergedConfig = buildMergedPermissionConfig(null);
+        setFirestorePermissionConfig(mergedConfig);
+        setEditablePermissionConfig(mergedConfig);
+      }
       setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [companyId]);
+  }, [companyId, companyData?.storageOption, localPermissionSyncKey]);
   
   const permissionsForSelectedRole = editablePermissionConfig.roles[selectedRoleForPermissions] || Array(flattenedPermissions.length).fill(false);
   const dateLimitsForSelectedRole = editablePermissionConfig.dateLimits?.[selectedRoleForPermissions] || { entryDays: 0, editDays: 0, deleteDays: 0 };
   const fileAttachmentLimitsForSelectedRole = editablePermissionConfig.fileAttachmentLimits?.[selectedRoleForPermissions] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
   const allowAttachmentsGlobal = editablePermissionConfig.allowAttachments !== false;
-  const activePlan = useMemo(() => {
-    return getPlanFromPlans(livePlans, (companyData?.planId as PlanId) || "basic");
-  }, [livePlans, companyData?.planId]);
+  // Local row ka `planId` aksar "basic" rehta jabki account pe advance ho — file caps galat 0 dikhte the; header/billing jaisa aggregate use karo.
+  const effectivePlanId = useMemo(
+    () => resolveEffectiveAccountPlanId(allCompanies, user?.uid, companyData?.planId),
+    [allCompanies, user?.uid, companyData?.planId]
+  );
+  const activePlan = useMemo(() => getPlanFromPlans(livePlans, effectivePlanId), [livePlans, effectivePlanId]);
   const planAllowsFileAttachment = activePlan.entitlements.canAddFileImagePdf === true;
   const planMaxFilesPerVoucher = Math.max(0, Number(activePlan.entitlements.maxVoucherFileCount) || 0);
-  const maxUsersPerPlan = Math.max(1, Number(activePlan.entitlements.maxUsers) || 1);
+  const maxUsersPerPlan = Math.max(
+    1,
+    numericEntitlement(activePlan.entitlements, "maxUsers", companyStorageIsLocal(companyData?.storageOption)) || 1
+  );
   const roleMaxFilesRaw = Number(fileAttachmentLimitsForSelectedRole.maxFileCount) || 0;
   const effectiveRoleMaxFiles = planAllowsFileAttachment
     ? Math.min(roleMaxFilesRaw, planMaxFilesPerVoucher)
@@ -304,6 +343,35 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         configToSave.roles.owner = Array(flattenedPermissions.length).fill(true);
       }
       
+      if (companyData && isOfflineCompanyStorage(companyData)) {
+        const localOk = await updateCompanyDocRoot(companyId, { permissionConfig: configToSave });
+        if (localOk) {
+          toast({ title: "Success", description: "Permissions have been saved." });
+          return;
+        }
+        try {
+          const existing = await getLocalCompanyById(companyId);
+          if (existing) {
+            await upsertLocalCompany({
+              ...existing,
+              id: companyId,
+              permissionConfig: configToSave,
+              updatedAt: Date.now(),
+            } as LocalCompanyDoc);
+            toast({ title: "Success", description: "Permissions have been saved (this device)." });
+            return;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+        toast({
+          variant: "destructive",
+          title: "Could not save",
+          description: "Local company: sync server chalao ya baad mein try karein.",
+        });
+        return;
+      }
+
       const companyRef = doc(firestore, "companies", companyId);
       await updateDoc(companyRef, { permissionConfig: configToSave });
       toast({ title: "Success", description: "Permissions have been saved." });
@@ -602,10 +670,108 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
   const enabledPermissions = permissionsForSelectedRole.filter(p => p === true).length;
   const disabledPermissions = totalPermissions - enabledPermissions;
 
+  /** SQLite / device-only: email-based Firestore share yahan support nahi — Company login + Local users. */
+  const isDeviceLocalCompany = isOfflineCompanyStorage(companyData);
 
   return (
     <div className="space-y-8">
-        <Card>
+        {isDeviceLocalCompany ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Sharing — {companyData.name}</CardTitle>
+              <CardDescription>
+                Device-local company — language below. Firebase email share is for cloud-uploaded companies only.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Eng / Nep / Hindi: same guidance, tabs se team pick kare */}
+              <Tabs defaultValue="eng" className="w-full">
+                <TabsList className="grid w-full max-w-md grid-cols-3">
+                  <TabsTrigger value="eng">English</TabsTrigger>
+                  <TabsTrigger value="nep">नेपाली</TabsTrigger>
+                  <TabsTrigger value="hi">हिन्दी</TabsTrigger>
+                </TabsList>
+                <TabsContent value="eng" className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none">
+                  <p className="text-muted-foreground">
+                    This company lives only on this device. Firebase &quot;Add Person&quot; / email sharing works for companies
+                    that are uploaded to the cloud.
+                  </p>
+                  <p className="font-medium text-foreground">
+                    How to give access: open{" "}
+                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
+                      Company Profile
+                    </Link>{" "}
+                    and set <strong>Company login</strong> (username + Protect company password). Your team can use these when
+                    switching companies.
+                  </p>
+                  <p className="text-muted-foreground">
+                    For extra device-only users, use <strong>Settings</strong> → <strong>Local users</strong> for this company —
+                    that is not Firestore sharing.
+                  </p>
+                  <p className="text-muted-foreground">
+                    For online email sharing, upload or sync this company to Firebase / the cloud first; then add people here under{" "}
+                    <strong>Manage Sharing</strong>.
+                  </p>
+                </TabsContent>
+                <TabsContent
+                  value="nep"
+                  lang="ne"
+                  className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none"
+                >
+                  {/* नेपाली देवनागरी — Roman placeholder हटाया */}
+                  <p className="text-muted-foreground">
+                    यो कम्पनी यस उपकरणमा मात्र स्थानीय छ। फायरबेसको &quot;Add Person&quot; / इमेल साझेदारी क्लाउडमा अपलोड गरिएका
+                    कम्पनीहरूका लागि मात्र हुन्छ।
+                  </p>
+                  <p className="font-medium text-foreground">
+                    पहुँच दिने तरिका:{" "}
+                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
+                      कम्पनी प्रोफाइल
+                    </Link>{" "}
+                    मा <strong>कम्पनी लगइन</strong> (प्रयोगकर्ता नाम + संरक्षित कम्पनी पासवर्ड) सेट गर्नुहोस्। कम्पनी बदल्दा यही
+                    प्रमाणपत्र प्रयोग गर्नुहोस्।
+                  </p>
+                  <p className="text-muted-foreground">
+                    थप उपकरण-मात्र प्रयोगकर्ताका लागि सेटिङहरू → यसै कम्पनीका <strong>स्थानीय प्रयोगकर्ता</strong> खण्ड प्रयोग
+                    गर्नुहोस् — यो फायरस्टोर साझेदारी होइन।
+                  </p>
+                  <p className="text-muted-foreground">
+                    अनलाइन इमेल साझेदारीका लागि पहिले यो कम्पनी फायरबेस / क्लाउडमा अपलोड वा सिङ्क गर्नुहोस्; पछि यहीं{" "}
+                    <strong>साझेदारी व्यवस्थापन</strong>बाट व्यक्ति थप्नुहोस्।
+                  </p>
+                </TabsContent>
+                <TabsContent
+                  value="hi"
+                  lang="hi"
+                  className="mt-3 rounded-lg border border-blue-200 bg-blue-50/90 dark:bg-blue-950/40 dark:border-blue-900 p-4 text-sm space-y-2 outline-none"
+                >
+                  {/* पूरी हिंदी देवनागरी; अंग्रेज़ी शब्द जहाँ UI से मेल खाते हों वही रखे */}
+                  <p className="text-muted-foreground">
+                    यह कंपनी केवल इस डिवाइस पर स्थानीय है। फायरबेस का &quot;Add Person&quot; / ईमेल साझाकरण केवल उन कंपनियों के लिए
+                    है जो क्लाउड पर अपलोड की गई हैं।
+                  </p>
+                  <p className="font-medium text-foreground">
+                    पहुँच देने का तरीका:{" "}
+                    <Link href="/settings?view=company" className="underline font-semibold hover:no-underline">
+                      कंपनी प्रोफ़ाइल
+                    </Link>{" "}
+                    में <strong>कंपनी लॉगिन</strong> (उपयोगकर्ता नाम + संरक्षित कंपनी पासवर्ड) सेट करें। टीम कंपनी बदलते समय इन्हीं
+                    प्रमाण-पत्रों का उपयोग कर सकती है।
+                  </p>
+                  <p className="text-muted-foreground">
+                    अतिरिक्त केवल-डिवाइस उपयोगकर्ताओं के लिए सेटिंग्स → इसी कंपनी का <strong>स्थानीय उपयोगकर्ता</strong> खंड उपयोग
+                    करें — यह फायरस्टोर साझाकरण नहीं है।
+                  </p>
+                  <p className="text-muted-foreground">
+                    ऑनलाइन ईमेल साझाकरण के लिए पहले इस कंपनी को फायरबेस / क्लाउड पर अपलोड या सिंक करें; फिर यहीं{" "}
+                    <strong>साझाकरण प्रबंधन</strong> से लोग जोड़ सकेंगे।
+                  </p>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
             <CardHeader className="flex flex-row items-start justify-between">
                 <div>
                     <CardTitle>Manage Sharing for {companyData.name}</CardTitle>
@@ -749,6 +915,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             )}
             </CardContent>
         </Card>
+        )}
         
         <Dialog open={!!userToEdit} onOpenChange={(open) => !open && setUserToEdit(null)}>
              <DialogContent>

@@ -839,9 +839,10 @@ export function useTransactions(
                 const displayType = t.type ? (t.subType === 'add_salary' ? 'Add Salary' : t.type.replace(/_/g, " ")) : "";
                 allSearchableFields.push(displayType.toLowerCase());
                 
-                // Voucher Number
-                if (t.voucherNumber) {
-                    allSearchableFields.push(t.voucherNumber.toLowerCase());
+                // Voucher No. column filter — dono field names (Firestore / legacy)
+                const vn = t.voucherNumber ?? t.voucher_number;
+                if (vn) {
+                    allSearchableFields.push(String(vn).toLowerCase());
                 }
                 
                 // User

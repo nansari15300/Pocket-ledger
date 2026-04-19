@@ -33,30 +33,33 @@ import { useSyncMasterDetailHeaderId } from "@/hooks/useSyncMasterDetailHeaderId
 import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { filterByPendingApproval } from "@/lib/pendingApprovalFilter";
-import { UnapprovedOnlyToggle } from "@/components/entity-lists/UnapprovedOnlyToggle";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
+import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
 
 function TaxPageContent() {
   const { user } = useAuth();
-  const { company, companyId } = useCompany();
+  const { company, companyId, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers, loading: vouchersLoading, processedTaxes, processedTaxGroups: initialProcessedTaxGroups, userNames: vouchersUserNames } = useVouchers();
   const { can } = usePermissions();
-  // Unapproved toggle + pending badges: permission only (not company notification "on list" flags)
-  const canApproveTransactions = can("approve_transactions");
+  const showApproveOnList =
+    can("approve_transactions") &&
+    effectiveNotificationSettings?.approve?.on !== false &&
+    effectiveNotificationSettings?.approve?.onList !== false;
   const pendingApprovalByTaxId = useMemo(() => {
-    if (!canApproveTransactions || !vouchers?.length) return {} as Record<string, number>;
+    if (!showApproveOnList || !vouchers?.length) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     const taxIdSet = new Set((processedTaxes || []).map((t: any) => t.id));
     vouchers.forEach((v: any) => {
       if (v.isApproved === true) return;
       const ids = new Set<string>();
-      if (v.taxAccountId) ids.add(v.taxAccountId);
+      // Sirf is company ke tax masters — sidebar/list alignment
+      if (v.taxAccountId && taxIdSet.has(v.taxAccountId)) ids.add(v.taxAccountId);
       (v.lineItems || []).forEach((line: any) => {
-        if (line.taxAccountId) ids.add(line.taxAccountId);
+        if (line.taxAccountId && taxIdSet.has(line.taxAccountId)) ids.add(line.taxAccountId);
       });
       (v.entries || []).forEach((entry: any) => {
         if (entry.accountId && taxIdSet.has(entry.accountId)) ids.add(entry.accountId);
@@ -66,16 +69,39 @@ function TaxPageContent() {
       });
     });
     return map;
-  }, [vouchers, processedTaxes, canApproveTransactions]);
+  }, [vouchers, processedTaxes, showApproveOnList]);
   const pendingApprovalByTaxGroupId = useMemo(() => {
-    if (!canApproveTransactions) return {} as Record<string, number>;
+    if (!showApproveOnList) return {} as Record<string, number>;
     const map: Record<string, number> = {};
     processedTaxes.forEach((tax: any) => {
-      const groupId = tax.groupId || "ungrouped";
-      map[groupId] = (map[groupId] || 0) + (pendingApprovalByTaxId[tax.id] || 0);
+      const n = pendingApprovalByTaxId[tax.id] || 0;
+      if (!n) return;
+      const gid =
+        tax.groupId && String(tax.groupId).trim() !== "" && tax.groupId !== "ungrouped_tax"
+          ? tax.groupId
+          : "ungrouped";
+      map[gid] = (map[gid] || 0) + n;
     });
     return map;
-  }, [processedTaxes, pendingApprovalByTaxId, canApproveTransactions]);
+  }, [processedTaxes, pendingApprovalByTaxId, showApproveOnList]);
+  const totalPendingApprovalVoucherCount = useMemo(() => {
+    if (!showApproveOnList || !vouchers?.length || !(processedTaxes || []).length) return 0;
+    const taxIdSet = new Set(processedTaxes.map((t: Tax) => t.id));
+    let n = 0;
+    for (const v of vouchers as any[]) {
+      if (v?.isApproved === true) continue;
+      let hit = false;
+      if (v.taxAccountId && taxIdSet.has(v.taxAccountId)) hit = true;
+      if (!hit && Array.isArray(v.lineItems)) {
+        hit = v.lineItems.some((line: any) => line.taxAccountId && taxIdSet.has(line.taxAccountId));
+      }
+      if (!hit && Array.isArray(v.entries)) {
+        hit = v.entries.some((e: any) => e.accountId && taxIdSet.has(e.accountId));
+      }
+      if (hit) n += 1;
+    }
+    return n;
+  }, [vouchers, processedTaxes, showApproveOnList]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
@@ -92,7 +118,7 @@ function TaxPageContent() {
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [unapprovedOnly, setUnapprovedOnly] = useState(false);
+  const [showOnlyTaxesWithPendingApproval, setShowOnlyTaxesWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -129,11 +155,6 @@ function TaxPageContent() {
     return baseGroups;
   }, [processedTaxes, initialProcessedTaxGroups, companyId]);
 
-  const taxesForListDisplay = useMemo(
-    () => filterByPendingApproval(processedTaxes, pendingApprovalByTaxId, unapprovedOnly),
-    [processedTaxes, pendingApprovalByTaxId, unapprovedOnly]
-  );
-
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "taxPageState", 
@@ -141,7 +162,7 @@ function TaxPageContent() {
     setActiveView,            
     selected,                 
     setSelected,              
-    activeView === 'taxes' ? taxesForListDisplay : processedTaxGroups, 
+    activeView === 'taxes' ? processedTaxes : processedTaxGroups, 
     vouchersLoading           
   );
   // ==================================
@@ -149,8 +170,22 @@ function TaxPageContent() {
   // Clear search when company changes (prevent email/other data from carrying over)
   useEffect(() => {
     setSearchTerm("");
-    setUnapprovedOnly(false);
   }, [companyId]);
+  useEffect(() => {
+    setShowOnlyTaxesWithPendingApproval(false);
+  }, [companyId]);
+  useEffect(() => {
+    if (activeView !== "taxes") setShowOnlyTaxesWithPendingApproval(false);
+  }, [activeView]);
+
+  const taxesForTaxList = useMemo(() => {
+    if (!showOnlyTaxesWithPendingApproval || !showApproveOnList) return processedTaxes;
+    return processedTaxes.filter((t) => (pendingApprovalByTaxId[t.id] ?? 0) > 0);
+  }, [processedTaxes, showOnlyTaxesWithPendingApproval, showApproveOnList, pendingApprovalByTaxId]);
+  const filteredTaxListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return taxesForTaxList.filter((t) => t.name && t.name.toLowerCase().includes(searchLower)).length;
+  }, [taxesForTaxList, searchTerm]);
   
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
@@ -225,14 +260,10 @@ function TaxPageContent() {
   }, []);
 
   const totalBalance = useMemo(() => {
-    if (activeView === "taxes") {
-      const list = unapprovedOnly
-        ? filterByPendingApproval(processedTaxes, pendingApprovalByTaxId, true)
-        : processedTaxes;
-      return list.reduce((acc, tax) => acc + tax.balance, 0);
-    }
-    return processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
-  }, [activeView, processedTaxes, processedTaxGroups, unapprovedOnly, pendingApprovalByTaxId]);
+    return activeView === 'taxes'
+      ? processedTaxes.reduce((acc, tax) => acc + tax.balance, 0)
+      : processedTaxGroups.reduce((acc, group) => acc + group.balance, 0);
+  }, [activeView, processedTaxes, processedTaxGroups]);
 
   const handleSelect = (item: Tax | TaxGroup) => {
     if (useQueryNav) {
@@ -260,7 +291,9 @@ function TaxPageContent() {
       viewFromUrl === "groups"
         ? `/tax?view=groups&selected=${encodeURIComponent(selectedIdFromUrl)}`
         : `/tax?selected=${encodeURIComponent(selectedIdFromUrl)}`;
-    router.replace(canonical, { scroll: false });
+    if (shouldReplaceWithMasterDetailCanonical(canonical)) {
+      router.replace(canonical, { scroll: false });
+    }
   }, [selectedIdFromUrl, viewFromUrl, vouchersLoading, processedTaxes, processedTaxGroups, setSelected, setActiveView, router]);
 
   const taxesForSelectedGroup = useMemo(() => {
@@ -272,11 +305,6 @@ function TaxPageContent() {
   }, [selectedGroup, processedTaxes]);
 
   // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
-  const filteredTaxCount = useMemo(() => {
-    const q = (searchTerm || "").toLowerCase();
-    return taxesForListDisplay.filter((t) => t.name && t.name.toLowerCase().includes(q)).length;
-  }, [taxesForListDisplay, searchTerm]);
-
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
     return (processedTaxGroups || []).filter((g) => {
@@ -310,13 +338,21 @@ function TaxPageContent() {
   const listView = (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b flex items-center gap-2">
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder={activeView === 'taxes' ? 'Search taxes...' : 'Search groups...'} className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} autoComplete="off" />
         </div>
-        {activeView === "taxes" && canApproveTransactions && (
-          <UnapprovedOnlyToggle active={unapprovedOnly} onToggle={() => setUnapprovedOnly((v) => !v)} />
-        )}
+        {activeView === "taxes" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyTaxesWithPendingApproval}
+            onToggle={() => setShowOnlyTaxesWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only taxes with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all taxes (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all taxes"
+          />
+        ) : null}
         {activeView === "taxes" ? (
           <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateTaxOpen(true)}>
@@ -335,10 +371,10 @@ function TaxPageContent() {
             <>
               <div className="px-3 py-1.5 border-b flex items-center gap-2 text-sm font-semibold text-muted-foreground flex-shrink-0">
                 <Receipt className="h-4 w-4" />
-                <span>Tax ({filteredTaxCount})</span>
+                <span>Tax ({filteredTaxListCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxList taxes={taxesForListDisplay} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
+                <TaxList taxes={taxesForTaxList} onSelectTax={handleSelect as any} selectedTax={selectedTax} searchTerm={searchTerm} pendingApprovalByTaxId={pendingApprovalByTaxId} getItemHref={useQueryNav ? (t) => `/tax?selected=${t.id}` : undefined} />
               </div>
             </>
         ) : (

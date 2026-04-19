@@ -2,13 +2,21 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { Loader2, Trash2, CalendarIcon } from "lucide-react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
-import { uploadFile } from "@/lib/storage";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { useAuth } from "@/hooks/useAuth";
+import {
+  EntityProfilePhotoBlock,
+  EntityDocumentsBlock,
+  EntityOpeningBalanceNarrationField,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -18,7 +26,8 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
-import { useAuth } from "@/hooks/useAuth";
+import { useVouchers } from "@/hooks/useVouchers";
+import { isLocalOnlyMode } from "@/lib/localMode";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -33,11 +42,18 @@ import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
 import { Textarea } from "../ui/textarea";
-import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+
+/** CreateStaffForm jaisa: Ungrouped bucket → form value `ungrouped_staff` (null / empty legacy). */
+function normalizeStaffEditGroupId(groupId: string | null | undefined): string {
+  const u = getUngroupedGroupId("staff");
+  if (!groupId || groupId === u) return u;
+  return groupId;
+}
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Staff name must be at least 2 characters." }),
@@ -49,6 +65,7 @@ const formSchema = z.object({
   openingBalanceDate: z.date().optional(),
   salaryPeriod: z.enum(["Daily", "Weekly", "Monthly", "Yearly"]).optional(),
   groupId: z.string().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
 
 const MAX_FILE_SIZE_MB = 0.5;
@@ -71,15 +88,21 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const setDialogOpen = onOpenChange ?? setInternalIsOpen;
 
   const { toast } = useToast();
+  const { companyId, company } = useCompany();
+  const { processedStaffGroups } = useVouchers();
+  const processedStaffGroupsRef = useRef(processedStaffGroups);
+  processedStaffGroupsRef.current = processedStaffGroups;
   const { user } = useAuth();
-  const { companyId, triggerSync, company } = useCompany();
-  const { canAddAvatar } = usePermissions();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem } = useDate();
   const [groups, setGroups] = useState<StaffGroup[]>(allGroups);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [file, setFile] = useState<File | string | null>(staff.fileUrl || null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [docSlots, setDocSlots] = useState<Array<File | string>>(() => staff.documentFileUrls || []);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
@@ -92,7 +115,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       openingBalance: staff.openingBalance || 0,
       openingBalanceDate: (staff as any).openingBalanceDate?.toDate ? (staff as any).openingBalanceDate.toDate() : undefined,
       salaryPeriod: staff.salaryPeriod || "Monthly",
-      groupId: staff.groupId || "",
+      groupId: normalizeStaffEditGroupId(staff.groupId),
+      openingBalanceNarration: staff.openingBalanceNarration ?? "",
     },
   });
 
@@ -118,84 +142,179 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         openingBalance: staff.openingBalance || 0,
         openingBalanceDate: finalDate,
         salaryPeriod: staff.salaryPeriod || "Monthly",
-        groupId: staff.groupId || "",
-      });
+      groupId: normalizeStaffEditGroupId(staff.groupId),
+        openingBalanceNarration: staff.openingBalanceNarration ?? "",
+    });
       setFile(staff.fileUrl || null);
+      setDocSlots(staff.documentFileUrls || []);
     }
   }, [dialogOpen, staff, form]);
   
   useEffect(() => {
     if (!dialogOpen || !companyId) return;
-    
+    if (isLocalOnlyMode()) {
+      setGroups((processedStaffGroups as StaffGroup[]) || []);
+      return;
+    }
     const q = query(collection(firestore, `companies/${companyId}/staff_groups`));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-        setGroups(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StaffGroup)));
-    }, (error) => {
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        setGroups(querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as StaffGroup)));
+      },
+      (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
-    });
-    
+        const fb = (processedStaffGroupsRef.current || []) as StaffGroup[];
+        if (fb.length > 0) setGroups(fb);
+      }
+    );
     return () => unsubscribe();
-  }, [dialogOpen, companyId, toast]);
+  }, [dialogOpen, companyId, processedStaffGroups]);
 
   async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    
-    setDialogOpen(false);
-    
+
     const toastId = sonnerToast.loading("Updating staff member...");
+    const isLocalGuestUser = user?.uid === "local_guest_user";
+    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
     try {
-      let fileUrl = typeof file === 'string' ? file : null;
-      if (file instanceof File && companyId && canAddAvatar) {
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: file.size, storageBytes: file.size });
+      let fileUrl: string | null = typeof file === "string" ? file : null;
+      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
+      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
+      const totalBytes =
+        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+      if (totalBytes > 0 && companyId) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+          company?.storageOption
+        );
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           return;
         }
-        const res = await uploadFile(
-          { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
-          companyId,
-          company?.name,
-          "avatar",
-          undefined,
-          undefined,
-          undefined,
-          new Date()
-        );
-        if (res.success && res.url) {
-          fileUrl = res.url;
-          await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-        }
       }
-      
+
+      if (file instanceof File && companyId && canAddAvatar) {
+        const st = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "staff",
+          entityId: staff.id,
+          avatarFile: file,
+          documentFiles: [],
+        });
+        if (st.fileUrl) fileUrl = st.fileUrl;
+      }
+
+      let documentFileUrls = [...keptDocUrls];
+      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
+        const st2 = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "staff",
+          entityId: staff.id,
+          avatarFile: null,
+          documentFiles: newDocFiles,
+        });
+        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
+      }
+
       const oldOpeningBalance = staff.openingBalance || 0;
       const newOpeningBalance = values.openingBalance || 0;
-      
-      const staffRef = doc(firestore, `companies/${companyId}/staff`, staff.id);
-      await updateDoc(staffRef, { 
-          ...values,
+      const narrationClean = values.openingBalanceNarration?.trim() || null;
+
+      if (isLocalOnlyMode()) {
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "staff", staff.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: staff.id,
+          companyId,
+          ownerId: user?.uid ?? "local_guest_user",
+          balance: staff.balance,
+          debit: staff.debit,
+          credit: staff.credit,
+          isDeleted: false,
+        };
+        const payload: Record<string, unknown> = {
+          ...base,
+          id: staff.id,
+          name: values.name,
+          email: values.email ?? "",
+          phone: values.phone ?? "",
+          address: values.address ?? "",
+          salary: values.salary,
+          salaryPeriod: values.salaryPeriod,
           openingBalance: newOpeningBalance,
-          openingBalanceDate: values.openingBalanceDate || null,
-          fileUrl, 
-          groupId: values.groupId || null
+          openingBalanceDate: values.openingBalanceDate ?? null,
+          openingBalanceNarration: narrationClean,
+          groupId: values.groupId || null,
+          companyId,
+          fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        };
+        await upsertCompanyDocInBrowserDb(companyId, "staff", staff.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "staff", "update", staff.id, payload);
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
+          id: toastId,
+          description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
+        });
+        setDialogOpen(false);
+        onStaffUpdated({
+          id: staff.id,
+          ...values,
+          fileUrl: fileUrl || "",
+          documentFileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+        });
+        return;
+      }
+
+      if (totalBytes > 0 && companyId) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalBytes,
+          storageBytes: totalBytes,
+        });
+      }
+
+      const staffRef = doc(firestore, `companies/${companyId}/staff`, staff.id);
+      await updateDoc(staffRef, {
+        name: values.name,
+        email: values.email ?? "",
+        phone: values.phone ?? "",
+        address: values.address ?? "",
+        salary: values.salary,
+        salaryPeriod: values.salaryPeriod,
+        openingBalance: newOpeningBalance,
+        openingBalanceDate: values.openingBalanceDate || null,
+        openingBalanceNarration: narrationClean,
+        fileUrl,
+        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        groupId: values.groupId || null,
       });
 
-      // Automatically balance opening balance change with Capital Account
       if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, 'staff', staff.id, oldOpeningBalance, newOpeningBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "staff", staff.id, oldOpeningBalance, newOpeningBalance);
       }
 
       sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      onStaffUpdated({ id: staff.id, ...values, fileUrl: fileUrl || '' });
-      triggerSync();
-
+      setDialogOpen(false);
+      onStaffUpdated({
+        id: staff.id,
+        ...values,
+        fileUrl: fileUrl || "",
+        documentFileUrls,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+      });
     } catch (error) {
       console.error("Error updating staff:", error);
-      sonnerToast.error("Error Updating Staff", { id: toastId, description: "An error occurred. Please try again." });
+      sonnerToast.error("Error Updating Staff", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
+      });
     }
   }
 
@@ -213,8 +332,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/staff`, staff.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
+            deletedAt: serverTimestamp()
         });
         toast({ title: "Staff Member Moved to Bin", description: `"${staff.name}" has been moved.`});
         onStaffDeleted();
@@ -237,6 +355,25 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     setIsCreateGroupOpen(false);
   };
 
+  const removeAvatar = () => {
+    setFile(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const handleDocsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
+    }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocSlots((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeDocAt = (idx: number) => setDocSlots((p) => p.filter((_, i) => i !== idx));
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     if (!canAddAvatar) {
@@ -245,6 +382,11 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       return;
     }
     const inputFile = e.target.files[0];
+    if (!isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
 
     if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
@@ -278,6 +420,19 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     }
   };
 
+  // CreateStaffForm ke saath: synthetic Ungrouped; `ungrouped_staff` doc list se isAutoUngrouped filter se hat jata hai
+  const staffGroupOptions = useMemo(
+    () => [
+      { value: getUngroupedGroupId("staff"), label: "Ungrouped" },
+      ...groups
+        .filter(
+          (g) =>
+            !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true
+        )
+        .map((g) => ({ value: g.id, label: g.name })),
+    ],
+    [groups]
+  );
 
   return (
     <>
@@ -320,9 +475,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                       <FormControl>
                         <div className="w-full">
                            <Combobox
-                              options={groups
-                                .filter(g => !(g as any).isSystemReserved)
-                                .map(g => ({ value: g.id, label: g.name }))}
+                              options={staffGroupOptions}
                               value={field.value}
                               onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -469,39 +622,28 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                       )}
                     />
                 </div>
-                 <FormItem>
-                    <FormLabel>Avatar/File (Optional)</FormLabel>
-                    {!canAddAvatar ? (
-                      <p className="text-xs text-muted-foreground">
-                        Upgrade plan to add or change avatar/file.{" "}
-                        <Link href="/billing" className="text-primary underline font-medium hover:no-underline">Click here to upgrade</Link>
-                      </p>
-                    ) : (
-                    <div className="flex items-center gap-4">
-                        {file && (
-                        <FilePreview file={file} onRemove={() => setFile(null)} />
-                        )}
-                        {!file && (
-                        <FormControl>
-                            <div 
-                                className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                type="file" 
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                                />
-                            </div>
-                        </FormControl>
-                        )}
-                    </div>
-                    )}
-                </FormItem>
+                <EntityProfilePhotoBlock
+                  file={file}
+                  onPickClick={() => avatarInputRef.current?.click()}
+                  fileInputRef={avatarInputRef}
+                  onAvatarChange={handleFileChange}
+                  onRemoveAvatar={removeAvatar}
+                  canAddAvatar={canAddAvatar}
+                />
+                <EntityDocumentsBlock
+                  docSlots={docSlots}
+                  onRemoveDoc={removeDocAt}
+                  onAddClick={() => docsInputRef.current?.click()}
+                  docsInputRef={docsInputRef}
+                  onDocsChange={handleDocsChange}
+                  canAttachDocuments={canAttachDocuments}
+                  entityStatementLabel="staff"
+                />
+                <EntityOpeningBalanceNarrationField
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  detailLabel="staff"
+                />
               </div>
 
               <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">

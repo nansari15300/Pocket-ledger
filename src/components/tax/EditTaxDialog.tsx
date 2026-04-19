@@ -2,12 +2,21 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
+import { Loader2, Trash2, CalendarIcon } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { useAuth } from "@/hooks/useAuth";
+import usePermissions from "@/hooks/usePermissions";
+import {
+  EntityProfilePhotoBlock,
+  EntityDocumentsBlock,
+  EntityOpeningBalanceNarrationField,
+} from "@/components/common/EntityProfileDocumentsNarrationFields";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -15,9 +24,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { firestore, storage } from "@/lib/firebase";
+import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
-import { useAuth } from "@/hooks/useAuth";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Combobox } from "../ui/combobox";
@@ -29,12 +37,14 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
-import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
-import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { isSystemParentGroup } from "@/lib/system-groups";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { useVouchers } from "@/hooks/useVouchers";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Account name must be at least 2 characters." }),
@@ -42,6 +52,7 @@ const formSchema = z.object({
   openingBalance: z.coerce.number(),
   openingBalanceDate: z.date().optional(),
   groupId: z.string().optional(),
+  openingBalanceNarration: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -60,14 +71,21 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const [isOpen, setIsOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
-  const { user } = useAuth(); // soft-delete par recycle bin "Deleted by" ke liye uid
-  const { companyId, triggerSync } = useCompany();
+  const { companyId, company } = useCompany();
+  const { user } = useAuth();
+  const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
+  const { processedTaxGroups } = useVouchers();
+  const processedTaxGroupsRef = useRef(processedTaxGroups);
+  processedTaxGroupsRef.current = processedTaxGroups;
   const { dateSystem } = useDate();
   const [groups, setGroups] = useState<TaxGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | string | null>(tax.fileUrl || null);
+  const [docSlots, setDocSlots] = useState<Array<File | string>>(() => tax.documentFileUrls || []);
 
 
   const form = useForm<FormValues>({
@@ -78,6 +96,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       openingBalance: tax.openingBalance || 0,
       openingBalanceDate: (tax as any).openingBalanceDate?.toDate ? (tax as any).openingBalanceDate.toDate() : undefined,
       groupId: tax.groupId || "",
+      openingBalanceNarration: tax.openingBalanceNarration ?? "",
     },
   });
 
@@ -100,13 +119,20 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         openingBalance: tax.openingBalance || 0,
         openingBalanceDate: finalDate,
         groupId: tax.groupId || "",
+        openingBalanceNarration: tax.openingBalanceNarration ?? "",
       });
       setFile(tax.fileUrl || null);
+      setDocSlots(tax.documentFileUrls || []);
     }
   }, [isOpen, tax, form]);
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
+    if (isLocalOnlyMode()) {
+      // Local mode me group list local vouchers hook se hydrate karo; Firestore listener avoid karo.
+      setGroups((processedTaxGroups as TaxGroup[]) || []);
+      return;
+    }
     
     const q = query(collection(firestore, `companies/${companyId}/tax_groups`));
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
@@ -114,55 +140,126 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         setGroups(fetchedGroups);
     }, (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
+        const fb = (processedTaxGroupsRef.current || []) as TaxGroup[];
+        if (fb.length > 0) setGroups(fb);
     });
     
     return () => unsubscribe();
-  }, [isOpen, companyId, toast]);
+  }, [isOpen, companyId, toast, processedTaxGroups]);
 
   async function onSubmit(values: FormValues): Promise<void> {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    
-    setIsOpen(false);
-    
+
     const toastId = sonnerToast.loading("Updating tax...");
+    const isLocalGuestUser = user?.uid === "local_guest_user";
+    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
     try {
-      let fileUrl = typeof file === 'string' ? file : null;
-      if (file instanceof File) {
-        const storageRef = ref(storage, `tax-files/${companyId}/${Date.now()}_${file.name}`);
-        const snapshot = await uploadBytes(storageRef, file);
-        fileUrl = await getDownloadURL(snapshot.ref);
+      let fileUrl: string | null = typeof file === "string" ? file : null;
+      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
+      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
+      const totalBytes =
+        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+      if (totalBytes > 0 && companyId) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          return;
+        }
       }
-      
+
+      if (file instanceof File && companyId && canAddAvatar) {
+        const st = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "taxes",
+          entityId: tax.id,
+          avatarFile: file,
+          documentFiles: [],
+        });
+        if (st.fileUrl) fileUrl = st.fileUrl;
+      }
+
+      let documentFileUrls = [...keptDocUrls];
+      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
+        const st2 = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "taxes",
+          entityId: tax.id,
+          avatarFile: null,
+          documentFiles: newDocFiles,
+        });
+        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
+      }
+
       const oldOpeningBalance = tax.openingBalance || 0;
       const newOpeningBalance = values.openingBalance || 0;
-      
-      const taxRef = doc(firestore, `companies/${companyId}/taxes`, tax.id);
-      await updateDoc(taxRef, { 
+      const narrationClean = values.openingBalanceNarration?.trim() || null;
+      const updatePayload = {
         name: values.name,
         rate: values.rate,
         openingBalance: newOpeningBalance,
         openingBalanceDate: values.openingBalanceDate || null,
         groupId: values.groupId || null,
-        fileUrl: fileUrl,
-      });
+        fileUrl,
+        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        openingBalanceNarration: narrationClean,
+      };
 
-      // Automatically balance opening balance change with Capital Account
+      if (isLocalOnlyMode()) {
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "taxes", tax.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: tax.id,
+          companyId,
+          ownerId: user?.uid ?? "local_guest_user",
+          balance: tax.balance,
+          debit: tax.debit,
+          credit: tax.credit,
+          isDeleted: false,
+        };
+        const payload: Record<string, unknown> = { ...base, ...updatePayload, id: tax.id, companyId };
+        await upsertCompanyDocInBrowserDb(companyId, "taxes", tax.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "taxes", "update", tax.id, payload);
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
+          id: toastId,
+          description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
+        });
+        setIsOpen(false);
+        onTaxUpdated();
+        return;
+      }
+
+      if (totalBytes > 0 && companyId) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalBytes,
+          storageBytes: totalBytes,
+        });
+      }
+
+      const taxRef = doc(firestore, `companies/${companyId}/taxes`, tax.id);
+      await updateDoc(taxRef, updatePayload);
+
       if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, 'taxes', tax.id, oldOpeningBalance, newOpeningBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "taxes", tax.id, oldOpeningBalance, newOpeningBalance);
       }
 
       sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
+      setIsOpen(false);
       onTaxUpdated();
-      triggerSync();
-
     } catch (error) {
       console.error("Error updating tax:", error);
-      sonnerToast.error("Error Updating Tax", { id: toastId, description: "An error occurred. Please try again." });
+      sonnerToast.error("Error Updating Tax", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
+      });
     }
   }
 
@@ -178,11 +275,23 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     }
     setIsLoading(true);
     try {
-        await updateDoc(doc(firestore, `companies/${companyId}/taxes`, tax.id), {
+        if (isLocalOnlyMode()) {
+          // Local mode me delete ko recycle-bin flag ke saath local DB + outbox me queue karo.
+          const localDoc = {
+            ...(tax as any),
             isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
-        });
+            deletedAt: Date.now(),
+            id: tax.id,
+            companyId,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "taxes", tax.id, localDoc);
+          await enqueueCompanyDocOutbox(companyId, "taxes", "update", tax.id, localDoc);
+        } else {
+          await updateDoc(doc(firestore, `companies/${companyId}/taxes`, tax.id), {
+              isDeleted: true,
+              deletedAt: serverTimestamp()
+          });
+        }
         toast({ title: "Tax Moved to Recycle Bin", description: `"${tax.name}" has been moved to the recycle bin.`});
         onTaxDeleted(tax.id);
         setIsOpen(false);
@@ -208,50 +317,73 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     const userGroups = (groups || []).filter(
       (g) => !(g as any).isSystemReserved && !isSystemParentGroup("tax_groups", g.id)
     );
-    return userGroups.map((g) => ({ value: g.id, label: g.name }));
+    const options = userGroups.map((g) => ({ value: g.id, label: g.name }));
+    const ungroupedId = getUngroupedGroupId("tax");
+    if (!options.some((opt) => opt.value === ungroupedId)) {
+      // Ensure local/system ungrouped bucket is always selectable in edit form.
+      options.unshift({ value: ungroupedId, label: "Ungrouped" });
+    }
+    return options;
   }, [groups]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    const inputFile = e.target.files[0];
+  const removeAvatar = () => {
+    setFile(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
 
+  const handleDocsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
+    }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocSlots((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeDocAt = (idx: number) => setDocSlots((p) => p.filter((_, i) => i !== idx));
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow a profile photo." });
+      return;
+    }
+    const inputFile = e.target.files[0];
+    if (!inputFile || !isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
     if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
         variant: "destructive",
         title: "File too large",
         description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
+      e.target.value = "";
       return;
     }
-
-    if (inputFile) {
-      try {
-        const compressedFile = await compressFile(inputFile);
-         if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({
-              variant: "destructive",
-              title: "File Too Large After Compression",
-              description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-            });
-            return;
-        }
-        setFile(compressedFile);
-      } catch (err) {
-        console.error("File compression error:", err);
+    try {
+      const compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         toast({
-            variant: "destructive",
-            title: "File Error",
-            description: "Could not process the file.",
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
         });
+        e.target.value = "";
+        return;
       }
+      setFile(compressedFile);
+    } catch (err) {
+      console.error("File compression error:", err);
+      toast({ variant: "destructive", title: "File Error", description: "Could not process the file." });
     }
-  };
-  
-  const removeFile = () => {
-    setFile(null);
-    if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-    }
+    e.target.value = "";
   }
 
 
@@ -391,32 +523,30 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     />
                 </div>
               </div>
-               <FormItem>
-                    <FormLabel>Icon/File</FormLabel>
-                    <div className="flex items-center gap-4">
-                        {file && (
-                        <FilePreview file={file} onRemove={removeFile} />
-                        )}
-                        {!file && (
-                        <FormControl>
-                            <div 
-                                className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                type="file" 
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                                />
-                            </div>
-                        </FormControl>
-                        )}
-                    </div>
-                </FormItem>
+               <EntityProfilePhotoBlock
+                  file={file}
+                  onPickClick={() => avatarInputRef.current?.click()}
+                  fileInputRef={avatarInputRef}
+                  onAvatarChange={handleAvatarChange}
+                  onRemoveAvatar={removeAvatar}
+                  canAddAvatar={canAddAvatar}
+                  inputId="edit-tax-avatar"
+                />
+                <EntityDocumentsBlock
+                  docSlots={docSlots}
+                  onRemoveDoc={removeDocAt}
+                  onAddClick={() => docsInputRef.current?.click()}
+                  docsInputRef={docsInputRef}
+                  onDocsChange={handleDocsChange}
+                  canAttachDocuments={canAttachDocuments}
+                  entityStatementLabel="tax"
+                  inputId="edit-tax-docs"
+                />
+                <EntityOpeningBalanceNarrationField
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  detailLabel="tax"
+                />
 
               <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
                 <DialogClose asChild>

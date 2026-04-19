@@ -5,9 +5,10 @@
 import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
-import { getFiscalMergePartitionDateFromCompany } from "@/lib/fiscalPartitionRows";
 import type { Party, Group } from "@/components/party/types";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -58,7 +59,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
-import usePermissions from "@/hooks/usePermissions";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -82,7 +82,6 @@ import { LinkAdvancesToVoucherDialog } from "@/components/vouchers/LinkAdvancesT
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "@/components/vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useShowNotes } from "@/components/vouchers/transactionColumnVisibility";
 import {
@@ -116,6 +115,8 @@ import AnimatedNumber from "@/components/ui/AnimatedNumber";
 import { NotificationBell } from "../vouchers/NotificationBell";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
+import { getLocalAuthUser } from "@/lib/localApiClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -184,6 +185,10 @@ export function PartyDetails({
   userNames,
   onBack,
   context,
+  /** Reports (e.g. Anusuchi 13): mobile header "Party Details" ki jagah yeh dikhao */
+  mobileDetailHeading,
+  /** Jab PartyDetails kisi report ke andar ho: dropdown se party badle bina `/party` par na jao */
+  onEmbeddedPartyChange,
 }: {
   party: Party & { saleTotal?: number; purchaseTotal?: number };
   allParties?: Party[];
@@ -198,9 +203,10 @@ export function PartyDetails({
   userNames?: Record<string, string>;
   onBack?: () => void;
   context?: string;
+  mobileDetailHeading?: string;
+  onEmbeddedPartyChange?: (partyId: string) => void;
 }) {
   const { company, companyId } = useCompany();
-  const { can } = usePermissions();
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
@@ -217,6 +223,9 @@ export function PartyDetails({
     return processedParties.find(p => p.id === initialParty.id) || initialParty;
   }, [processedParties, initialParty]);
 
+  /** Mobile AddVoucher — inline `{ partyId }` har render = naya object → dialog `initialVoucherData` + sale form date reset; stable deps */
+  const addVoucherDefaultPartyOnly = useMemo(() => ({ partyId: party.id }), [party.id]);
+
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
     vouchers.forEach((v) => {
@@ -230,21 +239,10 @@ export function PartyDetails({
     return Array.from(dates).map((d) => new Date(d));
   }, [vouchers, party.id]);
 
-  const pendingApprovalCount = useMemo(() => {
-    if (!party?.id || !vouchers?.length) return 0;
-    return vouchers.filter((v: any) => v.partyId === party.id && v.isApproved !== true).length;
-  }, [vouchers, party?.id]);
-  const showApproveNotification =
-    can("approve_transactions") &&
-    company?.notificationSettings?.approve?.on !== false &&
-    company?.notificationSettings?.approve?.onEntity !== false &&
-    pendingApprovalCount > 0;
-
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
     if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
     try {
@@ -374,6 +372,7 @@ export function PartyDetails({
   // Maintain local userNames state that merges with prop
   const [localFetchedUserNames, setLocalFetchedUserNames] = useState<Record<string, string>>({});
   const { user, customUser } = useAuth();
+  const isLocalMode = isLocalOnlyMode();
 
   // Always seed current user's display name so own transactions never fall back to raw UID.
   useEffect(() => {
@@ -382,6 +381,27 @@ export function PartyDetails({
     if (!me) return;
     setLocalFetchedUserNames((prev) => (prev[user.uid] === me ? prev : { ...prev, [user.uid]: me }));
   }, [user?.uid, user?.displayName, user?.email, customUser?.displayName]);
+
+  useEffect(() => {
+    if (!isLocalMode || !companyId) return;
+    const localUser = getLocalAuthUser(companyId);
+    const localDisplayName = (
+      localUser?.displayName ||
+      localUser?.username ||
+      ((company as any)?.adminUsername as string) ||
+      "Admin"
+    ).trim();
+    if (!localDisplayName) return;
+    setLocalFetchedUserNames((prev) => {
+      // Keep a stable local-id map so transaction rows resolve local actor names.
+      const next = { ...prev };
+      next["local"] = localDisplayName;
+      next["local_guest_user"] = localDisplayName;
+      if (localUser?.id) next[String(localUser.id)] = localDisplayName;
+      if (localUser?.username) next[String(localUser.username)] = localDisplayName;
+      return next;
+    });
+  }, [isLocalMode, companyId, company]);
   
   // Merge prop userNames with locally fetched userNames
   const mergedUserNames = useMemo(() => {
@@ -393,6 +413,7 @@ export function PartyDetails({
   // Fetch missing user names directly from Firestore and store in local state
   useEffect(() => {
     if (!processedTransactions || processedTransactions.length === 0) return;
+    if (isLocalMode) return;
     
     const uids = new Set(processedTransactions.map((t: any) => t.userId).filter(Boolean) as string[]);
     
@@ -461,7 +482,7 @@ export function PartyDetails({
         setLocalFetchedUserNames(prev => ({ ...prev, ...newUserNames }));
       }
     });
-  }, [processedTransactions, userNames, localFetchedUserNames]);
+  }, [processedTransactions, userNames, localFetchedUserNames, isLocalMode]);
 
   const handleEditVoucher = (voucher: any) => {
     openingModalRef.current = true;
@@ -514,8 +535,7 @@ export function PartyDetails({
 
   // Sort state for footer dropdown (Statement / Bill wise); applied after status filter, before search/pagination
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -638,8 +658,6 @@ export function PartyDetails({
         showDrCr: company.showDrCr,
         showCurrencySymbol: company.showCurrencySymbol,
         logoUrl: company.logoUrl,
-        country: company.country,
-        fiscalYearStart: company.fiscalYearStart,
       },
       title: getPrintTitle(variant),
       context: "party",
@@ -648,6 +666,8 @@ export function PartyDetails({
       dateRangeText: dateRangeText || "All Time",
       vouchersCount: transactionsToPrint.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (party as any).openingBalanceDate,
+      openingBalanceNarration: party.openingBalanceNarration ?? null,
       transactions: transactionsToPrint.map((t: any) => ({ ...t, dueDate: t.dueDate ?? t.due_date })),
       showNarration: showNarration,
       includeNotes: showNotes,
@@ -655,8 +675,6 @@ export function PartyDetails({
       userNames: mergedUserNames,
       journalAccountNames: journalAccountNames,
       billWise: variant === "bill_wise",
-      fiscalMergePartitionAt: getFiscalMergePartitionDateFromCompany(company) ?? undefined,
-      fiscalPartitionLabel: company.fiscalPartitionLabel || undefined,
       ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
     }, true);
   };
@@ -728,7 +746,7 @@ export function PartyDetails({
                 <ArrowLeft className="h-4 w-4" />
               </Button>
             )}
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">Party Details</h1>
+            <h1 className="text-base font-bold truncate flex-1 min-w-0">{mobileDetailHeading ?? "Party Details"}</h1>
             <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
               Showing {mobileTransactions.length} of {searchFilteredTransactions.length} voucher(s)
             </span>
@@ -762,7 +780,10 @@ export function PartyDetails({
                     options={partyDropdownOptions}
                     value={party.id}
                     onChange={(value) => {
-                      if (value && value !== party.id) router.push(`/party?selected=${value}`);
+                      if (!value || value === party.id) return;
+                      // Report-embedded list: parent hi party state rakhta hai (Anusuchi 13 filtered subset)
+                      if (onEmbeddedPartyChange) onEmbeddedPartyChange(value);
+                      else router.push(`/party?selected=${value}`);
                     }}
                     placeholder="Select party"
                   />
@@ -800,6 +821,7 @@ export function PartyDetails({
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
             <div className="pb-24">
+            {/* Unapproved (`isApproved` !== true): pink row tint — TransactionsTable default highlightPendingApproval */}
             <TransactionsTable
               transactions={mobileTransactions}
               context="party"
@@ -807,9 +829,11 @@ export function PartyDetails({
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={party.openingBalanceNarration}
+              openingBalanceAttachmentUrls={party.documentFileUrls}
+              openingBalanceDate={(party as any).openingBalanceDate}
               openingBalanceActions={undefined}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={mergedUserNames}
@@ -867,7 +891,7 @@ export function PartyDetails({
               }
             }}
             defaultTab={mobileFooterDialogOpen || "sale"}
-            defaultVoucherData={{ partyId: party.id }}
+            defaultVoucherData={addVoucherDefaultPartyOnly}
           />
           <Drawer
             open={isCalendarOpen}
@@ -1042,12 +1066,23 @@ export function PartyDetails({
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarImage src={party.fileUrl} alt={party.name} />
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {(party as any).isSystemAccount ? <FileDigit className="h-6 w-6"/> : getInitials(party.name)}
-                </AvatarFallback>
-              </Avatar>
+              <EntityFileAttachmentHover fileUrl={party.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+                {(party as any).isSystemAccount ? (
+                  <Avatar className="h-12 w-12 text-lg flex-shrink-0">
+                    <AvatarImage src={party.fileUrl} alt={party.name} />
+                    <AvatarFallback className="bg-muted text-muted-foreground">
+                      <FileDigit className="h-6 w-6" />
+                    </AvatarFallback>
+                  </Avatar>
+                ) : (
+                  <ResolvedEntityAvatar
+                    className="h-12 w-12 text-lg flex-shrink-0"
+                    src={party.fileUrl}
+                    alt={party.name}
+                    fallbackText={getInitials(party.name)}
+                  />
+                )}
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{party.name}</h2>
                 {party.id !== 'all' && !(party as any).isSystemAccount && (
@@ -1065,11 +1100,6 @@ export function PartyDetails({
                 <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
                   {formatCurrency(closingBalance, { showDrCr: true })}
                 </div>
-                {showApproveNotification && !isMobile && (
-                  <span className="inline-flex items-center justify-center h-10 px-4 rounded-md border border-pink-200 dark:border-pink-800 text-sm font-medium bg-pink-100 text-pink-800 dark:bg-pink-950/50 dark:text-pink-200 flex-shrink-0 min-w-[8rem]">
-                    {pendingApprovalCount} pending approval
-                  </span>
-                )}
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
@@ -1183,6 +1213,7 @@ export function PartyDetails({
             </div>
           </div>
         </div>
+        {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
         <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
             <TransactionsTable
@@ -1192,6 +1223,9 @@ export function PartyDetails({
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={party.openingBalanceNarration}
+              openingBalanceAttachmentUrls={party.documentFileUrls}
+              openingBalanceDate={(party as any).openingBalanceDate}
               openingBalanceActions={
                 party.id !== "all" && !(party as any).isSystemAccount ? (
                   <EditPartyDialog
@@ -1207,7 +1241,6 @@ export function PartyDetails({
                 ) : null
               }
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               userNames={mergedUserNames}
@@ -1245,11 +1278,6 @@ export function PartyDetails({
                 <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked: boolean) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-party"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

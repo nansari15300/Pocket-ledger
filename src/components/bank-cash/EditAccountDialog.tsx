@@ -2,12 +2,13 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Trash2, CalendarIcon, Upload, FileText, Crown } from "lucide-react";
+import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -15,8 +16,11 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { firestore, storage } from "@/lib/firebase";
+import { firestore } from "@/lib/firebase";
+import Link from "next/link";
 import { useCompany } from "@/hooks/useCompany";
+import { useVouchers } from "@/hooks/useVouchers";
+import { isLocalOnlyMode } from "@/lib/localMode";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
@@ -34,12 +38,23 @@ import { cnStaticMobileFullscreenDialog, IS_STATIC_APK } from "@/lib/staticMobil
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
+import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
+
+/** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
+function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
+  const u = getUngroupedGroupId("bank");
+  if (!groupId || groupId === u) return u;
+  return groupId;
+}
 
 const MAX_FILE_SIZE_MB = 0.5;
 
@@ -52,6 +67,7 @@ const formSchema = z.object({
   accountNumber: z.string().optional(),
   ifscCode: z.string().optional(),
   groupId: z.string().optional(),
+  openingBalanceNarration: z.string().optional(),
   isSpecial: z.boolean(),
   useFor: z.object({
     in: z.array(z.string()),
@@ -73,7 +89,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 }) {
   const { toast } = useToast();
   const { user } = useAuth();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
+  const { processedAccountGroups } = useVouchers();
+  const processedAccountGroupsRef = useRef(processedAccountGroups);
+  processedAccountGroupsRef.current = processedAccountGroups;
   const { dateSystem } = useDate();
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = controlledIsOpen ?? internalIsOpen;
@@ -88,9 +107,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [groups, setGroups] = useState<AccountGroup[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  /** Profile — image / saved URL / local: */
   const [file, setFile] = useState<File | string | null>(account.fileUrl || null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { can } = usePermissions();
+  const [docSlots, setDocSlots] = useState<Array<File | string>>(() => account.documentFileUrls || []);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const docsInputRef = useRef<HTMLInputElement>(null);
+  const { can, canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const isMobile = useIsMobile();
   const staticMobileFullscreen = IS_STATIC_APK && isMobile;
@@ -105,12 +128,13 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         bankName: account.bankName || "",
         accountNumber: account.accountNumber || "",
         ifscCode: account.ifscCode || "",
-        groupId: account.groupId || "",
+        groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
         useFor: account.useFor || { 
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
         },
+        openingBalanceNarration: account.openingBalanceNarration ?? "",
     },
   });
   
@@ -158,19 +182,28 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    
+    // Static/local: voucher hook cache — Firestore listener se pehle (CreateBankAccountDialog jaisa offline-safe)
+    if (isLocalOnlyMode()) {
+      setGroups((processedAccountGroups as AccountGroup[]) || []);
+      return;
+    }
     const q = query(collection(firestore, `companies/${companyId}/account_groups`));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-        const fetchedGroups = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AccountGroup));
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        const fetchedGroups = querySnapshot.docs.map(
+          (doc) => ({ id: doc.id, ...doc.data() } as AccountGroup)
+        );
         setGroups(fetchedGroups);
-    }, (error) => {
+      },
+      (error) => {
         console.error("Error fetching groups:", error);
-        toast({ variant: "destructive", title: "Could not load groups" });
-    });
-    
+        const fb = (processedAccountGroupsRef.current || []) as AccountGroup[];
+        if (fb.length > 0) setGroups(fb);
+      }
+    );
     return () => unsubscribe();
-  }, [isOpen, companyId, toast]);
-
+  }, [isOpen, companyId, processedAccountGroups]);
 
   useEffect(() => {
     if (isOpen) {
@@ -194,14 +227,16 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         bankName: account.bankName || "",
         accountNumber: account.accountNumber || "",
         ifscCode: account.ifscCode || "",
-        groupId: account.groupId || "",
+        groupId: normalizeBankAccountEditGroupId(account.groupId),
         isSpecial: account.isSpecial || false,
         useFor: account.useFor || { 
             in: company?.ownerEmail ? [company.ownerEmail] : [], 
             out: company?.ownerEmail ? [company.ownerEmail] : [] 
         },
+        openingBalanceNarration: account.openingBalanceNarration ?? "",
       });
       setFile(account.fileUrl || null);
+      setDocSlots(account.documentFileUrls || []);
     }
   }, [isOpen, account, form, company]); // added company dep
 
@@ -210,50 +245,143 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    
-    setIsOpen(false);
-    
+
     const toastId = sonnerToast.loading("Updating account...");
+    const isLocalGuestUser = user?.uid === "local_guest_user";
+    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
     try {
-      let fileUrl = typeof file === 'string' ? file : null;
-      if (file instanceof File) {
-        const storageRef = ref(storage, `account-files/${companyId}/${Date.now()}_${file.name}`);
-        const snapshot = await uploadBytes(storageRef, file);
-        fileUrl = await getDownloadURL(snapshot.ref);
+      let fileUrl: string | null = typeof file === "string" ? file : null;
+      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
+      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
+      const totalBytes =
+        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+      if (totalBytes > 0 && companyId) {
+        const limitCheck = await checkStorageLimit(
+          companyId,
+          company?.planId,
+          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+          company?.storageOption
+        );
+        if (!limitCheck.allowed) {
+          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          return;
+        }
       }
-      
+
+      if (file instanceof File && companyId && canAddAvatar) {
+        const st = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "bank_accounts",
+          entityId: account.id,
+          avatarFile: file,
+          documentFiles: [],
+        });
+        if (st.fileUrl) fileUrl = st.fileUrl;
+      }
+
+      let documentFileUrls = [...keptDocUrls];
+      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
+        const st2 = await stageEntityAvatarAndDocuments({
+          companyId,
+          collectionSeg: "bank_accounts",
+          entityId: account.id,
+          avatarFile: null,
+          documentFiles: newDocFiles,
+        });
+        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
+      }
+
       const oldOpeningBalance = account.openingBalance || 0;
       const newOpeningBalance = values.openingBalance || 0;
-      
-      const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, account.id);
-      await updateDoc(accountRef, { 
+      const narrationClean = values.openingBalanceNarration?.trim() || null;
+
+      /** Firestore `undefined` field skip / local mirror — explicit payload (EditExpenseAccountDialog jaisa) */
+      const updatePayload: Record<string, unknown> = {
+        accountName: values.accountName,
+        accountType: values.accountType,
+        bankName: values.bankName ?? "",
+        accountNumber: values.accountNumber ?? "",
+        ifscCode: values.ifscCode ?? "",
+        openingBalance: newOpeningBalance,
+        openingBalanceDate: values.openingBalanceDate ?? null,
+        openingBalanceNarration: narrationClean,
+        groupId: values.groupId || null,
+        isSpecial: values.isSpecial,
+        useFor: values.useFor ?? { in: [], out: [] },
+        fileUrl,
+        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+      };
+
+      // Static / local company: IndexedDB + outbox — `updateDoc` network par fail hota tha
+      if (isLocalOnlyMode()) {
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "bank_accounts", account.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: account.id,
+          companyId,
+          balance: account.balance,
+          debit: account.debit,
+          credit: account.credit,
+          isDeleted: false,
+          ownerId: account.ownerId,
+        };
+        const payload: Record<string, unknown> = { ...base, ...updatePayload, id: account.id, companyId };
+        await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", account.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", account.id, payload);
+        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
+          id: toastId,
+          description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
+        });
+        setIsOpen(false);
+        onAccountUpdated({
+          id: account.id,
           ...values,
-          openingBalance: newOpeningBalance,
-          openingBalanceDate: values.openingBalanceDate || null,
-          fileUrl, 
-          groupId: values.groupId || null
-      });
+          fileUrl: fileUrl || "",
+          documentFileUrls,
+          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+          useFor: {
+            in: values.useFor?.in || [],
+            out: values.useFor?.out || [],
+          } as { in: string[]; out: string[] },
+        });
+        return;
+      }
+
+      if (totalBytes > 0 && companyId) {
+        await incrementCompanyStorage(companyId, {
+          attachmentsBytes: totalBytes,
+          storageBytes: totalBytes,
+        });
+      }
+
+      const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, account.id);
+      await updateDoc(accountRef, updatePayload);
 
       // Automatically balance opening balance change with Capital Account
       if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
         const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, 'bank_accounts', account.id, oldOpeningBalance, newOpeningBalance);
+        await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", account.id, oldOpeningBalance, newOpeningBalance);
       }
 
       sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
+      setIsOpen(false);
       onAccountUpdated({
         id: account.id,
         ...values,
-        fileUrl: fileUrl || '',
+        fileUrl: fileUrl || "",
+        documentFileUrls,
+        openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         useFor: {
           in: values.useFor?.in || [],
-          out: values.useFor?.out || []
+          out: values.useFor?.out || [],
         } as { in: string[]; out: string[] },
       });
-
     } catch (error) {
       console.error("Error updating account:", error);
-      sonnerToast.error("Error Updating Account", { id: toastId, description: "An error occurred. Please try again." });
+      sonnerToast.error("Error Updating Account", {
+        id: toastId,
+        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
+      });
     }
   }
 
@@ -272,8 +400,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     try {
         await updateDoc(doc(firestore, `companies/${companyId}/bank_accounts`, account.id), {
             isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || "",
+            deletedAt: serverTimestamp()
         });
         toast({ title: "Account Moved to Bin", description: `"${account.accountName}" has been moved to the recycle bin.`});
         onAccountDeleted(account.id);
@@ -291,9 +418,19 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     }
   }
   
-   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return;
+    if (!canAddAvatar) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow changing profile photo." });
+      return;
+    }
     const inputFile = e.target.files[0];
+    if (!isProfileAvatarImageFile(inputFile)) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Image only", description: "Profile photo: JPG, PNG, WebP, etc." });
+      return;
+    }
 
     if (inputFile.size > MAX_IMAGE_BYTES_BEFORE_COMPRESS) {
       toast({
@@ -301,39 +438,67 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         title: "File too large",
         description: `Please select a file smaller than ${MAX_IMAGE_MB_BEFORE_COMPRESS}MB to compress.`,
       });
+      e.target.value = "";
       return;
     }
 
-    if (inputFile) {
-      try {
-        const compressedFile = await compressFile(inputFile);
-         if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-            toast({
-              variant: "destructive",
-              title: "File Too Large After Compression",
-              description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
-            });
-            return;
-        }
-        setFile(compressedFile);
-      } catch (err) {
-        console.error("File compression error:", err);
+    try {
+      const compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         toast({
-            variant: "destructive",
-            title: "File Error",
-            description: "Could not process the file.",
+          variant: "destructive",
+          title: "File Too Large After Compression",
+          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
         });
+        e.target.value = "";
+        return;
       }
+      setFile(compressedFile);
+    } catch (err) {
+      console.error("File compression error:", err);
+      toast({
+        variant: "destructive",
+        title: "File Error",
+        description: "Could not process the file.",
+      });
     }
+    e.target.value = "";
   };
-  
-  const removeFile = () => {
-    setFile(null);
-    if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-    }
-  }
 
+  const handleDocsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    if (!canAttachDocuments) {
+      e.target.value = "";
+      toast({ variant: "destructive", title: "Not allowed", description: "Your plan does not allow documents." });
+      return;
+    }
+    const incoming = Array.from(e.target.files).filter(isProfileDocumentFile);
+    setDocSlots((prev) => [...prev, ...incoming].slice(0, 5));
+    e.target.value = "";
+  };
+
+  const removeAvatar = () => {
+    setFile(null);
+    if (avatarInputRef.current) avatarInputRef.current.value = "";
+  };
+
+  const removeDocAt = (idx: number) => {
+    setDocSlots((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // Create dialog ke saath: synthetic Ungrouped row; `ungrouped_account` doc list se isAutoUngrouped filter se nahi aata
+  const accountGroupOptions = useMemo(
+    () => [
+      { value: getUngroupedGroupId("bank"), label: "Ungrouped" },
+      ...groups
+        .filter(
+          (g) =>
+            !(g as any).isSystemReserved && (g as any).isAutoUngrouped !== true
+        )
+        .map((g) => ({ value: g.id, label: g.name })),
+    ],
+    [groups]
+  );
 
   return (
     <>
@@ -406,9 +571,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                       <FormControl>
                         <div className="w-full">
                            <Combobox
-                              options={groups
-                                .filter(g => !(g as any).isSystemReserved)
-                                .map(g => ({ value: g.id, label: g.name }))}
+                              options={accountGroupOptions}
                               value={field.value}
                               onChange={(val, newName) => {
                                   if (val === 'add-new') {
@@ -554,32 +717,91 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                       </Card>
                 )}
                 
-                 <FormItem>
-                    <FormLabel>Avatar/File</FormLabel>
-                    <div className="flex items-center gap-4">
-                        {file && (
-                        <FilePreview file={file} onRemove={() => setFile(null)} />
-                        )}
-                        {!file && (
+                <FormItem>
+                  <FormLabel>Profile photo</FormLabel>
+                  {!canAddAvatar ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade plan to change profile photo.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">
+                        Upgrade
+                      </Link>
+                    </p>
+                  ) : (
+                    <div className="flex items-center gap-4 flex-wrap">
+                      {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
+                      {!file ? (
                         <FormControl>
-                            <div 
-                                className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                                onClick={() => fileInputRef.current?.click()}
-                            >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                type="file" 
-                                className="hidden"
-                                ref={fileInputRef}
-                                onChange={handleFileChange}
-                                accept="image/*,application/pdf"
-                                />
-                            </div>
+                          <div
+                            className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            onClick={() => avatarInputRef.current?.click()}
+                          >
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs mt-1 text-center px-1">Add photo</span>
+                            <Input
+                              type="file"
+                              className="hidden"
+                              ref={avatarInputRef}
+                              onChange={handleAvatarChange}
+                              accept="image/*"
+                            />
+                          </div>
                         </FormControl>
-                        )}
+                      ) : null}
                     </div>
+                  )}
+                  <p className="text-[10px] text-muted-foreground mt-1">Images only — shown on profile / avatar.</p>
                 </FormItem>
+
+                <FormItem>
+                  <FormLabel>Documents</FormLabel>
+                  <p className="mb-1 text-xs leading-snug text-muted-foreground">
+                    Optional supporting files (PDF or images). Up to 5 files; stored with this account and shown on the statement opening row (File column).
+                  </p>
+                  {!canAttachDocuments ? (
+                    <p className="text-xs text-muted-foreground">
+                      Upgrade for PDF/image attachments.{" "}
+                      <Link href="/billing" className="text-primary underline font-medium hover:no-underline">
+                        Upgrade
+                      </Link>
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap items-start gap-2">{/* add slot inline with FilePreviews */}
+                      {docSlots.map((slot, idx) => (
+                        <FilePreview
+                          key={typeof slot === "string" ? `${slot}-${idx}` : `${slot.name}-${idx}-${slot.size}`}
+                          file={slot}
+                          onRemove={() => removeDocAt(idx)}
+                          size={96}
+                        />
+                      ))}
+                      {docSlots.length < 5 ? (
+                        <FormControl>
+                          <div
+                            className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
+                            onClick={() => docsInputRef.current?.click()}
+                          >
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs mt-1 text-center px-1">PDF / image</span>
+                            <Input
+                              type="file"
+                              className="hidden"
+                              ref={docsInputRef}
+                              onChange={handleDocsChange}
+                              accept="image/*,application/pdf"
+                              multiple
+                            />
+                          </div>
+                        </FormControl>
+                      ) : null}
+                    </div>
+                  )}
+                </FormItem>
+
+                <EntityOpeningBalanceNarrationField
+                  control={form.control}
+                  name="openingBalanceNarration"
+                  detailLabel="bank/cash account"
+                />
 
               <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
                 <DialogClose asChild>

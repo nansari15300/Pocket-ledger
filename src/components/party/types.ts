@@ -4,6 +4,8 @@ export type Party = {
   name: string;
   openingBalance: number;
   openingBalanceDate?: any;
+  openingBalanceNarration?: string;
+  documentFileUrls?: string[];
   debit: number;
   credit: number;
   balance: number;

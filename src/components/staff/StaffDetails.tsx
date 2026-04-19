@@ -68,7 +68,6 @@ import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -164,7 +163,6 @@ export function StaffDetails({
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const { balanceMode, setBalanceMode } = useBalanceMode();
@@ -371,8 +369,7 @@ export function StaffDetails({
   );
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -434,6 +431,8 @@ export function StaffDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (staff as any).openingBalanceDate,
+      openingBalanceNarration: staff.openingBalanceNarration ?? null,
       transactions: displayTransactions,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -465,6 +464,8 @@ export function StaffDetails({
       dateRangeText: buildDateRangeText(),
       vouchersCount: processedTransactions.length,
       openingBalance: openingBalanceForPeriod,
+      openingBalanceDate: (staff as any).openingBalanceDate,
+      openingBalanceNarration: staff.openingBalanceNarration ?? null,
       transactions: displayTransactions,
       showNarration: showNarration,
       includeNotes: includeNotesInTable,
@@ -686,9 +687,11 @@ export function StaffDetails({
           openingBalance={openingBalanceForPeriod}
           openingBalanceOutstanding={openingBalanceOutstanding}
           openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+          openingBalanceNarration={staff.openingBalanceNarration}
+          openingBalanceAttachmentUrls={staff.documentFileUrls}
+          openingBalanceDate={(staff as any).openingBalanceDate}
           openingBalanceActions={undefined}
           showNarration={showNarration}
-          narrationNoteSearch={narrationNoteSearch}
           visibleColumns={
             balanceMode === "bill_wise"
               ? { ...visibleColumns, status: true }
@@ -973,6 +976,9 @@ export function StaffDetails({
                   openingBalance={openingBalanceForPeriod}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+                  openingBalanceNarration={staff.openingBalanceNarration}
+                  openingBalanceAttachmentUrls={staff.documentFileUrls}
+                  openingBalanceDate={(staff as any).openingBalanceDate}
                   openingBalanceActions={
                     <EditStaffDialog
                       staff={staff}
@@ -988,7 +994,6 @@ export function StaffDetails({
                     </EditStaffDialog>
                   }
                   showNarration={showNarration}
-                  narrationNoteSearch={narrationNoteSearch}
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
                   journalAccountNames={{}}
                   accountNames={accountNamesMap}
@@ -1022,11 +1027,6 @@ export function StaffDetails({
               <Checkbox id="show-narration-staff" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-staff" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
             </div>
-            <NarrationNoteSearchInput
-              id="narration-search-staff"
-              value={narrationNoteSearch}
-              onChange={setNarrationNoteSearch}
-            />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

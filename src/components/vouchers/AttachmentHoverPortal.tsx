@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ZoomIn, ZoomOut, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 
 /** Tooltip se zyada: fixed portal + solid bg taaki table/parent overflow ya blend se file transparent na dikhe */
 const HOVER_CLOSE_MS = 280;
@@ -53,6 +54,8 @@ export function AttachmentHoverPortal({
   disabled = false,
   triggerClassName,
 }: AttachmentHoverPortalProps) {
+  const { enabled: globalHoverPreviewEnabled } = useFileHoverPreview();
+  const effectiveDisabled = disabled || !globalHoverPreviewEnabled;
   const useTapMode = useTapInteractionMode();
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
@@ -100,11 +103,16 @@ export function AttachmentHoverPortal({
   }, []);
 
   const handleOpen = React.useCallback(() => {
-    if (disabled) return;
+    if (effectiveDisabled) return;
     cancelClose();
     updatePosition();
     setOpen(true);
-  }, [disabled, cancelClose, updatePosition]);
+  }, [effectiveDisabled, cancelClose, updatePosition]);
+
+  /** Global switch OFF: khula preview turant band (header toggle). */
+  React.useEffect(() => {
+    if (effectiveDisabled) setOpen(false);
+  }, [effectiveDisabled]);
 
   React.useEffect(() => {
     if (!open) {
@@ -179,18 +187,18 @@ export function AttachmentHoverPortal({
   };
 
   const handleTriggerPointerEnter = () => {
-    if (disabled || useTapMode) return;
+    if (effectiveDisabled || useTapMode) return;
     handleOpen();
   };
 
   const handleTriggerPointerLeave = () => {
-    if (disabled || useTapMode) return;
+    if (effectiveDisabled || useTapMode) return;
     scheduleClose();
   };
 
   /** Mobile / touch: ek baar tap = khula rahe; hover enter–leave se band nahi (pehle open + turant close ka bug) */
   const handleTriggerClick = (e: React.MouseEvent) => {
-    if (disabled || !useTapMode) return;
+    if (effectiveDisabled || !useTapMode) return;
     e.preventDefault();
     e.stopPropagation();
     setOpen((prev) => {
@@ -220,10 +228,10 @@ export function AttachmentHoverPortal({
         <div
           className={cn(
             "pointer-events-auto fixed flex max-h-[min(88vh,calc(100dvh-16px))] w-[min(820px,calc(100vw-20px))] flex-col overflow-hidden",
+            // reference-other-app (pic 2): mota blue border + barah round + zoom bar same frame
             "border-[3px] border-blue-600 bg-white shadow-2xl dark:bg-zinc-950",
             "isolate [opacity:1]"
           )}
-          // 15mm dono axis par — PC/mobile same; Tailwind rounded-[15mm] ke saath inline bhi taaki border follow kare
           style={
             useTapMode
               ? {
@@ -240,14 +248,15 @@ export function AttachmentHoverPortal({
           onPointerLeave={useTapMode ? undefined : scheduleClose}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-blue-600/25 px-2 py-1.5">
+          {/* Title center; tap mode me X dayein (absolute) taaki label geometric center rahe */}
+          <div className="relative flex shrink-0 items-center justify-center border-b border-blue-600/25 px-2 py-1.5">
             <span className="text-xs font-medium text-muted-foreground">Preview</span>
             {useTapMode ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 shrink-0"
+                className="absolute right-1 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2"
                 aria-label="Close preview"
                 onClick={() => setOpen(false)}
               >

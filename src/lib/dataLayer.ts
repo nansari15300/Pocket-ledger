@@ -10,6 +10,33 @@ import { collection, query, onSnapshot, QuerySnapshot, DocumentData } from "fire
 import { firestore } from "@/lib/firebase";
 import { useDataSource } from "@/contexts/DataSourceContext";
 import { createLocalApiClient } from "@/lib/localApiClient";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import {
+  BROWSER_DB_COLLECTION_BUMP,
+  listCompanyDocsFromBrowserDb,
+  type BrowserDbCollectionBumpDetail,
+} from "@/lib/localCompanyDocMirror";
+
+/** useCollectionFromSource: browser cache ko Firestore snapshot ke saath merge (static build). */
+function mergeCollectionById<T extends { id: string }>(
+  prev: T[] | null,
+  cached: any[],
+  orderByField?: string
+): T[] {
+  const base = prev || [];
+  if (!cached.length) return base;
+  const map = new Map(base.map((x) => [x.id, x]));
+  for (const v of cached) map.set(v.id, v as T);
+  const merged = [...map.values()];
+  if (orderByField) {
+    merged.sort((a: any, b: any) => {
+      const dateA = a[orderByField]?.toDate ? a[orderByField].toDate() : new Date(a[orderByField]);
+      const dateB = b[orderByField]?.toDate ? b[orderByField].toDate() : new Date(b[orderByField]);
+      return dateA.getTime() - dateB.getTime();
+    });
+  }
+  return merged;
+}
 
 export type UseCollectionFromSourceResult<T> = {
   data: (T & { id: string })[] | null;
@@ -90,11 +117,28 @@ export function useCollectionFromSource<T = Record<string, unknown>>(
     };
   }, [companyId, isLocalMode, fetchLocal, options?.refetchIntervalMs]);
 
-  // Firebase mode: onSnapshot
+  // Firebase mode: onSnapshot; static build mein browser SQLite prefetch + listen error fallback
   useEffect(() => {
     if (!companyId || isLocalMode) return;
     setIsLoading(true);
     setError(null);
+    const orderByField = options?.orderByField;
+
+    const applyBrowserMerge = (cached: any[]) => {
+      const filtered = cached.filter((item: any) => item.isDeleted !== true);
+      setData((prev) => mergeCollectionById<T & { id: string }>(prev, filtered, orderByField));
+      setError(null);
+      setIsLoading(false);
+    };
+
+    if (isStaticAppBuild()) {
+      listCompanyDocsFromBrowserDb(companyId, collectionName)
+        .then((cached) => {
+          if (cached.length) applyBrowserMerge(cached);
+        })
+        .catch(() => {});
+    }
+
     const q = query(collection(firestore, `companies/${companyId}/${collectionName}`));
     const unsub = onSnapshot(
       q,
@@ -103,10 +147,10 @@ export function useCollectionFromSource<T = Record<string, unknown>>(
           .map((d) => ({ ...d.data(), id: d.id } as T & { id: string }))
           .filter((item: any) => item.isDeleted !== true);
         let arr = list;
-        if (options?.orderByField) {
+        if (orderByField) {
           arr = [...list].sort((a: any, b: any) => {
-            const aVal = a[options!.orderByField!];
-            const bVal = b[options!.orderByField!];
+            const aVal = a[orderByField];
+            const bVal = b[orderByField];
             const dateA = aVal?.toDate ? aVal.toDate() : new Date(aVal);
             const dateB = bVal?.toDate ? bVal.toDate() : new Date(bVal);
             return dateA.getTime() - dateB.getTime();
@@ -116,13 +160,36 @@ export function useCollectionFromSource<T = Record<string, unknown>>(
         setError(null);
         setIsLoading(false);
       },
-      (err) => {
+      async (err) => {
+        if (isStaticAppBuild()) {
+          const cached = await listCompanyDocsFromBrowserDb(companyId, collectionName);
+          if (cached.length) {
+            applyBrowserMerge(cached);
+            return;
+          }
+        }
         setError(err instanceof Error ? err : new Error(String(err)));
         setData(null);
         setIsLoading(false);
       }
     );
     return () => unsub();
+  }, [companyId, collectionName, isLocalMode, options?.orderByField]);
+
+  // Static: `notifyBrowserDbCollectionUpdated` par list merge (jab yeh hook use hoga)
+  useEffect(() => {
+    if (!companyId || isLocalMode || !isStaticAppBuild()) return;
+    const onBump = (ev: Event) => {
+      const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
+      if (!d || d.companyId !== companyId || d.collection !== collectionName) return;
+      listCompanyDocsFromBrowserDb(companyId, collectionName).then((cached) => {
+        if (!cached.length) return;
+        const filtered = cached.filter((item: any) => item.isDeleted !== true);
+        setData((prev) => mergeCollectionById<T & { id: string }>(prev, filtered, options?.orderByField));
+      });
+    };
+    window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
+    return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
   }, [companyId, collectionName, isLocalMode, options?.orderByField]);
 
   const refetch = () => {

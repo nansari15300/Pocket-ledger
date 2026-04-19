@@ -26,7 +26,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -39,10 +41,18 @@ import { toast } from "@/hooks/use-toast";
 import { doc, deleteField, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import type { Company } from "@/hooks/useCompany";
+import {
+  isOnlineCompanyRow,
+  buildDuplicateNameCountMap,
+  companySelectOptionLabel,
+} from "@/lib/companyStorageKind";
 
 export function DangerZone() {
   const { user, customUser } = useAuth();
-  const { company, companyId, allCompanies, clearCompanyId } = useCompany();
+  const { company, companyId, allCompanies, clearCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -65,6 +75,18 @@ export function DangerZone() {
     [ownedCompanies, selectedCompanyToDeleteId]
   );
 
+  const { localCompaniesToDelete, onlineCompaniesToDelete } = useMemo(() => {
+    const local: Company[] = [];
+    const online: Company[] = [];
+    for (const c of ownedCompanies) {
+      if (isOnlineCompanyRow(c)) online.push(c);
+      else local.push(c);
+    }
+    return { localCompaniesToDelete: local, onlineCompaniesToDelete: online };
+  }, [ownedCompanies]);
+
+  const duplicateNameCountMap = useMemo(() => buildDuplicateNameCountMap(ownedCompanies), [ownedCompanies]);
+
   const handleDelete = async () => {
     const targetId = selectedCompanyToDeleteId || companyId;
     if (!targetId) {
@@ -79,18 +101,33 @@ export function DangerZone() {
     const targetName = companyToDelete?.name ?? company?.name;
     setIsLoading(true);
     try {
+      if (isLocalOnlyMode()) {
+        // Local-only mode: company ko local registry me recycle-bin state par mark karo (Firestore call skip).
+        const existingLocalCompany = await getLocalCompanyById(targetId);
+        if (!existingLocalCompany) {
+          throw new Error("Local company not found");
+        }
+        await upsertLocalCompany({
+          ...existingLocalCompany,
+          id: targetId,
+          isDeleted: true,
+          deletedAt: Date.now(),
+        });
+      } else {
       await updateDoc(doc(firestore, `companies/${targetId}`), {
         isDeleted: true,
         deletedAt: serverTimestamp(),
         movedToAdminRecycleAt: deleteField(),
-        deletedBy: user?.uid || "",
       });
+      }
       toast({
         title: "Company Moved to Bin",
         description: `"${targetName}" has been moved to the recycle bin.`,
       });
       if (companyId === targetId) clearCompanyId();
       setSelectedCompanyToDeleteId("");
+      reloadLocalCompanyRegistry();
+      triggerSync();
     } catch (error) {
       console.error("Error moving to bin:", error);
       toast({
@@ -127,11 +164,36 @@ export function DangerZone() {
                 <SelectValue placeholder="Choose company to delete..." />
               </SelectTrigger>
               <SelectContent>
-                {ownedCompanies.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                {localCompaniesToDelete.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs font-semibold text-muted-foreground">Local</SelectLabel>
+                    {localCompaniesToDelete.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                            Local
+                          </span>
+                          <span className="truncate">{companySelectOptionLabel(c, duplicateNameCountMap)}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {onlineCompaniesToDelete.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs font-semibold text-muted-foreground">Online (cloud)</SelectLabel>
+                    {onlineCompaniesToDelete.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0 text-[10px] font-medium text-sky-800 dark:text-sky-300">
+                            Online
+                          </span>
+                          <span className="truncate">{companySelectOptionLabel(c, duplicateNameCountMap)}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
               </SelectContent>
             </Select>
           </div>

@@ -5,7 +5,6 @@ import type { Staff, StaffGroup } from "@/components/staff/types";
 import { Button } from "@/components/ui/button";
 import { Edit, Printer, Calendar as CalendarIcon, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, FilePlus, XCircle, MoreVertical, ArrowLeft, ChevronDown, Columns3, Search } from "lucide-react";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
-import { NarrationNoteSearchInput } from "../vouchers/NarrationNoteSearchInput";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
 import {
@@ -109,7 +108,6 @@ export function StaffGroupDetails({
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
-  const [narrationNoteSearch, setNarrationNoteSearch] = useState("");
   const { visibleColumns, handleColumnVisibilityChange } = useTransactionVisibleColumns();
   const { setShowNotes, includeNotesInTable, notesPreferenceLockedOnMobile } = useShowNotes();
   const [selectedVoucher, setSelectedVoucher] = useState<any>(null);
@@ -340,8 +338,7 @@ export function StaffGroupDetails({
     [processedTransactions, includeNotesInTable]
   );
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
-  const [sortOrder, setSortOrder] =
-    useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
+  const [sortOrder, setSortOrder] = useState<TransactionSortOrder>(DEFAULT_TRANSACTION_SORT_ORDER);
   const sortedTransactions = useMemo(
     () =>
       recomputeRunningBalanceTopToBottom(
@@ -402,6 +399,8 @@ export function StaffGroupDetails({
           dateRangeText: dateRangeText,
           vouchersCount: sortedTransactions.length,
           openingBalance: openingBalanceForPeriod,
+          openingBalanceDate: (group as any).openingBalanceDate,
+          openingBalanceNarration: (group as any).openingBalanceNarration ?? null,
           transactions: sortedTransactions,
           showNarration: showNarration,
           includeNotes: includeNotesInTable,
@@ -507,9 +506,9 @@ export function StaffGroupDetails({
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={undefined}
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               journalAccountNames={journalAccountNames}
               accountNames={accountNamesMap}
@@ -842,11 +841,11 @@ export function StaffGroupDetails({
               contextId={group.id}
               groupEntityType="staff"
               showNarration={showNarration}
-              narrationNoteSearch={narrationNoteSearch}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
               openingBalance={openingBalanceForPeriod}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
+              openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={
                 <EditStaffGroupDialog
                   group={group}
@@ -894,11 +893,6 @@ export function StaffGroupDetails({
                   Show Narration
                 </label>
               </div>
-              <NarrationNoteSearchInput
-                id="narration-search-staff-group"
-                value={narrationNoteSearch}
-                onChange={setNarrationNoteSearch}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">

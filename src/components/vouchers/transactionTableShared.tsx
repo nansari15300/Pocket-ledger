@@ -11,10 +11,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { FilePreview } from "@/components/vouchers/FilePreview";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
-import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
+import { SingleAttachmentHoverPreviewBody } from "@/components/vouchers/attachmentHoverPreviewBody";
 import { differenceInDays } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
@@ -41,6 +45,42 @@ export type Context =
   | "other";
 
 export type Transaction = Record<string, any>;
+
+/**
+ * Opening balance row — File column: entity `documentFileUrls` par voucher jaisa hover preview + green tick (`local:` refs supported).
+ */
+export function OpeningBalanceFileCellContent({
+  fileUrls,
+}: {
+  fileUrls?: readonly string[] | null;
+}) {
+  const urls = Array.isArray(fileUrls)
+    ? fileUrls.map((u) => String(u)).filter((s) => s.length > 0)
+    : [];
+  if (urls.length === 0) {
+    return <span>-</span>;
+  }
+  return (
+    <AttachmentHoverPortal
+      triggerClassName="inline-flex cursor-help"
+      preview={
+        <div className="flex max-w-full flex-col gap-3">
+          {urls.map((url, idx) => (
+            <SingleAttachmentHoverPreviewBody
+              key={idx}
+              url={String(url)}
+              gallery={urls.length > 1 ? { urls, startIndex: idx } : undefined}
+            />
+          ))}
+        </div>
+      }
+    >
+      <span className="inline-flex cursor-help" aria-label="Has attachment">
+        <CheckCircle className="h-4 w-4 text-green-600" />
+      </span>
+    </AttachmentHoverPortal>
+  );
+}
 
 const safeToDate = (date: any): Date | null => {
   if (!date) return null;
@@ -525,10 +565,12 @@ export const TransactionRow = React.memo(
     blinkMode,
     animateLayout = false,
     statusBillWiseOnly = false,
-    /** Full table colspan (partition banner row ke liye TransactionsTable se). */
+    /** Party ledger: use default true — unapproved (`isApproved` !== true) pink main + narration row */
+    highlightPendingApproval = true,
+    /** Bill-wise + fiscal divider: full table colspan for banner row. */
     fullRowColSpan,
   }: any) => {
-    // Merge fiscal mode: purane / naye FY ke beech full-width divider — amounts / approve menu nahi.
+    // Merge fiscal mode: FY ke beech full-width divider — amounts / row actions nahi.
     if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const span = typeof fullRowColSpan === "number" && fullRowColSpan > 0 ? fullRowColSpan : 12;
       const label =
@@ -569,7 +611,7 @@ export const TransactionRow = React.memo(
     );
     const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
     const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
-    const { company } = useCompany();
+    const { effectiveNotificationSettings } = useCompany();
     const { user, customUser } = useAuth();
     const currentUserUid = user?.uid ?? null;
     const currentUserDisplayName = customUser?.displayName || user?.displayName || user?.email || null;
@@ -676,57 +718,27 @@ export const TransactionRow = React.memo(
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
               <AttachmentHoverPortal
-                triggerClassName="cursor-help"
+                triggerClassName="inline-flex cursor-help"
                 preview={
-                  <div className="flex flex-col gap-3">
-                    {(transaction.fileUrls as string[]).map((url, idx) => {
-                      const cleanUrl = String(url).split("?")[0].toLowerCase();
-                      const isImage = cleanUrl.match(/\.(jpe?g|png|gif|webp|bmp|svg)$/) || String(url).startsWith("data:image/");
-                      const isPdf =
-                        cleanUrl.endsWith(".pdf") ||
-                        String(url).toLowerCase().includes(".pdf") ||
-                        String(url).startsWith("data:application/pdf");
-                      const openAtt = () =>
-                        void openAttachmentInApp(url, {
-                          kind: isImage ? "image" : isPdf ? "pdf" : "other",
-                        });
-                      return (
-                        <div key={idx} className="flex w-full min-w-0 max-w-full flex-col gap-1">
-                          {/* min-h-[400px] hata: mobile par poori image native size — portal me fit + zoom toolbar */}
-                          <div className="flex max-h-[min(70vh,calc(100dvh-220px))] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-zinc-600 dark:bg-zinc-900">
-                            {isImage ? (
-                              <img
-                                src={url}
-                                alt=""
-                                className="h-auto max-h-full max-w-full w-auto cursor-zoom-in object-contain"
-                                loading="eager"
-                                onDoubleClick={openAtt}
-                                title="Double-click to open in app viewer"
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => e.key === "Enter" && openAtt()}
-                              />
-                            ) : (
-                              <FilePreview
-                                file={url}
-                                size={800}
-                                disabled={false}
-                                objectFit="contain"
-                                enableHoverFullPreview={false}
-                                showFormatBadge={false}
-                              />
-                            )}
-                          </div>
-                          <p className="text-center text-[10px] font-semibold text-muted-foreground">
-                            {getAttachmentFormatLabel(url)}
-                          </p>
-                        </div>
-                      );
-                    })}
+                  <div className="flex max-w-full flex-col gap-3">
+                    {(() => {
+                      const rowUrls = (transaction.fileUrls as string[])
+                        .map((x) => String(x).trim())
+                        .filter((s) => s.length > 0);
+                      return rowUrls.map((u, idx) => (
+                        <SingleAttachmentHoverPreviewBody
+                          key={`${u}-${idx}`}
+                          url={u}
+                          gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
+                        />
+                      ));
+                    })()}
                   </div>
                 }
               >
-                <CheckCircle className="h-4 w-4 text-green-600" aria-label="Has attachment" />
+                <span className="inline-flex cursor-help" aria-label="Has attachment">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                </span>
               </AttachmentHoverPortal>
             ) : (
               "-"
@@ -872,8 +884,8 @@ export const TransactionRow = React.memo(
             <DropdownMenuContent align="end" className="w-44">
               {/* Add Link action intentionally removed from 3-dot menu as per latest UX requirement. */}
               {can("approve_transactions") &&
-                company?.notificationSettings?.approve?.on !== false &&
-                company?.notificationSettings?.approve?.onTransaction !== false &&
+                effectiveNotificationSettings?.approve?.on !== false &&
+                effectiveNotificationSettings?.approve?.onTransaction !== false &&
                 (transaction as any).isApproved !== true && (
                   <DropdownMenuItem onClick={() => onApproveVoucher?.(transaction)} className="flex items-center gap-2">
                     <CheckCircle className="h-3.5 w-3.5" />
@@ -897,7 +909,7 @@ export const TransactionRow = React.memo(
     );
 
     const isPaid = (transaction as any).paymentStatus === "paid";
-    const isPendingApproval = (transaction as any).isApproved !== true;
+    const isPendingApproval = highlightPendingApproval && (transaction as any).isApproved !== true;
     const narrationText =
       transaction.type === "note" ? transaction.title : transaction.narration;
     const narrationLabel = transaction.type === "note" ? "Title" : "Narration";
@@ -1006,7 +1018,12 @@ export const TransactionRow = React.memo(
           spendWiseBorderMid,
           isNote && !isSelected && "bg-amber-50 [&>td]:bg-amber-50 hover:bg-amber-100 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
-          isPendingApproval && !isSelected && !inSpendWiseGroup && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+          /* Statement / non–spend-wise: full pink band — bank, item, tax, reports, etc. */
+          isPendingApproval && !isSelected && !inSpendWiseGroup &&
+            "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50 outline outline-1 outline-black/30 dark:outline-white/30 outline-offset-0",
+          /* Spend-wise group: green/gray pe bhi unapproved dikhe — tint override + ring */
+          isPendingApproval && !isSelected && inSpendWiseGroup &&
+            "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 dark:hover:[&>td]:!bg-pink-950/55 ring-2 ring-inset ring-pink-500/45 dark:ring-pink-400/35",
           isSelected &&
             "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
           isSelected &&
@@ -1081,7 +1098,10 @@ export const TransactionRow = React.memo(
             swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
             "[&>td:first-child]:border-l [&>td:last-child]:border-r"
           ),
-          isPendingApproval && !isSelected && !inSpendWiseGroup && "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
+          isPendingApproval && !isSelected && !inSpendWiseGroup &&
+            "bg-pink-100 dark:bg-pink-950/40 [&>td]:bg-pink-100 [&>td]:dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 [&>td]:hover:bg-pink-200 [&>td]:dark:hover:bg-pink-950/50",
+          isPendingApproval && !isSelected && inSpendWiseGroup &&
+            "[&>td]:!bg-pink-100/90 dark:[&>td]:!bg-pink-950/45 [&>td]:hover:!bg-pink-200/95 ring-2 ring-inset ring-pink-500/40 dark:ring-pink-400/30",
           isSelected
             ? "[&>td]:!transition-none [&>td]:bg-primary/10 [&>td]:[box-shadow:inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:[box-shadow:inset_2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))] [&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
             : isSpendWiseChild && !isSpendWiseInflowRow && !isSpendWiseOutflowRow && !spendWiseChildNeedsIndent && "bg-muted/20 [&>td]:bg-muted/20",

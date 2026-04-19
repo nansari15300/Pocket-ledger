@@ -13,6 +13,7 @@ import { EditCompanyForm } from "@/components/company/EditCompanyForm";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription } from "../ui/card";
+import { UploadCompanyToCloudCard } from "@/components/company/UploadCompanyToCloudCard";
 
 export function CompanySettings() {
   const { setCompanyId } = useCompany();
@@ -31,6 +32,9 @@ export function CompanySettings() {
           Manage your company profile or create a new one.
         </CardDescription>
       </CardHeader>
+      <div className="px-6 pb-4 space-y-4">
+        <UploadCompanyToCloudCard />
+      </div>
       <Tabs defaultValue="edit_company" className="w-full p-6 pt-0">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="edit_company">Edit Current Company</TabsTrigger>

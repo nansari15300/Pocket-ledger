@@ -76,7 +76,7 @@ export function TransactionTableSortDropdown({
             key={opt.value}
             onSelect={(e) => e.preventDefault()}
             onClick={() => {
-              // By Date is the global default action: oldest on top, newest at bottom.
+              // `DEFAULT_TRANSACTION_SORT_ORDER` in `@/lib/transactionSort` — purani date upar.
               if (opt.value === "date") onSortChange("date", "asc");
             }}
             className="flex items-center justify-between gap-2 py-1.5"

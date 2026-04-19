@@ -1,12 +1,15 @@
 
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { startOfDay, differenceInCalendarDays } from "date-fns";
 import { useAuth } from "./useAuth";
 import { useCompany } from "./useCompany";
 import { Permission, PermissionGroups } from "@/lib/permissions";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
@@ -45,12 +48,12 @@ export const initialPermissionConfig: PermissionConfig = {
   }, {} as Record<string, string[]>),
   // Role arrays: order matches flattenedPermissions (view_history removed from General; voucher perms moved into General)
   roles: {
-    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
-    // Align length with flattened perms: +2 dashboard falses (was 29) + fiscal prior-year off for data-entry.
-    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, true, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false],
-    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, true],
-    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, true],
-    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true],
+    viewer:       [true, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
+    // data-entry: manage_users_roles + configure_company_settings = false (Settings / admin tabs hide)
+    "data-entry": [true, false, true, true, false, true, false, false, false, false, false, false, false, false, true, true, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false],
+    accountant:   [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false],
+    editor:       [true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, false, true, true, true, false, false, false, false, false, false, true, false, true, true, false, false],
+    manager:      [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, true, true, true, true, true, true, true],
     owner: Array(flattenedPermissions.length).fill(true)
   },
   dateLimits: {
@@ -73,10 +76,22 @@ export const initialPermissionConfig: PermissionConfig = {
 };
 
 
+/** Offline company SQLite session — ye role Firebase owner se alag ho sakta hai (same email owner + staff login). */
+function isLocalStorageCompany(c: { storageOption?: string } | null | undefined): boolean {
+  return String(c?.storageOption || "local").toLowerCase() === "local";
+}
+
 const usePermissions = () => {
     const { customUser } = useAuth();
-    const { company } = useCompany();
+    const { company, allCompanies } = useCompany();
     const livePlans = useLivePlans();
+    /** Local unlock ke baad localStorage role turant useMemo me aaye (same-tab me storage event nahi aata). */
+    const [localAuthEpoch, setLocalAuthEpoch] = useState(0);
+    useEffect(() => {
+      const onAuth = () => setLocalAuthEpoch((n) => n + 1);
+      window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
+      return () => window.removeEventListener(LOCAL_AUTH_CHANGED_EVENT, onAuth);
+    }, []);
 
     const permissions = useMemo(() => {
         const config: PermissionConfig = company?.permissionConfig || initialPermissionConfig;
@@ -118,6 +133,26 @@ const usePermissions = () => {
                 }
             }
             }
+        }
+
+        // Local company: effective role = local unlock (username/password), NOT only Firebase owner email.
+        // `local_admin_fallback` = Admin username + company password → owner-level settings.
+        if (customUser && company && isLocalStorageCompany(company) && company.id && getLocalAuthToken(company.id)) {
+          const localUser = getLocalAuthUser(company.id);
+          if (localUser?.id) {
+            if (localUser.id === "local_admin_fallback") {
+              role = "owner";
+            } else if (localUser.role) {
+              const normalizedRole = String(localUser.role)
+                .toLowerCase()
+                .trim()
+                .replace(/_/g, "-")
+                .replace(/\s+/g, "-");
+              if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(normalizedRole)) {
+                role = normalizedRole as UserRole;
+              }
+            }
+          }
         }
         
         // Firestore may have shorter boolean[] than current PermissionGroups (new keys appended); pad from defaults so can() stays aligned.
@@ -165,11 +200,48 @@ const usePermissions = () => {
             return true;
         };
 
-        const plan = getPlanFromPlans(livePlans, (company?.planId as any) || "basic");
-        const canAddAvatar = plan.entitlements.canAddAvatar === true;
-        const canAddFileImagePdf = plan.entitlements.canAddFileImagePdf === true;
-        const planMaxFiles = Math.max(0, Math.min(10, Number(plan.entitlements.maxVoucherFileCount) || 0));
+        const effectivePlanId = resolveEffectiveAccountPlanId(
+          allCompanies,
+          customUser?.uid,
+          company?.planId
+        );
+        const plan = getPlanFromPlans(livePlans, effectivePlanId);
         const roleFileLimits = config.fileAttachmentLimits?.[role] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };
+
+        // Plan entitlements (live `app_settings/plans` + cache); default basic tier me files band ho sakte hain
+        let canAddFileImagePdf = plan.entitlements.canAddFileImagePdf === true;
+        let planMaxFiles = Math.max(0, Math.min(10, Number(plan.entitlements.maxVoucherFileCount) || 0));
+
+        /** Viewer ke alawa role jab file types allow karti ho — SQLite/local company par `planId` purana "basic" reh jata hai ya offline cache miss */
+        const roleAllowsFiles =
+          role !== "viewer" &&
+          (roleFileLimits.maxFileCount > 0 || roleFileLimits.allowImage || roleFileLimits.allowPDF);
+
+        // Static APK / local storage company: billing/advance Firestore tak sync na ho to bhi voucher attachments role ke hisaab se khulen
+        if (
+          company &&
+          config.allowAttachments !== false &&
+          roleAllowsFiles &&
+          (!canAddFileImagePdf || planMaxFiles === 0) &&
+          (isLocalStorageCompany(company) || isLocalOnlyMode())
+        ) {
+          canAddFileImagePdf = true;
+          planMaxFiles = Math.max(
+            planMaxFiles,
+            Math.min(10, Math.max(1, Number(roleFileLimits.maxFileCount) || 3))
+          );
+        }
+
+        let canAddAvatar = plan.entitlements.canAddAvatar === true;
+        // Local company / APK: `app_settings/plans` sync na ho ya cache purana ho to `basic` bundle me `canAddAvatar: false` reh jata hai — party-staff avatar bhi voucher files jaisa role se chale
+        if (
+          company &&
+          role !== "viewer" &&
+          !canAddAvatar &&
+          (isLocalStorageCompany(company) || isLocalOnlyMode())
+        ) {
+          canAddAvatar = true;
+        }
         const cappedMax = canAddFileImagePdf && planMaxFiles > 0
           ? Math.min(roleFileLimits.maxFileCount, planMaxFiles)
           : 0;
@@ -191,7 +263,7 @@ const usePermissions = () => {
             canAddFileImagePdf,
         };
 
-    }, [customUser, company, livePlans]);
+    }, [customUser, company, allCompanies, livePlans, localAuthEpoch]);
 
     return permissions;
 };

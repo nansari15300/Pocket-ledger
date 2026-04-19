@@ -35,7 +35,7 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { Combobox } from "@/components/ui/combobox";
@@ -46,10 +46,11 @@ import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError } from "@/lib/voucherActionsClient";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -153,7 +154,7 @@ export function CreatePaymentInForm({
   const { user, customUser } = useAuth();
   const { formatCurrency, formatDate, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedStaff, processedTaxes, processedStaffGroups, processedAccounts, expenseAccounts } = useVouchers();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
   const { canPerformBackdatedAction, allowAttachments, fileAttachmentLimits, can } = usePermissions();
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
@@ -171,6 +172,8 @@ export function CreatePaymentInForm({
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Edit-mode Save vs dirty: snapshot of URL attachments when voucher loads */
+  const initialFilesRef = useRef<string[]>([]);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -187,7 +190,17 @@ export function CreatePaymentInForm({
     resolver: zodResolver(formSchema) as Resolver<PaymentInFormValues>,
     defaultValues: getInitialFormValues(voucher),
   });
-  
+
+  const { isDirty: _isFormFieldsDirty } = form.formState;
+  const _isFileDirty = (() => {
+    const currentUrls = files.filter((f): f is string => typeof f === "string");
+    const newFiles = files.filter((f): f is File => f instanceof File);
+    if (newFiles.length > 0) return true;
+    const init = initialFilesRef.current;
+    return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
+  })();
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
+
   const payeeType = form.watch('payeeType');
   const partyId = form.watch("partyId");
   const staffId = form.watch("staffId");
@@ -257,7 +270,9 @@ export function CreatePaymentInForm({
         }
         form.reset(initialValues);
         setSavedVoucherId(voucher.id);
-        setFiles(voucher.fileUrls || []);
+        const urls = voucher.fileUrls || [];
+        setFiles(urls);
+        initialFilesRef.current = [...urls];
     }
 }, [voucher, form, isEditingAndConverting]);
 
@@ -276,14 +291,17 @@ export function CreatePaymentInForm({
     }
   }, [payeeType, voucherType, form]);
   
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  // Validated `data` — `getValues()` से date miss न हो
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    await processAndSave(form.getValues(), options.saveAndNew);
+    void form.handleSubmit(
+      async (data) => {
+        await processAndSave(data, options.saveAndNew);
+      },
+      () => {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+      }
+    )(e);
   }
   
   async function processAndSave(data: PaymentInFormValues, saveAndNew: boolean = false) {
@@ -294,29 +312,6 @@ export function CreatePaymentInForm({
     
     if (!voucher && !canPerformBackdatedAction("entry", data.date)) {
       sonnerToast.error("Permission Denied", { description: "You cannot create a voucher for this date based on your role's permissions."});
-      return;
-    }
-
-    const isEditDi = !!(voucher?.id || savedVoucherId);
-    const voucherDateDi = data.date instanceof Date ? data.date : new Date(data.date);
-    let originalVoucherDateDi: Date = voucherDateDi;
-    if (voucher?.date) {
-      originalVoucherDateDi = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
-    } else if (savedVoucherId) {
-      const ev = allVouchers.find((v: { id: string }) => v.id === savedVoucherId);
-      if (ev?.date) {
-        originalVoucherDateDi = ev.date?.toDate ? ev.date.toDate() : new Date(ev.date as string);
-      }
-    }
-    const fpDi = runFiscalVoucherPreflight({
-      company,
-      can,
-      isEditing: isEditDi,
-      recordDate: voucherDateDi,
-      originalVoucherDate: isEditDi ? originalVoucherDateDi : null,
-    });
-    if (fpDi.ok === false) {
-      if (fpDi.message) sonnerToast.error("Permission Denied", { description: fpDi.message });
       return;
     }
 
@@ -360,21 +355,45 @@ export function CreatePaymentInForm({
       };
 
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
+      let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
           return;
         }
-        for (const file of newFilesToUpload) {
-          if (submissionData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-          const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
-          const snapshot = await uploadBytes(storageRef, file);
-          const url = await getDownloadURL(snapshot.ref);
-          submissionData.fileUrls.push(url);
-          await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+        if (isLocalOnlyMode()) {
+          const voucherIdForLocalAttachments =
+            isEditingAndConverting && voucher?.id
+              ? null
+              : (savedVoucherId ?? voucher?.id ?? null);
+          const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+            await appendLocalOnlyVoucherFilesToUrls({
+              companyId,
+              storageFolder: String(voucherType),
+              existingFileUrls: submissionData.fileUrls as string[],
+              newFiles: newFilesToUpload,
+              maxFileCount: fileAttachmentLimits.maxFileCount,
+              existingVoucherId: voucherIdForLocalAttachments,
+            });
+          submissionData.fileUrls = merged;
+          if (preGen) preGeneratedVoucherId = preGen;
+          try {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          } catch {
+            /* offline */
+          }
+        } else {
+          for (const file of newFilesToUpload) {
+            if (submissionData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
+            const snapshot = await uploadBytes(storageRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+            submissionData.fileUrls.push(url);
+            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+          }
         }
       }
 
@@ -387,28 +406,28 @@ export function CreatePaymentInForm({
         companyId,
         user.uid,
         submissionData,
-        originalVoucherIdToDelete ? null : docId
+        originalVoucherIdToDelete ? null : docId,
+        undefined,
+        preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
           docId = savedDoc.id;
           setSavedVoucherId(docId);
           if (originalVoucherIdToDelete) {
-               await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
+              // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
+              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
-                deletedBy: user?.uid || "",
                 convertedToType: voucherType,
                 convertedToVoucherNumber: submissionData.voucherNumber,
-            });
+              });
           }
       } else {
           throw new Error("Failed to save voucher and get ID.");
       }
 
         sonnerToast.success("Receipt Recorded!", { id: toastId, description: `Voucher #${data.voucherNumber} has been created.` });
-
-        triggerSync();
 
         if (companyId && company) {
           const isEdit = !!voucher?.id;
@@ -480,9 +499,13 @@ export function CreatePaymentInForm({
     }
     setIsLoading(true);
     try {
-      await deleteDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-      toast({ title: "Voucher Deleted", description: "The voucher has been deleted." });
-      triggerSync();
+      // Local/offline compatible delete: voucher ko bin me move karo instead of hard delete.
+      await patchVoucherFields(companyId, savedVoucherId, {
+        isDeleted: true,
+        deletedAt: serverTimestamp(),
+        deletedBy: user?.uid || "",
+      });
+      toast({ title: "Voucher Moved to Bin", description: "The voucher has been moved to recycle bin." });
       onVoucherUpdated?.();
     } catch (error) {
       console.error("Error deleting voucher:", error);
@@ -494,7 +517,7 @@ export function CreatePaymentInForm({
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !allowAttachments) return;
-    
+
     const maxFiles = fileAttachmentLimits.maxFileCount || 0;
     if (maxFiles === 0) {
       toast({
@@ -507,23 +530,23 @@ export function CreatePaymentInForm({
 
     const newFiles = Array.from(e.target.files);
     const remainingSlots = maxFiles - files.length;
-    
+
     if (remainingSlots <= 0) {
       toast({
         variant: "destructive",
         title: "Limit Reached",
-        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
+        description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? "s" : ""}.`,
       });
       return;
     }
 
     const filesToProcess = newFiles.slice(0, remainingSlots);
-    
+
     for (const file of filesToProcess) {
-      // Check file type
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
-      
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+
       if (!fileAttachmentLimits.allowImage && isImage) {
         toast({
           variant: "destructive",
@@ -532,7 +555,7 @@ export function CreatePaymentInForm({
         });
         continue;
       }
-      
+
       if (!fileAttachmentLimits.allowPDF && isPDF) {
         toast({
           variant: "destructive",
@@ -551,27 +574,31 @@ export function CreatePaymentInForm({
         continue;
       }
 
-      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      try {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
+          toast({
+            variant: "destructive",
+            title: "File Still Too Large",
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+          });
+          continue;
+        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) return prev;
+          return [...prev, processedFile];
+        });
+      } catch (error) {
+        console.error("Compression error:", error);
         toast({
           variant: "destructive",
-          title: "File Too Large",
-          description: `Please select a file smaller than ${MAX_FILE_SIZE_MB}MB.`,
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
         });
-        continue;
-      }
-      
-      if (files.length < maxFiles) {
-        const compressedFile = await compressFile(file);
-        setFiles(prev => [...prev, compressedFile]);
-      } else {
-        toast({ 
-          variant: "destructive", 
-          title: "Limit Reached", 
-          description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`
-        });
-        break;
       }
     }
+    e.target.value = "";
   };
   
   const availableAccounts = processedAccounts.filter(acc => !acc.isSpecial);
@@ -937,7 +964,7 @@ export function CreatePaymentInForm({
                     Save & New
                 </Button>
               )}
-              <Button type="submit" disabled={isLoading} className={cn("w-full", BTN_SAVE_CLASS)}>
+              <Button type="submit" disabled={isLoading || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save
               </Button>

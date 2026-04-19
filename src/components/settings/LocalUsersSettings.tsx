@@ -7,14 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompany } from "@/hooks/useCompany";
 import { useDataSource } from "@/contexts/DataSourceContext";
-import { getLocalApiBaseUrl } from "@/lib/localApiClient";
+import { getLocalApiBaseUrl, isLocalCompanyId } from "@/lib/localApiClient";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import {
+  appendLocalCompanyUserClient,
+  localCompanyUsersToPublicList,
+  parseLocalCompanyUserRows,
+} from "@/lib/localCompanyUsers";
 import { Loader2, UserPlus } from "lucide-react";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
-import type { PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { doc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { updateCompanyDocRoot } from "@/lib/companyDocsClient";
-import { isLocalCompanyId } from "@/lib/localApiClient";
 
 type LocalUser = { id: string; username: string; displayName?: string; role?: string; createdAt?: number };
 
@@ -31,7 +36,8 @@ export function LocalUsersSettings() {
   const [error, setError] = useState("");
 
   const plan = getPlanFromPlans(livePlans, (company?.planId as PlanId) || "basic");
-  const maxUsers = Math.max(1, Number(plan?.entitlements?.maxUsers) ?? 1);
+  const maxUsersCap = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company?.storageOption));
+  const maxUsers = Math.max(1, maxUsersCap || 1);
   const ownerPlusShared = 1 + (company?.sharedWithEmails?.length ?? 0);
   const totalAfterAdd = users.length + 1 + ownerPlusShared;
   const atLimit = totalAfterAdd > maxUsers;
@@ -42,12 +48,28 @@ export function LocalUsersSettings() {
     if (!companyId) return;
     let cancelled = false;
     setLoading(true);
-    fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`)
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) setUsers(Array.isArray(data) ? data : []); })
-      .catch(() => { if (!cancelled) setUsers([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    const run = async () => {
+      try {
+        if (isLocalCompanyId(companyId)) {
+          // Offline company: users SQLite doc me — local API server optional.
+          const doc = await getLocalCompanyById(companyId);
+          const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown } | null)?.localCompanyUsers);
+          if (!cancelled) setUsers(localCompanyUsersToPublicList(rows));
+        } else {
+          const r = await fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`);
+          const data = await r.json();
+          if (!cancelled) setUsers(Array.isArray(data) ? data : []);
+        }
+      } catch {
+        if (!cancelled) setUsers([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [companyId, baseUrl]);
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -63,23 +85,38 @@ export function LocalUsersSettings() {
     }
     setAdding(true);
     try {
-      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), password, displayName: displayName.trim() || undefined }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data as { error?: string }).error || "Add failed");
-      setUsers((prev) => [...prev, { id: data.id, username: data.username, displayName: data.displayName, role: data.role }]);
-      setUsername("");
-      setPassword("");
-      setDisplayName("");
-      if (typeof data.localUserCount === "number") {
-        try {
-          const payload = { localUserCount: data.localUserCount };
-          const done = await updateCompanyDocRoot(companyId, payload);
-          if (!done && !isLocalCompanyId(companyId)) await updateDoc(doc(firestore, "companies", companyId), payload);
-        } catch (_) {}
+      if (isLocalCompanyId(companyId)) {
+        await appendLocalCompanyUserClient(companyId, {
+          username: username.trim(),
+          password,
+          displayName: displayName.trim() || username.trim(),
+          role: "manager",
+        });
+        const doc = await getLocalCompanyById(companyId);
+        const rows = parseLocalCompanyUserRows((doc as { localCompanyUsers?: unknown } | null)?.localCompanyUsers);
+        setUsers(localCompanyUsersToPublicList(rows));
+        setUsername("");
+        setPassword("");
+        setDisplayName("");
+      } else {
+        const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/companies/${companyId}/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: username.trim(), password, displayName: displayName.trim() || undefined }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error((data as { error?: string }).error || "Add failed");
+        setUsers((prev) => [...prev, { id: data.id, username: data.username, displayName: data.displayName, role: data.role }]);
+        setUsername("");
+        setPassword("");
+        setDisplayName("");
+        if (typeof data.localUserCount === "number") {
+          try {
+            const payload = { localUserCount: data.localUserCount };
+            const done = await updateCompanyDocRoot(companyId, payload);
+            if (!done && !isLocalCompanyId(companyId)) await updateDoc(doc(firestore, "companies", companyId), payload);
+          } catch (_) {}
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Add failed");
@@ -95,7 +132,8 @@ export function LocalUsersSettings() {
       <CardHeader>
         <CardTitle>Local users</CardTitle>
         <CardDescription>
-          Is company me kaam karne ke liye username/password se login. Same plan limit (e.g. {maxUsers} user) local + online dono pe lagta hai. Naya user add karein.
+          {/* Plan admin: "Max users" Online vs Local — yahan company `storageOption` ke hisaab se effective cap ({maxUsers}). */}
+          Is company me kaam karne ke liye username/password se login. Is plan / storage type par max {maxUsers} user (shared + yahan ke users, owner mila kar). Naya user add karein.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -158,7 +196,7 @@ export function LocalUsersSettings() {
           {error && <p className="text-sm text-destructive">{error}</p>}
           {atLimit && !error && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
-              Plan limit: total users (local + online) {maxUsers} se zyada nahi ho sakte. Ab add nahi kar sakte.
+              Plan limit: is company ke liye max {maxUsers} user ho sakte hain. Ab add nahi kar sakte.
             </p>
           )}
           <Button type="submit" disabled={adding || atLimit}>

@@ -3,9 +3,9 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, type Resolver, type FieldErrors } from "react-hook-form";
 import { z } from "zod";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -32,13 +32,12 @@ import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccoun
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
-import { runFiscalVoucherPreflight } from "@/lib/fiscalVoucherEditGuards";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
-import { compressFile } from "@/lib/compression";
+import { compressVoucherAttachment } from "@/lib/compression";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { Combobox } from "@/components/ui/combobox";
@@ -48,9 +47,11 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useSearchParams } from "next/navigation";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -105,6 +106,22 @@ const formSchema = z.object({
 
 type PaymentInFormValues = z.infer<typeof formSchema>;
 
+/** RHF+zod errors को save validation toast के लिए string में बाँधता है */
+function formatPaymentInFormValidationErrors(errors: FieldErrors<PaymentInFormValues>): string {
+  const errorMessages: string[] = [];
+  if (errors.payeeType?.message) errorMessages.push(`Payee Type: ${errors.payeeType.message}`);
+  if (errors.partyId?.message) errorMessages.push(`Party: ${errors.partyId.message}`);
+  if (errors.staffId?.message) errorMessages.push(`Staff: ${errors.staffId.message}`);
+  if (errors.taxAccountId?.message) errorMessages.push(`Tax Account: ${errors.taxAccountId.message}`);
+  if (errors.incomeAccountId?.message) errorMessages.push(`Income Account: ${errors.incomeAccountId.message}`);
+  if (errors.payeeName?.message) errorMessages.push(`Payee Name: ${errors.payeeName.message}`);
+  if (errors.accountId?.message) errorMessages.push(`Bank/Cash Account: ${errors.accountId.message}`);
+  if (errors.date?.message) errorMessages.push(`Date: ${errors.date.message}`);
+  if (errors.voucherNumber?.message) errorMessages.push(`Voucher No.: ${errors.voucherNumber.message}`);
+  if (errors.amount?.message) errorMessages.push(`Amount: ${errors.amount.message}`);
+  return errorMessages.length > 0 ? errorMessages.join(", ") : "Please check the form and try again.";
+}
+
 const getVoucherPrefix = (prefixes?: Record<string, string[]>, type?: 'payment_in' | 'direct_income') => {
     if (type === 'direct_income') {
         return (prefixes?.direct_income && prefixes.direct_income[0]) || "DINC-";
@@ -112,6 +129,15 @@ const getVoucherPrefix = (prefixes?: Record<string, string[]>, type?: 'payment_i
     return (prefixes?.payment_in && prefixes.payment_in[0]) || "RCPT-";
 }
 const MAX_FILE_SIZE_MB = 0.5;
+
+/** Sirf `next dev` — console filter: `[PaymentIn:attach]`; attachment kyon nahi chal raha trace karne ke liye. */
+const TRACE_PAYMENT_IN_ATTACH =
+  typeof process !== "undefined" && process.env.NODE_ENV === "development";
+function tracePaymentInAttach(msg: string, detail?: Record<string, unknown>) {
+  if (!TRACE_PAYMENT_IN_ATTACH) return;
+  if (detail && Object.keys(detail).length) console.log("[PaymentIn:attach]", msg, detail);
+  else console.log("[PaymentIn:attach]", msg);
+}
 
 const getPayeeTypeFromVoucher = (v: any) => {
   if (v?.staffId) return 'staff';
@@ -191,8 +217,10 @@ export function CreatePaymentInForm({
   const { user, customUser } = useAuth();
   const { formatCurrency, formatCurrencyForPrint, formatDate, formatDateBS, dateSystem } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedStaff, processedTaxes, processedStaffGroups, processedAccounts, expenseAccounts } = useVouchers();
-  const { company, companyId, triggerSync } = useCompany();
+  const { company, companyId } = useCompany();
   const { can, role, canPerformBackdatedAction, canEditRecord, canDeleteVoucher, fileAttachmentLimits, allowAttachments } = usePermissions();
+  /** Sirf saved + dialog-linked par file band; nayi txn par parent flag ignore (Add File dead-zone fix). */
+  const fileAttachLockedByDialog = !!voucher?.id && deleteDisabledWhenLinked;
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
@@ -204,11 +232,44 @@ export function CreatePaymentInForm({
   const [isLoading, setIsLoading] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Stable id for <label htmlFor> — modal me `hidden` input par sirf .click() se kuch browsers file picker nahi kholte. */
+  const attachFileInputId = useId();
+
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Dev: permissions + DOM — `files` ke baad hi hook (warna TDZ). */
+  useEffect(() => {
+    if (!TRACE_PAYMENT_IN_ATTACH) return;
+    const input = fileInputRef.current;
+    tracePaymentInAttach("snapshot", {
+      allowAttachments,
+      maxFileCount: fileAttachmentLimits.maxFileCount,
+      allowImage: fileAttachmentLimits.allowImage,
+      allowPDF: fileAttachmentLimits.allowPDF,
+      fileAttachLockedByDialog,
+      deleteDisabledWhenLinked,
+      voucherId: voucher?.id ?? null,
+      attachHtmlId: attachFileInputId,
+      inputFound: !!input,
+      inputDisabled: input?.disabled ?? null,
+      accept: input?.getAttribute?.("accept") ?? null,
+      filesStateCount: files.length,
+    });
+  }, [
+    allowAttachments,
+    fileAttachmentLimits.maxFileCount,
+    fileAttachmentLimits.allowImage,
+    fileAttachmentLimits.allowPDF,
+    fileAttachLockedByDialog,
+    deleteDisabledWhenLinked,
+    voucher?.id,
+    attachFileInputId,
+    files.length,
+  ]);
+
   const initialFilesRef = useRef<string[]>([]);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -405,13 +466,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** Show Link for bill wise card when party selected; when Link for Bill Wise is OFF, linking is optional (message hidden). */
   const showLinkedSection = voucherType === "payment_in" && payeeType === "party" && !!partyId;
   const showSalaryLinkSection = voucherType === "payment_in" && payeeType === "staff" && !!staffId;
-  /** Spend wise message: show only when Require Payment In link (for payment_out) is ON for this role. */
+  /** Role matrix: Require Payment In link (payment_out) — company Spend wise ke saath milakar save gate karte hain. */
   const requirePaymentLinkForSpendWise = (() => {
     const byRole = (company as { requirePaymentLinkByRole?: Record<string, boolean | { payment_out?: boolean }> } | null)?.requirePaymentLinkByRole?.[role];
     if (byRole === undefined) return false;
     if (typeof byRole === "boolean") return byRole;
     return (byRole as { payment_out?: boolean }).payment_out === true;
   })();
+  const spendWiseCompanyOn = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
+  const spendWiseLinkRequired = spendWiseCompanyOn || requirePaymentLinkForSpendWise;
 
   const currentVoucherId = voucher?.id ?? savedVoucherId;
   const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
@@ -546,8 +609,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   /** When Link for Bill Wise is ON: cannot save without bill-wise link if vouchers available (party only). */
   const saveDisabledByBillWise = !!company?.enableLinkPaymentToTxns && showLinkedSection && billWiseLinkableCount > 0 && linkedToRows.length === 0;
-  /** When Require Payment In link (spend wise switch ON): disable Save until linkable count is 0 (like Payment Out). */
-  const saveDisabledBySpendWise = requirePaymentLinkForSpendWise && spendWiseLinkableCount > 0;
+  /** Company Spend wise ON ya role rule: linkable vouchers hon to bina link save band (Payment Out jaisa). */
+  const saveDisabledBySpendWise = spendWiseLinkRequired && spendWiseLinkableCount > 0;
   const linkPayOthersDisabled = saveDisabledByBillWise || saveDisabledBySpendWise;
 
   /** Card display: when Done is clicked (pending set), show pending links live; otherwise server data. */
@@ -617,14 +680,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** For Link Pay dialog: outflow voucher ids that currently link to this Payment In. */
   const linkedPaymentOutSelectedIds = useMemo(() => spendWiseLinkedToMeRows.map((r) => r.id), [spendWiseLinkedToMeRows]);
 
-  /** Dialog lock: positive bill-wise rows or real spend-wise / pending link — not empty allocation stubs or display-only linked nos. */
+  /** Report effective has-links to dialog: 1 link → fields disabled; all unlink → edit enable. Applies to Party, Staff, Tax, Income equally. */
   useEffect(() => {
     if (!onEffectiveLinksChange) return;
-    const hasBill = allocations.some((a) => getAllocationTotal(a) > 0);
-    const spendWiseLinked =
-      spendWiseLinkedToMeRows.length > 0 || (pendingLinkedPaymentOut?.ids?.some(Boolean) ?? false);
-    onEffectiveLinksChange(hasBill || spendWiseLinked);
-  }, [onEffectiveLinksChange, allocations, spendWiseLinkedToMeRows.length, pendingLinkedPaymentOut?.ids]);
+    const spendWiseLinked = spendWiseLinkedToMeRows.length > 0 || (pendingLinkedPaymentOut?.ids?.length ?? 0) > 0;
+    const hasLinks = allocations.length > 0 || spendWiseLinked;
+    onEffectiveLinksChange(hasLinks);
+  }, [onEffectiveLinksChange, allocations.length, spendWiseLinkedToMeRows.length, pendingLinkedPaymentOut?.ids?.length]);
 
   /** Names for "To" column in Link Pay dialog (party, staff, account, expense). */
   const paymentOutDialogNames = useMemo(() => {
@@ -673,7 +735,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   useEffect(() => {
     if (voucher?.id) {
         const isSameVoucher = lastResetVoucherIdRef.current === voucher.id;
-        if (isSameVoucher && isFormDirty) return;
+        // Same `id` par snapshot/context se bar‑bar reset — date/amount wipe (Sale/Purchase jaisa)
+        if (isSameVoucher) return;
         lastResetVoucherIdRef.current = voucher.id;
         const initialValues = getInitialFormValues(voucher);
         if (isEditingAndConverting) {
@@ -691,19 +754,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
         }
     } else if (defaultVoucherData && !voucher?.id) {
-        const urls = defaultVoucherData.fileUrls || [];
-        setFiles(urls);
-        initialFilesRef.current = urls;
+        // Sirf pehli baar defaults hydrate karo — har `isFormDirty` / effect rerun par `setFiles([])` se user ki File gayab ho jati thi (console me append dikhta, UI khaali).
         if (lastSyncedVoucherIdRef.current !== "new") {
           lastSyncedVoucherIdRef.current = "new";
+          const urls = defaultVoucherData.fileUrls || [];
+          setFiles(urls);
+          initialFilesRef.current = urls;
           const allocs = Array.isArray(defaultVoucherData.allocations) ? defaultVoucherData.allocations : [];
           setAllocations(allocs);
           initialAllocationsRef.current = allocs.map((a) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+          form.setValue("partyId", defaultVoucherData.partyId ?? "");
         }
-        form.setValue("partyId", defaultVoucherData.partyId ?? "");
         lastResetVoucherIdRef.current = null;
     }
-  }, [voucher, defaultVoucherData, form, isEditingAndConverting, isFormDirty]);
+  }, [voucher, defaultVoucherData, form, isEditingAndConverting]);
 
   useEffect(() => {
     if ((!savedVoucherId || isEditingAndConverting) && isAutoVoucherEnabled) {
@@ -719,35 +783,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   }, [payeeType, voucherType, form]);
   
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean, print?: boolean, approveAfterSave?: boolean } = {}) {
+  // Validated `data` से save — nested mobile `date` + `getValues()` से date miss होकर server पर "आज" न जाए
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean; print?: boolean; approveAfterSave?: boolean } = {}) {
     e?.preventDefault?.();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      const errors = form.formState.errors;
-      const errorMessages: string[] = [];
-
-      if (errors.payeeType) errorMessages.push(`Payee Type: ${errors.payeeType.message}`);
-      if (errors.partyId) errorMessages.push(`Party: ${errors.partyId.message}`);
-      if (errors.staffId) errorMessages.push(`Staff: ${errors.staffId.message}`);
-      if (errors.taxAccountId) errorMessages.push(`Tax Account: ${errors.taxAccountId.message}`);
-      if (errors.incomeAccountId) errorMessages.push(`Income Account: ${errors.incomeAccountId.message}`);
-      if (errors.payeeName) errorMessages.push(`Payee Name: ${errors.payeeName.message}`);
-      if (errors.accountId) errorMessages.push(`Bank/Cash Account: ${errors.accountId.message}`);
-      if (errors.date) errorMessages.push(`Date: ${errors.date.message}`);
-      if (errors.voucherNumber) errorMessages.push(`Voucher No.: ${errors.voucherNumber.message}`);
-      if (errors.amount) errorMessages.push(`Amount: ${errors.amount.message}`);
-
-      const errorText = errorMessages.length > 0
-        ? errorMessages.join(", ")
-        : "Please check the form and try again.";
-
-      sonnerToast.error("Validation Failed", { description: errorText });
-      return;
-    }
-    
-    onVoucherAction?.('saved', options.saveAndNew);
-    
-    await processAndSave(form.getValues(), options.saveAndNew, options.print, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
+    void form.handleSubmit(
+      async (data) => {
+        onVoucherAction?.("saved", options.saveAndNew);
+        await processAndSave(data, options.saveAndNew, options.print, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
+      },
+      (errors) => {
+        sonnerToast.error("Validation Failed", { description: formatPaymentInFormValidationErrors(errors) });
+      }
+    )(e);
   }
 
   async function processAndSave(data: PaymentInFormValues, saveAndNew: boolean = false, print: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
@@ -769,7 +816,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const isEdit = !!voucher?.id || !!savedVoucherId;
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
-      let originalVoucherDate: Date = voucherDate;
       if (isEdit) {
         // Check edit permission - determine ownership
         const fetchVoucher = async (cid: string, vid: string) => {
@@ -781,6 +827,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         assertCanEdit(canEditRecord, isOwnRecord, currentVoucher);
         
         // Check backdate limit for edit - use ORIGINAL voucher date, not form date
+        let originalVoucherDate = voucherDate;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
@@ -802,18 +849,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         
         // Check backdate limit for create
         assertCanPerformBackdated(canPerformBackdatedAction, "create", voucherDate);
-      }
-
-      const fp = runFiscalVoucherPreflight({
-        company,
-        can,
-        isEditing: isEdit,
-        recordDate: voucherDate,
-        originalVoucherDate: isEdit ? originalVoucherDate : null,
-      });
-      if (fp.ok === false) {
-        if (fp.message) sonnerToast.error("Permission Denied", { description: fp.message });
-        return;
       }
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
@@ -876,23 +911,47 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
   
       const sanitizedData = JSON.parse(JSON.stringify(submissionData));
-  
+      let preGeneratedVoucherId: string | undefined;
+
       const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+        const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
         if (!limitCheck.allowed) {
           sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
           setIsLoading(false);
           return;
         }
-        for (const file of newFilesToUpload) {
-          if (sanitizedData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
-          const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
-          const snapshot = await uploadBytes(storageRef, file);
-          const url = await getDownloadURL(snapshot.ref);
-          sanitizedData.fileUrls.push(url);
-          await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+        if (isLocalOnlyMode()) {
+          const voucherIdForLocalAttachments =
+            isEditingAndConverting && voucher?.id
+              ? null
+              : (savedVoucherId ?? voucher?.id ?? null);
+          const { fileUrls: merged, preGeneratedVoucherId: preGen } =
+            await appendLocalOnlyVoucherFilesToUrls({
+              companyId,
+              storageFolder: String(voucherType),
+              existingFileUrls: sanitizedData.fileUrls as string[],
+              newFiles: newFilesToUpload,
+              maxFileCount: fileAttachmentLimits.maxFileCount,
+              existingVoucherId: voucherIdForLocalAttachments,
+            });
+          sanitizedData.fileUrls = merged;
+          if (preGen) preGeneratedVoucherId = preGen;
+          try {
+            await incrementCompanyStorage(companyId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes });
+          } catch {
+            /* offline */
+          }
+        } else {
+          for (const file of newFilesToUpload) {
+            if (sanitizedData.fileUrls.length >= fileAttachmentLimits.maxFileCount) break;
+            const storageRef = ref(storage, `voucher-files/${companyId}/${voucherType}/${Date.now()}_${file.name}`);
+            const snapshot = await uploadBytes(storageRef, file);
+            const url = await getDownloadURL(snapshot.ref);
+            sanitizedData.fileUrls.push(url);
+            await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
+          }
         }
       }
   
@@ -908,19 +967,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         user.uid,
         sanitizedData,
         originalVoucherIdToDelete ? null : docId,
-        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined
+        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+        preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
           docId = savedDoc.id;
           setSavedVoucherId(docId);
           if (originalVoucherIdToDelete) {
-               await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, originalVoucherIdToDelete), {
+              // Local-only mode me bhi converted voucher ko recycle-bin mark karna zaroori hai.
+              await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
                 deletedAt: serverTimestamp(),
                 convertedToType: voucherType,
                 convertedToVoucherNumber: sanitizedData.voucherNumber,
-            });
+              });
           }
       } else {
           throw new Error("Failed to save voucher and get ID.");
@@ -948,7 +1009,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
           const openingLinked = Number(pendingLinkedPaymentOut.amountsByVoucherId[SPEND_WISE_OPENING_BALANCE_ID] ?? 0) || 0;
           // Persist Opening Balance spend-wise link on current voucher so popup and count remain consistent after save.
-          await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, docId), {
+          // Spend-wise opening link patch local/offline + online dono paths par same helper se.
+          await patchVoucherFields(companyId, docId, {
             linkedOpeningBalanceAmount: openingLinked,
             linkedOpeningBalanceAccountId: openingLinked > 0 ? accountId : null,
           });
@@ -978,8 +1040,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         } else {
           sonnerToast.success("Receipt Recorded!", { id: toastId, description: `Voucher #${data.voucherNumber} has been ${isEdit ? 'updated' : 'created'}.` });
         }
-        triggerSync();
-
         if (companyId && company) {
           const vid = docId ?? voucher?.id;
           if (isEdit) {
@@ -1131,14 +1191,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     setIsLoading(true);
     try {
-        await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId), {
+        // Delete action local-first path me bhi voucher ko bin me move kare.
+        await patchVoucherFields(companyId, savedVoucherId, {
             isDeleted: true,
             deletedAt: serverTimestamp(),
             deletedBy: user?.uid || '',
         });
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
-        triggerSync();
     } catch (error) {
         console.error("Error deleting voucher:", error);
         toast({ variant: "destructive", title: "Error", description: "Failed to delete voucher." });
@@ -1148,10 +1208,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   };
   
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !allowAttachments) return;
-    
+    const picked = e.target.files?.length ?? 0;
+    tracePaymentInAttach("handleFileChange", { picked, allowAttachments });
+
+    if (!e.target.files) {
+      tracePaymentInAttach("exit: files null (unexpected)");
+      return;
+    }
+    if (picked === 0) {
+      tracePaymentInAttach("exit: 0 files — user cancelled ya empty pick");
+      return;
+    }
+    if (!allowAttachments) {
+      tracePaymentInAttach("exit: allowAttachments false (toast nahi tha pehle — ab pata chala)");
+      return;
+    }
+
     const maxFiles = fileAttachmentLimits.maxFileCount || 0;
     if (maxFiles === 0) {
+      tracePaymentInAttach("exit: maxFileCount 0");
       toast({
         variant: "destructive",
         title: "File Attachments Disabled",
@@ -1164,6 +1239,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const remainingSlots = maxFiles - files.length;
     
     if (remainingSlots <= 0) {
+      tracePaymentInAttach("exit: limit", { maxFiles, currentFiles: files.length });
       toast({
         variant: "destructive",
         title: "Limit Reached",
@@ -1173,13 +1249,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 
     const filesToProcess = newFiles.slice(0, remainingSlots);
+    tracePaymentInAttach("processing", { count: filesToProcess.length, names: filesToProcess.map((f) => f.name) });
   
     for (const file of filesToProcess) {
       // Check file type
       const isImage = file.type.startsWith("image/");
-      const isPDF = file.type === "application/pdf";
+      const isPDF =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
       
       if (!fileAttachmentLimits.allowImage && isImage) {
+        tracePaymentInAttach("skip file: image not allowed for role", { name: file.name });
         toast({
           variant: "destructive",
           title: "File Type Not Allowed",
@@ -1189,6 +1268,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
       
       if (!fileAttachmentLimits.allowPDF && isPDF) {
+        tracePaymentInAttach("skip file: pdf not allowed for role", { name: file.name });
         toast({
           variant: "destructive",
           title: "File Type Not Allowed",
@@ -1198,6 +1278,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       if (!isImage && !isPDF) {
+        tracePaymentInAttach("skip file: not image/pdf", { name: file.name, mime: file.type });
         toast({
           variant: "destructive",
           title: "File Type Not Allowed",
@@ -1207,30 +1288,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const compressedFile = await compressFile(file);
-        if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        tracePaymentInAttach("compress start", { name: file.name, size: file.size });
+        const processedFile = await compressVoucherAttachment(file, maxBytes);
+        if (processedFile.size > maxBytes) {
+          tracePaymentInAttach("skip: still too large after compress", { after: processedFile.size, maxBytes });
           toast({
             variant: "destructive",
             title: "File Still Too Large",
-            description: `कम्प्रेस गर्दा पनि फाइल ${MAX_FILE_SIZE_MB}MB भन्दा ठुलो भयो।`,
+            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
           });
           continue;
         }
-  
-        if (files.length < maxFiles) {
-          setFiles(prev => [...prev, compressedFile]);
-        } else {
-          toast({
-            variant: "destructive",
-            title: "Limit Reached",
-            description: `You can only upload up to ${maxFiles} file${maxFiles > 1 ? 's' : ''}.`,
-          });
-          break;
-        }
+        setFiles((prev) => {
+          if (prev.length >= maxFiles) {
+            tracePaymentInAttach("setFiles no-op: at cap", { prevLen: prev.length, maxFiles });
+            return prev;
+          }
+          tracePaymentInAttach("setFiles appended", { prevLen: prev.length, added: processedFile.name });
+          return [...prev, processedFile];
+        });
       } catch (error) {
         console.error("Compression error:", error);
+        tracePaymentInAttach("compress threw", {
+          name: file.name,
+          err: error instanceof Error ? error.message : String(error),
+        });
+        toast({
+          variant: "destructive",
+          title: "Could not process file",
+          description: error instanceof Error ? error.message : "Compression or PDF read failed.",
+        });
       }
     }
+    e.target.value = "";
+    tracePaymentInAttach("handleFileChange finished");
   };
   
   const isOwner = user?.uid === company?.ownerId;
@@ -1266,78 +1358,86 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
-                  {/* Mobile: Prefix + Voucher No. + Date(s) in one row, 2/3/4 equal-sized boxes */}
+                  {/* Mobile: Prefix + Voucher No. + Date — `date` को `voucherNumber` के अंदर nest नहीं (RHF date submit तक bind रहे) */}
                   {(() => {
                     const hasPrefix = isPrefixSelectionEnabled && voucherPrefixes.length > 0;
                     const hasDateBS = dateSystem === 'BS' || dateSystem === 'Both';
                     const hasDateAD = dateSystem === 'AD' || dateSystem === 'Both';
                     const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
-                      <FormField
-                        control={form.control}
-                        name="voucherNumber"
-                        render={({ field: voucherField }: any) => (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name="date"
-                              render={({ field: dateField }: any) => (
-                                <>
-                                  <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
-                                    {hasPrefix && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Prefix</FormLabel>
-                                        <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find(p => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
-                                          <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
-                                            <SelectValue/>
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {voucherPrefixes.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                                          </SelectContent>
-                                        </Select>
-                                      </FormItem>
-                                    )}
-                                    <FormItem className="min-w-0 w-full overflow-hidden">
-                                      <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
-                                      <FormControl>
-                                        <Input placeholder="e.g. RCPT-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
-                                      </FormControl>
-                                    </FormItem>
-                                    {hasDateBS && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
-                                        <div className="min-w-0 w-full overflow-hidden">
-                                          <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
-                                        </div>
-                                      </FormItem>
-                                    )}
-                                    {hasDateAD && (
-                                      <FormItem className="min-w-0 w-full overflow-hidden">
-                                        <FormLabel className="text-xs truncate">Date</FormLabel>
-                                        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                                          <PopoverTrigger asChild>
-                                            <FormControl>
-                                              <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
-                                                {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
-                                                <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
-                                              </Button>
-                                            </FormControl>
-                                          </PopoverTrigger>
-                                          <PopoverContent className="w-auto p-0 z-50" align="start">
-                                            <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
-                                          </PopoverContent>
-                                        </Popover>
-                                      </FormItem>
-                                    )}
-                                  </div>
-                                  <FormMessage />
-                                </>
-                              )}
-                            />
-                            <FormMessage />
-                          </>
-                        )}
-                      />
+                      <>
+                        <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                          <FormField
+                            control={form.control}
+                            name="voucherNumber"
+                            render={({ field: voucherField }: any) => (
+                              <>
+                                {hasPrefix && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Prefix</FormLabel>
+                                    <Select onValueChange={(prefix) => fetchVoucherNumber(prefix)} value={voucherPrefixes.find((p) => voucherField.value?.startsWith(normalizePrefix(p)) || voucherField.value?.startsWith(p)) || voucherPrefixes[0]} disabled={deleteDisabledWhenLinked}>
+                                      <SelectTrigger className="h-9 w-full min-w-0 max-w-full text-xs px-1 [&>span]:truncate">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {voucherPrefixes.map((p) => (
+                                          <SelectItem key={p} value={p}>
+                                            {p}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormItem>
+                                )}
+                                <FormItem className="min-w-0 w-full overflow-hidden">
+                                  <FormLabel className="text-xs truncate">Voucher No.</FormLabel>
+                                  <FormControl>
+                                    <Input placeholder="e.g. RCPT-001" {...voucherField} className="h-9 text-xs px-2 min-w-0 max-w-full truncate w-full" disabled={deleteDisabledWhenLinked || (isAutoVoucherEnabled && (!isVoucherEditingAllowed || !can('edit_voucher_numbers')))} />
+                                  </FormControl>
+                                </FormItem>
+                              </>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="date"
+                            render={({ field: dateField }: any) => (
+                              <>
+                                {hasDateBS && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date (BS)</FormLabel>
+                                    <div className="min-w-0 w-full overflow-hidden">
+                                      <BsDatePicker valueAD={dateField.value} onChangeAD={(d) => { if (d) d.setHours(12, 0, 0, 0); dateField.onChange(d as Date); setIsCalendarOpen(false); }} isRange={false} transactionDates={transactionDates} className="h-9 text-xs w-full" disabled={deleteDisabledWhenLinked} />
+                                    </div>
+                                  </FormItem>
+                                )}
+                                {hasDateAD && (
+                                  <FormItem className="min-w-0 w-full overflow-hidden">
+                                    <FormLabel className="text-xs truncate">Date</FormLabel>
+                                    <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                                      <PopoverTrigger asChild>
+                                        <FormControl>
+                                          <Button variant="outline" className={cn("h-9 pl-2 pr-2 text-left font-normal text-xs w-full min-w-0 max-w-full truncate", !dateField.value && "text-muted-foreground")} disabled={deleteDisabledWhenLinked}>
+                                            {dateField.value ? formatDate(dateField.value) : <span className="text-xs">Pick date</span>}
+                                            <CalendarIcon className="ml-auto h-3 w-3 shrink-0 opacity-50" />
+                                          </Button>
+                                        </FormControl>
+                                      </PopoverTrigger>
+                                      <PopoverContent className="w-auto p-0 z-50" align="start">
+                                        <Calendar mode="single" selected={dateField.value} onSelect={(date) => { if (date) date.setHours(12, 0, 0, 0); dateField.onChange(date); setIsCalendarOpen(false); }} initialFocus modifiers={{ hasTransactions: transactionDates }} modifiersClassNames={{ hasTransactions: "has-transactions" }} />
+                                      </PopoverContent>
+                                    </Popover>
+                                  </FormItem>
+                                )}
+                              </>
+                            )}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-0">
+                          <FormField control={form.control} name="voucherNumber" render={() => <FormMessage />} />
+                          <FormField control={form.control} name="date" render={() => <FormMessage />} />
+                        </div>
+                      </>
                     );
                   })()}
                 </>
@@ -1813,7 +1913,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="amount"
                 render={({ field }: any) => {
-                  const hasLinks = allocations.some((a) => getAllocationTotal(a) > 0);
+                  const hasLinks = allocations.length > 0;
                   const amountDisabled = hasLinks || deleteDisabledWhenLinked;
                   return (
                   <FormItem>
@@ -1852,43 +1952,50 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         key={index}
                         file={file}
                         onRemove={
-                          allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
+                          allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
                             ? () => setFiles((prev) => prev.filter((_, i) => i !== index))
                             : undefined
                         }
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                       />
                     ))}
-                    {allowAttachments && !deleteDisabledWhenLinked && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <div
-                        className={cn(
-                          "relative flex h-24 w-24 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "cursor-pointer text-muted-foreground hover:border-primary"
-                            : "cursor-not-allowed border-muted-foreground/25 text-muted-foreground/50 opacity-50"
-                        )}
-                        onClick={() => {
-                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                            fileInputRef.current?.click();
+                    {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                      <>
+                        <label
+                          htmlFor={attachFileInputId}
+                          className={cn(
+                            "relative flex h-24 w-24 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors",
+                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                              ? "cursor-pointer text-muted-foreground hover:border-primary"
+                              : "pointer-events-none cursor-not-allowed border-muted-foreground/25 text-muted-foreground/50 opacity-50"
+                          )}
+                          onPointerDown={() =>
+                            tracePaymentInAttach("label pointerdown (user tapped Add File area)")
                           }
-                        }}
-                      >
-                        <PlusCircle className="h-6 w-6" />
-                        <span className="mt-1 text-xs">Add File</span>
+                        >
+                          <PlusCircle className="h-6 w-6" />
+                          <span className="mt-1 text-xs">Add File</span>
+                        </label>
                         <Input
+                          id={attachFileInputId}
                           type="file"
-                          className="hidden"
+                          className="sr-only"
                           ref={fileInputRef}
                           onChange={handleFileChange}
+                          onClick={() =>
+                            tracePaymentInAttach("native <input type=file> click", {
+                              disabled: fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0,
+                            })
+                          }
                           accept={
                             [fileAttachmentLimits.allowImage ? "image/*" : "", fileAttachmentLimits.allowPDF ? "application/pdf" : ""]
                               .filter(Boolean)
                               .join(",") || "image/*,application/pdf"
                           }
                           multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={deleteDisabledWhenLinked || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                          disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                         />
-                      </div>
+                      </>
                     )}
                   </div>
                 </RestrictedFileUploader>
@@ -2043,7 +2150,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                         <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher ( current voucher )</span>
                       </div>
-                      {requirePaymentLinkForSpendWise && (
+                      {spendWiseLinkRequired && (
                         <p className="text-sm text-blue-600">
                           {spendWiseLinkableCount > 0
                             ? `${spendWiseLinkableCount} voucher${spendWiseLinkableCount === 1 ? "" : "s"} available to link, so link 1st to save.`
@@ -2269,9 +2376,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={(e) => handleFormSubmit(e, { print: true })} disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_PRINT_CLASS)}>
                   Save & Print
                 </Button>
-                {/* Row 1: Cancel | Approve or Save & Approve (when can approve) | Save (always) - all 6 buttons */}
+                {/* Row 1: Cancel | Save | Approve (right) — CreateSaleForm jaisa */}
                 <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setPendingLinkedPaymentOut(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
+                </Button>
+                {/* Edit + unchanged → Save off; chhota sa dirty → on (Approve jaisa) */}
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                  {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -2284,9 +2395,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 ) : (
                   <Button type="button" disabled className="w-full bg-muted text-muted-foreground border-0 opacity-50">—</Button>
                 )}
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("w-full", BTN_SAVE_CLASS)}>
-                  {isLoading ? "..." : "Save"}
-                </Button>
               </div>
             ) : (
               <>
@@ -2326,7 +2434,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

@@ -9,13 +9,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCompany } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
 import { useVouchers } from "@/hooks/useVouchers";
-import { useUnreadNotificationCount, useUnreadAlertsCount } from "@/hooks/useUnreadNotificationCount";
+import { useUnreadMessagesCount, useUnreadAlertsCount } from "@/hooks/useUnreadNotificationCount";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
-import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
+import { writeLocalUserNotificationSettings } from "@/lib/localUserNotificationSettings";
 import { Loader2, Bell, CheckCircle, MessageSquare, Receipt } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { NotificationSettings as NotificationSettingsType } from "@/hooks/useCompany";
@@ -91,12 +90,13 @@ function toNotificationSettings(data: FormValues): NotificationSettingsType {
 }
 
 export function NotificationSettings() {
-  const { company, companyId, triggerSync, loading: companyLoading } = useCompany();
+  const { companyId, effectiveNotificationSettings, loading: companyLoading } = useCompany();
+  const { user } = useAuth();
   const { vouchers } = useVouchers();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const unapprovedCount = (vouchers || []).filter((v: any) => v.isApproved !== true).length;
-  const unreadMessageCount = useUnreadNotificationCount();
+  const unreadMessageCount = useUnreadMessagesCount();
   const unreadAlertsCount = useUnreadAlertsCount();
 
   const form = useForm<FormValues>({
@@ -104,32 +104,30 @@ export function NotificationSettings() {
     defaultValues,
   });
 
+  // effective = local user prefs > company doc mirror > defaults — bina Firestore sync ke
   useEffect(() => {
-    if (company?.notificationSettings) {
-      form.reset(toFormValues(company.notificationSettings));
-    } else {
-      form.reset(defaultValues);
-    }
-  }, [company?.notificationSettings, form]);
+    form.reset(toFormValues(effectiveNotificationSettings));
+  }, [effectiveNotificationSettings, form]);
 
   async function onSubmit(data: FormValues) {
     if (!companyId) {
       toast({ variant: "destructive", title: "No company selected." });
       return;
     }
+    if (!user?.uid) {
+      toast({ variant: "destructive", title: "Sign in required", description: "Save your notification prefs after login." });
+      return;
+    }
     setIsLoading(true);
     try {
-      const companyRef = doc(firestore, "companies", companyId);
-      await updateDoc(companyRef, { notificationSettings: toNotificationSettings(data) });
-      toast({ title: "Saved", description: "Notification settings updated." });
-      triggerSync();
-    } catch (error) {
-      console.error("Error updating notification settings:", error);
+      writeLocalUserNotificationSettings(companyId, user.uid, toNotificationSettings(data));
       toast({
-        variant: "destructive",
-        title: "Error",
-        description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to save.",
+        title: "Saved",
+        description: "Notification preferences saved for this user on this device.",
       });
+    } catch (error) {
+      console.error("Error saving notification settings:", error);
+      toast({ variant: "destructive", title: "Error", description: "Failed to save (storage may be full or blocked)." });
     } finally {
       setIsLoading(false);
     }
@@ -148,8 +146,8 @@ export function NotificationSettings() {
             Notification Settings
           </CardTitle>
           <CardDescription>
-            Control where approve and message notifications appear (entity pages, list pages, and transaction rows).
-            Only users with the relevant permissions will see these indicators.
+            These choices apply to this logged-in user on this device only (no cloud sync required). Where indicators
+            appear — entity pages, lists, transaction rows — as allowed by your permissions.
           </CardDescription>
         </CardHeader>
         <CardContent>

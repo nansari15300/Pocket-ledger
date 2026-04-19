@@ -207,9 +207,17 @@ export function Combobox({
             <CommandEmpty>{showAddNew ? null : "No results found."}</CommandEmpty>
             <CommandGroup>
               {isMultiSelect && (
-                  <CommandItem key="all" value="all" onSelect={() => handleMultiSelect('all')}>
-                    <Check className={cn("mr-2 h-4 w-4", (value as string[]).includes('all') ? "opacity-100" : "opacity-0")} />
-                    All
+                  <CommandItem
+                    key="all"
+                    value="all"
+                    onSelect={() => handleMultiSelect("all")}
+                    className="w-full"
+                  >
+                    {/* pointer-events-none: hit cmdk-item root — full row select (child text svg pe narrow hit fix) */}
+                    <span className="pointer-events-none flex w-full min-w-0 items-center">
+                      <Check className={cn("mr-2 h-4 w-4 shrink-0", (value as string[]).includes("all") ? "opacity-100" : "opacity-0")} />
+                      All
+                    </span>
                   </CommandItem>
               )}
               {filteredOptions.map((option) => (
@@ -223,21 +231,27 @@ export function Combobox({
                     return isMultiSelect ? handleMultiSelect(option.value) : handleSingleSelect(option.value);
                   }}
                   className={cn(
-                    "flex items-center",
+                    "flex w-full min-w-0 items-center",
                     option.isSpecial && "text-amber-600 font-medium",
                     option.disabled && "opacity-50 cursor-not-allowed"
                   )}
                 >
-                  <Check
-                    className={cn(
-                      "mr-2 h-4 w-4",
-                      isMultiSelect
-                        ? (value as string[]).includes(option.value) || (value as string[]).includes('all') ? "opacity-100" : "opacity-0"
-                        : value === option.value ? "opacity-100" : "opacity-0"
-                    )}
-                  />
-                  {option.isSpecial && <Crown className="mr-2 h-4 w-4 text-amber-500" />}
-                  {renderOptionLabel(option.label)}
+                  <span className="pointer-events-none flex w-full min-w-0 items-center">
+                    <Check
+                      className={cn(
+                        "mr-2 h-4 w-4 shrink-0",
+                        isMultiSelect
+                          ? (value as string[]).includes(option.value) || (value as string[]).includes("all")
+                            ? "opacity-100"
+                            : "opacity-0"
+                          : value === option.value
+                            ? "opacity-100"
+                            : "opacity-0"
+                      )}
+                    />
+                    {option.isSpecial && <Crown className="mr-2 h-4 w-4 shrink-0 text-amber-500" />}
+                    {renderOptionLabel(option.label)}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -251,10 +265,12 @@ export function Combobox({
                                 key={item.value}
                                 value={item.value}
                                 onSelect={() => handleAddNew(item.value, search.trim())}
-                                className="text-green-600 font-medium focus:text-green-700 focus:bg-green-50 dark:focus:bg-green-950/30"
+                                className="w-full min-w-0 text-green-600 font-medium focus:text-green-700 focus:bg-green-50 dark:focus:bg-green-950/30"
                             >
-                                <Plus className="mr-2 h-4 w-4 text-green-600" />
-                                {search.trim() ? `${item.label}: "${search.trim()}"` : item.label}
+                                <span className="pointer-events-none flex w-full min-w-0 items-center">
+                                  <Plus className="mr-2 h-4 w-4 shrink-0 text-green-600" />
+                                  {search.trim() ? `${item.label}: "${search.trim()}"` : item.label}
+                                </span>
                             </CommandItem>
                         ))}
                     </CommandGroup>

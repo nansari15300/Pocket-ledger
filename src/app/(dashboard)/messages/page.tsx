@@ -81,7 +81,8 @@ export default function MessagesPage() {
   // Radix Tabs + nested dialogs use React useId(); SSR and client can assign different prefixes in Next dev — render tabs only after mount.
   const [messagesRadixMounted, setMessagesRadixMounted] = useState(false);
 
-  const { company, companyId, setCompanyId, allCompanies: userCompanies } = useCompany();
+  const { company, companyId, setCompanyId, allCompanies: userCompanies, effectiveNotificationSettings } =
+    useCompany();
   const { user, customUser } = useAuth();
   const { processedParties, processedStaff } = useVouchers();
   const [allAppUsers, setAllAppUsers] = useState<any[]>([]);
@@ -413,7 +414,8 @@ export default function MessagesPage() {
 
    useEffect(() => {
     if (!myUserIds.length) return;
-    if (company?.isOwned !== true) {
+    // Sirf owner + selected company ke alerts — badge/count dusri company se mix na ho.
+    if (company?.isOwned !== true || !companyId?.trim()) {
       setUnreadAlerts(0);
       return;
     }
@@ -429,6 +431,7 @@ export default function MessagesPage() {
       const alertsQuery = query(
         collection(firestore, "admin_notifications"),
         where("recipientUserId", "==", id),
+        where("companyId", "==", companyId),
         where("isRead", "==", false)
       );
       const unsubAlerts = onSnapshot(alertsQuery, (snapshot) => {
@@ -439,7 +442,7 @@ export default function MessagesPage() {
     });
 
     return () => unsubscribers.forEach((unsub) => unsub());
-  }, [myUserIds, company?.isOwned]);
+  }, [myUserIds, company?.isOwned, companyId]);
   
   const handleConversationSelect = useCallback((conversation: any) => {
     if (!conversation || !user) return;
@@ -708,7 +711,7 @@ export default function MessagesPage() {
                     <TabsList className="mb-0 w-full sm:w-auto">
                         <TabsTrigger value="alerts" className="flex items-center gap-2">
                             <Bell className="h-4 w-4"/>Alerts 
-                            {unreadAlerts > 0 && (company?.notificationSettings?.transactionAlerts?.onTabs !== false) && (
+                            {unreadAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
                               <Badge className="ml-2">{unreadAlerts}</Badge>
                             )}
                         </TabsTrigger>
@@ -737,7 +740,10 @@ export default function MessagesPage() {
                         handleSendInvite={handleSendInvite}
                         statuses={statuses}
                         unreadAlertsCount={unreadAlerts}
-                        showAlertsOnList={company?.notificationSettings?.transactionAlerts?.on !== false && company?.notificationSettings?.transactionAlerts?.onList !== false}
+                        showAlertsOnList={
+                          effectiveNotificationSettings?.transactionAlerts?.on !== false &&
+                          effectiveNotificationSettings?.transactionAlerts?.onList !== false
+                        }
                         onMobileViewChange={setMobileChatView}
                      />
                 </TabsContent>

@@ -3,7 +3,10 @@
 import { doc, getDoc, updateDoc, collection, getCountFromServer } from "firebase/firestore";
 import { increment } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { getPlan, type PlanId } from "@/config/plans";
+import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
+import { getPlanFromPlans } from "@/hooks/useLivePlans";
+import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
+import { isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
 const BYTES_PER_GB = 1e9;
 
@@ -15,13 +18,19 @@ export type UsageDelta = {
 export async function getCompanyUsage(
   companyId: string
 ): Promise<{ attachmentsUsedBytes: number; storageUsedBytes: number }> {
-  const ref = doc(firestore, "companies", companyId);
-  const snap = await getDoc(ref);
-  const data = snap.data();
-  return {
-    attachmentsUsedBytes: Number(data?.attachmentsUsedBytes ?? 0),
-    storageUsedBytes: Number(data?.storageUsedBytes ?? 0),
-  };
+  // Offline / local-only company: Firestore read throw kare to voucher+file save poora fail ho jata tha — limit check ke liye 0 maan lo.
+  try {
+    const ref = doc(firestore, "companies", companyId);
+    const snap = await getDoc(ref);
+    const data = snap.data();
+    return {
+      attachmentsUsedBytes: Number(data?.attachmentsUsedBytes ?? 0),
+      storageUsedBytes: Number(data?.storageUsedBytes ?? 0),
+    };
+  } catch (e) {
+    console.warn("[storageUsage] getCompanyUsage fallback (offline or no company doc)", e);
+    return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
+  }
 }
 
 /**
@@ -30,11 +39,14 @@ export async function getCompanyUsage(
 export async function checkStorageLimit(
   companyId: string,
   planId: PlanId | string | undefined,
-  delta: UsageDelta
+  delta: UsageDelta,
+  /** Local company → `*Local` GB caps (admin Plans); missing `storageOption` treated as local app-wide. */
+  storageOption?: string | null
 ): Promise<{ allowed: boolean; message?: string }> {
-  const plan = getPlan((planId as PlanId) || undefined);
-  const maxAttachmentsGB = (plan?.entitlements?.maxAttachmentsGB as number) ?? 1;
-  const maxStorageGB = (plan?.entitlements?.maxStorageGB as number) ?? 1;
+  const merged = getPlanFromPlans(readCachedPlansRecord() ?? defaultPlansRecordFallback(), (planId as PlanId) || undefined);
+  const useLocal = companyStorageIsLocal(storageOption);
+  const maxAttachmentsGB = numericEntitlement(merged.entitlements, "maxAttachmentsGB", useLocal);
+  const maxStorageGB = numericEntitlement(merged.entitlements, "maxStorageGB", useLocal);
 
   const usage = await getCompanyUsage(companyId);
   const addAtt = Math.max(0, delta.attachmentsBytes ?? 0);
@@ -86,6 +98,11 @@ export async function incrementCompanyStorage(
       console.warn("[storageUsage] Skipped increment due to insufficient permissions.");
       return;
     }
+    // Offline / unavailable: local file queue + SQLite save chalna chahiye; usage counter baad me sync ho sakta hai.
+    if (isLikelyOfflineFirestoreError(error)) {
+      console.warn("[storageUsage] Skipped increment (offline/unavailable).");
+      return;
+    }
     throw error;
   }
 }
@@ -113,6 +130,10 @@ export async function decrementCompanyStorage(
     // Non-owner/shared roles may fail this update; do not break user flow.
     if (error?.code === "permission-denied" || error?.code === "PERMISSION_DENIED") {
       console.warn("[storageUsage] Skipped decrement due to insufficient permissions.");
+      return;
+    }
+    if (isLikelyOfflineFirestoreError(error)) {
+      console.warn("[storageUsage] Skipped decrement (offline/unavailable).");
       return;
     }
     throw error;

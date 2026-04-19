@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Year dropdown: default window is 11 years — 5 below + selected + 5 above selected year
- * (clamped to min/max). Trigger matches month SelectTrigger. Selected year = green border ring only (not solid fill), like month item highlight.
+ * Year picker: pehle ±5 saal (11 rows) — "Show more" se range badhe; selected row green border + tick.
+ * Reference app / BS+AD date panels ke saath same trigger size as month wheel.
  */
 import * as React from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -12,9 +12,7 @@ import { calendarSelectContentClassName } from "@/lib/calendarChrome";
 import { ChevronDown, Check } from "lucide-react";
 
 const STEP = 5;
-/** Years to show below selected on open (inclusive span is ±5 → 11 years total). */
 const INITIAL_PAST = 5;
-/** Years to show above selected on open (same count as past for centered default). */
 const INITIAL_FUTURE = 5;
 
 function initialYearRange(value: number, minYear: number, maxYear: number) {
@@ -45,10 +43,8 @@ export function YearSelectShowMore({
   const [start, setStart] = React.useState(() => initialYearRange(value, minYear, maxYear).start);
   const [end, setEnd] = React.useState(() => initialYearRange(value, minYear, maxYear).end);
   const listRef = React.useRef<HTMLDivElement>(null);
-  // Nested rAF id so cleanup can cancel both frames when popover closes quickly.
   const centerFollowUpRafRef = React.useRef(0);
 
-  /** Centers the selected year row inside listRef (scrollIntoView often scrolls the page, not this div). */
   const scrollSelectedRowToCenter = React.useCallback(() => {
     const container = listRef.current;
     if (!container) return;
@@ -104,11 +100,7 @@ export function YearSelectShowMore({
           role="combobox"
           aria-expanded={open}
           disabled={disabled}
-          className={cn(
-            // Match NepaliCalendar / AdCalendar month SelectTrigger: w-[120px] h-8 text-sm + same outline chrome
-            "w-[120px] h-8 text-sm justify-between px-3 font-normal",
-            className
-          )}
+          className={cn("w-[120px] h-8 text-sm justify-between px-3 font-normal", className)}
         >
           <span>{value}</span>
           <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
@@ -119,7 +111,6 @@ export function YearSelectShowMore({
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        {/* Taller shell so ~11 year rows fit with less inner scroll */}
         <div className="flex flex-col max-h-[min(320px,55vh)]">
           {canOlder ? (
             <button
@@ -130,7 +121,6 @@ export function YearSelectShowMore({
               Show more · older years
             </button>
           ) : null}
-          {/* No visible scrollbar (like month Select); still scrollable — wheel / touch / drag */}
           <div
             ref={listRef}
             className={cn(
@@ -144,7 +134,6 @@ export function YearSelectShowMore({
                 type="button"
                 data-year-row={y}
                 className={cn(
-                  // Selected = green outline + check; hover (any row) = border line, full pill fill nahi (month Select jaisa)
                   "w-full max-w-[calc(100%-2px)] mx-auto flex items-center justify-start gap-2 pl-2.5 pr-2 py-1.5 text-sm rounded-full transition-colors border-2 border-transparent bg-background",
                   y === value
                     ? "border-green-600 font-semibold text-foreground hover:border-green-600"

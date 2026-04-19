@@ -31,6 +31,7 @@ import {
   type Context,
   type Transaction,
   TransactionRow,
+  OpeningBalanceFileCellContent,
   getConversionFactor,
   formatQuantity,
   getOppositeAccountLabel,
@@ -47,11 +48,9 @@ import { format } from "date-fns";
 import { useCompany } from "@/hooks/useCompany";
 import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { useAuth } from "@/hooks/useAuth";
-import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { toast } from "sonner";
+import usePermissions from "@/hooks/usePermissions";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
-import { resolveLedgerRowToVoucherId } from "@/lib/resolveLedgerVoucherId";
-import { filterTransactionsByNarrationNoteSearch } from "@/lib/transactionNarrationNoteSearch";
 import {
   insertFiscalPartitionRows,
   getFiscalMergePartitionDateFromCompany,
@@ -66,6 +65,16 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
 
+/** Spend-wise row grouping — mobile cards + desktop table must share shape; hooks using this stay above any conditional return. */
+type MobileBlock =
+  | { type: "spacer" }
+  | { type: "group"; colorIndex: number; items: any[] }
+  | { type: "single"; item: any };
+type TableBlock =
+  | { type: "spacer"; id: string }
+  | { type: "group"; colorIndex: number; items: any[] }
+  | { type: "single"; item: any };
+
 interface TransactionsTableProps {
   transactions: Transaction[];
   context: Context;
@@ -73,7 +82,15 @@ interface TransactionsTableProps {
   openingBalance?: number;
   openingBalanceOutstanding?: number;
   openingBalanceLinkedVoucherNos?: string[];
+  /** Party (etc.): opening row ke turant baad voucher-style narration line */
+  openingBalanceNarration?: string;
+  /** Opening row File column: party/bank `documentFileUrls` (voucher jaisa tick + hover) */
+  openingBalanceAttachmentUrls?: string[];
+  /** Entity "As on" date — opening row ke Date column(s) me dikhai (party/bank/staff/tax/item/expense) */
+  openingBalanceDate?: unknown;
   showNarration?: boolean;
+  /** Daybook: narration column me note-text filter (parent state) */
+  narrationNoteSearch?: string;
   stockView?: StockView;
   item?: Item;
   displayUnit?: string;
@@ -132,8 +149,8 @@ interface TransactionsTableProps {
   forceBalanceMode?: "statement" | "bill_wise";
   /** Item context: allow Party column show/hide from columns dropdown. */
   showItemPartyColumn?: boolean;
-  /** Narration + note title filter (footer search); spend-wise row groups stay intact when any row matches. */
-  narrationNoteSearch?: string;
+  /** When true (default), `isApproved` !== true rows get pink tint (main + narration). Party details use default. */
+  highlightPendingApproval?: boolean;
 }
 
 export function TransactionsTable({
@@ -143,7 +160,11 @@ export function TransactionsTable({
   openingBalance = 0,
   openingBalanceOutstanding,
   openingBalanceLinkedVoucherNos,
+  openingBalanceNarration,
+  openingBalanceAttachmentUrls,
+  openingBalanceDate,
   showNarration = true,
+  narrationNoteSearch: _narrationNoteSearch,
   stockView = "amount",
   item,
   displayUnit,
@@ -192,13 +213,10 @@ export function TransactionsTable({
   blinkMode,
   forceBalanceMode,
   showItemPartyColumn = true,
-  narrationNoteSearch = "",
+  highlightPendingApproval = true,
 }: TransactionsTableProps) {
-  const filteredTableTransactions = useMemo(
-    () => filterTransactionsByNarrationNoteSearch(transactions, narrationNoteSearch ?? ""),
-    [transactions, narrationNoteSearch]
-  );
   const { company, companyId } = useCompany();
+  // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
   const fiscalPartitionOpts = useMemo(() => {
     if (company?.fiscalSplitMode !== "merge") return { at: null as Date | null, label: undefined as string | undefined };
     return {
@@ -206,7 +224,6 @@ export function TransactionsTable({
       label: company.fiscalPartitionLabel,
     };
   }, [company?.fiscalSplitMode, company?.fiscalMergePartitionAt, company?.fiscalPartitionLabel]);
-  /** Neela divider: "FY …/… Start Date YYYY-MM-DD" (+ optional settings note). */
   const fiscalMergeBannerLabel = useMemo(
     () =>
       fiscalPartitionOpts.at
@@ -217,10 +234,13 @@ export function TransactionsTable({
   const tableTransactions = useMemo(
     () =>
       fiscalPartitionOpts.at
-        ? insertFiscalPartitionRows(filteredTableTransactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel)
-        : filteredTableTransactions,
-    [filteredTableTransactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
+        ? insertFiscalPartitionRows(transactions as any[], fiscalPartitionOpts.at, fiscalMergeBannerLabel)
+        : transactions,
+    [transactions, fiscalPartitionOpts.at, fiscalMergeBannerLabel]
   );
+  /** OB narration row blue tint — openingBalanceNarrationRow `useSpendWiseOpeningBalanceCard` se pehle chahiye */
+  const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+  const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
   const { user, customUser } = useAuth();
   const currentUserUid = user?.uid ?? null;
   const currentUserDisplayName = customUser?.displayName || user?.displayName || user?.email || null;
@@ -230,12 +250,10 @@ export function TransactionsTable({
   const handleApproveVoucherDefault = useCallback(
     async (transaction: any) => {
       if ((transaction as any)?.type === FISCAL_YEAR_PARTITION_ROW_TYPE) return;
-      // Synthetic row ids (group contra -in/-out, spend-wise -in-, -ob-link) ko real voucher id par map karo — warna Firestore "not found".
-      const voucherId = resolveLedgerRowToVoucherId(transaction);
-      if (!companyId || !voucherId || !user?.uid) return;
+      if (!companyId || !transaction?.id || !user?.uid) return;
       try {
         const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-        await approveVoucherWithHistory(companyId, voucherId, user.uid, approverName);
+        await approveVoucherWithHistory(companyId, transaction.id, user.uid, approverName);
         toast.success("Transaction approved.");
       } catch (e) {
         toast.error("Failed to approve transaction.");
@@ -390,6 +408,7 @@ export function TransactionsTable({
   }, [getDisplayValueProp, formatCurrency]);
 
 
+  // Header filter: `modal` true — input pe pehla click dismiss na ho (non-modal me DismissableLayer kabhi filter box ko "outside" maan leta hai)
   const renderHeaderWithFilter = (key: string, label: string, isNumeric: boolean = false, minWidthPx?: number) => {
     const isFiltered = !!(filters && filters[key]) || (key === 'type' && voucherTypes && !voucherTypes.includes('all'));
     const thClass = cn('p-0', isNumeric && 'text-right');
@@ -401,13 +420,13 @@ export function TransactionsTable({
           <div className={cn('flex items-center', isNumeric ? 'flex-row' : 'flex-row')}>
             <span>{label}</span>
             {isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && (
-              <Popover open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
+              <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
                 <PopoverTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-6 w-6 ml-1">
                     <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="p-1 w-48" onOpenAutoFocus={(e: Event) => e.preventDefault()} onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+                <PopoverContent className="p-1 w-48" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
                     ) : setFilters ? (
@@ -426,13 +445,13 @@ export function TransactionsTable({
               </Popover>
             )}
             {!isNumeric && (setFilters || (key === 'type' && onVoucherTypeChange)) && (
-              <Popover open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
+              <Popover modal open={activeFilter === key} onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}>
                 <PopoverTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-6 w-6 ml-0">
                     <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="p-1 w-48" onOpenAutoFocus={(e: Event) => e.preventDefault()} onCloseAutoFocus={(e: Event) => e.preventDefault()}>
+                <PopoverContent className="p-1 w-48" onCloseAutoFocus={(e: Event) => e.preventDefault()}>
                     {key === 'type' && onVoucherTypeChange ? (
                         <VoucherTypeFilter selectedTypes={voucherTypes || ['all']} onSelectionChange={onVoucherTypeChange} />
                     ) : setFilters ? (
@@ -514,9 +533,9 @@ export function TransactionsTable({
       return getDisplayValue(val);
   }
 
-  const livePlans = useLivePlans();
-  const plan = getPlanFromPlans(livePlans, (company?.planId as any) || "basic");
-  const showFileColumn = plan.entitlements.canAddFileImagePdf === true;
+  // File column: `usePermissions` local/SQLite company par plan cache miss ya "basic" par bhi `canAddFileImagePdf` boost karta hai — seedha plan se mat lo
+  const { canAddFileImagePdf } = usePermissions();
+  const showFileColumn = canAddFileImagePdf === true;
   const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const showFileBySelection = showFileColumn && showCol("file");
   const dateCols = dateSystem === "Both" ? 2 : 1;
@@ -543,6 +562,45 @@ export function TransactionsTable({
   const openingBalanceColSpan = visibleBaseCols + (context === 'note' ? 1 : 0);
   const totalColSpan = visibleBaseCols;
   const fullRowColSpan = openingBalanceColSpan + visibleDebitCol + visibleCreditCol + visibleStatusCol + visibleBalanceCol + 1;
+  const openingBalanceNarrationTrimmed = (openingBalanceNarration ?? "").trim();
+  /** Main OB `<tr>` aur narration `<tr>` ke beech double border na ho */
+  const hasOpeningBalanceNarrationSubRow = showNarration && Boolean(openingBalanceNarrationTrimmed);
+  /** Firestore Timestamp | Date | string — entity form ki "As on" date */
+  const openingBalanceRowDate = useMemo((): Date | null => {
+    const v = openingBalanceDate;
+    if (v == null || v === undefined) return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    if (typeof (v as { toDate?: () => Date }).toDate === "function") {
+      try {
+        const d = (v as { toDate: () => Date }).toDate();
+        return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+      } catch {
+        return null;
+      }
+    }
+    const p = new Date(v as string | number);
+    return isNaN(p.getTime()) ? null : p;
+  }, [openingBalanceDate]);
+  /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
+  const openingBalanceNarrationColSpan =
+    visibleColumns == null
+      ? dateCols +
+        2 +
+        (context === "daybook" ? 1 : 0) +
+        (isItemPartyContext && showItemPartyColumn ? 1 : 0) +
+        userCol +
+        fileCol +
+        visibleDebitCol +
+        visibleCreditCol
+      : (showCol("date") ? dateCols : 0) +
+        (showCol("type") ? 1 : 0) +
+        (showCol("voucherNo") ? 1 : 0) +
+        (context === "daybook" ? 1 : 0) +
+        (isItemPartyContext && showItemPartyColumn ? 1 : 0) +
+        (showCol("user") && context !== "note" ? 1 : 0) +
+        (showFileBySelection ? 1 : 0) +
+        visibleDebitCol +
+        visibleCreditCol;
 
   // When spend-wise already has an explicit opening-balance group row, avoid rendering top opening row twice.
   const hasSpendWiseOpeningGroupRow = tableTransactions?.some((t: any) =>
@@ -550,11 +608,93 @@ export function TransactionsTable({
   );
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context) && !hasSpendWiseOpeningGroupRow;
 
+  // Prevent header/amount overlap — `openingBalanceDateRowCells` className ke liye pehle
+  const ensureMinGaps = true;
+
+  /** Opening row dates — normal transaction row jaisa (muted/chhota mat) */
+  const openingBalanceDateRowCells =
+    showOpeningBalance && showCol("date") ? (
+      dateSystem === "Both" ? (
+        <>
+          <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+            {openingBalanceRowDate ? formatDateBS(openingBalanceRowDate) : ""}
+          </TableCell>
+          <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+            {openingBalanceRowDate ? formatDate(openingBalanceRowDate) : ""}
+          </TableCell>
+        </>
+      ) : (
+        <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+          {openingBalanceRowDate
+            ? dateSystem === "AD"
+              ? formatDate(openingBalanceRowDate)
+              : formatDateBS(openingBalanceRowDate)
+            : ""}
+        </TableCell>
+      )
+    ) : null;
+
+  /** Type / voucher / user columns — alag cells taaki narration row date ke neeche left align ho */
+  const openingBalanceMainMiddleCells = (
+    <>
+      {showCol("type") && (
+        <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
+          <div className="flex flex-wrap items-center gap-2">
+            {openingBalanceLeftContent}
+            {openingBalanceSearch}
+            <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+              {openingBalanceLabel}
+            </Badge>
+          </div>
+        </TableCell>
+      )}
+      {showCol("voucherNo") && (
+        <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined} />
+      )}
+      {context === "daybook" && <TableCell className="max-w-[200px] truncate" />}
+      {isItemPartyContext && showItemPartyColumn && (
+        <TableCell className="max-w-[180px] truncate text-muted-foreground" />
+      )}
+      {showCol("user") && context !== "note" && (
+        <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined} />
+      )}
+    </>
+  );
+
+  const openingBalanceNarrationRow =
+    hasOpeningBalanceNarrationSubRow ? (
+      <tr
+        data-row="opening-balance-narration"
+        className={cn(
+          "narration-row border-b",
+          useSpendWiseOpeningBalanceCard && "bg-blue-50/50 dark:bg-blue-950/20",
+          /* OB main row + narration ke beech `TableCell` p-1 gap — tight */
+          "[&>td]:!pt-0 [&>td]:!pb-0"
+        )}
+      >
+        <TableCell
+          colSpan={openingBalanceNarrationColSpan}
+          className={cn(
+            "px-3 text-[11px] italic leading-tight align-top whitespace-normal break-words w-full min-w-0 overflow-hidden text-black"
+          )}
+        >
+          <span className="block min-w-0 overflow-hidden break-words font-normal" style={{ overflowWrap: "anywhere" }}>
+            <span className="not-italic">Narration:</span>{" "}
+            <span className="whitespace-pre-wrap">{openingBalanceNarrationTrimmed}</span>
+          </span>
+        </TableCell>
+        {showCol("status") && !hideStatusColumn && (
+          <TableCell className={cn("text-center align-top py-0", ensureMinGaps && "min-w-[95px] px-[5px]")} />
+        )}
+        {showCol("runningBalance") && !hideBalanceColumn && (
+          <TableCell className={cn("text-right", ensureMinGaps && "min-w-[115px] px-[5px]")} />
+        )}
+        <TableCell className="w-10 p-0" />
+      </tr>
+    ) : null;
+
   const isMobile = useIsMobile();
   const names = useMemo(() => ({ ...(journalAccountNames || {}), ...(userNames || {}), ...(accountNames || {}) }), [journalAccountNames, userNames, accountNames]);
-
-  // Prevent header/amount overlap on narrow screens globally - min 20px gap headers, 10px amount columns, show scroll
-  const ensureMinGaps = true;
 
   // On mobile, party/group use same card UI for both Statement and Bill wise (not PC table).
   const useMobileCardView =
@@ -572,12 +712,7 @@ export function TransactionsTable({
   // In party/staff/group billwise view, status shows only bill-wise link voucher no (not spend-wise RCPT/PYMT/Contra).
   const statusBillWiseOnly = resolvedBalanceMode === "bill_wise" && (context === "party" || context === "staff" || context === "group");
 
-  type MobileBlock =
-    | { type: "spacer" }
-    | { type: "group"; colorIndex: number; items: any[] }
-    | { type: "single"; item: any };
-  // Hamesha same hooks order: pehle mobile path sirf isMemos andar tha, desktop ke baad doosre — isMobile flip par React crash.
-  const hasSpendWiseGroups = tableTransactions?.some((t: any) => typeof t._spendWiseGroupColorIndex === "number");
+  // Always run these useMemos — mobile used to return early and skip them, breaking hook order when isMobile flipped.
   const mobileBlocks = useMemo((): MobileBlock[] => {
     if (!useMobileCardView) return [];
     const blocks: MobileBlock[] = [];
@@ -615,8 +750,6 @@ export function TransactionsTable({
     return blocks;
   }, [useMobileCardView, tableTransactions]);
 
-  const useSpendWiseOpeningBalanceCard = context === "account" && hasSpendWiseGroups;
-
   const spendWiseColWidths = useMemo((): number[] => {
     if (!hasSpendWiseGroups) return [];
     const w: number[] = [];
@@ -641,7 +774,6 @@ export function TransactionsTable({
     return w;
   }, [
     hasSpendWiseGroups,
-    showCol,
     dateSystem,
     context,
     groupEntityType,
@@ -651,12 +783,10 @@ export function TransactionsTable({
     hideBalanceColumn,
     showFileBySelection,
     showItemPartyColumn,
+    isItemPartyContext,
+    visibleColumns,
   ]);
 
-  type TableBlock =
-    | { type: "spacer"; id: string }
-    | { type: "group"; colorIndex: number; items: any[] }
-    | { type: "single"; item: any };
   const tableBlocks = useMemo((): TableBlock[] | null => {
     if (!hasSpendWiseGroups || !tableTransactions?.length) return null;
     const blocks: TableBlock[] = [];
@@ -739,11 +869,7 @@ export function TransactionsTable({
       }
       const amount = credit > 0 ? credit : debit;
       const isCredit = credit > 0;
-      // Dashboard / recent rows: kabhi date string malformed ho → Invalid Date; truthy reh kar bhi format() RangeError deta hai
-      const rawDate =
-        t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date as string | number | Date));
-      const d =
-        rawDate instanceof Date && !Number.isNaN(rawDate.getTime()) ? rawDate : null;
+      const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
       const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
@@ -778,7 +904,7 @@ export function TransactionsTable({
       const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
       const isPaidStatus = statusLabel === "Paid";
       const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
-      const isPendingApproval = (t as any).isApproved !== true;
+      const isPendingApproval = highlightPendingApproval && (t as any).isApproved !== true;
       const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
         ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
         : "";
@@ -878,10 +1004,30 @@ export function TransactionsTable({
         {showOpeningBalance && (
           <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex justify-between items-start gap-2 min-w-0">
-              <div className="flex items-center gap-2 min-w-0 flex-1 min-h-9">
-                {openingBalanceLeftContent}
-                {openingBalanceSearch}
-                <p className="font-bold text-sm text-foreground">{openingBalanceLabel}</p>
+              {/* OB date: entity form "As on" — statement card par bhi header ke niche */}
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
+                <div className="flex items-center gap-2 min-w-0">
+                  {openingBalanceLeftContent}
+                  {openingBalanceSearch}
+                  {/* Desktop table jaisa: Type column pill, chhota gray bold heading nahi */}
+                  <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+                    {openingBalanceLabel}
+                  </Badge>
+                </div>
+                {showCol("date") && openingBalanceRowDate ? (
+                  <p className="text-sm font-medium text-foreground">
+                    {dateSystem === "Both" ? (
+                      <>
+                        {formatDateBS(openingBalanceRowDate)} <span className="opacity-70">·</span>{" "}
+                        {formatDate(openingBalanceRowDate)}
+                      </>
+                    ) : dateSystem === "AD" ? (
+                      formatDate(openingBalanceRowDate)
+                    ) : (
+                      formatDateBS(openingBalanceRowDate)
+                    )}
+                  </p>
+                ) : null}
               </div>
               <div className="shrink-0 flex flex-col items-end gap-0.5">
                 {/* Bill-wise: show main amount (full OB) on top like normal transaction, then balance (outstanding) below. */}
@@ -943,6 +1089,12 @@ export function TransactionsTable({
                 )}
               </div>
             </div>
+            {showNarration && openingBalanceNarrationTrimmed ? (
+              <p className="mt-1.5 pl-0 text-[11px] leading-tight text-black break-words whitespace-normal line-clamp-none min-w-0 w-full">
+                <span className="not-italic font-normal">Narration:</span>{" "}
+                <span className="whitespace-pre-wrap font-normal">{openingBalanceNarrationTrimmed}</span>
+              </p>
+            ) : null}
           </Card>
         )}
         {mobileBlocks.map((block, blockIdx) => {
@@ -1036,31 +1188,38 @@ export function TransactionsTable({
                   {/* Render opening row in the main table so amount stays exactly under Debit/Credit columns. */}
                   <tr
                     data-row="opening-balance"
+                    data-ob-narration-follows={hasOpeningBalanceNarrationSubRow || undefined}
                     className={cn(
                       "bg-blue-50/50 dark:bg-blue-950/20",
                       "[&>td]:border-y [&>td]:border-blue-500 [&>td]:border-solid",
                       "[&>td:first-child]:border-l [&>td:last-child]:border-r",
                       "[&>td:first-child]:rounded-l-xl [&>td:last-child]:rounded-r-xl",
-                      "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
+                      "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
+                      hasOpeningBalanceNarrationSubRow && "[&>td]:border-b-0",
+                      hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
                     )}
                   >
-                    <TableCell colSpan={openingBalanceColSpan - (showFileBySelection ? 1 : 0)} className="font-semibold">
-                        <div className="flex items-center gap-2">
-                          {openingBalanceLeftContent}
-                          {openingBalanceSearch}
-                          <span>{openingBalanceLabel}</span>
-                        </div>
-                    </TableCell>
-                    {showFileBySelection && <TableCell className="text-center">-</TableCell>}
-                    {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                    {/* Entity "As on" — same date columns as body rows */}
+                    {openingBalanceDateRowCells}
+                    {openingBalanceMainMiddleCells}
+                    {showFileBySelection && (
+                      <TableCell
+                        className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Party/bank documents — same UX as voucher File column */}
+                        <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                      </TableCell>
+                    )}
+                    {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
                         {displayOpeningBalanceDr > 0 ? formatFooterAmount(displayOpeningBalanceDr) : '-'}
                     </TableCell>}
-                    {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                    {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
                         {displayOpeningBalanceCr > 0 ? formatFooterAmount(displayOpeningBalanceCr) : '-'}
                     </TableCell>}
-                    {/* Keep opening-balance status vertically centered with amount columns. */}
+                    {/* align-top: OB cell me narration ho sakti hai — status badge row ke top se mile */}
                     {showCol("status") && !hideStatusColumn && (
-                      <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                      <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
                         {openingBalanceOutstanding != null ? (
                           <div className="flex flex-col items-center gap-[1px] leading-tight">
                             <Badge
@@ -1085,11 +1244,11 @@ export function TransactionsTable({
                       </TableCell>
                     )}
                     {showCol("runningBalance") && !hideBalanceColumn && (
-                        <TableCell className={cn("text-right font-semibold", displayOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                        <TableCell className={cn("text-right font-semibold align-top", displayOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
                             {formatFooterBalance(displayOpeningBalanceForRow)}
                         </TableCell>
                     )}
-                    <TableCell className="w-10 p-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
                         {openingBalanceActions != null ? (
                           openingBalanceActions
                         ) : (
@@ -1104,6 +1263,7 @@ export function TransactionsTable({
                         )}
                     </TableCell>
                   </tr>
+                  {openingBalanceNarrationRow}
                   {/* Spend-wise bank/account view: keep visual gap between OB and first group. */}
                   <tr data-row="opening-balance-gap" aria-hidden="true" className="spend-wise-gap-row">
                     <td
@@ -1114,68 +1274,77 @@ export function TransactionsTable({
                   </tr>
                 </>
               ) : (
-                // All non-spend-wise/non-bank pages: render opening balance as normal table row (no card/no extra gap).
-                <tr data-row="opening-balance">
-                  <TableCell colSpan={openingBalanceColSpan - (showFileBySelection ? 1 : 0)} className="font-semibold">
-                      <div className="flex items-center gap-2">
-                        {openingBalanceLeftContent}
-                        {openingBalanceSearch}
-                        <span>{openingBalanceLabel}</span>
-                      </div>
-                  </TableCell>
-                  {showFileBySelection && <TableCell className="text-center">-</TableCell>}
-                  {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                      {displayOpeningBalanceDr > 0 ? formatFooterAmount(displayOpeningBalanceDr) : '-'}
-                  </TableCell>}
-                  {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-                      {displayOpeningBalanceCr > 0 ? formatFooterAmount(displayOpeningBalanceCr) : '-'}
-                  </TableCell>}
-                  {/* Keep opening-balance status vertically centered with amount columns. */}
-                  {showCol("status") && !hideStatusColumn && (
-                    <TableCell className={cn("text-center align-middle", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-                      {openingBalanceOutstanding != null ? (
-                        <div className="flex flex-col items-center gap-[1px] leading-tight">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              // Match Type/Status badge dimensions for consistent row alignment.
-                              "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
-                              openingBalanceOutstanding <= 0 ? "text-green-600 border-green-600/50" : "text-red-600 border-red-600/50"
-                            )}
-                          >
-                            {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
-                          </Badge>
-                          {/* Opening balance: list all linked voucher nos in 2–3 lines (from voucher data). */}
-                          {showNarration && openingBalanceLinkedVoucherNos?.length ? (
-                            <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
-                          ) : null}
-                        </div>
-                      ) : (
-                        // Show "-" for opening balance status when no outstanding balance data
-                        <span className="font-semibold">-</span>
-                      )}
-                    </TableCell>
-                  )}
-                  {showCol("runningBalance") && !hideBalanceColumn && (
-                      <TableCell className={cn("text-right font-semibold", displayOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
-                          {formatFooterBalance(displayOpeningBalanceForRow)}
+                <>
+                  {/* Non–spend-wise: opening row; narration pehle cell me (voucher row jaisa, alag tr nahi) */}
+                  <tr
+                    data-row="opening-balance"
+                    data-ob-narration-follows={hasOpeningBalanceNarrationSubRow || undefined}
+                    className={cn(
+                      hasOpeningBalanceNarrationSubRow && "border-b-0 [&>td]:border-b-0",
+                      hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                    )}
+                  >
+                    {openingBalanceDateRowCells}
+                    {openingBalanceMainMiddleCells}
+                    {showFileBySelection && (
+                      <TableCell
+                        className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Party/bank documents — same UX as voucher File column */}
+                        <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
                       </TableCell>
-                  )}
-                  <TableCell className="w-10 p-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
-                      {openingBalanceActions != null ? (
-                        openingBalanceActions
-                      ) : (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                              <MoreVertical className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-40" />
-                        </DropdownMenu>
-                      )}
-                  </TableCell>
-                </tr>
+                    )}
+                    {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                        {displayOpeningBalanceDr > 0 ? formatFooterAmount(displayOpeningBalanceDr) : '-'}
+                    </TableCell>}
+                    {showCol("cr") && !hideCreditColumn && <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                        {displayOpeningBalanceCr > 0 ? formatFooterAmount(displayOpeningBalanceCr) : '-'}
+                    </TableCell>}
+                    {showCol("status") && !hideStatusColumn && (
+                      <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                        {openingBalanceOutstanding != null ? (
+                          <div className="flex flex-col items-center gap-[1px] leading-tight">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "inline-flex h-6 items-center rounded-xl px-2.5 font-medium leading-none shrink-0",
+                                openingBalanceOutstanding <= 0 ? "text-green-600 border-green-600/50" : "text-red-600 border-red-600/50"
+                              )}
+                            >
+                              {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
+                            </Badge>
+                            {showNarration && openingBalanceLinkedVoucherNos?.length ? (
+                              <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="font-semibold">-</span>
+                        )}
+                      </TableCell>
+                    )}
+                    {showCol("runningBalance") && !hideBalanceColumn && (
+                        <TableCell className={cn("text-right font-semibold align-top", displayOpeningBalanceForRow >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                            {formatFooterBalance(displayOpeningBalanceForRow)}
+                        </TableCell>
+                    )}
+                    <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+                        {openingBalanceActions != null ? (
+                          openingBalanceActions
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                                <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40" />
+                          </DropdownMenu>
+                        )}
+                    </TableCell>
+                  </tr>
+                  {openingBalanceNarrationRow}
+                </>
               )
             )}
             {tableTransactions.length > 0 ? (
@@ -1284,6 +1453,7 @@ export function TransactionsTable({
                                         ensureMinGaps={ensureMinGaps}
                                         showFileColumn={showFileBySelection}
                                         statusBillWiseOnly={statusBillWiseOnly}
+                                        highlightPendingApproval={highlightPendingApproval}
                                       />
                                     );
                                   })}
@@ -1341,6 +1511,7 @@ export function TransactionsTable({
                           ensureMinGaps={ensureMinGaps}
                           showFileColumn={showFileBySelection}
                           statusBillWiseOnly={statusBillWiseOnly}
+                          highlightPendingApproval={highlightPendingApproval}
                         />
                       </React.Fragment>
                     );
@@ -1407,6 +1578,7 @@ export function TransactionsTable({
                         ensureMinGaps={ensureMinGaps}
                         showFileColumn={showFileBySelection}
                         statusBillWiseOnly={statusBillWiseOnly}
+                        highlightPendingApproval={highlightPendingApproval}
                       />
                     );
                   })

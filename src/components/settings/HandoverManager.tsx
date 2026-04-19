@@ -31,7 +31,9 @@ import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -50,11 +52,16 @@ import { Loader2, Hand, X, Send, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import type { Company } from "@/hooks/useCompany";
 import { acceptCompanyHandover } from "@/lib/actions";
+import {
+  isOnlineCompanyRow,
+  buildDuplicateNameCountMap,
+  companySelectOptionLabel,
+} from "@/lib/companyStorageKind";
 
 export function HandoverManager() {
   const { user, customUser } = useAuth();
   const { setCompanyId, allCompanies } = useCompany();
-  const [ownedCompanies, setOwnedCompanies] = useState<any[]>([]);
+  const [ownedCompanies, setOwnedCompanies] = useState<Company[]>([]);
   const [incomingHandovers, setIncomingHandovers] = useState<any[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>("");
   const [handoverEmail, setHandoverEmail] = useState("");
@@ -68,20 +75,22 @@ export function HandoverManager() {
 
   // Fetch owned companies from the context (ownerId or, for SuperAdmin, ownerEmail match)
   useEffect(() => {
-    if (user && allCompanies) {
-      const userOwnedCompanies = allCompanies.filter((c) => {
-        if (c.ownerId === user.uid) return true;
-        if (customUser?.role === "SuperAdmin" && c.ownerEmail && user.email) {
-          return c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim();
-        }
-        return false;
-      });
-      setOwnedCompanies(userOwnedCompanies);
-      if (!selectedCompanyId && userOwnedCompanies.length > 0) {
-        setSelectedCompanyId(userOwnedCompanies[0].id);
+    if (!user || !allCompanies) return;
+    const userOwnedCompanies = allCompanies.filter((c) => {
+      if (c.isDeleted) return false;
+      if (c.ownerId === user.uid) return true;
+      if (customUser?.role === "SuperAdmin" && c.ownerEmail && user.email) {
+        return c.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim();
       }
-    }
-  }, [user, customUser?.role, allCompanies, selectedCompanyId]);
+      return false;
+    });
+    setOwnedCompanies(userOwnedCompanies);
+    setSelectedCompanyId((prev) => {
+      if (userOwnedCompanies.length === 0) return "";
+      if (!prev || !userOwnedCompanies.some((c) => c.id === prev)) return userOwnedCompanies[0].id;
+      return prev;
+    });
+  }, [user, customUser?.role, allCompanies]);
 
 
   // Fetch incoming handovers
@@ -105,6 +114,18 @@ export function HandoverManager() {
     [selectedCompanyId, ownedCompanies]
   );
   const isHandoverPending = selectedCompany?.handoverStatus === "pending";
+
+  const { localHandoverCompanies, onlineHandoverCompanies } = useMemo(() => {
+    const local: Company[] = [];
+    const online: Company[] = [];
+    for (const c of ownedCompanies) {
+      if (isOnlineCompanyRow(c)) online.push(c);
+      else local.push(c);
+    }
+    return { localHandoverCompanies: local, onlineHandoverCompanies: online };
+  }, [ownedCompanies]);
+
+  const duplicateNameCountMap = useMemo(() => buildDuplicateNameCountMap(ownedCompanies), [ownedCompanies]);
 
   const handleInitiateHandover = async () => {
     if (!selectedCompany || !handoverEmail) {
@@ -280,11 +301,36 @@ export function HandoverManager() {
                 <SelectValue placeholder="Select a company..." />
               </SelectTrigger>
               <SelectContent>
-                {ownedCompanies.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                {localHandoverCompanies.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs font-semibold text-muted-foreground">Local</SelectLabel>
+                    {localHandoverCompanies.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                            Local
+                          </span>
+                          <span className="truncate">{companySelectOptionLabel(c, duplicateNameCountMap)}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {onlineHandoverCompanies.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs font-semibold text-muted-foreground">Online (cloud)</SelectLabel>
+                    {onlineHandoverCompanies.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center gap-2">
+                          <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0 text-[10px] font-medium text-sky-800 dark:text-sky-300">
+                            Online
+                          </span>
+                          <span className="truncate">{companySelectOptionLabel(c, duplicateNameCountMap)}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
               </SelectContent>
             </Select>
 
