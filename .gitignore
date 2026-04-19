@@ -28,6 +28,11 @@
 # /android/
 # /ios/
 
+# Android release signing (create android/keystore.properties locally; never commit secrets)
+android/keystore.properties
+*.jks
+*.keystore
+
 # production
 /build
 
