@@ -47,6 +47,7 @@ import {
   verifyCompanyUnlock,
   isOfflineCompanyStorage,
   isOnlineSharedCompany,
+  onlineSharedHasPerUserPassword,
 } from "@/lib/companyUnlockGate";
 import {
   clearRememberedSharedUnlockUsername,
@@ -553,11 +554,26 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                   Open <span className="font-medium text-foreground">&quot;{companyToUnlock?.name}&quot;</span>.
                   {companyToUnlock &&
                   isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) ? (
-                    <>
-                      {" "}
-                      Company Profile wala <strong>Admin username</strong> aur <strong>Protect company</strong> password
-                      daalein (share list alag; yahi dono field verify hote hain).
-                    </>
+                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email) ? (
+                      <>
+                        {" "}
+                        <strong>Apke share</strong> ke liye: user name me <strong>account email</strong>,{" "}
+                        <strong>display name</strong>, ya email ka <strong>@ se pehle</strong> hissa — password wahi jo owner ne
+                        aapke user ke liye set kiya hai.
+                        {(companyToUnlock as CompanyData & { password?: string }).password ? (
+                          <>
+                            {" "}
+                            Ya Company Profile wala <strong>Admin username</strong> + <strong>Protect company</strong> password.
+                          </>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        Company Profile wala <strong>Admin username</strong> aur <strong>Protect company</strong> password
+                        daalein.
+                      </>
+                    )
                   ) : (
                     <> Neeche company password daalein.</>
                   )}
@@ -616,7 +632,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                     <Input
                       id="cs-unlock-username"
                       autoComplete="username"
-                      placeholder="Company Profile → Admin username"
+                      placeholder={
+                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                          ? "Email, display name, ya email ka pehla hissa"
+                          : "Company Profile → Admin username"
+                      }
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
@@ -637,13 +658,25 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label htmlFor="cs-unlock-password">Company password</Label>
+                  <Label htmlFor="cs-unlock-password">
+                    {companyToUnlock &&
+                    isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                      ? "Password (aapke share ke liye)"
+                      : "Company password"}
+                  </Label>
                   <div className="relative">
                     <Input
                       id="cs-unlock-password"
                       type={showPassword ? "text" : "password"}
                       autoComplete="current-password"
-                      placeholder="Enter company password"
+                      placeholder={
+                        companyToUnlock &&
+                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                          ? "Jo owner ne aapke user ke liye set kiya"
+                          : "Enter company password"
+                      }
                       value={passwordInput}
                       onChange={(e) => setPasswordInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
@@ -1026,10 +1059,23 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                   Open <span className="font-medium text-foreground">&quot;{companyToUnlock?.name}&quot;</span>.
                   {companyToUnlock &&
                   isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) ? (
-                    <>
-                      {" "}
-                      Company Profile: <strong>Admin username</strong> + <strong>Protect company</strong> password.
-                    </>
+                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email) ? (
+                      <>
+                        {" "}
+                        <strong>Share password:</strong> email / display name / email prefix + aapka set password.
+                        {(companyToUnlock as CompanyData & { password?: string }).password ? (
+                          <>
+                            {" "}
+                            Ya <strong>Admin username</strong> + <strong>Protect company</strong> password.
+                          </>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        Company Profile: <strong>Admin username</strong> + <strong>Protect company</strong> password.
+                      </>
+                    )
                   ) : (
                     <> Neeche company password daalein.</>
                   )}
@@ -1088,7 +1134,12 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                     <Input
                       id="ca-unlock-username"
                       autoComplete="username"
-                      placeholder="Company Profile → Admin username"
+                      placeholder={
+                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                          ? "Email, display name, ya email ka pehla hissa"
+                          : "Company Profile → Admin username"
+                      }
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
@@ -1109,13 +1160,25 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label htmlFor="ca-unlock-password">Company password</Label>
+                  <Label htmlFor="ca-unlock-password">
+                    {companyToUnlock &&
+                    isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                    onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                      ? "Password (aapke share ke liye)"
+                      : "Company password"}
+                  </Label>
                   <div className="relative">
                     <Input
                       id="ca-unlock-password"
                       type={showPassword ? "text" : "password"}
                       autoComplete="current-password"
-                      placeholder="Enter company password"
+                      placeholder={
+                        companyToUnlock &&
+                        isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
+                        onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
+                          ? "Jo owner ne aapke user ke liye set kiya"
+                          : "Enter company password"
+                      }
                       value={passwordInput}
                       onChange={(e) => setPasswordInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}

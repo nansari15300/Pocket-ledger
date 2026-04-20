@@ -28,23 +28,35 @@ export function getShareEntryForEmail(company: CompanyUnlockRow, email: string |
   return company.sharedWith?.find((u: { email?: string }) => String(u.email || "").toLowerCase().trim() === e);
 }
 
+/** Online shared row par user-specific password (Manage Sharing / Company Profile) — Protect company ke alag. */
+export function onlineSharedHasPerUserPassword(company: CompanyUnlockRow, userEmail?: string | null): boolean {
+  if (!isOnlineSharedCompany(company)) return false;
+  const se = getShareEntryForEmail(company, userEmail);
+  return !!(se && se.password != null && String(se.password).trim() !== "");
+}
+
 /** Select se pehle dialog dikhana hai ya nahi */
 export function shouldPromptCompanyUnlock(company: CompanyUnlockRow, userEmail?: string | null): boolean {
-  // Shared + cloud: sirf tab jab owner ne "Protect company" password lagaya ho (Company Profile).
-  if (isOnlineSharedCompany(company)) return !!company.password;
+  // Shared + cloud: Protect company password ya shared row par user-specific password.
+  if (isOnlineSharedCompany(company)) {
+    return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
+  }
   const se = getShareEntryForEmail(company, userEmail || undefined);
   return !!(se?.password || company.password);
 }
 
-/** Username field: online shared jab company password on ho; offline shared jab share row me name+password ho */
+/** Username field: online shared jab Protect on ho ya shared user ka apna password ho; offline shared jab share row me name+password ho */
 export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: string | null): boolean {
-  if (isOnlineSharedCompany(company)) return !!company.password;
+  if (isOnlineSharedCompany(company)) {
+    return !!company.password || onlineSharedHasPerUserPassword(company, userEmail);
+  }
   const se = getShareEntryForEmail(company, userEmail || undefined);
   return !!(se?.password && String((se as { name?: string }).name || "").trim());
 }
 
 /**
- * Company access verify: owner = root password; online shared = Company Profile admin username + root password.
+ * Company access verify: owner = root password; online shared = shared row email/name + per-user password,
+ * ya (Protect on ho to) Admin username + root password fallback.
  */
 export function verifyCompanyUnlock(
   company: CompanyUnlockRow,
@@ -64,7 +76,48 @@ export function verifyCompanyUnlock(
 
   if (isOnlineSharedCompany(company)) {
     if (!se) return { ok: false, message: "No share entry for your account." };
-    if (!company.password) return { ok: true };
+
+    const sharedPassRaw = se.password;
+    const sharedPass =
+      sharedPassRaw != null && String(sharedPassRaw).trim() !== "" ? String(sharedPassRaw) : "";
+
+    /** Per-shared-user password: login = same Google email, display name, ya email ka @ se pehle wala hissa. */
+    const verifyPerUserSharedUnlock = (): { ok: true } | { ok: false; message: string } => {
+      if (!sharedPass) return { ok: false, message: "Wrong company username or password." };
+      const u = usernameInput.trim().toLowerCase();
+      const emailNorm = String(se.email || "").toLowerCase().trim();
+      const nameNorm = String((se as { name?: string }).name || "").trim().toLowerCase();
+      const localFromEmail =
+        emailNorm.includes("@") ? emailNorm.split("@")[0]!.trim().toLowerCase() : "";
+      const userOk =
+        (!!emailNorm && u === emailNorm) ||
+        (!!localFromEmail && u === localFromEmail) ||
+        (!!nameNorm && u === nameNorm);
+      if (!userOk || passwordInput !== sharedPass) {
+        return { ok: false, message: "Wrong company username or password." };
+      }
+      return { ok: true };
+    };
+
+    if (!company.password) {
+      if (sharedPass) return verifyPerUserSharedUnlock();
+      return { ok: true };
+    }
+
+    if (sharedPass) {
+      const per = verifyPerUserSharedUnlock();
+      if (per.ok) return per;
+      const adminLogin = effectiveCompanyAdminUsername(company);
+      if (
+        adminLogin &&
+        usernameInput.trim().toLowerCase() === adminLogin.toLowerCase() &&
+        passwordInput === String(company.password)
+      ) {
+        return { ok: true };
+      }
+      return { ok: false, message: "Wrong company username or password." };
+    }
+
     const adminLogin = effectiveCompanyAdminUsername(company);
     if (!adminLogin) {
       return {
