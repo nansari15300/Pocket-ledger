@@ -36,6 +36,7 @@ import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -82,6 +83,27 @@ const getVoucherType = (voucher: any, defaultData: any, defaultTab: string): Vou
   if (voucher?.id) return (voucher.type || 'sale') as VoucherType;
   return (defaultData?.defaultTab || defaultTab || 'sale') as VoucherType;
 };
+
+/**
+ * `liveVoucher` Firestore snapshot kabhi `fileUrls` omit / [] bhejta hai (sync lag, partial hydrate).
+ * Daybook / Recent row `useVouchers` mirror se poore refs rakhta hai — replace se `local:` / https links gayab ho kar
+ * APK pe "Attachment file not found" deta tha; Party jaisi jagah timing se kabhi bachta tha.
+ */
+function mergeAttachmentFieldsFromRowForEffectiveVoucher(live: any, row: any): any {
+  if (!live) return live;
+  const out = { ...live };
+  const liveUrls = Array.isArray(live.fileUrls) ? live.fileUrls.filter(Boolean) : [];
+  const rowUrls = Array.isArray(row?.fileUrls) ? row.fileUrls.filter(Boolean) : [];
+  if (liveUrls.length === 0 && rowUrls.length > 0) {
+    out.fileUrls = rowUrls;
+  }
+  const liveUn = live.unassignedFile?.url;
+  const rowUn = row?.unassignedFile?.url;
+  if (!liveUn && rowUn) {
+    out.unassignedFile = row.unassignedFile;
+  }
+  return out;
+}
 
 function VoucherDialogContent({ 
   voucher, 
@@ -457,9 +479,12 @@ export function AddVoucherDialog(props: any) {
     };
   }, [isOpen, voucher?.id, companyId, voucher?.type, editCompanyId, ctxCompanyId, vouchers]);
 
-  // Preserve clicked contra leg from table row even after live Firestore refresh replaces voucher object.
+  // Preserve clicked contra leg + attachments from table row when live doc has not synced fileUrls yet.
   const effectiveVoucher = liveVoucher
-    ? { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg }
+    ? mergeAttachmentFieldsFromRowForEffectiveVoucher(
+        { ...liveVoucher, _contraLeg: (voucher as any)?._contraLeg ?? (liveVoucher as any)?._contraLeg },
+        voucher
+      )
     : voucher;
   // Bill-wise: voucher's own allocations/linked refs, OR (sale/purchase) any payment has allocations to this voucher
   const hasBillWiseLinks =
@@ -672,33 +697,38 @@ export function AddVoucherDialog(props: any) {
     </DialogHeader>
   );
 
+  const voucherAttachmentFallbackValue =
+    companyId && effectiveVoucher?.id ? { companyId, voucherId: String(effectiveVoucher.id) } : null;
+
   const bodyBlock = (
-    <>
-      <VoucherDialogContent 
-        {...rest}
-        ledgerScopeCompanyId={editCompanyId}
-        voucher={effectiveVoucher}
-        defaultVoucherData={defaultVoucherData}
-        onVoucherAction={handleAction}
-        onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
-        showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
-        editingDisabled={editingDisabled || historyBlocksEdit}
-        restrictConvertWhenLinked={hasLinks}
-        deleteDisabledWhenLinked={isEditLockedByLinks}
-        showApproveButton={showApproveButton}
-        showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
-        onApprove={handleApprove}
-        isApproving={isApproving}
-        onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
-        onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
-      />
-      <HistoryDialog
-        voucher={historyVoucher}
-        isOpen={!!historyVoucher}
-        onOpenChange={(open) => !open && setHistoryVoucher(null)}
-        onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
-      />
-    </>
+    <VoucherAttachmentFallbackContext.Provider value={voucherAttachmentFallbackValue}>
+      <>
+        <VoucherDialogContent
+          {...rest}
+          ledgerScopeCompanyId={editCompanyId}
+          voucher={effectiveVoucher}
+          defaultVoucherData={defaultVoucherData}
+          onVoucherAction={handleAction}
+          onOpenHistory={effectiveVoucher?.id && can("view_voucher_history") ? () => setHistoryVoucher(effectiveVoucher) : undefined}
+          showHistoryButton={!!effectiveVoucher?.id && can("view_voucher_history")}
+          editingDisabled={editingDisabled || historyBlocksEdit}
+          restrictConvertWhenLinked={hasLinks}
+          deleteDisabledWhenLinked={isEditLockedByLinks}
+          showApproveButton={showApproveButton}
+          showSaveAndApproveOnCreate={showSaveAndApproveOnCreate}
+          onApprove={handleApprove}
+          isApproving={isApproving}
+          onEffectiveLinksChange={(v) => setEffectiveHasLinksFromForm(v === undefined ? null : v)}
+          onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
+        />
+        <HistoryDialog
+          voucher={historyVoucher}
+          isOpen={!!historyVoucher}
+          onOpenChange={(open) => !open && setHistoryVoucher(null)}
+          onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
+        />
+      </>
+    </VoucherAttachmentFallbackContext.Provider>
   );
 
   return (

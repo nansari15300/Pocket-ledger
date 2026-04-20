@@ -19,7 +19,8 @@ import {
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { getBlobFromLocalFileRef, getPendingPayloadForLocalRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
+import { getBlobFromLocalFileRef, getPendingPayloadForLocalRef, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
+import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 
 /** JPG seedha browser decode; PDF = download + pdf.js + canvas — 3–6s pehli baar normal. Dubara same URL tez ho: LRU cache. */
 const PDF_THUMB_LRU_MAX = 40;
@@ -188,6 +189,8 @@ interface FilePreviewProps {
   showFormatBadge?: boolean;
   /** Saved URLs only (same voucher/entity set) — click par multi-file viewer ← → / swipe */
   attachmentGallery?: { urls: string[]; startIndex: number };
+  /** Voucher edit: `files` se string URLs — server pe HTTPS milne par index match */
+  attachmentClientFileUrls?: string[];
 }
 
 const getCleanName = (name: string) => {
@@ -217,7 +220,9 @@ export function FilePreview({
   enableHoverFullPreview = true,
   showFormatBadge = true,
   attachmentGallery,
+  attachmentClientFileUrls,
 }: FilePreviewProps) {
+  const voucherAttachmentFb = useVoucherAttachmentFallback();
   // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile
   const resolvedStoragePath = React.useMemo(() => {
     if (storagePath) return storagePath;
@@ -542,7 +547,21 @@ export function FilePreview({
         attachmentGallery && attachmentGallery.urls.length > 1
           ? { urls: attachmentGallery.urls, startIndex: attachmentGallery.startIndex }
           : undefined;
-      void openAttachmentInApp(fileInfo.url, { title: fileInfo.name, kind, gallery: g });
+      const clientList =
+        attachmentClientFileUrls ??
+        (attachmentGallery?.urls && attachmentGallery.urls.length > 0 ? [...attachmentGallery.urls] : undefined);
+      const serverFallback =
+        voucherAttachmentFb &&
+        isLocalFileRef(fileInfo.url) &&
+        voucherAttachmentFb.companyId &&
+        voucherAttachmentFb.voucherId
+          ? {
+              companyId: voucherAttachmentFb.companyId,
+              voucherId: voucherAttachmentFb.voucherId,
+              clientFileUrls: clientList,
+            }
+          : undefined;
+      void openAttachmentInApp(fileInfo.url, { title: fileInfo.name, kind, gallery: g, serverFallback });
     }
   };
 

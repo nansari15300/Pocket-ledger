@@ -35,6 +35,7 @@ import {
   encryptServerBackupPayloadJson,
   getBackupEncryptionPassphraseFromSession,
 } from "@/lib/serverBackupEncryption";
+import { hydrateVoucherLocalAttachmentsForServer } from "@/lib/hydrateVoucherLocalAttachmentsForServer";
 
 /**
  * Encrypted flush: update par server doc + outbox delta merge (partial outbox bhi full ciphertext ban jata hai).
@@ -306,6 +307,11 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       // SQLite `company_id` != Firestore doc id ho to authoritativeCompanyId se sahi path (warna server pe kuch nahi dikhta)
       const fsCompanyId =
         String((reg as Record<string, unknown>).authoritativeCompanyId || row.company_id).trim() || row.company_id;
+      let docFieldsToWrite = docFields as Record<string, unknown>;
+      // `local:` refs are device-local; never write them to Firestore — upload blobs first (other devices need HTTPS).
+      if (row.collection_name === "vouchers") {
+        docFieldsToWrite = await hydrateVoucherLocalAttachmentsForServer(fsCompanyId, docFieldsToWrite);
+      }
       const ref = doc(firestore, `companies/${fsCompanyId}/${row.collection_name}`, row.doc_id);
       const regAny = reg as Record<string, unknown>;
       const encFlag = regAny.encryptServerBackup === true;
@@ -324,7 +330,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           row.collection_name,
           row.doc_id,
           row.op,
-          docFields as Record<string, unknown>,
+          docFieldsToWrite,
           row.company_id,
           reg
         );
@@ -353,7 +359,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         );
       } else if (row.op === "create") {
         await setDoc(ref, {
-          ...docFields,
+          ...docFieldsToWrite,
           companyId: fsCompanyId,
           // Firestore metadata: vouchers aur normal masters dono me harmless.
           createdAt: serverTimestamp(),
@@ -361,7 +367,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
           updatedAt: serverTimestamp(),
         });
       } else if (row.op === "update") {
-        const { createdAt: _c, ...rest } = docFields;
+        const { createdAt: _c, ...rest } = docFieldsToWrite;
         await updateDoc(ref, {
           ...rest,
           companyId: fsCompanyId,

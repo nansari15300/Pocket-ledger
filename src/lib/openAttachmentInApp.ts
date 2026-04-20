@@ -11,6 +11,7 @@ import { showInAppImagePreview } from "@/lib/inAppImagePreview";
 import { openAttachmentGalleryInApp } from "@/lib/inAppAttachmentGallery";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
+import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 
 /** UI se pata ho to sniffing kam: pdf / image / unknown */
 export type AttachmentKindHint = "pdf" | "image" | "other";
@@ -20,6 +21,13 @@ export type OpenAttachmentGalleryOpts = {
   urls: readonly string[];
   startIndex: number;
   kinds?: readonly AttachmentKindHint[];
+};
+
+/** Jab device IndexedDB se `local:` blob gayab ho lekin voucher Firestore / mirror pe HTTPS URL ho */
+export type OpenAttachmentServerFallback = {
+  companyId: string;
+  voucherId: string;
+  clientFileUrls?: readonly string[] | null;
 };
 
 function pathLooksImage(pathLower: string): boolean {
@@ -55,7 +63,12 @@ function showInAppPdfOpenError(sourceUrl: string): void {
  */
 export async function openAttachmentInApp(
   url: string,
-  opts?: { title?: string; kind?: AttachmentKindHint; gallery?: OpenAttachmentGalleryOpts }
+  opts?: {
+    title?: string;
+    kind?: AttachmentKindHint;
+    gallery?: OpenAttachmentGalleryOpts;
+    serverFallback?: OpenAttachmentServerFallback;
+  }
 ): Promise<void> {
   const u = String(url || "").trim();
   if (!u) return;
@@ -75,8 +88,28 @@ export async function openAttachmentInApp(
     const kindHint = opts?.kind ?? "other";
     const blob = await getBlobFromLocalFileRef(u);
     if (!blob) {
+      const sf = opts?.serverFallback;
+      if (sf?.companyId && sf?.voucherId) {
+        const remote = await tryResolveRemoteUrlForStaleLocalAttachment(
+          sf.companyId,
+          sf.voucherId,
+          u,
+          sf.clientFileUrls
+        );
+        if (remote && !isLocalFileRef(remote)) {
+          await openAttachmentInApp(remote, {
+            title: opts?.title,
+            kind: opts?.kind,
+            gallery: opts?.gallery,
+          });
+          return;
+        }
+      }
       if (typeof window !== "undefined") {
-        window.alert("Attachment file not found. It may have been cleared from device storage.");
+        window.alert(
+          "Attachment file not found on this device (cache may have been cleared). " +
+            "Could not load a copy from the server — check internet or re-upload the file if the voucher still shows an old local link."
+        );
       }
       return;
     }

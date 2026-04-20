@@ -896,6 +896,7 @@ export function CreateNoteForm({
                         <FilePreview 
                           key={idx} 
                           file={file} 
+                          attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
                           onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== idx)) : undefined}
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />

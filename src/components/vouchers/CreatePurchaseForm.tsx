@@ -2414,6 +2414,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FilePreview 
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
+                              attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={cn(
                                 !allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : "",
@@ -2673,6 +2674,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             <FilePreview 
                               key={typeof file === "string" ? file : `file-${index}`} 
                               file={file} 
+                              attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((f) => f !== file)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />

@@ -1423,6 +1423,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FilePreview
                         key={index}
                         file={file}
+                        attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
                         onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                       />

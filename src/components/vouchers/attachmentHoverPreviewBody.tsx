@@ -7,6 +7,7 @@ import { FilePreview } from "@/components/vouchers/FilePreview";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
+import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { getAttachmentFormatLabel, sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 
 /** Multi-file row / local pending: gallery swipe App me */
@@ -20,6 +21,7 @@ export function LocalFileRefTooltipPreview({
   url: string;
   gallery?: AttachmentPreviewGalleryOpts;
 }) {
+  const voucherAttachmentFb = useVoucherAttachmentFallback();
   const [state, setState] = React.useState<
     { status: "loading" } | { status: "error" } | { status: "ready"; objectUrl: string; mime: string }
   >({ status: "loading" });
@@ -71,8 +73,16 @@ export function LocalFileRefTooltipPreview({
           : "other";
     const multi =
       gallery && gallery.urls.length > 1 ? { urls: gallery.urls, startIndex: gallery.startIndex } : undefined;
-    void openAttachmentInApp(url, { kind, gallery: multi });
-  }, [url, state, gallery]);
+    const serverFallback =
+      voucherAttachmentFb && isLocalFileRef(url)
+        ? {
+            companyId: voucherAttachmentFb.companyId,
+            voucherId: voucherAttachmentFb.voucherId,
+            clientFileUrls: gallery?.urls,
+          }
+        : undefined;
+    void openAttachmentInApp(url, { kind, gallery: multi, serverFallback });
+  }, [url, state, gallery, voucherAttachmentFb]);
 
   if (state.status === "loading") {
     return (
