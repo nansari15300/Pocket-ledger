@@ -88,6 +88,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { getAttachmentFormatLabel, getAttachmentFormatLabelFromHints } from "@/lib/attachmentFormatLabel";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { canSyncCompanyToServer } from "@/lib/localVoucherOutbox";
 import { getPendingFiles, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 
 
@@ -1158,6 +1159,14 @@ function getUserLabelFromDoc(data: any): string | null {
   return getEmailSuffixLabel(email) || (email || null);
 }
 
+/** Firestore + Storage paths: cloud mirror companies use authoritative id when present. */
+function firestoreCompanyIdForGallery(
+  companyId: string,
+  company: { authoritativeCompanyId?: string } | null | undefined
+): string {
+  return String(company?.authoritativeCompanyId || companyId).trim() || companyId;
+}
+
 // --- Sub-Component: Unassigned Documents Tab ---
 function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChange }: { handleAttachToVoucher: any; previewSize: number; onSizeChange: any; }) {
   const isMobile = useIsMobile();
@@ -1241,26 +1250,51 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     // Mark mounted on client so popover ids are generated only client-side for these controls.
     setIsHydrated(true);
   }, []);
+
+  /**
+   * Pure offline company: unassigned list is device-localStorage only.
+   * Local-first APK + company that syncs to Firestore: same subcollection + Storage as web — multi-device.
+   */
+  const [unassignedUseDeviceLocalOnly, setUnassignedUseDeviceLocalOnly] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!companyId) {
+      setUnassignedUseDeviceLocalOnly(null);
+      return;
+    }
+    if (!isLocalOnlyMode()) {
+      setUnassignedUseDeviceLocalOnly(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const deviceOnly = !(await canSyncCompanyToServer(companyId));
+      if (!cancelled) setUnassignedUseDeviceLocalOnly(deviceOnly);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
   
   // Fetch unassigned files
   useEffect(() => {
-    if (!companyId) return;
-    if (isLocalOnlyMode()) {
-      // Local-only mode me unassigned docs local cache se hydrate karo.
+    if (!companyId || unassignedUseDeviceLocalOnly === null) return;
+    if (unassignedUseDeviceLocalOnly) {
       setUnassignedFiles(readLocalUnassignedDocs());
       return;
     }
-    const q = query(collection(firestore, `companies/${companyId}/unassigned_documents`), orderBy('uploadedAt', 'desc'));
+    const fsId = firestoreCompanyIdForGallery(companyId, company);
+    const q = query(collection(firestore, `companies/${fsId}/unassigned_documents`), orderBy('uploadedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const filesData = snapshot.docs.map(d => ({id: d.id, ...d.data()}) as UnassignedFile);
         setUnassignedFiles(filesData);
     });
     return () => unsubscribe();
-  }, [companyId]);
+  }, [companyId, company, unassignedUseDeviceLocalOnly]);
 
   // Fetch users separately to avoid re-fetching files when a user is added
   useEffect(() => {
-    if (isLocalOnlyMode()) return;
+    if (unassignedUseDeviceLocalOnly !== false) return;
     const q = query(collection(firestore, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const usersData: Record<string, string> = {};
@@ -1275,10 +1309,10 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
         setUserNames(usersData);
     });
     return () => unsubscribe();
-  }, []);
+  }, [unassignedUseDeviceLocalOnly]);
 
   useEffect(() => {
-    if (isLocalOnlyMode()) return;
+    if (unassignedUseDeviceLocalOnly !== false) return;
     // Fallback resolver: for any still-missing uploader id, fetch displayName directly from users collection.
     const missingUploaderIds = Array.from(new Set(unassignedFiles.map((f) => f.uploadedBy).filter(Boolean)))
       .filter((id) => !userNames[id]);
@@ -1323,7 +1357,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     return () => {
       cancelled = true;
     };
-  }, [unassignedFiles, userNames]);
+  }, [unassignedFiles, userNames, unassignedUseDeviceLocalOnly]);
   
   const uploaderOptions = useMemo(() => {
     const uniqueNamesMap = new Map();
@@ -1362,11 +1396,15 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     setUploadingFiles(prev => [...prev, ...newUploadingFiles]);
 
     let compressedFiles: File[] = [];
+    let storeUnassignedOnDeviceOnly = false;
     try {
       compressedFiles = await Promise.all(acceptedFiles.map(f => compressFile(f)));
-      if (!isLocalOnlyMode()) {
+      const fsIdForLimits = firestoreCompanyIdForGallery(companyId, company);
+      storeUnassignedOnDeviceOnly =
+        isLocalOnlyMode() && !(await canSyncCompanyToServer(companyId));
+      if (!storeUnassignedOnDeviceOnly) {
         const totalNewBytes = compressedFiles.reduce((sum, c) => sum + c.size, 0);
-        const limitCheck = await checkStorageLimit(companyId, company?.planId, {
+        const limitCheck = await checkStorageLimit(fsIdForLimits, company?.planId, {
           attachmentsBytes: totalNewBytes,
           storageBytes: totalNewBytes,
         }, company?.storageOption);
@@ -1382,8 +1420,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       return;
     }
 
-    if (isLocalOnlyMode()) {
-      // Local-only mode me files ko data URL ke saath local cache me save karo.
+    if (storeUnassignedOnDeviceOnly) {
+      // Sirf asli offline-only company: data URL + localStorage (dusre device par nahi dikhega).
       const toAppend: UnassignedFile[] = [];
       await Promise.all(
         compressedFiles.map(async (compressedFile, idx) => {
@@ -1417,6 +1455,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       return;
     }
 
+    const fsId = firestoreCompanyIdForGallery(companyId, company);
     const batch = writeBatch(firestore);
     let batchOperationsCount = 0;
 
@@ -1427,16 +1466,16 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
       try {
         const uploadResult = await uploadFileClient(
           { name: compressedFile.name, type: compressedFile.type, arrayBuffer: await compressedFile.arrayBuffer() },
-          companyId!,
+          fsId,
           company?.name,
           new Date()
         );
         if (uploadResult.success) {
-          await incrementCompanyStorage(companyId, {
+          await incrementCompanyStorage(fsId, {
             attachmentsBytes: compressedFile.size,
             storageBytes: compressedFile.size,
           });
-          const docRef = doc(collection(firestore, `companies/${companyId}/unassigned_documents`));
+          const docRef = doc(collection(firestore, `companies/${fsId}/unassigned_documents`));
           batch.set(docRef, {
             url: uploadResult.url, path: uploadResult.path, name: compressedFile.name,
             type: compressedFile.type.startsWith("image/") ? 'image' : 'pdf',
@@ -1468,7 +1507,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     } else if (newUploadingFiles.length > 0) {
       toast.error("Upload failed", { description: "Could not upload files. Check your connection and try again." });
     }
-  }, [companyId, user, company?.name, company?.planId]);
+  }, [companyId, user, company]);
   
   const { getRootProps, getInputProps } = useDropzone({ onDrop });
   
@@ -1486,8 +1525,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     }
     setIsRenaming(true);
     try {
-      if (isLocalOnlyMode()) {
-        // Local-only mode me rename local cache me update karo.
+      const deviceOnly =
+        isLocalOnlyMode() && !(await canSyncCompanyToServer(companyId));
+      if (deviceOnly) {
         const next = readLocalUnassignedDocs().map((f) =>
           f.id === fileToRename.id ? { ...f, name: newName } : f
         );
@@ -1497,7 +1537,8 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
         setFileToRename(null);
         return;
       }
-      await updateDoc(doc(firestore, `companies/${companyId}/unassigned_documents`, fileToRename.id), { name: newName });
+      const fsId = firestoreCompanyIdForGallery(companyId, company);
+      await updateDoc(doc(firestore, `companies/${fsId}/unassigned_documents`, fileToRename.id), { name: newName });
       toast.success("File renamed successfully");
       setFileToRename(null);
     } catch (error) {
@@ -1512,8 +1553,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
     if (!fileToDelete || !companyId) return;
     setIsDeleting(true);
     try {
-        if (isLocalOnlyMode()) {
-          // Local-only mode me delete operation local cache par hi run karo.
+        const deviceOnly =
+          isLocalOnlyMode() && !(await canSyncCompanyToServer(companyId));
+        if (deviceOnly) {
           const next = readLocalUnassignedDocs().filter((f) => f.id !== fileToDelete.id);
           writeLocalUnassignedDocs(next);
           setUnassignedFiles(next);
@@ -1521,11 +1563,12 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
           return;
         }
         await deleteFileFromStorageClient(fileToDelete.path);
-        await decrementCompanyStorage(companyId, {
+        const fsId = firestoreCompanyIdForGallery(companyId, company);
+        await decrementCompanyStorage(fsId, {
           attachmentsBytes: fileToDelete.size,
           storageBytes: fileToDelete.size,
         });
-        await deleteDoc(doc(firestore, `companies/${companyId}/unassigned_documents`, fileToDelete.id));
+        await deleteDoc(doc(firestore, `companies/${fsId}/unassigned_documents`, fileToDelete.id));
         toast.success("File deleted successfully");
     } catch (error) {
         console.error("Error deleting file:", error);
