@@ -74,7 +74,6 @@ import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderId
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
-import { filterCompaniesExcludeOnlineShared } from "@/lib/companyUnlockGate";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
@@ -880,23 +879,27 @@ export function DesktopAppHeader() {
 
   useEffect(() => {
     if (isLocalOnlyMode()) {
-      // Local-only: context list; offline mode me cloud-only shared (online shared) header se hatao — CompanySelector ke saath align
+      // Local-first: header list = owned + local + mirrored online/shared (CompanySelector ke saath align)
       setLoading(Boolean(companyContextLoading));
-      const mapped = (contextCompanies || []).map((c) => ({ ...c, isOwned: c.isOwned ?? true })) as Company[];
-      setCompanies(filterCompaniesExcludeOnlineShared(mapped, user?.email, user?.uid));
+      const isOwnedByUser = (c: Company) =>
+        (!!user?.uid && c.ownerId === user?.uid) ||
+        (!!user?.email &&
+          !!c.ownerEmail &&
+          c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+      const mapped = (contextCompanies || [])
+        .filter((c) => !c.isDeleted)
+        .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[];
+      setCompanies(mapped);
       if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
         listLocalCompanies()
           .then((rows) => {
-            const mappedRows = rows.map((r) => {
-              const c = { ...(r as unknown as Company) };
-              const owned =
-                (!!user?.uid && c.ownerId === user?.uid) ||
-                (!!user?.email &&
-                  !!c.ownerEmail &&
-                  c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
-              return { ...c, isOwned: owned } as Company;
-            });
-            setCompanies(filterCompaniesExcludeOnlineShared(mappedRows, user?.email, user?.uid));
+            const mappedRows = rows
+              .filter((r: { isDeleted?: boolean }) => !r?.isDeleted)
+              .map((r) => {
+                const c = { ...(r as unknown as Company) };
+                return { ...c, isOwned: isOwnedByUser(c) } as Company;
+              });
+            setCompanies(mappedRows);
           })
           .finally(() => setLoading(false));
       }

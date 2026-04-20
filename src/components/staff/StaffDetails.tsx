@@ -75,6 +75,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import {
   DropdownMenu,
@@ -92,6 +93,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { toast } from "sonner";
@@ -144,6 +146,7 @@ export function StaffDetails({
     processedParties,
     processedExpenseAccounts,
     processedTaxes,
+    journalAccountNames,
   } = useVouchers();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
@@ -158,6 +161,11 @@ export function StaffDetails({
     if (!processedStaff) return initialStaff;
     return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
   }, [processedStaff, initialStaff]);
+
+  const mobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...(userNames || {}) }),
+    [journalAccountNames, userNames]
+  );
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -520,9 +528,7 @@ export function StaffDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "staff", staff.id).includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -532,7 +538,7 @@ export function StaffDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, staff.id]);
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter =
       !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -790,6 +796,15 @@ export function StaffDetails({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
               {(dateSystem === "BS" || dateSystem === "Both") && (
                 <NepaliCalendar
+                  rangePresetSlot={
+                    <DateRangePresetRow
+                      country={company?.country}
+                      onApply={(r) => {
+                        handleDateRangeChange(r);
+                        setIsCalendarOpen(false);
+                      }}
+                    />
+                  }
                   onSelect={handleNepaliSelect}
                   valueAD={dateRange}
                   isRange={true}
@@ -799,6 +814,15 @@ export function StaffDetails({
               {(dateSystem === "AD" || dateSystem === "Both") && (
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          handleDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     valueAD={dateRange}
                     isRange
                     numberOfMonths={calendarMonths}

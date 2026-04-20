@@ -6,8 +6,16 @@ import { Button } from "@/components/ui/button";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
+import { usePathname } from "next/navigation";
+
+function isCompanySelectOrCreatePath(pathname: string | null): boolean {
+  if (!pathname) return false;
+  const p = pathname.replace(/\/+$/, "") || "/";
+  return p === "/company" || p === "/company/create";
+}
 
 export function MobileFloatingButton() {
+  const pathname = usePathname();
   const isMobile = useIsMobile();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showButton, setShowButton] = useState(false);
@@ -112,7 +120,7 @@ export function MobileFloatingButton() {
     };
   }, [isMobile]);
 
-  if (!isMobile) {
+  if (!isMobile || isCompanySelectOrCreatePath(pathname)) {
     return null;
   }
 

@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { doc, onSnapshot, updateDoc, arrayRemove, getDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc, arrayRemove, getDoc, collection, query, where, getDocs, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
@@ -98,7 +98,7 @@ function buildMergedPermissionConfig(currentConfig: PermissionConfig | undefined
 }
 
 export function ManageShare() {
-  const { company: companyData, companyId, allCompanies } = useCompany();
+  const { company: companyData, companyId, allCompanies, reloadLocalCompanyRegistry, triggerSync } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -116,7 +116,16 @@ export function ManageShare() {
   const [isSavingPermissions, setIsSavingPermissions] = useState(false);
 
   const [allAppUsers, setAllAppUsers] = useState<any[]>([]);
-  
+  /** Revoke ke baad context/SQLite stale ho sakta hai — turant list se hatao; `companyData.sharedWith` sync par khud saaf. */
+  const [optimisticRevokedEmails, setOptimisticRevokedEmails] = useState<string[]>([]);
+
+  useEffect(() => {
+    const sw = companyData?.sharedWith || [];
+    setOptimisticRevokedEmails((prev) =>
+      prev.filter((email) => sw.some((u) => normalizeEmail(u.email) === normalizeEmail(email)))
+    );
+  }, [companyData?.sharedWith]);
+
   useEffect(() => {
     if (!user || !companyData) return;
 
@@ -259,12 +268,18 @@ export function ManageShare() {
     if (!companyData) return 0;
     const ownerEmailNorm = (companyData.ownerEmail || "").toLowerCase().trim();
     const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
+    const revoked = new Set(optimisticRevokedEmails.map((e) => e.toLowerCase().trim()));
     const sharedCount = (companyData.sharedWithEmails || []).filter((email) => {
       const e = (email || "").toLowerCase().trim();
-      return !!e && e !== ownerEmailNorm && !superAdminEmails.has(e);
+      return (
+        !!e &&
+        e !== ownerEmailNorm &&
+        !superAdminEmails.has(e) &&
+        !revoked.has(e)
+      );
     }).length;
     return 1 + sharedCount;
-  }, [companyData]);
+  }, [companyData, optimisticRevokedEmails]);
   const isUserLimitReached = currentUserCount >= maxUsersPerPlan;
 
 const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: number) => {
@@ -389,10 +404,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
 
   const handleRoleChange = async (email: string, newRole: SharedUser["role"]) => {
     if (!companyId) return;
-    
-    // Check if company is pending sync
-    
-    // Permission check: manage users/roles
+
     try {
       if (!can("manage_users_roles")) {
         toast({
@@ -402,7 +414,7 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         });
         return;
       }
-    } catch (error) {
+    } catch {
       toast({
         variant: "destructive",
         title: "Error",
@@ -410,17 +422,16 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
       });
       return;
     }
-    
-    // Prevent selecting "owner" role for non-owners
+
     if (newRole === "owner") {
-      toast({ 
-        variant: "destructive", 
-        title: "Invalid Role", 
-        description: "Only the company owner can be Owner role." 
+      toast({
+        variant: "destructive",
+        title: "Invalid Role",
+        description: "Only the company owner can be Owner role.",
       });
       return;
     }
-    
+
     setIsUpdating(email);
     try {
       const companyRef = doc(firestore, "companies", companyId);
@@ -429,35 +440,35 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         toast({ variant: "destructive", title: "Error", description: COMPANY_NOT_SYNCED_MESSAGE });
         return;
       }
-      
+
       const currentData = companySnap.data();
       const currentSharedWith = currentData.sharedWith || [];
 
-      // Ensure role is lowercase and valid
       const normalizedRole = newRole.toLowerCase() as UserRole;
       if (!["viewer", "data-entry", "accountant", "editor", "manager"].includes(normalizedRole)) {
-        toast({ 
-          variant: "destructive", 
-          title: "Invalid Role", 
-          description: "Invalid role selected." 
+        toast({
+          variant: "destructive",
+          title: "Invalid Role",
+          description: "Invalid role selected.",
         });
         return;
       }
 
-      const updatedSharedWith = currentSharedWith.map((u: SharedUser) => 
+      const updatedSharedWith = currentSharedWith.map((u: SharedUser) =>
         u.email === email ? { ...u, role: normalizedRole } : u
       );
 
-      await updateDoc(companyRef, { sharedWith: updatedSharedWith });
-      
+      await updateDoc(companyRef, { sharedWith: updatedSharedWith, updatedAt: serverTimestamp() });
+      reloadLocalCompanyRegistry();
+      triggerSync();
       toast({ title: "Success", description: `Role for ${email} has been updated to ${normalizedRole}.` });
     } catch (error: any) {
       console.error("Error updating role:", error);
       const isNotFoundError = error?.code === "not-found" || error?.message?.includes("No document to update");
-      toast({ 
-        variant: "destructive", 
-        title: "Error", 
-        description: isNotFoundError ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to update role." 
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: isNotFoundError ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to update role.",
       });
     } finally {
       setIsUpdating(null);
@@ -572,13 +583,35 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
             toast({ variant: "destructive", title: "Error", description: COMPANY_NOT_SYNCED_MESSAGE });
             return;
           }
-          
-          const fullUserObject = companyData.sharedWith?.find(u => u.email === userToRemove.email);
+          const serverData = companySnap.data();
+          const sharedWithServer = (serverData.sharedWith || []) as SharedUser[];
+          const fullUserObject = sharedWithServer.find(
+            (u) => normalizeEmail(u.email) === normalizeEmail(userToRemove.email)
+          );
+          if (!fullUserObject) {
+            toast({
+              variant: "destructive",
+              title: "Error",
+              description: "User not found in the current share list. Try refreshing the page.",
+            });
+            return;
+          }
+          const emailsOnDoc = Array.isArray(serverData.sharedWithEmails) ? serverData.sharedWithEmails : [];
+          const emailForArrayRemove =
+            emailsOnDoc.find((e) => normalizeEmail(String(e)) === normalizeEmail(userToRemove.email)) ??
+            fullUserObject.email;
 
           await updateDoc(companyRef, { 
               sharedWith: arrayRemove(fullUserObject),
-              sharedWithEmails: arrayRemove(userToRemove.email) 
+              sharedWithEmails: arrayRemove(emailForArrayRemove) 
             });
+          setOptimisticRevokedEmails((prev) =>
+            prev.some((e) => normalizeEmail(e) === normalizeEmail(userToRemove.email))
+              ? prev
+              : [...prev, userToRemove.email]
+          );
+          reloadLocalCompanyRegistry();
+          triggerSync();
           toast({ title: "Success", description: `Access for ${userToRemove.email} has been revoked.`});
       } catch (error: any) {
           console.error("Error removing access:", error);
@@ -616,21 +649,25 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
         });
     }
 
-    (companyData.sharedWith || []).forEach(user => {
-        if (user.email) {
-            const userInfo = allAppUsers.find(u => normalizeEmail(u.email) === normalizeEmail(user.email));
-            uniqueUsers.set(user.email, {
-                ...user,
-                name: userInfo?.displayName || user.name || "User", 
-                isOnline: isUserOnline(userInfo),
-                id: userInfo?.id,
-                photoURL: userInfo?.photoURL || user.photoURL
-            });
-        }
-    });
+    (companyData.sharedWith || [])
+      .filter(
+        (user) =>
+          user.email &&
+          !optimisticRevokedEmails.some((e) => normalizeEmail(e) === normalizeEmail(user.email))
+      )
+      .forEach((user) => {
+        const userInfo = allAppUsers.find((u) => normalizeEmail(u.email) === normalizeEmail(user.email));
+        uniqueUsers.set(user.email, {
+          ...user,
+          name: userInfo?.displayName || user.name || "User",
+          isOnline: isUserOnline(userInfo),
+          id: userInfo?.id,
+          photoURL: userInfo?.photoURL || user.photoURL,
+        });
+      });
     
     return Array.from(uniqueUsers.values());
-}, [companyData, allAppUsers]);
+}, [companyData, allAppUsers, optimisticRevokedEmails]);
 
 
   if (loading) {
@@ -776,7 +813,12 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                 <div>
                     <CardTitle>Manage Sharing for {companyData.name}</CardTitle>
                     <CardDescription>
-                        Control who has access to this company and what permissions they have.
+                        Control who has access. Change a shared user&apos;s <strong>role</strong> in the table below, or
+                        when inviting from{" "}
+                        <Link href="/settings?view=company" className="underline font-medium hover:no-underline">
+                          Company Profile
+                        </Link>
+                        .
                     </CardDescription>
                 </div>
                 <div className="flex flex-col items-end gap-2">
@@ -849,23 +891,37 @@ const handleDateLimitChange = (action: 'entry' | 'edit' | 'delete', value: numbe
                                 )}
                             </TableCell>
                             <TableCell>
-                                 <Select
+                                {sharedUser.email === companyData.ownerEmail ? (
+                                  <span className="inline-flex items-center text-sm font-medium text-amber-700">
+                                    <Crown className="mr-1 h-3.5 w-3.5" /> Owner
+                                  </span>
+                                ) : (
+                                  <Select
                                     value={sharedUser.role}
-                                    onValueChange={(newRole: SharedUser["role"]) => handleRoleChange(sharedUser.email, newRole)}
-                                    disabled={sharedUser.email === companyData.ownerEmail || isUpdating === sharedUser.email}
-                                >
-                                    <SelectTrigger className="w-[140px]">
-                                        <SelectValue placeholder="Select a role" />
+                                    onValueChange={(newRole: SharedUser["role"]) =>
+                                      handleRoleChange(sharedUser.email, newRole)
+                                    }
+                                    disabled={isUpdating === sharedUser.email}
+                                  >
+                                    <SelectTrigger className="h-9 w-[140px]">
+                                      <SelectValue placeholder="Role" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="owner"><span className="flex items-center gap-1.5"><Crown className="h-3 w-3" /> Owner</span></SelectItem>
-                                        <SelectItem value="viewer">Viewer</SelectItem>
-                                        <SelectItem value="data-entry">Data Entry</SelectItem>
-                                        <SelectItem value="accountant">Accountant</SelectItem>
-                                        <SelectItem value="editor">Editor</SelectItem>
-                                        <SelectItem value="manager">Manager</SelectItem>
+                                      <SelectItem value="viewer">Viewer</SelectItem>
+                                      <SelectItem value="data-entry">Data Entry</SelectItem>
+                                      <SelectItem value="accountant">Accountant</SelectItem>
+                                      <SelectItem value="editor">Editor</SelectItem>
+                                      <SelectItem value="manager">Admin</SelectItem>
+                                      {sharedUser.role === "owner" ? (
+                                        <SelectItem value="owner">
+                                          <span className="flex items-center gap-1.5">
+                                            <Crown className="h-3 w-3" /> Owner
+                                          </span>
+                                        </SelectItem>
+                                      ) : null}
                                     </SelectContent>
-                                </Select>
+                                  </Select>
+                                )}
                             </TableCell>
                              <TableCell className="text-right">
                                 <div className="flex justify-end items-center gap-1">

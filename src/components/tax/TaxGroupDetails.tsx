@@ -35,6 +35,7 @@ import { Checkbox } from "../ui/checkbox";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
@@ -50,6 +51,8 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { calendarPanelClassName } from "@/lib/calendarChrome";
 import type { BSDate } from "@/lib/bs-date";
 import { Search } from "lucide-react";
 import { Avatar, AvatarFallback } from "../ui/avatar";
@@ -103,6 +106,10 @@ export function TaxGroupDetails({
   const { company } = useCompany();
   const { processedTaxes, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
+  const mobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...(userNames ?? {}) }),
+    [journalAccountNames, userNames]
+  );
   const taxesInGroup = useMemo(() => {
     if (group.id === "ungrouped") {
       // Ungrouped should include both empty groupId and persisted ungrouped id rows.
@@ -319,9 +326,7 @@ export function TaxGroupDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "tax").includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -331,7 +336,7 @@ export function TaxGroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -575,24 +580,61 @@ export function TaxGroupDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1">
-                    <Calendar
-                      className="p-0 w-full"
-                      initialFocus
-                      mode="range"
-                      defaultMonth={dateRange?.from}
-                      selected={asCalendarRange(dateRange)}
-                      onSelect={(range) => {
-                        onDateRangeChange(range as DateRange | undefined);
-                        if (range?.from && range?.to) setIsCalendarOpen(false);
-                      }}
-                      numberOfMonths={calendarMonths}
-                      modifiers={{ hasTransactions: transactionDates }}
-                      modifiersClassNames={{ hasTransactions: "has-transactions" }}
-                    />
+                    <div
+                      className={cn(
+                        calendarPanelClassName,
+                        "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+                          "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
+                        )}
+                      >
+                        <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+                          <DateRangePresetRow
+                            country={company?.country}
+                            onApply={(r) => {
+                              onDateRangeChange(r);
+                              setIsCalendarOpen(false);
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <Calendar
+                        className="p-0 w-full"
+                        initialFocus
+                        mode="range"
+                        defaultMonth={dateRange?.from}
+                        selected={asCalendarRange(dateRange)}
+                        onSelect={(range) => {
+                          onDateRangeChange(range as DateRange | undefined);
+                          if (range?.from && range?.to) setIsCalendarOpen(false);
+                        }}
+                        numberOfMonths={calendarMonths}
+                        modifiers={{ hasTransactions: transactionDates }}
+                        modifiersClassNames={{ hasTransactions: "has-transactions" }}
+                      />
+                    </div>
                   </div>
                 )}
               </div>

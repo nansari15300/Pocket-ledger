@@ -16,7 +16,6 @@ import {
   DropdownMenuPortal,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CreateCompanyDialog } from "./CreateCompanyDialog";
 import { DeleteCompanyDialog } from "./DeleteCompanyDialog";
 import { ShareCompanyDialog } from "./ShareCompanyDialog";
 import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
@@ -46,7 +45,6 @@ import {
   shouldPromptCompanyUnlock,
   showCompanyUserNameField,
   verifyCompanyUnlock,
-  filterCompaniesExcludeOnlineShared,
   isOfflineCompanyStorage,
   isOnlineSharedCompany,
 } from "@/lib/companyUnlockGate";
@@ -119,7 +117,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   // Local mode: list useCompany context se (local DB + mirror) — alag listLocalCompanies se sab ko isOwned true galat tha.
   const { setCompanyId, allCompanies: contextCompanies, loading: contextCompanyLoading, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const [dialogState, setDialogState] = useState<{
-    type: "share" | "addLocalUser" | "delete" | "create" | null;
+    type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
   const [companies, setCompanies] = useState<CompanyData[]>(initialCompanies);
@@ -138,10 +136,10 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
 
     useEffect(() => {
     if (isLocalOnlyMode()) {
-      // Offline: local DB ki list; cloud-only shared (online shared) mat dikhao — koi bhi user local companies dekh sake
+      // Local-first: registry list (owned + mirrored cloud/shared); online shared bhi select kar sakte ho
       setLoading(contextCompanyLoading);
       const raw = contextCompanies || [];
-      setCompanies(filterCompaniesExcludeOnlineShared(raw, user?.email, user?.uid));
+      setCompanies(raw.filter((c) => !c.isDeleted));
       return;
     }
     if (!user) {
@@ -400,6 +398,12 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     );
   };
 
+  const hasAnyCompany =
+    localOwnedCompanies.length > 0 ||
+    sharedLocalCompanies.length > 0 ||
+    cloudOwnedCompanies.length > 0 ||
+    sharedCloudCompanies.length > 0;
+
   return (
     <>
       <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-background p-4">
@@ -409,7 +413,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               <div className="min-w-0">
                 <CardTitle className="font-headline text-2xl">Select a Company</CardTitle>
                 <CardDescription>
-                  Choose which company you want to work on.
+                  Choose which company you want to work on, or create a new one.
                 </CardDescription>
               </div>
               <Button
@@ -426,6 +430,15 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            {!hasAnyCompany && (
+              <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-10 text-center space-y-4">
+                <p className="text-sm text-muted-foreground">No companies yet. Create one to get started.</p>
+                <Button type="button" className="w-full sm:w-auto" onClick={() => router.push("/company/create")}>
+                  <PlusCircle className="mr-2 h-4 w-4" />
+                  Create New Company
+                </Button>
+              </div>
+            )}
             {/* Order: 1) owned local 2) shared local 3) owned online 4) shared online — user-requested labels */}
             {localOwnedCompanies.length > 0 && (
               <div className="rounded-lg border border-dashed bg-muted/25 p-3">
@@ -468,23 +481,16 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </div>
             )}
           </CardContent>
-          <CardFooter className="flex justify-center">
-             <Button variant="outline" onClick={() => setDialogState({ type: 'create', company: null })}>
-                <PlusCircle className="mr-2 h-4 w-4"/>Create New Company
-             </Button>
-          </CardFooter>
+          {hasAnyCompany ? (
+            <CardFooter className="flex justify-center">
+              <Button type="button" variant="outline" onClick={() => router.push("/company/create")}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Create New Company
+              </Button>
+            </CardFooter>
+          ) : null}
         </Card>
       </div>
-      
-      <CreateCompanyDialog
-          onCompanyCreated={(id) => {
-            setCompanyId(id);
-            setDialogState({ type: null, company: null });
-            router.push('/dashboard');
-          }}
-          isOpen={dialogState.type === 'create'}
-          onOpenChange={(open) => !open && setDialogState({ type: null, company: null })}
-        />
 
       <AddLocalCompanyUserDialog
         company={dialogState.type === "addLocalUser" ? dialogState.company : null}
@@ -680,7 +686,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
   const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const { isOpen } = useSidebar();
   const [dialogState, setDialogState] = useState<{
-    type: "share" | "addLocalUser" | "delete" | "create" | null;
+    type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
   const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
@@ -937,7 +943,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
             cloudOwnedCompanies.length > 0 ||
             sharedCloudCompanies.length > 0) && <DropdownMenuSeparator />}
           <DropdownMenuGroup>
-             <DropdownMenuItem onSelect={() => setDialogState({ type: 'create', company: null })}>
+             <DropdownMenuItem onSelect={() => router.push("/company/create")}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 <span>Add Company</span>
              </DropdownMenuItem>
@@ -961,16 +967,6 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
         </DropdownMenuContent>
         </DropdownMenuPortal>
       </DropdownMenu>
-
-      <CreateCompanyDialog
-          onCompanyCreated={(id) => {
-            setCompanyId(id);
-            setDialogState({ type: null, company: null });
-            router.push('/dashboard');
-          }}
-          isOpen={dialogState.type === 'create'}
-          onOpenChange={(open) => !open && setDialogState({ type: null, company: null })}
-      />
 
       <AddLocalCompanyUserDialog
         company={dialogState.type === "addLocalUser" ? dialogState.company : null}

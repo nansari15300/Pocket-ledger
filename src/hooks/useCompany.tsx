@@ -8,11 +8,12 @@ import { onSnapshot, collection, query, where, Timestamp, getDocs } from "fireba
 import { auth, firestore } from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { getLocalCompanyById, listLocalCompanies, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, listLocalCompanies, removeLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import type { PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { CompanyDemoteReason } from "@/lib/companyDemote";
-import { reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
+import { isCurrentUserOwnerOfCompanyRow, reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
 import { readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import {
@@ -277,6 +278,8 @@ type CompanyContextType = {
   triggerSync: () => void;
   /** Static/local-only: poori company list + cloud mirror dubara — party/voucher save par mat chalao. */
   reloadLocalCompanyRegistry: () => void;
+  /** Local-only registry reload counter — SQLite company row refresh (e.g. Edit Company “Existing users”). */
+  localCompanyRegistryEpoch: number;
   setCompanyId: (companyId: string) => void;
   clearCompanyId: () => void;
   /** Server → local sync UX: 3d stale, 20d “go online”, offline license expiry */
@@ -609,6 +612,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     let cancelled = false;
     (async () => {
       // Local-first + online login: cloud companies ko local store me mirror karo so dropdown/data local se chale.
+      let cloudMirrorAllowedIds: Set<string> | null = null;
       if (user?.uid && user?.email) {
         try {
           const ownedSnap = await getDocs(query(collection(firestore, "companies"), where("ownerId", "==", user.uid)));
@@ -616,6 +620,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           const cloudRows = [...ownedSnap.docs, ...sharedSnap.docs]
             .map((d: any) => ({ id: d.id, ...(d.data() || {}) }))
             .filter((c: any) => c?.isDeleted !== true);
+          cloudMirrorAllowedIds = new Set(cloudRows.map((r: { id?: string }) => String(r.id || "")).filter(Boolean));
           for (const row of cloudRows) {
             const raw = row as Record<string, unknown>;
             const rid = String(raw.id ?? "");
@@ -632,15 +637,30 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             }
             // Edit Company local save ke turant baad `reloadLocalCompanyRegistry` → yeh loop dubara chalta hai; Firestore abhi purana naam rakhta hai to SQLite stomp na ho (rename "save" UI revert).
             if (existing && localMs > cloudMs) continue;
+            const firestoreSharedWith = Array.isArray(raw.sharedWith) ? raw.sharedWith : [];
+            const prevUsers = existing
+              ? parseLocalCompanyUserRows((existing as { localCompanyUsers?: unknown }).localCompanyUsers)
+              : [];
+            const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, firestoreSharedWith as any);
             await upsertLocalCompany({
               ...row,
               storageOption: "firebase",
               syncPolicy: "online",
               syncedFromCloud: true,
+              localCompanyUsers: mergedLocalUsers,
             } as any);
           }
         } catch {
-          /* cloud mirror optional */
+          cloudMirrorAllowedIds = null;
+        }
+      }
+      if (cloudMirrorAllowedIds !== null && user?.uid && user.email) {
+        const locals = await listLocalCompanies({ includeDeleted: true });
+        for (const row of locals) {
+          const id = row.id;
+          if (!id || cloudMirrorAllowedIds.has(id)) continue;
+          if (isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email })) continue;
+          await removeLocalCompanyById(id, { firebaseUid: user.uid });
         }
       }
       const localCompanies = await listLocalCompanies();
@@ -721,30 +741,49 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
     });
     // Merge local DB companies — live plan entitlements ke liye normalizeLocalCompany (online jaisa).
-    (localCompanies || []).forEach((c: Company) => {
-      if (deletedOnFirestore.has(c.id)) return;
+    for (const c of localCompanies || []) {
+      if (deletedOnFirestore.has(c.id)) continue;
       const normalized = normalizeLocalCompany(c);
       const existing = companyMap.get(c.id);
       if (!existing) {
+        const row = c as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc;
+        if (
+          user?.uid &&
+          !isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user?.email ?? null })
+        ) {
+          // Owner/shared Firestore lists me ab nahi — access revoke; device se poora company data hatao
+          await removeLocalCompanyById(c.id, { firebaseUid: user.uid });
+          continue;
+        }
         companyMap.set(c.id, normalized);
       } else {
         companyMap.set(c.id, mergeOnlineCompanyWithLocalPlanOverlay(existing as Company, normalized));
       }
-    });
+    }
 
     const mergedCompanies = Array.from(companyMap.values());
     // Sync engine: persist all online-category companies to local DB on every server snapshot update.
+    const onlineCompanies = mergedCompanies.filter(
+      (c) => ((c.storageOption || "firebase") as string).toLowerCase() !== "local"
+    );
     await Promise.all(
-      mergedCompanies
-        .filter((c) => ((c.storageOption || "firebase") as string).toLowerCase() !== "local")
-        .map((c) =>
-          upsertLocalCompany({
-            ...(c as any),
-            storageOption: "firebase",
-            syncPolicy: "online",
-            syncedFromCloud: true,
-          } as any)
-        )
+      onlineCompanies.map(async (c) => {
+        const existing = await getLocalCompanyById(c.id, { includeDeleted: true });
+        const prevUsers = existing
+          ? parseLocalCompanyUserRows((existing as { localCompanyUsers?: unknown }).localCompanyUsers)
+          : [];
+        const sw = Array.isArray((c as { sharedWith?: unknown }).sharedWith)
+          ? ((c as { sharedWith: unknown[] }).sharedWith as any[])
+          : [];
+        const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, sw);
+        await upsertLocalCompany({
+          ...(c as any),
+          storageOption: "firebase",
+          syncPolicy: "online",
+          syncedFromCloud: true,
+          localCompanyUsers: mergedLocalUsers,
+        } as any);
+      })
     );
     setAllCompanies(mergedCompanies);
     setLoading(false);
@@ -860,7 +899,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [user?.uid, user?.email, authLoading, companyId, clearCompanyId, router, reloadLocalCompanyRegistry]);
+  }, [user?.uid, user?.email, authLoading, companyId, clearCompanyId, router, reloadLocalCompanyRegistry, registryVersion]);
 
   useEffect(() => {
     if (!companyId) {
@@ -984,6 +1023,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         loading,
         triggerSync,
         reloadLocalCompanyRegistry,
+        localCompanyRegistryEpoch: localRegistryEpoch,
         setCompanyId,
         clearCompanyId,
         allCompanies,

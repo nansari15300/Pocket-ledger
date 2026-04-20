@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   }
 
   const decoded = decodeState(stateB64);
-  const returnPath = decoded?.returnPath || "/company/create";
+  const returnPath = decoded?.returnPath || "/company";
 
   if (!code) {
     const u = new URL(returnPath, appUrl);

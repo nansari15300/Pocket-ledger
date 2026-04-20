@@ -19,7 +19,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PartyList } from "@/components/party/PartyList";
@@ -53,6 +53,7 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { toast } from "sonner";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -66,7 +67,7 @@ function PartyPageContent() {
   // Pehle company context: warna vouchersLoading false ho kar khali list flash, phir company aate hi dubara paint (Poora page jump).
   const { company, companyId, loading: companyLoading, effectiveNotificationSettings } = useCompany();
   const { formatCurrency } = useDate();
-  const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames } = useVouchers();
+  const { vouchers, loading: vouchersLoading, processedParties, processedPartiesForSelection, processedGroups: initialProcessedGroups, overdueTransactions, hasOverdueTransactions, userNames: voucherUserNames, journalAccountNames } = useVouchers();
   const waitingForCompany = Boolean(companyId && (companyLoading || !company));
   const pageDataLoading = waitingForCompany || vouchersLoading;
   const { can } = usePermissions();
@@ -164,6 +165,16 @@ function PartyPageContent() {
 
   const selectedParty = activeView === 'parties' ? selected as Party : null;
   const selectedGroup = activeView === 'groups' ? selected as Group : null;
+  const mobilePartyGroupSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    const name = (selected as Party | Group).name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected]);
+  const mobilePartyGroupSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Party | Group).balance);
+  }, [selected]);
+  const partyMasterDetailTitle = activeView === "groups" ? "Party Groups" : "Parties";
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
   useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
 
@@ -219,22 +230,22 @@ function PartyPageContent() {
     return m;
   }, [overdueTransactions]);
 
+  const overdueMobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...mergedUserNames, ...overduePartyNames }),
+    [journalAccountNames, mergedUserNames, overduePartyNames]
+  );
+
   const mobileFilteredOverdue = useMemo(() => {
     if (!overdueMobileSearchTerm.trim()) return overdueAsTransactions;
     const q = overdueMobileSearchTerm.toLowerCase().trim();
     return overdueAsTransactions.filter((t: any) => {
       const amt = t.debit > 0 ? t.debit : t.credit;
-      const userStr = (mergedUserNames && t.userId && mergedUserNames[t.userId]) || t.userName || "";
       return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
-        (t.partyName || "").toLowerCase().includes(q) ||
-        String(amt || 0).toLowerCase().includes(q) ||
-        userStr.toLowerCase().includes(q)
+        getTransactionQuickSearchHaystack(t, overdueMobileSearchNames, t.partyId ? "party" : undefined, t.partyId).includes(q) ||
+        String(amt || 0).toLowerCase().includes(q)
       );
     });
-  }, [overdueAsTransactions, overdueMobileSearchTerm, mergedUserNames]);
+  }, [overdueAsTransactions, overdueMobileSearchTerm, overdueMobileSearchNames]);
 
   const overduePeriodDr = useMemo(
     () => mobileFilteredOverdue.reduce((s, t) => s + (t.debit ?? 0), 0),
@@ -746,7 +757,9 @@ function PartyPageContent() {
   return (
     <>
       <ResponsiveMasterDetail
-        title="Parties"
+        title={partyMasterDetailTitle}
+        mobileSelectionLabel={mobilePartyGroupSelectionLabel}
+        mobileSelectionLabelClassName={mobilePartyGroupSelectionLabelClassName}
         balance={
           <span className={cn(
               "font-semibold",

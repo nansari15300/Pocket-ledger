@@ -13,13 +13,15 @@ import { ArrowLeft, Calendar as CalendarIcon, File, Printer, Share2, BarChart2, 
 import type { Staff, StaffGroup } from "@/components/staff/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect, getPdfBlob, type Context } from "@/lib/printDirect";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { calendarPanelClassName } from "@/lib/calendarChrome";
 import type { BSDate } from "@/lib/bs-date";
 import {
   Drawer,
@@ -416,12 +418,27 @@ export default function DesktopStaffStatementPage() {
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
       <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h1 className="text-base font-bold truncate flex-1 min-w-0">{pageTitle}</h1>
-          <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            {activeEntity?.name ? (
+              <>
+                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+                  ·
+                </span>
+                <span
+                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                  title={activeEntity.name}
+                >
+                  {activeEntity.name}
+                </span>
+              </>
+            ) : null}
+          </div>
+          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
             Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
           </span>
         </div>
@@ -492,23 +509,60 @@ export default function DesktopStaffStatementPage() {
           </DrawerHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
             {(dateSystem === "BS" || dateSystem === "Both") && (
-              <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+              <NepaliCalendar
+                rangePresetSlot={
+                  <DateRangePresetRow
+                    country={company?.country}
+                    onApply={(r) => {
+                      setDateRange(r);
+                      setIsCalendarOpen(false);
+                    }}
+                  />
+                }
+                onSelect={handleNepaliSelect}
+                valueAD={dateRange}
+                isRange={true}
+                numberOfMonths={calendarMonths}
+              />
             )}
             {(dateSystem === "AD" || dateSystem === "Both") && (
               <div className="flex-1">
-                <Calendar
-                  className="p-0 w-full"
-                  classNames={{ table: "w-full" }}
-                  initialFocus
-                  mode="range"
-                  defaultMonth={dateRange?.from}
-                  selected={asCalendarRange(dateRange)}
-                  onSelect={(range) => {
-                    setDateRange(range as DateRange | undefined);
-                    if (range?.from && range.to) setIsCalendarOpen(false);
-                  }}
-                  numberOfMonths={calendarMonths}
-                />
+                <div
+                  className={cn(
+                    calendarPanelClassName,
+                    "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+                      "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
+                    )}
+                  >
+                    <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          setDateRange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <Calendar
+                    className="p-0 w-full"
+                    classNames={{ table: "w-full" }}
+                    initialFocus
+                    mode="range"
+                    defaultMonth={dateRange?.from}
+                    selected={asCalendarRange(dateRange)}
+                    onSelect={(range) => {
+                      setDateRange(range as DateRange | undefined);
+                      if (range?.from && range.to) setIsCalendarOpen(false);
+                    }}
+                    numberOfMonths={calendarMonths}
+                  />
+                </div>
               </div>
             )}
           </div>

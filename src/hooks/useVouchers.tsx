@@ -1345,7 +1345,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     processedTaxes.forEach((t) => { preloaded[t.id] = t.name; });
     processedExpenseAccounts.forEach((e) => { preloaded[e.id] = e.name; });
     processedItems.forEach((i) => { preloaded[i.id] = i.name; });
-    return { ...preloaded, ...journalAccountNames };
+    // Fetched names first; master lists win so async "Unknown Account" never overwrites real entity names.
+    return { ...journalAccountNames, ...preloaded };
   }, [processedParties, processedAccounts, processedStaff, processedTaxes, processedExpenseAccounts, processedItems, journalAccountNames]);
   
   const value = useMemo(() => {

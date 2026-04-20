@@ -62,6 +62,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -107,6 +108,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 
 interface TaxDetailsProps {
@@ -144,6 +146,10 @@ export function TaxDetails({
   const { dateSystem, formatDate, formatDateBS, formatCurrency } = useDate();
   const { vouchers, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
   const journalAccountNames = journalAccountNamesProp ?? journalAccountNamesFromHook ?? {};
+  const mobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...(userNames ?? {}) }),
+    [journalAccountNames, userNames]
+  );
 
   const tax = useMemo(() => {
     if (!initialTax) return undefined;
@@ -337,21 +343,17 @@ export function TaxDetails({
       const timeStr = d ? format(d, "h:mm a") : "";
       const amt = t.debit > 0 ? t.debit : t.credit;
       const bal = t.balance ?? t.runningBalance ?? 0;
-      const userStr = (userNames && t.userId && userNames[t.userId]) || "";
       return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, tax ? "tax" : undefined, tax?.id).includes(q) ||
         dateStr.toLowerCase().includes(q) ||
         timeStr.toLowerCase().includes(q) ||
         String(amt || 0).toLowerCase().includes(q) ||
         String(t.debit || 0).toLowerCase().includes(q) ||
         String(t.credit || 0).toLowerCase().includes(q) ||
-        String(bal).toLowerCase().includes(q) ||
-        userStr.toLowerCase().includes(q)
+        String(bal).toLowerCase().includes(q)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
+  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mobileSearchNames, tax?.id]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -639,11 +641,34 @@ export function TaxDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

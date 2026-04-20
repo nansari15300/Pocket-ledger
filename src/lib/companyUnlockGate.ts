@@ -43,27 +43,6 @@ export function showCompanyUserNameField(company: CompanyUnlockRow, userEmail?: 
   return !!(se?.password && String((se as { name?: string }).name || "").trim());
 }
 
-/** Local-only mode: DB ki companies dikhao, cloud-only shared (online shared) hatao */
-export function filterCompaniesExcludeOnlineShared<T extends CompanyUnlockRow>(
-  rows: T[],
-  userEmail: string | undefined,
-  userUid: string | undefined
-): T[] {
-  const isOwnedByUser = (c: T) =>
-    (!!userUid && c.ownerId === userUid) ||
-    (!!userEmail &&
-      !!c.ownerEmail &&
-      String(c.ownerEmail).toLowerCase().trim() === userEmail.toLowerCase().trim());
-
-  return rows.filter((c) => {
-    const owned = isOwnedByUser(c);
-    const row: CompanyUnlockRow = { ...c, isOwned: owned };
-    if (owned) return true;
-    if (isOnlineSharedCompany(row)) return false;
-    return true;
-  });
-}
-
 /**
  * Company access verify: owner = root password; online shared = Company Profile admin username + root password.
  */

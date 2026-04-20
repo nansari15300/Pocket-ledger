@@ -102,9 +102,11 @@ import { pushIncomeExpenseAccountSwitch } from "@/lib/incomeExpenseDetailNav";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import usePermissions from "@/hooks/usePermissions";
 
 interface ExpenseAccountDetailsProps {
@@ -146,7 +148,12 @@ export function ExpenseAccountDetails({
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { vouchers } = useVouchers();
+  const { vouchers, journalAccountNames: journalAccountNamesFromHook } = useVouchers();
+  const resolvedJournalAccountNames = journalAccountNames ?? journalAccountNamesFromHook ?? {};
+  const mobileSearchNames = useMemo(
+    () => ({ ...resolvedJournalAccountNames, ...(userNames ?? {}) }),
+    [resolvedJournalAccountNames, userNames]
+  );
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -382,9 +389,7 @@ export function ExpenseAccountDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "expense", account.id).includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -394,7 +399,7 @@ export function ExpenseAccountDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, account.id]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -932,6 +937,15 @@ export function ExpenseAccountDetails({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     onSelect={handleNepaliSelect}
                     valueAD={dateRange}
                     isRange={true}
@@ -941,6 +955,15 @@ export function ExpenseAccountDetails({
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange?.(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

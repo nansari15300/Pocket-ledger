@@ -35,7 +35,12 @@ import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Calendar } from "@/components/ui/calendar";
 import { compressFile } from "@/lib/compression";
-import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+import {
+  MAX_IMAGE_BYTES_BEFORE_COMPRESS,
+  MAX_IMAGE_MB_BEFORE_COMPRESS,
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_AFTER_COMPRESS,
+} from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { CreateGroupDialog } from "./CreateGroupDialog";
@@ -85,8 +90,6 @@ const formSchema = z
 
 type FormValues = z.infer<typeof formSchema>;
 
-
-const MAX_FILE_SIZE_MB = 0.5;
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -188,13 +191,17 @@ export function CreatePartyForm({
 
     setIsCompressing(true);
     try {
-      const compressedFile = await compressFile(inputFile);
+      // Pehle normal ~150KB target; fail / zyada bada ho to doosri pass (party/item jaisa cap MAX_IMAGE_MB_AFTER_COMPRESS)
+      let compressedFile = await compressFile(inputFile);
+      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+        compressedFile = await compressFile(inputFile, { maxKB: 420, minKB: 40 });
+      }
       setCompressionResult({ originalSize: inputFile.size, compressedSize: compressedFile.size });
-      if (compressedFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      if (compressedFile.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
         toast({
           variant: "destructive",
           title: "File Too Large After Compression",
-          description: `Even after compression, the file is larger than ${MAX_FILE_SIZE_MB}MB.`,
+          description: `Even after compression, the file is larger than ${MAX_IMAGE_MB_AFTER_COMPRESS} MB.`,
         });
         setAvatarToUpload(null);
         return;

@@ -3,15 +3,14 @@ import * as React from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Calendar as Icon } from "lucide-react";
-import { type BSDate, bsToAd, BS_CALENDAR_MIN_YEAR, canConvertAdDateToBs } from "@/lib/bs-date";
+import { type BSDate, canConvertAdDateToBs } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useCompany } from "@/hooks/useCompany";
 import { useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
-import { subDays, startOfMonth, endOfMonth, subMonths } from "date-fns";
-import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 
 type BsDatePickerBaseProps = {
   numberOfMonths?: number;
@@ -97,50 +96,6 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
     }
   }
 
-  /** Range shortcuts — top row; company country se F Y; All = BS min year se aaj tak */
-  const applyRangePreset = React.useCallback(
-    (preset: "7d" | "month" | "3m" | "6m" | "fy" | "all") => {
-      if (!isRange) return;
-      const today = new Date();
-      const onRange = onChangeAD as (date?: DateRange | undefined) => void;
-      let from: Date;
-      let to: Date = atNoon(today);
-
-      switch (preset) {
-        case "7d":
-          from = atNoon(subDays(today, 6));
-          break;
-        case "month":
-          from = atNoon(startOfMonth(today));
-          to = atNoon(endOfMonth(today));
-          break;
-        case "3m":
-          from = atNoon(startOfMonth(subMonths(today, 2)));
-          to = atNoon(endOfMonth(today));
-          break;
-        case "6m":
-          from = atNoon(startOfMonth(subMonths(today, 5)));
-          to = atNoon(endOfMonth(today));
-          break;
-        case "fy": {
-          const { start, end } = getFiscalRangeForCountry(company?.country ?? "Nepal", today);
-          from = atNoon(start);
-          to = atNoon(end);
-          break;
-        }
-        case "all":
-          from = atNoon(bsToAd({ y: BS_CALENDAR_MIN_YEAR, m: 1, d: 1 }));
-          to = atNoon(today);
-          break;
-        default:
-          return;
-      }
-      onRange({ from, to });
-      setOpen(false);
-    },
-    [isRange, onChangeAD, company?.country]
-  );
-
   const displayValue = () => {
     if (children) return children;
     if (!valueAD) return isRange ? "Pick a date range" : "Pick a date";
@@ -176,7 +131,15 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
             <span className="truncate min-w-0">{displayValue()}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-auto p-0 z-50">
+      <PopoverContent
+        align="start"
+        collisionPadding={16}
+        className={cn(
+          "w-auto p-0 z-50",
+          // Narrow viewports: keep popover in screen; inner NepaliCalendar scrolls (presets + calendar)
+          "max-w-[calc(100vw-1rem)] sm:max-w-none"
+        )}
+      >
         <NepaliCalendar
             onSelect={handleNepaliSelect}
             valueAD={valueAD}
@@ -186,30 +149,14 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
             disabled={disabled}
             rangePresetSlot={
               isRange ? (
-                <>
-                  {(
-                    [
-                      { key: "7d" as const, label: "7 days" },
-                      { key: "month" as const, label: "Month" },
-                      { key: "3m" as const, label: "3 months" },
-                      { key: "6m" as const, label: "6 months" },
-                      { key: "fy" as const, label: "F Y" },
-                      { key: "all" as const, label: "All" },
-                    ] as const
-                  ).map(({ key, label }) => (
-                    <Button
-                      key={key}
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="h-7 text-xs px-2 shrink-0"
-                      disabled={disabled}
-                      onClick={() => applyRangePreset(key)}
-                    >
-                      {label}
-                    </Button>
-                  ))}
-                </>
+                <DateRangePresetRow
+                  disabled={disabled}
+                  country={company?.country}
+                  onApply={(r) => {
+                    (onChangeAD as (date?: DateRange | undefined) => void)(r);
+                    setOpen(false);
+                  }}
+                />
               ) : undefined
             }
         />

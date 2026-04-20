@@ -186,6 +186,12 @@ export const getOppositeAccountLabel = (
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
 ): string => {
   const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
+  const labelFromJournalEntry = (e: any) => {
+    const raw = String(e?.accountName ?? "").trim();
+    if (raw) return raw;
+    const id = e?.accountId;
+    return id ? getName(id) : "N/A";
+  };
   const getPartyDisplay = (partyId: string | undefined) => {
     // Item-ledger rows can carry partyName even when id->name map is incomplete.
     const fromMap = partyId ? names[partyId] : undefined;
@@ -213,9 +219,9 @@ export const getOppositeAccountLabel = (
         const partyEntry = t.entries.find((e: any) => e?.accountId === contextId);
         const oppositeSide = partyEntry ? ((Number(partyEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
         const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
-        if (oppositeEntry?.accountId) return getName(oppositeEntry.accountId);
+        if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
         const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
-        if (anyOther?.accountId) return getName(anyOther.accountId);
+        if (anyOther?.accountId) return labelFromJournalEntry(anyOther);
         return "Journal";
       }
       if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
@@ -246,7 +252,7 @@ export const getOppositeAccountLabel = (
     if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
     if (t.type === "contra") return getName(t.fromAccountId) || getName(t.toAccountId);
     if (t.type === "journal" && Array.isArray(t.entries)) {
-      const parts = t.entries.slice(0, 2).map((e: any) => getName(e.accountId));
+      const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
       return parts.join(", ") || "Journal";
     }
   }
@@ -268,9 +274,9 @@ export const getOppositeAccountLabel = (
       const accountEntry = t.entries.find((e: any) => e?.accountId === contextId);
       const oppositeSide = accountEntry ? ((Number(accountEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
       const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
-      if (oppositeEntry?.accountId) return getName(oppositeEntry.accountId);
+      if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
       const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
-      if (anyOther?.accountId) return getName(anyOther.accountId);
+      if (anyOther?.accountId) return labelFromJournalEntry(anyOther);
       return "Journal";
     }
   }
@@ -312,7 +318,7 @@ export const getOppositeAccountLabel = (
         nonStaffEntries.find((e: any) => (Number(e?.debit) || 0) > 0) ||
         nonStaffEntries.find((e: any) => !isTaxLikeId(e.accountId)) ||
         nonStaffEntries[0];
-      if (expenseEntry?.accountId) return getName(expenseEntry.accountId);
+      if (expenseEntry?.accountId) return labelFromJournalEntry(expenseEntry);
       return "Add Salary";
     }
 
@@ -324,7 +330,7 @@ export const getOppositeAccountLabel = (
         nonStaffEntries.find((e: any) => (Number(e?.[preferredSide]) || 0) > 0 && !isTaxLikeId(e.accountId)) ||
         nonStaffEntries.find((e: any) => !isTaxLikeId(e.accountId)) ||
         nonStaffEntries[0];
-      if (oppositeEntry?.accountId) return getName(oppositeEntry.accountId);
+      if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
     }
   }
 
@@ -334,7 +340,7 @@ export const getOppositeAccountLabel = (
   const isTaxContext = context === "tax" || context === "tax_group";
   if (isTaxContext && t.type === "journal" && t.subType === "add_salary" && Array.isArray(t.entries)) {
     const expenseEntry = t.entries.find((e: any) => (Number(e?.debit) || 0) > 0);
-    if (expenseEntry?.accountId) return getName(expenseEntry.accountId);
+    if (expenseEntry?.accountId) return labelFromJournalEntry(expenseEntry);
   }
   if (isTaxContext && (t.type === "payment_in" || t.type === "payment_out")) {
     // payment_in: Dr Bank (accountId), Cr Tax → opposite = bank received into
@@ -352,12 +358,40 @@ export const getOppositeAccountLabel = (
   if (t.type === "direct_income") return getName(t.incomeAccountId);
   if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
   if (t.type === "journal" && Array.isArray(t.entries)) {
-    const parts = t.entries.slice(0, 2).map((e: any) => getName(e.accountId));
+    const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
     return parts.join(", ") || "Journal";
   }
   if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
   return t.narration || "";
 };
+
+/**
+ * Mobile "Search transactions" text blob: voucher, narration, particulars, opposite account (card title), user display, etc.
+ */
+export function getTransactionQuickSearchHaystack(
+  t: any,
+  names: Record<string, string> = {},
+  context?: Context,
+  contextId?: string,
+  groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
+): string {
+  const chunks: string[] = [
+    t?.voucherNumber,
+    getDisplayType(t),
+    t?.narration,
+    typeof t?.partyName === "string" ? t.partyName : "",
+    typeof t?.payeeName === "string" ? t.payeeName : "",
+    typeof t?.userDisplayName === "string" ? t.userDisplayName : "",
+    typeof t?.userName === "string" ? t.userName : "",
+    getParticularsText(t, names),
+  ];
+  const uid = t?.userId;
+  if (uid && names[uid]) chunks.push(names[uid]);
+  if (context && contextId) {
+    chunks.push(getOppositeAccountLabel(t, names, context, contextId, groupEntityType));
+  }
+  return chunks.filter(Boolean).join(" ").toLowerCase();
+}
 
 const isStatusJournalOrNote = (t: any) =>
   t.type === "journal" || t.type === "note";

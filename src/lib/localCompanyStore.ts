@@ -6,6 +6,11 @@
  */
 
 import { getBrowserDb } from "@/lib/localSqlite";
+import { clearLocalAuth } from "@/lib/localApiClient";
+import { clearCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
+import { clearCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswordUnlockRemember";
+import { clearOfflineUnlockSession } from "@/lib/offlineCompanyUnlockRemember";
+import { clearRememberedSharedUnlockUsername } from "@/lib/onlineSharedUnlockRememberUsername";
 
 export type LocalCompanyDoc = {
   id: string;
@@ -73,9 +78,48 @@ export async function listLocalCompanies(options?: { includeDeleted?: boolean })
   return out;
 }
 
-export async function removeLocalCompanyById(companyId: string): Promise<void> {
+export type RemoveLocalCompanyOptions = {
+  /** Firebase Auth uid — company unlock / remember sessions hataane ke liye */
+  firebaseUid?: string | null;
+};
+
+/**
+ * Device se company ka saara local data hatao: registry + company_docs + users + sync outbox + related localStorage.
+ * Shared access revoke / recycle bin permanent delete dono yahi use karte hain.
+ */
+export async function removeLocalCompanyById(
+  companyId: string,
+  options?: RemoveLocalCompanyOptions
+): Promise<void> {
   const db = await getBrowserDb();
   if (!db || !companyId) return;
-  // Permanent delete: local company registry se row remove karo.
-  db.prepare(`DELETE FROM companies WHERE id = ?`).run(companyId);
+  const cid = String(companyId).trim();
+  if (!cid) return;
+
+  db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(cid);
+  db.prepare(`DELETE FROM company_users WHERE company_id = ?`).run(cid);
+  db.prepare(`DELETE FROM sync_outbox WHERE company_id = ?`).run(cid);
+  db.prepare(`DELETE FROM companies WHERE id = ?`).run(cid);
+
+  try {
+    clearLocalAuth(cid);
+  } catch {
+    /* ignore */
+  }
+  try {
+    clearCompanyPlanLocalCache(cid);
+  } catch {
+    /* ignore */
+  }
+  const uid = options?.firebaseUid;
+  if (uid != null && String(uid).trim()) {
+    const u = String(uid).trim();
+    try {
+      clearCloudCompanyPasswordUnlockSession(u, cid);
+      clearOfflineUnlockSession(u, cid);
+      clearRememberedSharedUnlockUsername(u, cid);
+    } catch {
+      /* ignore */
+    }
+  }
 }

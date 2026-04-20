@@ -42,6 +42,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -85,6 +86,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -436,6 +438,11 @@ export function GroupDetails({
   const mergedUserNames = useMemo(() => {
     return { ...userNames, ...localFetchedUserNames };
   }, [userNames, localFetchedUserNames]);
+
+  const mobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...mergedUserNames }),
+    [journalAccountNames, mergedUserNames]
+  );
   
   const {
     openingBalanceForPeriod,
@@ -822,9 +829,7 @@ export function GroupDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "party").includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0)
@@ -836,7 +841,7 @@ export function GroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
   const totalPagesMobile = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
   const paginatedMobileTransactions = filteredMobileTransactions.slice(
@@ -1124,11 +1129,34 @@ export function GroupDetails({
             </DrawerHeader>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
               {(dateSystem === "BS" || dateSystem === "Both") && (
-                <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                <NepaliCalendar
+                  rangePresetSlot={
+                    <DateRangePresetRow
+                      country={company?.country}
+                      onApply={(r) => {
+                        onDateRangeChange(r);
+                        setIsCalendarOpen(false);
+                      }}
+                    />
+                  }
+                  onSelect={handleNepaliSelect}
+                  valueAD={dateRange}
+                  isRange={true}
+                  numberOfMonths={calendarMonths}
+                />
               )}
               {(dateSystem === "AD" || dateSystem === "Both") && (
                 <div className="flex-1 w-full min-w-0">
                   <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     valueAD={dateRange}
                     isRange
                     numberOfMonths={calendarMonths}

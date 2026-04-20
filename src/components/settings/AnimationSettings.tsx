@@ -77,22 +77,31 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
 
   const watchedSettings = form.watch();
 
-  // Load: shared+blocked → localStorage; warna Firestore user doc (same path as profile).
+  // Load: pehle device (localStorage) — offline/online dono; cloud sirf jab local khali ho
   useEffect(() => {
     if (!userDocId) return;
     const loadUserSettings = async () => {
+      const readLocal = (): AnimationSettingsValues | null => {
+        const raw = typeof window !== "undefined" ? localStorage.getItem(animationLocalStorageKey(userDocId)) : null;
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw) as AnimationSettingsValues;
+          return {
+            numbers: { ...defaultAnimationSettings.numbers, ...parsed.numbers },
+            rows: { ...defaultAnimationSettings.rows, ...parsed.rows },
+          };
+        } catch {
+          return null;
+        }
+      };
       try {
+        const fromLocal = readLocal();
+        if (fromLocal) {
+          form.reset(fromLocal);
+          return;
+        }
         if (localPersistenceOnly) {
-          const raw = typeof window !== "undefined" ? localStorage.getItem(animationLocalStorageKey(userDocId)) : null;
-          if (raw) {
-            const parsed = JSON.parse(raw) as AnimationSettingsValues;
-            form.reset({
-              numbers: { ...defaultAnimationSettings.numbers, ...parsed.numbers },
-              rows: { ...defaultAnimationSettings.rows, ...parsed.rows },
-            });
-          } else {
-            form.reset(defaultAnimationSettings);
-          }
+          form.reset(defaultAnimationSettings);
           return;
         }
         const userDocRef = doc(firestore, "users", userDocId);
@@ -101,11 +110,10 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
           const userData = userDoc.data();
           const settings = userData.animationSettings;
           if (settings) {
-            const newSettings = {
+            form.reset({
               numbers: { ...defaultAnimationSettings.numbers, ...settings.numbers },
               rows: { ...defaultAnimationSettings.rows, ...settings.rows },
-            };
-            form.reset(newSettings);
+            });
           } else {
             form.reset(defaultAnimationSettings);
           }
@@ -114,7 +122,8 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
         }
       } catch (error) {
         console.error("Error loading user animation settings:", error);
-        form.reset(defaultAnimationSettings);
+        const fallback = readLocal();
+        form.reset(fallback ?? defaultAnimationSettings);
       }
     };
     void loadUserSettings();
@@ -156,15 +165,16 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
     }
     setIsLoading(true);
     try {
+      // Hamesha device pe likho — Wi‑Fi band / offline company par bhi save kaam kare
+      if (typeof window !== "undefined") {
+        localStorage.setItem(animationLocalStorageKey(userDocId), JSON.stringify(data));
+      }
+      if (typeof BroadcastChannel !== "undefined") {
+        try {
+          new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
+        } catch (_) {}
+      }
       if (localPersistenceOnly) {
-        if (typeof window !== "undefined") {
-          localStorage.setItem(animationLocalStorageKey(userDocId), JSON.stringify(data));
-        }
-        if (typeof BroadcastChannel !== "undefined") {
-          try {
-            new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
-          } catch (_) {}
-        }
         toast({
           title: "Saved",
           description: "Animation preferences saved on this device only (company owner controls other settings).",
@@ -173,13 +183,16 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
         return;
       }
       const userRef = doc(firestore, "users", userDocId);
-      await updateDoc(userRef, { animationSettings: data });
-      if (typeof BroadcastChannel !== "undefined") {
-        try {
-          new BroadcastChannel(ANIMATION_SETTINGS_CHANNEL).postMessage(data);
-        } catch (_) {}
+      try {
+        await updateDoc(userRef, { animationSettings: data });
+        toast({ title: "Success", description: "Animation settings saved on this device and synced to your account." });
+      } catch (cloudErr) {
+        console.warn("[AnimationSettings] Cloud sync failed — local copy kept", cloudErr);
+        toast({
+          title: "Saved on device",
+          description: "Could not sync to cloud while offline. Settings will upload when the connection is back.",
+        });
       }
-      toast({ title: "Success", description: "Animation settings have been updated." });
       handleReloadDemo();
     } catch (error) {
       console.error("Error updating animation settings:", error);
@@ -372,7 +385,7 @@ export function AnimationSettings({ localPersistenceOnly }: { localPersistenceOn
               <p>
                 {localPersistenceOnly
                   ? "Note: Saved only on this device. Other devices keep their own animation preferences."
-                  : "Note: These settings are saved per user and will apply across all companies you work with."}
+                  : "Note: A copy is always kept on this device (works offline). When online, they also sync to your user account."}
               </p>
             </div>
           </form>

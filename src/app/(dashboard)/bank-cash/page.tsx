@@ -19,7 +19,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { AccountList } from "@/components/bank-cash/AccountList";
@@ -120,10 +120,37 @@ function BankCashPageContent() {
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [accountDetailsDateRange, setAccountDetailsDateRange] = useState<DateRange | undefined>(undefined);
   const [groupDetailsDateRange, setGroupDetailsDateRange] = useState<DateRange | undefined>(undefined);
+  /** Mobile: AccountDetails se voucher count — master-detail title row me dikhane ke liye */
+  const [bankMobileVoucherStats, setBankMobileVoucherStats] = useState<{ showing: number; total: number } | null>(null);
 
   const selectedAccount = activeView === 'accounts' ? selected as Account : null;
   const selectedGroup = activeView === 'groups' ? selected as AccountGroup : null;
+  // Account row = `accountName`; group row = `name` — sirf `.name` se bank detail header khali rehta tha
+  const mobileBankCashSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    if (activeView === "accounts") {
+      const nm = (selected as Account).accountName;
+      return nm && String(nm).trim() ? String(nm).trim() : null;
+    }
+    const nm = (selected as AccountGroup).name;
+    return nm && String(nm).trim() ? String(nm).trim() : null;
+  }, [selected, activeView]);
+  const mobileBankCashSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Account | AccountGroup).balance);
+  }, [selected]);
+  const bankCashMasterDetailTitle = activeView === "groups" ? "Bank Groups" : "Bank & Cash";
   useSyncMasterDetailHeaderId("bank-cash", selectedAccount?.id ?? selectedGroup?.id ?? null);
+
+  useEffect(() => {
+    if (!isMobile || activeView !== "accounts") setBankMobileVoucherStats(null);
+  }, [isMobile, activeView, selectedAccount?.id]);
+
+  const mobileBankDetailHeaderEnd = useMemo(() => {
+    if (!isMobile || activeView !== "accounts" || !selectedAccount || !bankMobileVoucherStats) return null;
+    const { showing, total } = bankMobileVoucherStats;
+    return `Showing ${showing} of ${total} voucher(s)`;
+  }, [isMobile, activeView, selectedAccount, bankMobileVoucherStats]);
   
    const processedAccountGroups = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');
@@ -370,6 +397,7 @@ function BankCashPageContent() {
             dateRange={accountDetailsDateRange}
             onDateRangeChange={setAccountDetailsDateRange}
             userNames={userNames}
+            onMobileVoucherListStatsChange={isMobile ? setBankMobileVoucherStats : undefined}
           />
       )}
       {activeView === 'groups' && selectedGroup && (
@@ -391,7 +419,10 @@ function BankCashPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title="Bank & Cash"
+      title={bankCashMasterDetailTitle}
+      mobileSelectionLabel={mobileBankCashSelectionLabel}
+      mobileSelectionLabelClassName={mobileBankCashSelectionLabelClassName}
+      mobileDetailHeaderEnd={mobileBankDetailHeaderEnd}
       balance={
         <span className={cn(
             "font-semibold",

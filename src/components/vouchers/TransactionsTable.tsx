@@ -868,7 +868,12 @@ export function TransactionsTable({
         balance = balance / conversionFactor;
       }
       const amount = credit > 0 ? credit : debit;
-      const isCredit = credit > 0;
+      const mainAmountClass =
+        amount <= 0
+          ? "text-muted-foreground"
+          : credit > 0
+            ? "text-red-600"
+            : "text-green-600";
       const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
@@ -925,7 +930,7 @@ export function TransactionsTable({
             <div className="min-w-0 flex-1 overflow-hidden">
               <p className="font-bold text-sm truncate">{titleLabel}</p>
             </div>
-            <p className={cn("font-bold text-sm shrink-0", isCredit ? "text-green-600" : "text-red-600")}>
+            <p className={cn("font-bold text-sm shrink-0", mainAmountClass)}>
               {amount > 0 ? formatAmountOrQty(amount) : "-"}
             </p>
           </div>

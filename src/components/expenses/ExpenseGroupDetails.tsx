@@ -35,6 +35,7 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useTransactions, getTransactionAmounts } from "@/hooks/use-transactions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import usePermissions from "@/hooks/usePermissions";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
@@ -52,6 +53,7 @@ import { pushIncomeExpenseGroupSwitch } from "@/lib/incomeExpenseDetailNav";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import {
   Drawer,
@@ -100,7 +102,7 @@ export function ExpenseGroupDetails({
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company } = useCompany();
-  const { processedExpenseAccounts, vouchers } = useVouchers();
+  const { processedExpenseAccounts, vouchers, journalAccountNames } = useVouchers();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const router = useRouter();
@@ -121,6 +123,14 @@ export function ExpenseGroupDetails({
     if (fromProcessed.length > 0) return fromProcessed as ExpenseAccount[];
     return accounts.filter((a) => a.groupId === group.id);
   }, [processedExpenseAccounts, accounts, group.id]);
+  const mobileSearchNames = useMemo(
+    () => ({
+      ...journalAccountNames,
+      ...Object.fromEntries(accountsInGroup.map((a) => [a.id, a.name])),
+      ...(userNames ?? {}),
+    }),
+    [journalAccountNames, accountsInGroup, userNames]
+  );
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -243,20 +253,16 @@ export function ExpenseGroupDetails({
       const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
       const amt = t.debit > 0 ? t.debit : t.credit;
       const bal = t.balance ?? t.runningBalance ?? 0;
-      const userStr = (userNames && t.userId && userNames[t.userId]) || "";
       return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id).includes(q) ||
         dateStr.toLowerCase().includes(q) ||
         String(amt || 0).toLowerCase().includes(q) ||
         String(t.debit || 0).toLowerCase().includes(q) ||
         String(t.credit || 0).toLowerCase().includes(q) ||
-        String(bal).toLowerCase().includes(q) ||
-        userStr.toLowerCase().includes(q)
+        String(bal).toLowerCase().includes(q)
       );
     });
-  }, [processedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
+  }, [processedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mobileSearchNames, group.id]);
 
   const mobileTransactions = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -577,6 +583,15 @@ export function ExpenseGroupDetails({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     onSelect={handleNepaliSelect}
                     valueAD={dateRange}
                     isRange={true}
@@ -586,6 +601,15 @@ export function ExpenseGroupDetails({
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange?.(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

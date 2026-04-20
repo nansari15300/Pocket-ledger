@@ -18,6 +18,12 @@ export function ResponsiveMasterDetail({
   mobileListOnly,
   hasSelectedItem,
   onBackToList,
+  /** Mobile detail header: selected party / group / account name next to page title */
+  mobileSelectionLabel,
+  /** Tailwind classes for {@link mobileSelectionLabel} (e.g. green/red from selected balance). Defaults to muted. */
+  mobileSelectionLabelClassName,
+  /** Mobile detail title row — right side (e.g. voucher count); niche duplicate row avoid */
+  mobileDetailHeaderEnd,
 }: {
   title: string | React.ReactNode;
   balance: string | React.ReactNode;
@@ -32,6 +38,9 @@ export function ResponsiveMasterDetail({
   hasSelectedItem?: boolean;
   /** Callback to go back to list when showing detail on mobile (Back button) */
   onBackToList?: () => void;
+  mobileSelectionLabel?: string | null;
+  mobileSelectionLabelClassName?: string;
+  mobileDetailHeaderEnd?: React.ReactNode;
 }) {
   const isNegative = typeof balance === 'string' && balance.includes('Cr');
 
@@ -44,7 +53,30 @@ export function ResponsiveMasterDetail({
             <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={onBackToList} aria-label="Back to list">
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">{title}</h1>
+            <div className="flex-1 min-w-0 flex items-center gap-1.5">
+              <h1 className="text-base font-bold shrink-0">{title}</h1>
+              {mobileSelectionLabel ? (
+                <>
+                  <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
+                    ·
+                  </span>
+                  <span
+                    className={cn(
+                      "text-sm font-medium truncate min-w-0",
+                      mobileSelectionLabelClassName ?? "text-muted-foreground"
+                    )}
+                    title={mobileSelectionLabel}
+                  >
+                    {mobileSelectionLabel}
+                  </span>
+                </>
+              ) : null}
+            </div>
+            {mobileDetailHeaderEnd ? (
+              <div className="flex-shrink-0 text-xs text-muted-foreground whitespace-nowrap max-w-[45%] truncate text-right">
+                {mobileDetailHeaderEnd}
+              </div>
+            ) : null}
           </div>
           {/* flex flex-col so detail (AccountGroupDetails etc.) ke andar scroll container ko height mile */}
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">{detailView}</div>

@@ -72,6 +72,10 @@ export function useAnimationSettings() {
       return;
     }
 
+    // Offline / slow: turant device copy dikhao — snapshot error par bhi defaults nahi
+    const seeded = readAnimationFromLocalStorage(userDocId);
+    if (seeded) setSettings(seeded);
+
     const userDocRef = doc(firestore, "users", userDocId);
     const unsubscribe = onSnapshot(
       userDocRef,
@@ -85,16 +89,19 @@ export function useAnimationSettings() {
               rows: { ...defaultSettings.rows, ...userSettings.rows },
             });
           } else {
-            setSettings(defaultSettings);
+            const fromLs = readAnimationFromLocalStorage(userDocId);
+            setSettings(fromLs ?? defaultSettings);
           }
         } else {
-          setSettings(defaultSettings);
+          const fromLs = readAnimationFromLocalStorage(userDocId);
+          setSettings(fromLs ?? defaultSettings);
         }
         setLoading(false);
       },
       (error) => {
         console.error("Error loading user animation settings:", error);
-        setSettings(defaultSettings);
+        const fromLs = readAnimationFromLocalStorage(userDocId);
+        setSettings(fromLs ?? defaultSettings);
         setLoading(false);
       }
     );

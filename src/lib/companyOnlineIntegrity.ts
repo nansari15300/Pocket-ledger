@@ -61,13 +61,13 @@ export async function reconcileOnlineMirrorsWithServer(user: {
       try {
         const snap = await getDoc(doc(firestore, "companies", id));
         if (snap.exists()) continue;
-        await removeLocalCompanyById(id);
+        await removeLocalCompanyById(id, { firebaseUid: user.uid });
         removedIds.push(id);
         changed = true;
       } catch (e: unknown) {
         const code = (e as { code?: string })?.code;
         if (code === "permission-denied" || code === "PERMISSION_DENIED") {
-          await removeLocalCompanyById(id);
+          await removeLocalCompanyById(id, { firebaseUid: user.uid });
           removedIds.push(id);
           changed = true;
         }

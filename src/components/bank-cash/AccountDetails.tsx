@@ -86,6 +86,7 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -97,6 +98,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -121,6 +123,8 @@ interface AccountDetailsProps {
   allAccounts?: any[];
   userNames?: Record<string, string>;
   transactions?: any[];
+  /** Master-detail mobile: "Showing x of y" title row me — set ho to niche duplicate row nahi */
+  onMobileVoucherListStatsChange?: (stats: { showing: number; total: number } | null) => void;
 }
 
 export function AccountDetails({
@@ -132,7 +136,8 @@ export function AccountDetails({
   onBack,
   allAccounts,
   userNames,
-  transactions
+  transactions,
+  onMobileVoucherListStatsChange,
 }: AccountDetailsProps) {
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
@@ -204,6 +209,11 @@ export function AccountDetails({
     if (!allAccounts) return initialAccount;
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  const mobileSearchNames = useMemo(
+    () => ({ ...journalAccountNames, ...(userNames || {}) }),
+    [journalAccountNames, userNames]
+  );
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -768,9 +778,7 @@ export function AccountDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        (t.type ?? "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "account", account.id).includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -797,7 +805,7 @@ export function AccountDetails({
       return ([] as any[]).concat(...displayBlocks.filter((_, i) => included.has(i)));
     }
     return sortedTransactions.filter(t => rowMatches(t));
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, spendWiseView, displayBlocks]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, spendWiseView, displayBlocks, mobileSearchNames, account.id]);
 
   // Mobile: show last 10 by default (no date filter), all when date filter applied. When no date filter, keep full groups (don't cut a group).
   const mobileTransactionsToShow = useMemo(() => {
@@ -833,6 +841,24 @@ export function AccountDetails({
     }
     return list.filter((_, i) => showIndices.has(i));
   }, [filteredMobileTransactions, dateRange]);
+
+  useEffect(() => {
+    if (!onMobileVoucherListStatsChange) return;
+    if (!isMobile) {
+      onMobileVoucherListStatsChange(null);
+      return;
+    }
+    onMobileVoucherListStatsChange({
+      showing: mobileTransactionsToShow.length,
+      total: filteredMobileTransactions.length,
+    });
+    return () => onMobileVoucherListStatsChange(null);
+  }, [
+    isMobile,
+    onMobileVoucherListStatsChange,
+    mobileTransactionsToShow.length,
+    filteredMobileTransactions.length,
+  ]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange || (dateRange.from == null && dateRange.to == null)) return "Last 10 Txns";
@@ -883,19 +909,20 @@ export function AccountDetails({
   const renderMobileView = () => (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* No pb-24 here: scroll area extends to footer; inner content has pb-24 so last row clears footer */}
-      {/* Row 1: Bank Account Details (left) | Showing x of y voucher(s) (right) - same as Party Details */}
-      <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-        {onBack && (
-          <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleMobileBack}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        )}
-        <h1 className="text-base font-bold truncate flex-1 min-w-0">Bank Account Details</h1>
-        <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-          Showing {mobileTransactionsToShow.length} of {filteredMobileTransactions.length} voucher(s)
-        </span>
-      </div>
-      {/* Row 2: Last 10 Txns or date range label - same as Party Details */}
+      {/* Master-detail flow: count upar title row me; yahan sirf `/bank-cash/[id]` jaisa standalone — back + count */}
+      {onMobileVoucherListStatsChange ? null : (
+        <div className="px-2 py-1.5 border-b flex items-center gap-2 flex-shrink-0">
+          {onBack ? (
+            <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleMobileBack}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          ) : null}
+          <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0 ml-auto">
+            Showing {mobileTransactionsToShow.length} of {filteredMobileTransactions.length} voucher(s)
+          </span>
+        </div>
+      )}
+      {/* Last 10 Txns / date range label */}
       <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
         <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
         {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
@@ -908,6 +935,23 @@ export function AccountDetails({
             <XCircle className="h-3.5 w-3.5" />
           </button>
         )}
+      </div>
+      {/* Profile — mobile list jaisa local:uuid resolve */}
+      <div className="px-3 pt-2 pb-1 flex justify-center flex-shrink-0 border-b">
+        <EntityFileAttachmentHover fileUrl={account.fileUrl} triggerClassName="inline-flex rounded-full">
+          <ResolvedEntityAvatar
+            className="h-14 w-14 text-lg border"
+            src={account.fileUrl}
+            alt={account.accountName}
+            fallbackSlot={
+              account.isSpecial ? (
+                <Crown className="h-7 w-7 text-amber-500" />
+              ) : (
+                <Landmark className="h-7 w-7 text-muted-foreground" />
+              )
+            }
+          />
+        </EntityFileAttachmentHover>
       </div>
       {/* Balance row */}
       <div className="px-3 py-3 border-b flex-shrink-0">
@@ -933,7 +977,9 @@ export function AccountDetails({
                 options={allAccounts.map((p) => ({ value: p.id, label: p.accountName }))}
                 value={account?.id || ""}
                 onChange={(value) => {
-                  if (value && value !== account.id) router.push(`/bank-cash/${value}`);
+                  if (!value || value === account.id) return;
+                  // `/bank-cash/[id]` par chale jane se master-detail + "Bank & Cash · name" header tut jata tha — `?selected=` par hi rakho
+                  router.replace(`/bank-cash?selected=${encodeURIComponent(value)}`, { scroll: false });
                 }}
                 placeholder="Select an account"
               />
@@ -1069,6 +1115,15 @@ export function AccountDetails({
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                onDateRangeChange?.(r);
+                                setIsCalendarOpen(false);
+                              }}
+                            />
+                          }
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
@@ -1078,6 +1133,15 @@ export function AccountDetails({
                     {(dateSystem === 'AD' || dateSystem === 'Both') && (
                       <div className="flex-1 w-full min-w-0">
                         <AdCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                onDateRangeChange?.(r);
+                                setIsCalendarOpen(false);
+                              }}
+                            />
+                          }
                           valueAD={dateRange}
                           isRange
                           numberOfMonths={calendarMonths}

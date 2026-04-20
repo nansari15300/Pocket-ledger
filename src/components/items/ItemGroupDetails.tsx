@@ -63,6 +63,7 @@ import { Checkbox } from "../ui/checkbox";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import usePermissions from "@/hooks/usePermissions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { PartyFilterDropdown } from "@/components/party/PartyFilterDropdown";
@@ -93,6 +94,7 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 
 const getInitials = (name: string) => {
@@ -135,7 +137,7 @@ export function ItemGroupDetails({
 }) {
   const { dateSystem, formatDateBS, formatDate, formatCurrency } = useDate();
   const { company } = useCompany();
-  const { processedItems, processedAccounts, processedParties } = useVouchers();
+  const { processedItems, processedAccounts, processedParties, journalAccountNames } = useVouchers();
   const itemsInGroup = useMemo(() => items.filter((i) => i.groupId === group.id), [items, group.id]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
   const isMobile = useIsMobile();
@@ -221,6 +223,15 @@ export function ItemGroupDetails({
   const partyNamesMap = useMemo(
     () => Object.fromEntries((processedParties || []).map((p: any) => [p.id, p.name])),
     [processedParties]
+  );
+  const mobileSearchNames = useMemo(
+    () => ({
+      ...partyNamesMap,
+      ...journalAccountNames,
+      ...Object.fromEntries((processedAccounts || []).map((a: any) => [a.id, a.accountName])),
+      ...userNames,
+    }),
+    [partyNamesMap, journalAccountNames, processedAccounts, userNames]
   );
 
   // Filter transactions: show Sale, Purchase, and Notes linked to items in this group
@@ -416,9 +427,7 @@ export function ItemGroupDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "item").includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -428,7 +437,7 @@ export function ItemGroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
   // Mobile: show last 10 when no date filter (like Party), all when date filter applied
   const mobileDisplayTransactions = useMemo(() => {
@@ -677,11 +686,34 @@ export function ItemGroupDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

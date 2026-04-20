@@ -1,11 +1,10 @@
 
 "use client";
 
-import { CreateCompanyForm } from "@/components/company/CreateCompanyForm";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -30,21 +29,22 @@ function CreateCompanyPageContent() {
   const searchParams = useSearchParams();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [checkingCompanies, setCheckingCompanies] = useState(true);
-  
-  // Check if user has any companies (owned or shared)
+  /** Jab koi company pehle se hai tab dialog band kar sakte hain (select page par wapas). */
+  const [userHasCompanies, setUserHasCompanies] = useState(false);
+  const skipCloseRedirectRef = useRef(false);
+
+  // Hydrate: /company/create par hamesha create flow dikhao — pehle yahan `replace("/company")` tha jis se button dead lagta tha.
   useEffect(() => {
     if (isLocalOnlyMode()) {
-      // Local-first: jab tak SQLite/registry load ho rahi ho wait karo; sirf non-empty list → /company (stale companyId + empty list = ping-pong with /company page).
+      // Local-first: jab tak SQLite/registry load ho rahi ho wait karo.
       if (authLoading || companyContextLoading) {
         setCheckingCompanies(true);
         return;
       }
       setCheckingCompanies(false);
-      if ((allCompanies || []).length > 0) {
-        router.replace("/company");
-      } else {
-        setIsDialogOpen(true);
-      }
+      const selectable = (allCompanies || []).filter((c) => !c.isDeleted);
+      setUserHasCompanies(selectable.length > 0);
+      setIsDialogOpen(true);
       return;
     }
 
@@ -61,11 +61,8 @@ function CreateCompanyPageContent() {
       if (settled) return;
       settled = true;
       setCheckingCompanies(false);
-      if (hasCompanies) {
-        router.replace('/company');
-      } else {
-        setIsDialogOpen(true);
-      }
+      setUserHasCompanies(hasCompanies);
+      setIsDialogOpen(true);
     };
 
     const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
@@ -108,6 +105,7 @@ function CreateCompanyPageContent() {
   const returnPath = searchParams.get("returnTo") || "/company";
 
   const handleCompanyCreated = (companyId: string) => {
+    skipCloseRedirectRef.current = true;
     setCompanyId(companyId);
     setIsDialogOpen(false);
     const base = returnPath === "/company" ? "/company" : returnPath;
@@ -115,11 +113,20 @@ function CreateCompanyPageContent() {
     router.replace(url);
   };
 
-  const handleDialogClose = () => {
+  const handleDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setIsDialogOpen(true);
+      return;
+    }
     setIsDialogOpen(false);
-    // If the user closes the dialog, redirect them to the company selection page.
-    router.replace('/company');
-  }
+    if (skipCloseRedirectRef.current) {
+      skipCloseRedirectRef.current = false;
+      return;
+    }
+    if (userHasCompanies) {
+      router.replace("/company");
+    }
+  };
 
   // Show loading while checking companies
   if (checkingCompanies || authLoading) {
@@ -128,17 +135,12 @@ function CreateCompanyPageContent() {
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
-      {/* 
-        This dialog will only auto-open if user has NO companies (owned or shared).
-        If user manually navigates here but has companies, they will be redirected to /company.
-        Manual clicks from CompanySelector will also work via the button.
-      */}
       <CreateCompanyDialog
         isOpen={isDialogOpen}
-        onOpenChange={handleDialogClose}
+        onOpenChange={handleDialogOpenChange}
         onCompanyCreated={handleCompanyCreated}
         redirectTo={returnPath === "/company" ? undefined : returnPath}
-        isDismissable={false} // Prevent closing by clicking outside when auto-opened
+        isDismissable={userHasCompanies}
       />
     </div>
   );

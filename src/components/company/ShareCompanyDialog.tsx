@@ -7,24 +7,34 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Loader2, Eye, EyeOff } from "lucide-react";
-import { doc, updateDoc, arrayUnion, getDoc, getDocs, query, collection, where } from "firebase/firestore";
+import { doc, updateDoc, arrayUnion, getDoc, getDocs, query, collection, where, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "../ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Company as CompanyData } from "@/hooks/useCompany";
+import { useCompany } from "@/hooks/useCompany";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import {
+  mergeSharedWithIntoLocalCompanyUsers,
+  parseLocalCompanyUserRows,
+} from "@/lib/localCompanyUsers";
 
+
+const inviteRoles = ["viewer", "data-entry", "accountant", "editor", "manager"] as const;
+const allShareRoles = [...inviteRoles, "owner"] as const;
 
 const formSchema = z.object({
   name: z.string().min(2, { message: "Please enter a name for the user." }),
   email: z.string().email({ message: "Please enter a valid email address." }),
-  role: z.enum(["viewer", "data-entry", "accountant", "editor", "manager", "owner"], { message: "Please select a role." }),
+  role: z.enum(allShareRoles, { message: "Please select a role." }),
   password: z.string().optional(),
 });
 
@@ -48,6 +58,7 @@ export function ShareCompanyDialog({
   const { toast } = useToast();
   const [showPassword, setShowPassword] = useState(false);
   const livePlans = useLivePlans();
+  const { reloadLocalCompanyRegistry, triggerSync } = useCompany();
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
@@ -57,7 +68,7 @@ export function ShareCompanyDialog({
     defaultValues: {
       name: "",
       email: "",
-      role: "accountant",
+      role: "manager",
       password: "",
     },
   });
@@ -71,7 +82,7 @@ export function ShareCompanyDialog({
             password: userToEdit.password || "",
         });
     } else if (isOpen && !isEditing) {
-        form.reset({ name: "", email: "", role: "accountant", password: "" });
+        form.reset({ name: "", email: "", role: "manager", password: "" });
     }
   }, [isOpen, isEditing, userToEdit, form]);
 
@@ -85,33 +96,15 @@ export function ShareCompanyDialog({
         return;
     }
 
-    if (!isEditing && company.sharedWithEmails?.includes(values.email)) {
+    if (!isEditing) {
+      if (values.role === "owner") {
         toast({
-            variant: "destructive",
-            title: "Already Shared",
-            description: "This company is already shared with this account.",
+          variant: "destructive",
+          title: "Invalid role",
+          description: "Owner cannot be assigned through online share. Choose Admin or another role.",
         });
         return;
-    }
-
-    const plan = getPlanFromPlans(livePlans, (company.planId as PlanId) || undefined);
-    const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption)) || 1;
-    const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
-    const ownerEmailNorm = (company.ownerEmail || "").toLowerCase().trim();
-    const sharedExcludingSuperAdminAndOwner = (company.sharedWithEmails || []).filter(
-      (email) => {
-        const e = (email || "").toLowerCase().trim();
-        return !superAdminEmails.has(e) && e !== ownerEmailNorm;
       }
-    );
-    const currentMembers = 1 + sharedExcludingSuperAdminAndOwner.length;
-    if (!isEditing && currentMembers >= maxUsers) {
-        toast({
-            variant: "destructive",
-            title: "Plan limit reached",
-            description: `This plan allows up to ${maxUsers} user${maxUsers === 1 ? "" : "s"}. Upgrade to add more.`,
-        });
-        return;
     }
 
     setIsLoading(true);
@@ -130,16 +123,93 @@ export function ShareCompanyDialog({
         }
 
         const currentData = companySnap.data();
-        const currentSharedWith = currentData?.sharedWith || [];
+        const currentSharedWith = (currentData?.sharedWith || []) as any[];
+        const emailNorm = values.email.toLowerCase().trim();
+        const existingIdx = !isEditing
+          ? currentSharedWith.findIndex(
+              (u: any) => String(u?.email || "").toLowerCase().trim() === emailNorm
+            )
+          : -1;
 
         if (isEditing) {
-            const updatedSharedWith = currentSharedWith.map((u: any) => 
-                u.email === values.email ? { ...u, name: values.name, role: values.role, password: values.password || null } : u
+            const updatedSharedWith = currentSharedWith.map((u: any) =>
+                u.email === values.email
+                  ? {
+                      ...u,
+                      name: values.name,
+                      role: values.role,
+                      password: values.password?.trim() ? values.password : (u.password ?? null),
+                    }
+                  : u
             );
-             await updateDoc(companyRef, { sharedWith: updatedSharedWith });
-             toast({ title: "User Updated!", description: `Details for ${values.email} have been updated.` });
+             await updateDoc(companyRef, { sharedWith: updatedSharedWith, updatedAt: serverTimestamp() });
+             toast({ title: "User updated", description: `Details for ${values.email} have been updated.` });
 
+        } else if (existingIdx >= 0) {
+            const existing = currentSharedWith[existingIdx];
+            const nextPassword = values.password?.trim()
+              ? values.password
+              : (existing.password != null && existing.password !== "" ? existing.password : null);
+            let sharedUid: string | null = existing.uid ?? null;
+            if (!sharedUid) {
+              try {
+                const userSnap = await getDocs(query(collection(firestore, "users"), where("email", "==", values.email)));
+                const first = userSnap.docs[0];
+                const data = first?.data();
+                sharedUid = (data?.uid as string) || first?.id || null;
+              } catch {
+                /* optional */
+              }
+            }
+            const updatedSharedWith = [...currentSharedWith];
+            updatedSharedWith[existingIdx] = {
+              ...existing,
+              name: values.name,
+              email: existing.email || values.email,
+              uid: sharedUid,
+              role: values.role,
+              password: nextPassword,
+            };
+            await updateDoc(companyRef, {
+              sharedWith: updatedSharedWith,
+              updatedAt: serverTimestamp(),
+            });
+            toast({
+              title: "Share updated",
+              description: `Updated ${values.email} — name, role, or password saved.`,
+            });
         } else {
+            if (!String(values.password || "").trim()) {
+              toast({
+                variant: "destructive",
+                title: "Password required",
+                description: "Set a password for a new invite. If this person is already shared, use the same email to update without a new password.",
+              });
+              setIsLoading(false);
+              return;
+            }
+
+            const plan = getPlanFromPlans(livePlans, (company.planId as PlanId) || undefined);
+            const maxUsers = numericEntitlement(plan.entitlements, "maxUsers", companyStorageIsLocal(company.storageOption)) || 1;
+            const superAdminEmails = new Set(getSuperAdminEmails().map((e) => e.toLowerCase().trim()));
+            const ownerEmailNorm = (company.ownerEmail || "").toLowerCase().trim();
+            const sharedExcludingSuperAdminAndOwner = (company.sharedWithEmails || []).filter(
+              (email) => {
+                const e = (email || "").toLowerCase().trim();
+                return !superAdminEmails.has(e) && e !== ownerEmailNorm;
+              }
+            );
+            const currentMembers = 1 + sharedExcludingSuperAdminAndOwner.length;
+            if (currentMembers >= maxUsers) {
+                toast({
+                    variant: "destructive",
+                    title: "Plan limit reached",
+                    description: `This plan allows up to ${maxUsers} user${maxUsers === 1 ? "" : "s"}. Upgrade to add more.`,
+                });
+                setIsLoading(false);
+                return;
+            }
+
             let sharedUid: string | null = null;
             try {
               const userSnap = await getDocs(query(collection(firestore, "users"), where("email", "==", values.email)));
@@ -151,16 +221,34 @@ export function ShareCompanyDialog({
             }
             await updateDoc(companyRef, {
                 sharedWith: arrayUnion({ name: values.name, email: values.email, uid: sharedUid, role: values.role, password: values.password || null }),
-                sharedWithEmails: arrayUnion(values.email)
+                sharedWithEmails: arrayUnion(values.email),
+                updatedAt: serverTimestamp(),
             });
             toast({
-                title: "Company Shared!",
+                title: "Company shared!",
                 description: `"${company.name}" has been shared with ${values.email} as a(n) ${values.role}.`,
             });
         }
 
+        const freshSnap = await getDoc(companyRef);
+        if (freshSnap.exists() && isLocalOnlyMode()) {
+          const sw = (freshSnap.data()?.sharedWith || []) as any[];
+          const existingRow = await getLocalCompanyById(company.id, { includeDeleted: true });
+          if (existingRow) {
+            const prev = parseLocalCompanyUserRows(existingRow.localCompanyUsers);
+            const merged = mergeSharedWithIntoLocalCompanyUsers(prev, sw);
+            await upsertLocalCompany({
+              ...(existingRow as any),
+              localCompanyUsers: merged,
+              updatedAt: Date.now(),
+            } as any);
+          }
+        }
+
         form.reset();
         setOpen(false);
+        reloadLocalCompanyRegistry();
+        triggerSync();
     } catch (error: any) {
         console.error("Error sharing/updating company: ", error);
         const errorMessage = error?.message || "An error occurred. Please try again.";
@@ -181,11 +269,15 @@ export function ShareCompanyDialog({
   return (
     <Dialog open={isOpen} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      <DialogContent className="sm:max-w-[425px] p-4">
+      <DialogContent className="sm:max-w-[480px] p-4">
         <DialogHeader>
-          <DialogTitle>{isEditing ? `Edit User: ${userToEdit?.name}` : `Share "${company?.name}"`}</DialogTitle>
+          <DialogTitle>
+            {isEditing ? `Edit user: ${userToEdit?.name}` : `Online share — ${company?.name ?? "company"}`}
+          </DialogTitle>
           <DialogDescription>
-            {isEditing ? "Update the user's details and role." : "Invite others to collaborate on this company."}
+            {isEditing
+              ? "Update this person’s details. Email cannot be changed here."
+              : "Invite by email. Login username matches the display name. Role and password apply in Manage Sharing / company access."}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -195,23 +287,44 @@ export function ShareCompanyDialog({
                 name="name"
                 render={({ field }: any) => (
                   <FormItem>
-                    <FormLabel>Name</FormLabel>
+                    <FormLabel>Company user name</FormLabel>
                     <FormControl>
-                      <Input placeholder="User's Name" {...field} className="h-9 text-sm px-3 rounded-md"/>
+                      <Input placeholder="e.g., Sales User" {...field} className="h-9 text-sm px-3 rounded-md"/>
                     </FormControl>
+                    <FormDescription>Shown to the invited user; login id is kept the same.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+              <FormItem>
+                <FormLabel>Share online — login username</FormLabel>
+                <FormControl>
+                  <Input
+                    readOnly
+                    disabled
+                    className="h-9 text-sm px-3 rounded-md bg-muted cursor-not-allowed"
+                    value={form.watch("name") || ""}
+                    placeholder="Same as company user name"
+                  />
+                </FormControl>
+                <FormDescription>Automatically matches company user name.</FormDescription>
+              </FormItem>
               <FormField
                 control={form.control}
                 name="email"
                 render={({ field }: any) => (
                   <FormItem>
-                    <FormLabel>Email Address</FormLabel>
+                    <FormLabel>Email (online share)</FormLabel>
                     <FormControl>
-                      <Input placeholder="name@example.com" {...field} disabled={isEditing} className="h-9 text-sm px-3 rounded-md"/>
+                      <Input
+                        type="email"
+                        placeholder="name@example.com"
+                        {...field}
+                        disabled={isEditing}
+                        className="h-9 text-sm px-3 rounded-md"
+                      />
                     </FormControl>
+                    <FormDescription>They must sign in with this email to open the company.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -225,7 +338,7 @@ export function ShareCompanyDialog({
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger className="h-9 text-sm px-3 rounded-md">
-                          <SelectValue placeholder="Select a role for the user" />
+                          <SelectValue placeholder="Select role" />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -233,8 +346,10 @@ export function ShareCompanyDialog({
                         <SelectItem value="data-entry">Data Entry</SelectItem>
                         <SelectItem value="accountant">Accountant</SelectItem>
                         <SelectItem value="editor">Editor</SelectItem>
-                        <SelectItem value="manager">Manager</SelectItem>
-                        <SelectItem value="owner">Owner</SelectItem>
+                        <SelectItem value="manager">Admin</SelectItem>
+                        {isEditing && userToEdit?.role === "owner" ? (
+                          <SelectItem value="owner">Owner</SelectItem>
+                        ) : null}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -246,15 +361,25 @@ export function ShareCompanyDialog({
                 name="password"
                 render={({ field }: any) => (
                   <FormItem>
-                    <FormLabel>Set User Password (Optional)</FormLabel>
+                    <FormLabel>Company Password For shared user</FormLabel>
                     <div className="relative">
                         <FormControl>
-                          <Input type={showPassword ? "text" : "password"} placeholder="Leave blank to use main password" {...field} className="h-9 text-sm px-3 rounded-md"/>
+                          <Input
+                            type={showPassword ? "text" : "password"}
+                            placeholder={isEditing ? "Update password (optional)" : "Required for new invite"}
+                            {...field}
+                            className="h-9 text-sm px-3 rounded-md"
+                          />
                         </FormControl>
                         <Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7" onClick={() => setShowPassword(!showPassword)}>
                             {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </Button>
                     </div>
+                    <FormDescription>
+                      {isEditing
+                        ? "Company access password for this user (not their email/Google password). Leave blank to keep the current one."
+                        : "Company access password for this shared user (not their email/Google password). Required for a brand-new email. If that email is already shared, leave blank to keep their current password or enter a new one."}
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -265,7 +390,7 @@ export function ShareCompanyDialog({
               </DialogClose>
               <Button type="submit" disabled={isLoading} className="h-9 text-sm px-4 rounded-md">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isEditing ? "Save Changes" : "Share Company"}
+                {isEditing ? "Save changes" : "Send invite"}
               </Button>
             </DialogFooter>
           </form>

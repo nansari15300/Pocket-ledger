@@ -6,7 +6,19 @@ import { Loader2, CalendarIcon, Eye, EyeOff, Pencil, Trash2, Upload } from "luci
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, Timestamp, serverTimestamp, deleteField } from "firebase/firestore";
+import {
+  doc,
+  updateDoc,
+  Timestamp,
+  serverTimestamp,
+  deleteField,
+  getDoc,
+  arrayUnion,
+  getDocs,
+  query,
+  collection,
+  where,
+} from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 import { compressFile } from "@/lib/compression";
@@ -65,11 +77,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
 import { generateEncryptServerBackupSaltBase64, setBackupEncryptionSessionFromLogin } from "@/lib/serverBackupEncryption";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import {
   localCompanyUsersToPublicList,
+  mergeSharedWithIntoLocalCompanyUsers,
   parseLocalCompanyUserRows,
   removeLocalCompanyUserByIdClient,
   updateLocalCompanyUserClient,
@@ -96,6 +110,8 @@ const formSchema = z.object({
   adminUsername: z.string().optional(),
   companyUserName: z.string().optional(),
   companyUserUsername: z.string().optional(),
+  /** Online share: invite email (Manage Sharing list). */
+  companyUserEmail: z.string().optional().or(z.literal("")),
   companyUserRole: z.string().optional(),
   companyUserPassword: z.string().optional(),
 }).refine(data => {
@@ -111,7 +127,15 @@ const formSchema = z.object({
 
 export function EditCompanyForm() {
   const [isLoading, setIsLoading] = useState(false);
-  const { company, companyId, loading: companyLoading, clearCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
+  const {
+    company,
+    companyId,
+    loading: companyLoading,
+    clearCompanyId,
+    triggerSync,
+    reloadLocalCompanyRegistry,
+    localCompanyRegistryEpoch,
+  } = useCompany();
   const { toast } = useToast();
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const { user } = useAuth();
@@ -204,11 +228,17 @@ export function EditCompanyForm() {
       adminUsername: "",
       companyUserName: "",
       companyUserUsername: "",
+      companyUserEmail: "",
       // Existing permission model me manager = admin-like company user role.
       companyUserRole: "manager",
       companyUserPassword: "",
     },
   });
+
+  const companyUserNameWatch = form.watch("companyUserName");
+  useEffect(() => {
+    form.setValue("companyUserUsername", (companyUserNameWatch || "").trim());
+  }, [companyUserNameWatch, form]);
   
   const companyNameValue = form.watch("name");
   const confirmPasswordToSaveValue = form.watch("confirmPasswordToSave");
@@ -246,6 +276,7 @@ export function EditCompanyForm() {
               ((company.ownerEmail || "").includes("@") ? (company.ownerEmail || "").split("@")[0] : ""),
             companyUserName: "",
             companyUserUsername: "",
+            companyUserEmail: "",
             companyUserRole: "manager",
             companyUserPassword: "",
         });
@@ -272,7 +303,7 @@ export function EditCompanyForm() {
 
   useEffect(() => {
     void loadExistingLocalUsers();
-  }, [loadExistingLocalUsers]);
+  }, [loadExistingLocalUsers, localCompanyRegistryEpoch]);
 
   useEffect(() => {
     if (!localUserToEdit) return;
@@ -299,6 +330,87 @@ export function EditCompanyForm() {
       let skipGenericSuccessToast = false;
       const localOnly = isLocalOnlyMode();
       const companyRef = doc(firestore, "companies", companyId);
+      const deviceLocalCo = isOfflineCompanyStorage(company);
+
+      if (addCompanyUserEnabled && !deviceLocalCo) {
+        const email = (values.companyUserEmail || "").trim();
+        const name = (values.companyUserName || "").trim();
+        const password = (values.companyUserPassword || "").trim();
+        const role = (values.companyUserRole || "manager").trim().toLowerCase();
+        if (email && name) {
+          const preSnap = await getDoc(companyRef);
+          if (!preSnap.exists()) {
+            throw new Error("company_not_on_server");
+          }
+          const preData = preSnap.data();
+          const currentSharedWith = (preData.sharedWith || []) as Array<{
+            email?: string;
+            name?: string;
+            role?: string;
+            password?: string | null;
+            uid?: string | null;
+          }>;
+          const emailNorm = email.toLowerCase().trim();
+          const existingIdx = currentSharedWith.findIndex(
+            (u) => String(u.email || "").toLowerCase().trim() === emailNorm
+          );
+
+          if (existingIdx >= 0) {
+            const existing = currentSharedWith[existingIdx];
+            const nextPassword = password.trim()
+              ? password
+              : (existing.password != null && existing.password !== ""
+                  ? existing.password
+                  : null);
+            let sharedUid: string | null = (existing.uid as string | null) ?? null;
+            if (!sharedUid) {
+              try {
+                const userSnap = await getDocs(query(collection(firestore, "users"), where("email", "==", email)));
+                const first = userSnap.docs[0];
+                sharedUid = (first?.data()?.uid as string) || first?.id || null;
+              } catch {
+                /* uid optional */
+              }
+            }
+            const updatedSharedWith = [...currentSharedWith];
+            updatedSharedWith[existingIdx] = {
+              ...existing,
+              name,
+              email: existing.email || email,
+              uid: sharedUid,
+              role,
+              password: nextPassword,
+            };
+            await updateDoc(companyRef, {
+              sharedWith: updatedSharedWith,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            if (!password.trim()) {
+              throw new Error("password_required_new_invite");
+            }
+            let sharedUid: string | null = null;
+            try {
+              const userSnap = await getDocs(query(collection(firestore, "users"), where("email", "==", email)));
+              const first = userSnap.docs[0];
+              sharedUid = (first?.data()?.uid as string) || first?.id || null;
+            } catch {
+              /* uid optional */
+            }
+            await updateDoc(companyRef, {
+              sharedWith: arrayUnion({
+                name,
+                email,
+                uid: sharedUid,
+                role,
+                password: password || null,
+              }),
+              sharedWithEmails: arrayUnion(email),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      }
       
       let logoUrl: string | null = company.logoUrl || null;
       
@@ -390,10 +502,10 @@ export function EditCompanyForm() {
           }
         }
 
-        if (addCompanyUserEnabled) {
+        if (addCompanyUserEnabled && deviceLocalCo) {
           const usersToCreate: LocalCompanyUserDraft[] = [...queuedCompanyUsers];
           const currentName = (values.companyUserName || "").trim();
-          const currentUsername = (values.companyUserUsername || "").trim();
+          const currentUsername = (values.companyUserUsername || currentName || "").trim();
           const currentPassword = (values.companyUserPassword || "").trim();
           if (currentName && currentUsername && currentPassword) {
             usersToCreate.push({
@@ -413,6 +525,21 @@ export function EditCompanyForm() {
           }
         }
 
+        const companyLinkedToFirestore =
+          String(company.storageOption || "local").toLowerCase() === "firebase" ||
+          String(company.syncPolicy || "").toLowerCase() === "online";
+        if (companyLinkedToFirestore) {
+          try {
+            const swSnap = await getDoc(companyRef);
+            if (swSnap.exists()) {
+              const sw = (swSnap.data().sharedWith || []) as any[];
+              nextUsers = mergeSharedWithIntoLocalCompanyUsers(nextUsers, sw);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
         const localUpdatePayload = { ...updateData };
         if (!encryptCompanyEnabled) {
           delete localUpdatePayload.encryptServerBackupSalt;
@@ -428,9 +555,6 @@ export function EditCompanyForm() {
           updatedAt: Date.now(),
         });
         // Company cloud pe link hai (`storageOption: firebase`) — Firestore root bhi update karo; warna app naya naam dikhaye, console purana
-        const companyLinkedToFirestore =
-          String(company.storageOption || "local").toLowerCase() === "firebase" ||
-          String(company.syncPolicy || "").toLowerCase() === "online";
         if (companyLinkedToFirestore) {
           const firestoreMirrorPayload: Record<string, unknown> = { ...updateData };
           if (!encryptCompanyEnabled) {
@@ -520,14 +644,31 @@ export function EditCompanyForm() {
           description: "Your company details have been successfully updated.",
         });
       }
+      if (addCompanyUserEnabled) {
+        setAddCompanyUserEnabled(false);
+        setQueuedCompanyUsers([]);
+        form.setValue("companyUserName", "");
+        form.setValue("companyUserUsername", "");
+        form.setValue("companyUserEmail", "");
+        form.setValue("companyUserRole", "manager");
+        form.setValue("companyUserPassword", "");
+      }
       form.reset({ ...form.getValues(), password: "", confirmPassword: "", confirmPasswordToSave: "" });
 
     } catch (error) {
       console.error("Error updating company:", error);
+      const msg =
+        error instanceof Error && error.message === "company_not_on_server"
+          ? "This company is not on the server yet. Connect and sync, then try again."
+          : error instanceof Error && error.message === "password_required_new_invite"
+            ? "Set a password for a new invite."
+            : isCompanyNotFoundError(error)
+              ? COMPANY_NOT_SYNCED_MESSAGE
+              : "Failed to update company details. Please try again.";
       toast({
         variant: "destructive",
         title: "Error",
-        description: isCompanyNotFoundError(error) ? COMPANY_NOT_SYNCED_MESSAGE : "Failed to update company details. Please try again.",
+        description: msg,
       });
     } finally {
       setIsLoading(false);
@@ -560,26 +701,52 @@ export function EditCompanyForm() {
       }
     }
     if (addCompanyUserEnabled) {
-      // Add-company-user fields required when toggle is enabled.
-      const hasName = (values.companyUserName || "").trim().length > 1;
-      const hasUsername = (values.companyUserUsername || "").trim().length > 0;
-      const hasPassword = (values.companyUserPassword || "").trim().length > 0;
-      const currentDraftComplete = hasName && hasUsername && hasPassword;
-      if (!currentDraftComplete && queuedCompanyUsers.length === 0) {
-        toast({
-          variant: "destructive",
-          title: "Company user details required",
-          description: "Add at least one company user (current draft or queued list).",
-        });
-        return;
-      }
-      if (!isLocalOnlyMode()) {
-        toast({
-          variant: "destructive",
-          title: "Local user only",
-          description: "Add Company User works only for local companies on this device.",
-        });
-        return;
+      const deviceLocalCo = isOfflineCompanyStorage(company);
+      if (deviceLocalCo) {
+        if (!isLocalOnlyMode()) {
+          toast({
+            variant: "destructive",
+            title: "Device-local companies only",
+            description: "Adding device login users here works in local-first mode for offline storage companies.",
+          });
+          return;
+        }
+        const hasName = (values.companyUserName || "").trim().length > 1;
+        const loginId = (values.companyUserUsername || values.companyUserName || "").trim();
+        const hasPassword = (values.companyUserPassword || "").trim().length > 0;
+        const currentDraftComplete = hasName && loginId.length > 0 && hasPassword;
+        if (!currentDraftComplete && queuedCompanyUsers.length === 0) {
+          toast({
+            variant: "destructive",
+            title: "Company user details required",
+            description: "Add at least one company user (current draft or queued list).",
+          });
+          return;
+        }
+      } else {
+        const email = (values.companyUserEmail || "").trim();
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        const hasName = (values.companyUserName || "").trim().length >= 2;
+        const hasPassword = (values.companyUserPassword || "").trim().length > 0;
+        const alreadyShared = (company.sharedWithEmails || []).some(
+          (e) => String(e || "").toLowerCase().trim() === email.toLowerCase()
+        );
+        if (!emailOk || !hasName) {
+          toast({
+            variant: "destructive",
+            title: "Online invite incomplete",
+            description: "Enter a valid email and company user name (2+ characters).",
+          });
+          return;
+        }
+        if (!alreadyShared && !hasPassword) {
+          toast({
+            variant: "destructive",
+            title: "Password required",
+            description: "New invites need a password. If this email is already shared, leave password blank to keep the current one or type a new password.",
+          });
+          return;
+        }
       }
     }
     if (isLocalOnlyMode() && encryptCompanyEnabled) {
@@ -629,6 +796,9 @@ export function EditCompanyForm() {
     }
   };
 
+  const deviceLocalCoForUi = company ? isOfflineCompanyStorage(company) : true;
+  const showAddUserCard =
+    !!company && (!deviceLocalCoForUi || (isLocalOnlyMode() && deviceLocalCoForUi));
 
   if (companyLoading) {
     return (
@@ -921,18 +1091,18 @@ export function EditCompanyForm() {
             </div>
             )}
 
-            {isLocalOnlyMode() && (
+            {showAddUserCard && (
             <div className="space-y-4 rounded-md border border-emerald-200 bg-emerald-50/40 p-3 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-              {/* Company user details section: distinct color so user-area is visually separate from admin-area. */}
               <FormItem>
                 <div className="flex items-center justify-between rounded-md border p-3">
                   <div>
                     <FormLabel>Add Company User</FormLabel>
                     <FormDescription>
-                      Add one company user while editing company. Default role is Admin.
+                      {deviceLocalCoForUi
+                        ? "Device login users for this offline company. Role applies to permissions on this device."
+                        : "Invite by email for online access. Same name and role appear under Manage Sharing (role is not changed there)."}
                     </FormDescription>
                   </div>
-                  {/* Local companies only: extra device users beyond admin. */}
                   <input
                     type="checkbox"
                     checked={addCompanyUserEnabled}
@@ -943,6 +1113,7 @@ export function EditCompanyForm() {
                         setQueuedCompanyUsers([]);
                         form.setValue("companyUserName", "");
                         form.setValue("companyUserUsername", "");
+                        form.setValue("companyUserEmail", "");
                         form.setValue("companyUserRole", "manager");
                         form.setValue("companyUserPassword", "");
                       }
@@ -952,9 +1123,16 @@ export function EditCompanyForm() {
                 </div>
               </FormItem>
 
-              {addCompanyUserEnabled && queuedCompanyUsers.length > 0 && (
+              {deviceLocalCoForUi && addCompanyUserEnabled && (
+                <div className="rounded-md border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground">
+                  <strong className="text-foreground">Offline company:</strong> Email / online sharing is not available
+                  here. Use an <strong>online (cloud)</strong> company to invite people by email; they will appear in
+                  Manage Sharing.
+                </div>
+              )}
+
+              {addCompanyUserEnabled && deviceLocalCoForUi && queuedCompanyUsers.length > 0 && (
                 <div className="rounded-md border p-3">
-                  {/* Queued local users for batch creation on Save Changes. */}
                   <p className="text-xs font-medium text-muted-foreground mb-2">Queued Users ({queuedCompanyUsers.length})</p>
                   <div className="space-y-1">
                     {queuedCompanyUsers.map((u, index) => (
@@ -977,15 +1155,35 @@ export function EditCompanyForm() {
 
               {addCompanyUserEnabled && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {!deviceLocalCoForUi && (
+                    <FormField
+                      control={form.control}
+                      name="companyUserEmail"
+                      render={({ field }: any) => (
+                        <FormItem className="sm:col-span-2">
+                          <FormLabel>Email (online share)</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="email"
+                              placeholder="user@example.com"
+                              autoComplete="off"
+                              {...field}
+                              value={field.value ?? ""}
+                            />
+                          </FormControl>
+                          <FormDescription>Must match the account they use to sign in. Shown in Manage Sharing.</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
                   <FormField
                     control={form.control}
                     name="companyUserName"
                     render={({ field }: any) => (
                       <FormItem>
-                        {/* User-requested label rename for local company user naming. */}
-                        <FormLabel>Comapny User Name</FormLabel>
+                        <FormLabel>Company user name</FormLabel>
                         <FormControl>
-                          {/* Keep this field controlled from first render to avoid uncontrolled/controlled warnings. */}
                           <Input placeholder="e.g., Sales User" {...field} value={field.value ?? ""} />
                         </FormControl>
                         <FormMessage />
@@ -997,12 +1195,18 @@ export function EditCompanyForm() {
                     name="companyUserUsername"
                     render={({ field }: any) => (
                       <FormItem>
-                        {/* User-requested label rename for login identifier field. */}
-                        <FormLabel>Login User name</FormLabel>
+                        <FormLabel>Share online — login username</FormLabel>
                         <FormControl>
-                          {/* Keep this field controlled from first render to avoid uncontrolled/controlled warnings. */}
-                          <Input placeholder="e.g., sales_user" {...field} value={field.value ?? ""} />
+                          <Input
+                            readOnly
+                            disabled
+                            className="bg-muted cursor-not-allowed"
+                            placeholder="Same as company user name"
+                            {...field}
+                            value={field.value ?? ""}
+                          />
                         </FormControl>
+                        <FormDescription>Automatically the same as company user name.</FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -1012,9 +1216,8 @@ export function EditCompanyForm() {
                     name="companyUserRole"
                     render={({ field }: any) => (
                       <FormItem>
-                        <FormLabel>Company User Role</FormLabel>
+                        <FormLabel>Role</FormLabel>
                         <FormControl>
-                          {/* "manager" maps to admin-like role in current permission setup. */}
                           <select
                             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                             value={field.value || "manager"}
@@ -1036,7 +1239,7 @@ export function EditCompanyForm() {
                     name="companyUserPassword"
                     render={({ field }: any) => (
                       <FormItem>
-                        <FormLabel>Company User Password</FormLabel>
+                        <FormLabel>Password</FormLabel>
                         <div className="relative">
                           <FormControl>
                             <Input
@@ -1057,38 +1260,45 @@ export function EditCompanyForm() {
                             {showCompanyUserPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </Button>
                         </div>
+                        {!deviceLocalCoForUi ? (
+                          <FormDescription>
+                            New invite: password required. Email already on Manage Sharing: leave blank to keep their
+                            password or enter a new one.
+                          </FormDescription>
+                        ) : null}
                         <FormMessage />
                       </FormItem>
                     )}
                   />
-                  <div className="sm:col-span-2 flex justify-end">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        // Queue multiple local users from edit form before final save.
-                        const name = (form.getValues("companyUserName") || "").trim();
-                        const username = (form.getValues("companyUserUsername") || "").trim();
-                        const role = (form.getValues("companyUserRole") || "manager").trim().toLowerCase();
-                        const password = (form.getValues("companyUserPassword") || "").trim();
-                        if (!name || !username || !password) {
-                          toast({
-                            variant: "destructive",
-                            title: "User details required",
-                            description: "Fill name, username and password before adding another user.",
-                          });
-                          return;
-                        }
-                        setQueuedCompanyUsers((prev) => [...prev, { name, username, role, password }]);
-                        form.setValue("companyUserName", "");
-                        form.setValue("companyUserUsername", "");
-                        form.setValue("companyUserRole", "manager");
-                        form.setValue("companyUserPassword", "");
-                      }}
-                    >
-                      Add Another User
-                    </Button>
-                  </div>
+                  {deviceLocalCoForUi && (
+                    <div className="sm:col-span-2 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          const name = (form.getValues("companyUserName") || "").trim();
+                          const username = (form.getValues("companyUserUsername") || name || "").trim();
+                          const role = (form.getValues("companyUserRole") || "manager").trim().toLowerCase();
+                          const password = (form.getValues("companyUserPassword") || "").trim();
+                          if (!name || !username || !password) {
+                            toast({
+                              variant: "destructive",
+                              title: "User details required",
+                              description: "Fill name and password before adding another user.",
+                            });
+                            return;
+                          }
+                          setQueuedCompanyUsers((prev) => [...prev, { name, username, role, password }]);
+                          form.setValue("companyUserName", "");
+                          form.setValue("companyUserUsername", "");
+                          form.setValue("companyUserRole", "manager");
+                          form.setValue("companyUserPassword", "");
+                        }}
+                      >
+                        Add Another User
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1099,7 +1309,8 @@ export function EditCompanyForm() {
                 {/* List ke saath Edit/Remove: turant SQLite update (Save Changes zaroori nahi). */}
                 <p className="text-sm font-medium mb-2">Existing Company Users ({existingLocalUsers.length})</p>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Har user par Edit ya Remove — change turant device par save hota hai. Admin user hataoge to company login username band ho sakta hai.
+                  Use Edit or Remove for each user — changes save immediately on this device. If you remove the Admin user,
+                  the company login username may stop working.
                 </p>
                 <div className="space-y-2">
                   {existingLocalUsers.map((u, i) => (

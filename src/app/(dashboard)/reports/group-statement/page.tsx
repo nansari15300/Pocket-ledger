@@ -24,7 +24,7 @@ import { useDate } from "@/hooks/useDate";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc, query, collection, getDocs, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { format } from "date-fns";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
 
@@ -659,8 +659,31 @@ export default function GroupStatementPage({ onPartySelectionChange }: GroupStat
   };
 
   if (isMobile) {
+    const mobileSummaryName =
+      selectedMember != null
+        ? String(selectedMember.name ?? selectedMember.accountName ?? "").trim()
+        : selectedGroup != null
+          ? String(selectedGroup.name ?? "").trim()
+          : "";
+    const mobileSummaryBalance =
+      selectedMember != null ? selectedMember.balance : selectedGroup != null ? selectedGroup.balance : undefined;
+
     return (
       <div className="h-full flex flex-col min-h-0 overflow-hidden bg-background">
+        {mobileSummaryName ? (
+          <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-3 py-2 min-w-0">
+            <h1 className="shrink-0 text-base font-bold">Group Summary</h1>
+            <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+              ·
+            </span>
+            <span
+              className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(mobileSummaryBalance))}
+              title={mobileSummaryName}
+            >
+              {mobileSummaryName}
+            </span>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-2 p-3 border-b flex-shrink-0">
           <div className="flex justify-center items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>

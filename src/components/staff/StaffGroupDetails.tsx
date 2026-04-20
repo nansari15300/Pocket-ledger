@@ -31,6 +31,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { useTransactions } from "@/hooks/use-transactions";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
 import {
@@ -56,6 +57,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 
 const getInitials = (name: string) => {
@@ -245,37 +247,6 @@ export function StaffGroupDetails({
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   };
 
-  const filteredMobileTransactions = useMemo(() => {
-    if (!mobileSearchTerm) return processedTransactions;
-    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return processedTransactions.filter((t: any) => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
-      return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type?.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
-        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
-        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
-        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
-        String(t.balance).toLowerCase().includes(lowerCaseSearch)
-      );
-    });
-  }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
-
-  const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
-    const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
-
-  const dateRangeLabel = buildDateRangeText();
-
   const groupDropdownOptions = useMemo(
     () => allGroups.map((g) => ({ value: g.id, label: g.name })),
     [allGroups]
@@ -290,6 +261,10 @@ export function StaffGroupDetails({
       ...Object.fromEntries((processedExpenseAccounts || []).map((e) => [e.id, e.name])),
     }),
     [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts]
+  );
+  const mobileSearchNames = useMemo(
+    () => ({ ...accountNamesMap, ...journalAccountNames, ...(userNames || {}) }),
+    [accountNamesMap, journalAccountNames, userNames]
   );
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
@@ -347,6 +322,36 @@ export function StaffGroupDetails({
       ),
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
+
+  const filteredMobileTransactions = useMemo(() => {
+    if (!mobileSearchTerm) return sortedTransactions;
+    const lowerCaseSearch = mobileSearchTerm.toLowerCase();
+    return sortedTransactions.filter((t: any) => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
+      return (
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "staff").includes(lowerCaseSearch) ||
+        formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
+        formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
+        String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
+        String(t.balance).toLowerCase().includes(lowerCaseSearch)
+      );
+    });
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
+
+  const mobileTransactionsToShow = useMemo(() => {
+    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
+    if (hasDateFilter) return filteredMobileTransactions;
+    const list = filteredMobileTransactions;
+    if (list.length <= 10) return list;
+    return list.slice(-10);
+  }, [filteredMobileTransactions, dateRange]);
+
+  const dateRangeLabel = buildDateRangeText();
+
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
   const paginatedTransactions = sortedTransactions.slice(
     (currentPage - 1) * rowsPerPage,
@@ -588,11 +593,34 @@ export function StaffGroupDetails({
               </DrawerHeader>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
-                  <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                  <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
+                    onSelect={handleNepaliSelect}
+                    valueAD={dateRange}
+                    isRange={true}
+                    numberOfMonths={calendarMonths}
+                  />
                 )}
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange?.(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

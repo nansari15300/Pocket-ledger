@@ -550,7 +550,7 @@ function RecycleBinContent() {
             if (isCompany) {
                 if (isLocalOnlyMode()) {
                     // Local-only mode: permanent delete means local company registry se purge.
-                    await removeLocalCompanyById(item.id);
+                    await removeLocalCompanyById(item.id, { firebaseUid: user?.uid ?? null });
                     toast({ title: "Deleted permanently", description: `"${item.name}" has been removed from your recycle bin.` });
                     return;
                 }
@@ -641,7 +641,7 @@ function RecycleBinContent() {
             if (isLocalOnlyMode()) {
                 // Deleted companies: SQLite registry se purge. Vouchers/bank_accounts Firestore pe hain — neeche `nonCompanyItems` loop zaroor chale.
                 for (const cid of companyIds) {
-                    await removeLocalCompanyById(cid);
+                    await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
                 }
                 if (companyIds.length > 0) {
                     setDeletedItems((prev) => prev.filter((item) => item.collectionPath !== "companies"));

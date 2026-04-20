@@ -89,9 +89,11 @@ import {
   recomputeRunningBalanceTopToBottom,
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Combobox } from "@/components/ui/combobox";
 import {
@@ -210,7 +212,8 @@ export function PartyDetails({
   const { balanceMode, setBalanceMode } = useBalanceMode();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } =
     useDate();
-  const { vouchers, processedParties } = useVouchers();
+  const { vouchers, processedParties, journalAccountNames: voucherJournalAccountNames } = useVouchers();
+  const resolvedJournalAccountNames = journalAccountNames ?? voucherJournalAccountNames;
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const router = useRouter();
@@ -407,8 +410,13 @@ export function PartyDetails({
   const mergedUserNames = useMemo(() => {
     return { ...userNames, ...localFetchedUserNames };
   }, [userNames, localFetchedUserNames]);
+
+  const mobileSearchNames = useMemo(
+    () => ({ ...resolvedJournalAccountNames, ...mergedUserNames }),
+    [resolvedJournalAccountNames, mergedUserNames]
+  );
   
-  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(party, "party", dateRange, undefined, allParties, passedTransactions, context, filters, undefined, undefined, mergedUserNames);
+  const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(party, "party", dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
   
   // Fetch missing user names directly from Firestore and store in local state
   useEffect(() => {
@@ -556,9 +564,7 @@ export function PartyDetails({
       const bal = t.balance ?? t.runningBalance ?? 0;
       const userStr = (userNames && t.userId && userNames[t.userId]) || "";
       return (
-        (t.voucherNumber || "").toLowerCase().includes(q) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(q) ||
-        (t.narration || "").toLowerCase().includes(q) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "party", party.id).includes(q) ||
         dateStr.toLowerCase().includes(q) ||
         timeStr.toLowerCase().includes(q) ||
         String(amt || 0).toLowerCase().includes(q) ||
@@ -568,7 +574,7 @@ export function PartyDetails({
         userStr.toLowerCase().includes(q)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames]);
+  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames, mobileSearchNames, party.id]);
 
   const totalPages = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
   const paginatedTransactions = rowsPerPage > 0 ? searchFilteredTransactions.slice(
@@ -673,7 +679,7 @@ export function PartyDetails({
       includeNotes: showNotes,
       visibleColumns: printVisibleColumns,
       userNames: mergedUserNames,
-      journalAccountNames: journalAccountNames,
+      journalAccountNames: resolvedJournalAccountNames,
       billWise: variant === "bill_wise",
       ...(variant === "bill_wise" && { openingBalanceOutstanding, openingBalanceLinkedVoucherNos, vouchers }),
     }, true);
@@ -835,7 +841,7 @@ export function PartyDetails({
               openingBalanceActions={undefined}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              journalAccountNames={journalAccountNames}
+              journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
               onDeleteVoucher={handleDeleteVoucher}
@@ -917,6 +923,15 @@ export function PartyDetails({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     onSelect={(_bs, adDate) => {
                       const range = dateRange;
                       if (!range?.from || (range.from && range.to)) {
@@ -937,6 +952,15 @@ export function PartyDetails({
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}
@@ -1242,7 +1266,7 @@ export function PartyDetails({
               }
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              journalAccountNames={journalAccountNames}
+              journalAccountNames={resolvedJournalAccountNames}
               userNames={mergedUserNames}
               onRowClick={handleEditVoucher}
               onDeleteVoucher={handleDeleteVoucher}

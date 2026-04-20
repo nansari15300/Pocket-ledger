@@ -272,7 +272,8 @@ const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
 export function AddVoucherDialog(props: any) {
   /** Compare-before-sync jaisi jagah nested stack: `false` se parent non-modal Compare band hone par saath na band ho. */
   const { children, isOpen, onOpenChange, voucher, defaultVoucherData, dialogRootModal = true, editCompanyId, ...rest } = props;
-  const { companyId: ctxCompanyId, company: ctxCompany, effectiveNotificationSettings, allCompanies } = useCompany();
+  const { companyId: ctxCompanyId, setCompanyId, company: ctxCompany, effectiveNotificationSettings, allCompanies } =
+    useCompany();
   /** Voucher jis company ka hai (Compare Side A/B) — header company se alag ho sakta hai. */
   const companyId = String(editCompanyId?.trim() || ctxCompanyId || "");
   const company = useMemo(() => {
@@ -539,11 +540,19 @@ export function AddVoucherDialog(props: any) {
     effectiveNotificationSettings?.approve?.on !== false;
 
   const handleApprove = useCallback(async () => {
-    if (!companyId || !effectiveVoucher?.id || isApproving || !user?.uid) return;
+    const cid = String(editCompanyId?.trim() || ctxCompanyId || "");
+    if (!cid || !effectiveVoucher?.id || isApproving || !user?.uid) return;
     setIsApproving(true);
     try {
       const approverName = customUser?.displayName || user?.displayName || user?.email || user.uid;
-      await approveVoucherWithHistory(companyId, effectiveVoucher.id, user.uid, approverName);
+      await approveVoucherWithHistory(cid, effectiveVoucher.id, user.uid, approverName);
+      // Static APK: async approve + outbox flush ke dauran companyId kabhi brief null → /company redirect; restore turant
+      try {
+        if (typeof window !== "undefined") localStorage.setItem("companyId", cid);
+      } catch {
+        /* ignore */
+      }
+      setCompanyId(cid);
       toast.success("Transaction approved.");
       props.onVoucherAction?.("saved");
       onOpenChange?.(false);
@@ -552,7 +561,19 @@ export function AddVoucherDialog(props: any) {
     } finally {
       setIsApproving(false);
     }
-  }, [companyId, effectiveVoucher?.id, isApproving, user?.uid, user?.displayName, user?.email, customUser?.displayName, props.onVoucherAction, onOpenChange]);
+  }, [
+    editCompanyId,
+    ctxCompanyId,
+    effectiveVoucher?.id,
+    isApproving,
+    user?.uid,
+    user?.displayName,
+    user?.email,
+    customUser?.displayName,
+    setCompanyId,
+    props.onVoucherAction,
+    onOpenChange,
+  ]);
 
   // ✅ handleAction मा pathsToDelete थपियो
   const handleAction = useCallback(async (

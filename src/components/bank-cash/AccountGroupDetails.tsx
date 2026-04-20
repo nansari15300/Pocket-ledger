@@ -35,6 +35,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import { useTransactions } from "@/hooks/use-transactions";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { useVouchers } from "@/hooks/useVouchers";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Input } from "../ui/input";
 import {
@@ -65,6 +66,7 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 
 
@@ -632,16 +634,30 @@ export function AccountGroupDetails({
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
   };
 
+  const accountNamesMap = useMemo(
+    () => ({
+      ...Object.fromEntries((processedAccounts || []).map((a) => [a.id, a.accountName])),
+      ...Object.fromEntries((processedParties || []).map((p) => [p.id, p.name])),
+      ...Object.fromEntries((processedStaff || []).map((s) => [s.id, s.name])),
+      ...Object.fromEntries((processedTaxes || []).map((t) => [t.id, t.name])),
+      ...Object.fromEntries((processedExpenseAccounts || []).map((e) => [e.id, e.name])),
+    }),
+    [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts]
+  );
+  const mobileSearchNames = useMemo(
+    () => ({ ...accountNamesMap, ...journalAccountNames, ...(userNames || {}) }),
+    [accountNamesMap, journalAccountNames, userNames]
+  );
+
   const filteredMobileTransactions = useMemo(() => {
     if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
     return sortedTransactions.filter((t: any) => {
+      if ((t as any)._spendWiseSpacer) return false;
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        t.type?.replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, "group", group.id, "account").includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -651,7 +667,7 @@ export function AccountGroupDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
   const mobileTransactionsToShow = useMemo(() => {
     const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
@@ -692,17 +708,6 @@ export function AccountGroupDetails({
   const groupDropdownOptions = useMemo(
     () => allGroups.map((g) => ({ value: g.id, label: g.name })),
     [allGroups]
-  );
-
-  const accountNamesMap = useMemo(
-    () => ({
-      ...Object.fromEntries((processedAccounts || []).map((a) => [a.id, a.accountName])),
-      ...Object.fromEntries((processedParties || []).map((p) => [p.id, p.name])),
-      ...Object.fromEntries((processedStaff || []).map((s) => [s.id, s.name])),
-      ...Object.fromEntries((processedTaxes || []).map((t) => [t.id, t.name])),
-      ...Object.fromEntries((processedExpenseAccounts || []).map((e) => [e.id, e.name])),
-    }),
-    [processedAccounts, processedParties, processedStaff, processedTaxes, processedExpenseAccounts]
   );
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
@@ -980,6 +985,15 @@ export function AccountGroupDetails({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                 {(dateSystem === "BS" || dateSystem === "Both") && (
                   <NepaliCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange?.(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    }
                     onSelect={handleNepaliSelect}
                     valueAD={dateRange}
                     isRange={true}
@@ -989,6 +1003,15 @@ export function AccountGroupDetails({
                 {(dateSystem === "AD" || dateSystem === "Both") && (
                   <div className="flex-1 w-full min-w-0">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            onDateRangeChange?.(r);
+                            setIsCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

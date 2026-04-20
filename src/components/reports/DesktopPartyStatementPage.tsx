@@ -17,7 +17,7 @@ import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, Layers
 import type { Party, Group } from "@/components/party/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -25,6 +25,7 @@ import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import {
   Drawer,
@@ -409,10 +410,25 @@ export default function DesktopPartyStatementPage() {
         <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
              <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
                  {/* Row 1: Back | Title | Showing X of Y voucher(s) */}
-                 <div className="flex items-center gap-2">
+                 <div className="flex items-center gap-2 min-w-0">
                     <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}><ArrowLeft className="h-4 w-4" /></Button>
-                    <h1 className="text-base font-bold truncate flex-1 min-w-0">{pageTitle}</h1>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+                      {activeEntity?.name ? (
+                        <>
+                          <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+                            ·
+                          </span>
+                          <span
+                            className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                            title={activeEntity.name}
+                          >
+                            {activeEntity.name}
+                          </span>
+                        </>
+                      ) : null}
+                    </div>
+                    <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                         Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
                     </span>
                  </div>
@@ -486,11 +502,34 @@ export default function DesktopPartyStatementPage() {
                     </DrawerHeader>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
                         {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                            <NepaliCalendar onSelect={handleNepaliSelect} valueAD={dateRange} isRange={true} numberOfMonths={calendarMonths} />
+                            <NepaliCalendar
+                              rangePresetSlot={
+                                <DateRangePresetRow
+                                  country={company?.country}
+                                  onApply={(r) => {
+                                    setDateRange(r);
+                                    setIsCalendarOpen(false);
+                                  }}
+                                />
+                              }
+                              onSelect={handleNepaliSelect}
+                              valueAD={dateRange}
+                              isRange={true}
+                              numberOfMonths={calendarMonths}
+                            />
                         )}
                         {(dateSystem === 'AD' || dateSystem === 'Both') && (
                             <div className="flex-1 w-full min-w-0">
                                 <AdCalendar
+                                    rangePresetSlot={
+                                      <DateRangePresetRow
+                                        country={company?.country}
+                                        onApply={(r) => {
+                                          setDateRange(r);
+                                          setIsCalendarOpen(false);
+                                        }}
+                                      />
+                                    }
                                     valueAD={dateRange}
                                     isRange
                                     numberOfMonths={calendarMonths}

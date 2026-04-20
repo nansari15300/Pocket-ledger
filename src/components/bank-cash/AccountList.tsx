@@ -2,7 +2,7 @@
 "use client";
 
 import type { Account } from "@/components/bank-cash/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
@@ -70,12 +70,18 @@ export function AccountList({
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
                     <div className="relative flex-shrink-0">
-                      <Avatar className="h-8 w-8 text-xs">
-                        <AvatarImage src={account.fileUrl} />
-                        <AvatarFallback className="bg-muted text-muted-foreground">
-                          {isSpecial ? <Crown className="h-4 w-4 text-amber-500"/> : <Landmark className="h-4 w-4" />}
-                        </AvatarFallback>
-                      </Avatar>
+                      <ResolvedEntityAvatar
+                        className="h-8 w-8 text-xs"
+                        src={account.fileUrl}
+                        alt={account.accountName}
+                        fallbackSlot={
+                          isSpecial ? (
+                            <Crown className="h-4 w-4 text-amber-500" />
+                          ) : (
+                            <Landmark className="h-4 w-4 text-muted-foreground" />
+                          )
+                        }
+                      />
                       {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
                         <span
                           className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"

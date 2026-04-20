@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   const host = req.headers.get("host");
   const baseUrl = `${protocol}://${host}`;
 
-  let returnPath = "/company/create";
+  let returnPath = "/company";
   const encodedState = state || "";
   const decoded: DecodedState | null = state ? safeBase64JsonDecode(state) : null;
 

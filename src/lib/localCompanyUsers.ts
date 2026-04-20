@@ -47,6 +47,63 @@ export function parseLocalCompanyUserRows(raw: unknown): LocalCompanyUserRecord[
   return out;
 }
 
+/** Firestore `companies.sharedWith` entry — SQLite `localCompanyUsers` mirror ke liye. */
+export type FirestoreSharedUser = {
+  email?: string;
+  name?: string;
+  role?: string;
+  password?: string | null;
+  uid?: string | null;
+};
+
+const VALID_SHARED_ROLES = ["viewer", "data-entry", "accountant", "editor", "manager", "owner"] as const;
+
+/**
+ * Cloud `sharedWith` ko device SQLite `localCompanyUsers` me merge — offline login + "Existing Company Users" list.
+ * Pehle se maujood rows (jaise Admin) preserve; email = online login id.
+ */
+export function mergeSharedWithIntoLocalCompanyUsers(
+  rows: LocalCompanyUserRecord[],
+  sharedWith: FirestoreSharedUser[]
+): LocalCompanyUserRecord[] {
+  if (!Array.isArray(sharedWith) || sharedWith.length === 0) {
+    return [...rows];
+  }
+  let next = [...rows];
+  for (const u of sharedWith) {
+    const email = String(u?.email || "").trim();
+    if (!email) continue;
+    const name = String(u?.name || "").trim() || email;
+    let role =
+      String(u?.role || "viewer")
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, "-")
+        .replace(/\s+/g, "-") || "viewer";
+    if (!VALID_SHARED_ROLES.includes(role as (typeof VALID_SHARED_ROLES)[number])) {
+      role = "viewer";
+    }
+    const pwFromShared =
+      u?.password != null && String(u.password).trim() !== "" ? String(u.password).trim() : "";
+    const idx = next.findIndex((x) => x.username.toLowerCase() === email.toLowerCase());
+    if (idx >= 0) {
+      const row = { ...next[idx] };
+      row.displayName = name;
+      row.role = role;
+      if (pwFromShared) row.password = pwFromShared;
+      next[idx] = row;
+    } else {
+      next = upsertUserInList(next, {
+        username: email,
+        displayName: name,
+        role,
+        password: pwFromShared,
+      });
+    }
+  }
+  return next;
+}
+
 /** Same username par naya password/display update; naya user ho to push. */
 export function upsertUserInList(
   list: LocalCompanyUserRecord[],

@@ -260,10 +260,23 @@ export default function NepaliCalendar({
   }
 
   return (
-    <div className={calendarPanelClassName}>
+    <div
+      className={cn(
+        calendarPanelClassName,
+        // Mobile: tall panel + inner scroll so presets stay reachable; sticky row keeps shortcuts visible while scrolling months
+        rangePresetSlot && "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+      )}
+    >
       {rangePresetSlot ? (
-        <div className="w-full border-b border-border pb-2 mb-2 -mt-0.5">
-          <div className="flex flex-wrap gap-1.5 justify-center sm:justify-start">{rangePresetSlot}</div>
+        <div
+          className={cn(
+            "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+            "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
+          )}
+        >
+          <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+            {rangePresetSlot}
+          </div>
         </div>
       ) : null}
       {entryDateRangeAD ? (

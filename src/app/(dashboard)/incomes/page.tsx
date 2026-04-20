@@ -18,7 +18,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -144,6 +144,16 @@ function IncomeExpensePageContent() {
 
   const selectedAccount = activeView === 'accounts' ? selected as ExpenseAccount : null;
   const selectedGroup = activeView === 'groups' ? selected as ExpenseGroup : null;
+  const mobileIncomesSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    const name = (selected as ExpenseAccount | ExpenseGroup).name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected]);
+  const mobileIncomesSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as ExpenseAccount | ExpenseGroup).balance);
+  }, [selected]);
+  const incomesMasterDetailTitle = activeView === "groups" ? "Income & Expense Groups" : "Income & Expense";
   useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroup?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
   const incomesListEnabled = incomesMenuEnabled && featureConfig.incomes_list !== false;
@@ -537,7 +547,9 @@ function IncomeExpensePageContent() {
       {/* h-full + min-h-0: dashboard main (overflow-y-auto) ke andar list column ko height mile, PC par ScrollArea scroll kare */}
       <div className="h-full min-h-0 min-w-0">
       <ResponsiveMasterDetail
-        title="Income & Expense"
+        title={incomesMasterDetailTitle}
+        mobileSelectionLabel={mobileIncomesSelectionLabel}
+        mobileSelectionLabelClassName={mobileIncomesSelectionLabelClassName}
         balance={
             <span className={cn(
                 "font-semibold",

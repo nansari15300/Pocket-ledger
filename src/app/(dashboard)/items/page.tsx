@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { CreateItemGroupDialog } from "@/components/items/CreateItemGroupDialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ItemGroupDetails } from "@/components/items/ItemGroupDetails";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { PermissionButton } from "@/components/permission";
 import { useDate } from "@/hooks/useDate";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -130,6 +130,16 @@ function ItemsPageContent() {
 
   const selectedItem = activeView === "items" ? (selected as Item) : null;
   const selectedItemGroup = activeView === "groups" ? (selected as ItemGroup) : null;
+  const mobileItemsSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    const name = (selected as Item | ItemGroup).name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected]);
+  const mobileItemsSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Item | ItemGroup).balance);
+  }, [selected]);
+  const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
   useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroup?.id ?? null);
 
   const processedItemGroups = useMemo(() => {
@@ -489,7 +499,9 @@ function ItemsPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title="Items"
+      title={itemsMasterDetailTitle}
+      mobileSelectionLabel={mobileItemsSelectionLabel}
+      mobileSelectionLabelClassName={mobileItemsSelectionLabelClassName}
       balance={
         <span
           className={cn(

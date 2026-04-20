@@ -202,9 +202,9 @@ export async function enqueueCompanyDocOutbox(
     `INSERT INTO sync_outbox (outbox_id, company_id, collection_name, doc_id, op, payload, created_at)
      VALUES (?,?,?,?,?,?,?)`
   ).run(outboxId, companyId, collectionName, docId, op, json, now);
-  // Turant flush: 45s interval ka wait na karo — online company ka party/voucher server pe jaldi dikhe
+  // Turant flush: 45s interval ka wait na karo; `await` se approve/save return tab tak jab tak is row ka flush try ho chuka ho (online company server pe sync)
   if (typeof navigator !== "undefined" && navigator.onLine) {
-    void flushVoucherOutbox();
+    await flushVoucherOutbox();
   }
 }
 

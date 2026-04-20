@@ -101,24 +101,34 @@ export function DangerZone() {
     const targetName = companyToDelete?.name ?? company?.name;
     setIsLoading(true);
     try {
-      if (isLocalOnlyMode()) {
-        // Local-only mode: company ko local registry me recycle-bin state par mark karo (Firestore call skip).
-        const existingLocalCompany = await getLocalCompanyById(targetId);
-        if (!existingLocalCompany) {
-          throw new Error("Local company not found");
-        }
-        await upsertLocalCompany({
-          ...existingLocalCompany,
-          id: targetId,
-          isDeleted: true,
-          deletedAt: Date.now(),
-        });
-      } else {
-      await updateDoc(doc(firestore, `companies/${targetId}`), {
+      const existingLocalCompany = await getLocalCompanyById(targetId, { includeDeleted: true });
+      const isOnline =
+        (targetCompany && isOnlineCompanyRow(targetCompany)) ||
+        (!!existingLocalCompany && isOnlineCompanyRow(existingLocalCompany as Company));
+
+      const moveToBinUpdate = {
         isDeleted: true,
         deletedAt: serverTimestamp(),
         movedToAdminRecycleAt: deleteField(),
-      });
+      };
+
+      if (isLocalOnlyMode()) {
+        // Cloud / mirrored companies: Firestore source of truth — warna mirror dubara SQLite ko purani row se overwrite kar deta hai.
+        if (isOnline) {
+          await updateDoc(doc(firestore, `companies/${targetId}`), moveToBinUpdate);
+        }
+        if (existingLocalCompany) {
+          await upsertLocalCompany({
+            ...existingLocalCompany,
+            id: targetId,
+            isDeleted: true,
+            deletedAt: Date.now(),
+          });
+        } else if (!isOnline) {
+          throw new Error("Local company not found");
+        }
+      } else {
+        await updateDoc(doc(firestore, `companies/${targetId}`), moveToBinUpdate);
       }
       toast({
         title: "Company Moved to Bin",

@@ -32,7 +32,7 @@ import { masterDetailListHref } from "@/lib/masterDetailListPath";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { useResponsiveListLayout } from "@/hooks/useResponsiveListLayout";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 
 // Custom Hook
 import { usePageMemory } from "@/hooks/usePageMemory";
@@ -111,6 +111,16 @@ function StaffPageContent() {
 
   const selectedStaff = activeView === 'staff' ? selected as Staff : null;
   const selectedGroup = activeView === 'groups' ? selected as StaffGroup : null;
+  const mobileStaffSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    const name = (selected as Staff | StaffGroup).name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected]);
+  const mobileStaffSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Staff | StaffGroup).balance);
+  }, [selected]);
+  const staffMasterDetailTitle = activeView === "groups" ? "Staff Groups" : "Staff";
   useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroup?.id ?? null);
 
   const processedStaffGroups = useMemo(() => {
@@ -390,7 +400,9 @@ function StaffPageContent() {
   return (
     <>
     <ResponsiveMasterDetail
-      title="Staff"
+      title={staffMasterDetailTitle}
+      mobileSelectionLabel={mobileStaffSelectionLabel}
+      mobileSelectionLabelClassName={mobileStaffSelectionLabelClassName}
       balance={
         <span className={cn(
             "font-semibold",

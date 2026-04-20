@@ -62,6 +62,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "@/components/ui/badge";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -69,6 +70,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { useTransactions } from "@/hooks/use-transactions";
+import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
 import usePermissions from "@/hooks/usePermissions";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { 
@@ -245,6 +247,16 @@ export default function ItemDetails({
     previousItemRef.current = initialItem;
     return initialItem;
   }, [processedItems, initialItem]);
+
+  const mobileSearchNames = useMemo(
+    () => ({
+      ...journalAccountNames,
+      ...effectiveUserNames,
+      ...Object.fromEntries((processedAccounts || []).map((a: any) => [a.id, a.accountName])),
+      ...Object.fromEntries((processedParties || []).map((p: any) => [p.id, p.name])),
+    }),
+    [journalAccountNames, effectiveUserNames, processedAccounts, processedParties]
+  );
 
   const {
     processedTransactions: allProcessedTransactions,
@@ -555,9 +567,7 @@ export default function ItemDetails({
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
       return (
-        t.voucherNumber?.toLowerCase().includes(lowerCaseSearch) ||
-        (t.type || "").replace(/_/g, " ").toLowerCase().includes(lowerCaseSearch) ||
-        t.narration?.toLowerCase().includes(lowerCaseSearch) ||
+        getTransactionQuickSearchHaystack(t, mobileSearchNames, currentItem ? "item" : undefined, currentItem?.id).includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
@@ -567,7 +577,7 @@ export default function ItemDetails({
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS]);
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, currentItem?.id]);
 
   // Mobile: show last 10 when no date filter (like Party), all when date filter applied
   const mobileDisplayTransactions = useMemo(() => {
@@ -824,6 +834,15 @@ export default function ItemDetails({
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                setDateRange(r);
+                                setIsCalendarOpen(false);
+                              }}
+                            />
+                          }
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
@@ -833,6 +852,15 @@ export default function ItemDetails({
                     {(dateSystem === 'AD' || dateSystem === 'Both') && (
                       <div className="flex-1 w-full min-w-0">
                         <AdCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                setDateRange(r);
+                                setIsCalendarOpen(false);
+                              }}
+                            />
+                          }
                           valueAD={dateRange}
                           isRange
                           numberOfMonths={calendarMonths}

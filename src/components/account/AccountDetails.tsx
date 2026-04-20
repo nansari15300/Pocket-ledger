@@ -90,6 +90,8 @@ import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import { useRouter } from "next/navigation";
 import { Combobox } from "../ui/combobox";
 import NepaliCalendar from "../ui/nepali-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
+import { calendarPanelClassName } from "@/lib/calendarChrome";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -464,6 +466,15 @@ export function AccountDetails({
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
                     {(dateSystem === 'BS' || dateSystem === 'Both') && (
                        <NepaliCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                onDateRangeChange(r);
+                                setIsCalendarOpen(false);
+                              }}
+                            />
+                          }
                           onSelect={handleNepaliSelect}
                           valueAD={dateRange}
                           isRange={true}
@@ -472,19 +483,42 @@ export function AccountDetails({
                     )}
                     {(dateSystem === 'AD' || dateSystem === 'Both') && (
                       <div className="flex-1">
-                        <Calendar
-                          className="p-0 w-full"
-                           classNames={{ table: 'w-full' }}
-                          initialFocus
-                          mode="range"
-                          defaultMonth={dateRange?.from}
-                          selected={asCalendarRange(dateRange)}
-                          onSelect={(range) => {
-                              if(onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
+                        <div
+                          className={cn(
+                            calendarPanelClassName,
+                            "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+                              "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
+                            )}
+                          >
+                            <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+                              <DateRangePresetRow
+                                country={company?.country}
+                                onApply={(r) => {
+                                  onDateRangeChange(r);
+                                  setIsCalendarOpen(false);
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <Calendar
+                            className="p-0 w-full"
+                            classNames={{ table: "w-full" }}
+                            initialFocus
+                            mode="range"
+                            defaultMonth={dateRange?.from}
+                            selected={asCalendarRange(dateRange)}
+                            onSelect={(range) => {
+                              if (onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
                               if (range?.from && range.to) setIsCalendarOpen(false);
-                          }}
-                          numberOfMonths={calendarMonths}
-                        />
+                            }}
+                            numberOfMonths={calendarMonths}
+                          />
+                        </div>
                       </div>
                     )}
                  </div>

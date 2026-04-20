@@ -42,6 +42,8 @@ type AdCalendarProps = {
   transactionDates?: Date[];
   isRange?: boolean;
   disabled?: boolean;
+  /** Shortcuts row — same as NepaliCalendar: inside blue `calendarPanelClassName` border */
+  rangePresetSlot?: React.ReactNode;
 };
 
 function getMonthDays(year: number, month: number) {
@@ -60,6 +62,7 @@ export default function AdCalendar({
   transactionDates = [],
   isRange: isRangeProp,
   disabled = false,
+  rangePresetSlot = null,
 }: AdCalendarProps) {
   const todayAD = new Date();
   const isRange =
@@ -204,7 +207,24 @@ export default function AdCalendar({
   }
 
   return (
-    <div className={calendarPanelClassName}>
+    <div
+      className={cn(
+        calendarPanelClassName,
+        rangePresetSlot && "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+      )}
+    >
+      {rangePresetSlot ? (
+        <div
+          className={cn(
+            "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+            "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
+          )}
+        >
+          <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+            {rangePresetSlot}
+          </div>
+        </div>
+      ) : null}
       <div
         className={cn(
           "flex flex-col md:flex-row gap-6 w-full",

@@ -8,7 +8,7 @@ import { Search, Receipt, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TaxList } from "@/components/tax/TaxList";
@@ -127,6 +127,16 @@ function TaxPageContent() {
 
   const selectedTax = activeView === 'taxes' ? selected as Tax : null;
   const selectedGroup = activeView === 'groups' ? selected as TaxGroup : null;
+  const mobileTaxSelectionLabel = useMemo(() => {
+    if (!selected) return null;
+    const name = (selected as Tax | TaxGroup).name;
+    return name && String(name).trim() ? String(name).trim() : null;
+  }, [selected]);
+  const mobileTaxSelectionLabelClassName = useMemo(() => {
+    if (!selected) return undefined;
+    return masterDetailBalanceToneClass((selected as Tax | TaxGroup).balance);
+  }, [selected]);
+  const taxMasterDetailTitle = activeView === "groups" ? "Tax Groups" : "Taxes";
   useSyncMasterDetailHeaderId("tax", selectedTax?.id ?? selectedGroup?.id ?? null);
   
   const processedTaxGroups = useMemo(() => {
@@ -405,7 +415,9 @@ function TaxPageContent() {
 
   return (
     <ResponsiveMasterDetail
-      title="Taxes"
+      title={taxMasterDetailTitle}
+      mobileSelectionLabel={mobileTaxSelectionLabel}
+      mobileSelectionLabelClassName={mobileTaxSelectionLabelClassName}
       balance={
         <span className={cn(
             "font-semibold",
