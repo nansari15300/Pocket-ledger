@@ -12,6 +12,7 @@ import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
 
 export type Company = {
   id: string;
@@ -39,15 +40,29 @@ function SelectCompanyPageContent() {
   useEffect(() => {
     // Local-only: page-level Firestore listeners skip — data companyContextLoading + contextCompanies se.
     if (isLocalOnlyMode()) {
+      registerCompanyPickerFirestoreDetach(null);
       return;
     }
-    if (authLoading || !user || !user.email) {
-      if (!authLoading && !user) {
-        router.replace("/");
-      }
+    if (authLoading) {
+      registerCompanyPickerFirestoreDetach(null);
+      setLoading(true);
+      setOwnedCompanies([]);
+      setSharedCompanies([]);
+      setNewlyCreatedCompany(null);
+      return;
+    }
+    if (!user || !user.email) {
+      registerCompanyPickerFirestoreDetach(null);
+      setOwnedCompanies([]);
+      setSharedCompanies([]);
+      setLoading(false);
+      router.replace("/");
       return;
     }
 
+    setOwnedCompanies([]);
+    setSharedCompanies([]);
+    setNewlyCreatedCompany(null);
     setLoading(true);
     let settled = false;
     const setSettled = () => {
@@ -92,10 +107,16 @@ function SelectCompanyPageContent() {
     // Fallback: stop loading after 10s so user never stays on skeleton (e.g. network/rules issues)
     const timeoutId = setTimeout(setSettled, 10000);
 
+    const cleanupListeners = () => {
+      unsubOwned();
+      unsubShared();
+      clearTimeout(timeoutId);
+    };
+    registerCompanyPickerFirestoreDetach(cleanupListeners);
+
     return () => {
-        unsubOwned();
-        unsubShared();
-        clearTimeout(timeoutId);
+      registerCompanyPickerFirestoreDetach(null);
+      cleanupListeners();
     };
   }, [user, authLoading, router]);
 
@@ -186,7 +207,17 @@ function SelectCompanyPageContent() {
     );
   }
 
-  return <CompanySelector companies={allCompanies} />;
+  if (!user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Card className="w-full max-w-lg">
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">Signing out…</CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return <CompanySelector key={user.uid} companies={allCompanies} />;
 }
 
 function SelectCompanyPageLoading() {

@@ -29,9 +29,9 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { collection, query, where, onSnapshot, getDocsFromServer, Timestamp } from "firebase/firestore";
-import { firestore, auth } from "@/lib/firebase";
-import { startOfDay, endOfDay, startOfMonth, endOfMonth, format, differenceInDays } from "date-fns";
+import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { format, differenceInDays } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import { useRouter, usePathname, useParams, useSearchParams } from "next/navigation";
 import {
@@ -56,13 +56,14 @@ import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import Link from "next/link";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
-import { signOut } from "firebase/auth";
+import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import type { Company } from "@/hooks/useCompany";
 import {
   DEFAULT_PLANS,
   getNextPaidUpgrade,
   numericEntitlement,
   companyStorageIsLocal,
+  PLAN_TIER_ORDER,
   type PlanId,
 } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -75,7 +76,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
@@ -499,6 +500,62 @@ function HeaderActions() {
   );
 }
 
+/** Opaque “stucco-like” surface in code only — no image, no translucent stacks (clear HD read). */
+function ProfileDropdownPlanCard({
+  borderClassName,
+  tone,
+  roundedClassName = "rounded-lg",
+  children,
+}: {
+  borderClassName: string;
+  tone: "emerald" | "sky";
+  /** Stack cards flush: e.g. `rounded-t-lg rounded-b-none` */
+  roundedClassName?: string;
+  children: React.ReactNode;
+}) {
+  const fill =
+    tone === "emerald"
+      ? {
+          backgroundColor: "#f6faf7",
+          backgroundImage: `
+            linear-gradient(165deg, #ffffff 0%, #f2fbf6 38%, #e8f0ec 100%),
+            repeating-linear-gradient(
+              -11deg,
+              transparent,
+              transparent 4px,
+              rgba(15, 23, 42, 0.028) 4px,
+              rgba(15, 23, 42, 0.028) 8px
+            )
+          `,
+        } as const
+      : {
+          backgroundColor: "#f5f8fc",
+          backgroundImage: `
+            linear-gradient(165deg, #ffffff 0%, #f0f7ff 38%, #e8edf5 100%),
+            repeating-linear-gradient(
+              -11deg,
+              transparent,
+              transparent 4px,
+              rgba(15, 23, 42, 0.028) 4px,
+              rgba(15, 23, 42, 0.028) 8px
+            )
+          `,
+        } as const;
+
+  return (
+    <div
+      className={cn(
+        "relative w-full max-w-full box-border overflow-hidden border-4 px-3 py-3 sm:px-4 shadow-sm",
+        roundedClassName,
+        borderClassName
+      )}
+      style={fill}
+    >
+      <div className="relative z-[1] w-full min-w-0">{children}</div>
+    </div>
+  );
+}
+
 function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
@@ -506,8 +563,6 @@ function UserProfileButton() {
   const { isOnline } = useOnlineStatus();
   const livePlans = useLivePlans();
   const [profileOpen, setProfileOpen] = useState(false);
-  const [dailyUsed, setDailyUsed] = useState<number | null>(null);
-  const [monthlyUsed, setMonthlyUsed] = useState<number | null>(null);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
   /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
   const profileHoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -550,50 +605,17 @@ function UserProfileButton() {
   const handleLogout = async () => {
     const { clearNavigationMemory } = await import("@/lib/navigation-memory");
     clearNavigationMemory();
+    pruneRememberedLoginEmailIfDisabled();
     // Local guest logout: local no-login flag off karo so app true online login screen par aaye.
     if (isLocalGuestEnabled()) {
       disableLocalGuest();
       router.replace("/");
       return;
     }
-    await signOut(auth);
+    await signOutWithFirestoreTeardown(auth);
     // Firebase logout ke baad bhi explicit redirect rakho for predictable online-login UX.
     router.replace("/");
   };
-
-  useEffect(() => {
-    if (!profileOpen || !company?.id) {
-      setDailyUsed(null);
-      setMonthlyUsed(null);
-      return;
-    }
-    const voucherPath = `companies/${company.id}/vouchers`;
-    const now = new Date();
-    const todayStart = Timestamp.fromDate(startOfDay(now));
-    const todayEnd = Timestamp.fromDate(endOfDay(now));
-    const monthStart = Timestamp.fromDate(startOfMonth(now));
-    const monthEnd = Timestamp.fromDate(endOfMonth(now));
-    const dailyQuery = query(
-      collection(firestore, voucherPath),
-      where("date", ">=", todayStart),
-      where("date", "<=", todayEnd)
-    );
-    const monthlyQuery = query(
-      collection(firestore, voucherPath),
-      where("date", ">=", monthStart),
-      where("date", "<=", monthEnd)
-    );
-    Promise.all([
-      getDocsFromServer(dailyQuery),
-      getDocsFromServer(monthlyQuery),
-    ]).then(([dailySnap, monthlySnap]) => {
-      setDailyUsed(dailySnap.size);
-      setMonthlyUsed(monthlySnap.size);
-    }).catch(() => {
-      setDailyUsed(null);
-      setMonthlyUsed(null);
-    });
-  }, [profileOpen, company?.id]);
 
   useEffect(() => {
     if (!profileOpen || allCompanies.length === 0) {
@@ -610,12 +632,8 @@ function UserProfileButton() {
     ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
     : ((company?.planId as PlanId) || "basic");
   const planName = DEFAULT_PLANS[accountPlanId]?.name ?? String(accountPlanId);
-  const plan = getPlanFromPlans(livePlans, accountPlanId);
   // Profile dropdown: selected company local ho to uske liye *Local caps dikhao (admin Plans).
   const storageIsLocal = companyStorageIsLocal(company?.storageOption);
-  const maxAttGB = numericEntitlement(plan?.entitlements, "maxAttachmentsGB", storageIsLocal);
-  const dailyLimit = numericEntitlement(plan?.entitlements, "dailyVoucherLimit", storageIsLocal);
-  const monthlyLimit = numericEntitlement(plan?.entitlements, "monthlyVoucherLimit", storageIsLocal);
   const ownedForUsage = React.useMemo(
     () =>
       allCompanies.filter(
@@ -624,6 +642,30 @@ function UserProfileButton() {
       ),
     [allCompanies, user?.uid]
   );
+  const hasOwnedCompanies = ownedForUsage.length > 0;
+  const isSelectedCompanyOwned =
+    !!company &&
+    (company.ownerId === user?.uid || (!!user?.email && company.ownerEmail === user.email));
+
+  const ownedOnlyPlanId: PlanId = (() => {
+    const best = user?.uid ? highestPlanIdAmongOwnedCompanies(allCompanies, user.uid) : null;
+    return best ?? "basic";
+  })();
+
+  /** Shared company open + aapki khud ki companies: caps aapke owned plan se — shared wale `storageOption` se nahi. */
+  const limitsPlanId: PlanId =
+    !isSelectedCompanyOwned && hasOwnedCompanies ? ownedOnlyPlanId : accountPlanId;
+  const limitsPlan = getPlanFromPlans(livePlans, limitsPlanId);
+  const limitsUseLocalForSelected =
+    isSelectedCompanyOwned ? storageIsLocal : hasOwnedCompanies ? false : storageIsLocal;
+
+  const maxAttGB =
+    !isSelectedCompanyOwned && hasOwnedCompanies
+      ? Math.max(
+          numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", false),
+          numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", true)
+        )
+      : numericEntitlement(limitsPlan?.entitlements, "maxAttachmentsGB", limitsUseLocalForSelected);
   const attUsedGB =
     ownedForUsage.reduce((s, c) => s + Number((c as Company).attachmentsUsedBytes ?? 0), 0) / 1e9;
   const attFreeGB = Math.max(0, maxAttGB - attUsedGB);
@@ -631,7 +673,13 @@ function UserProfileButton() {
   const attUsedMB = attUsedGB * GB_TO_MB;
   const attFreeMB = attFreeGB * GB_TO_MB;
   const userStorUsedMB = userStorageUsedBytes != null ? userStorageUsedBytes / (1024 * 1024) : 0;
-  const accountMaxStorGB = numericEntitlement(plan?.entitlements, "maxStorageGB", storageIsLocal);
+  const accountMaxStorGB =
+    !isSelectedCompanyOwned && hasOwnedCompanies
+      ? Math.max(
+          numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", false),
+          numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", true)
+        )
+      : numericEntitlement(limitsPlan?.entitlements, "maxStorageGB", limitsUseLocalForSelected);
   const totalMaxStorMB = accountMaxStorGB * GB_TO_MB;
   const storFreeMB = Math.max(0, totalMaxStorMB - userStorUsedMB);
   const maxStorGB = accountMaxStorGB;
@@ -640,6 +688,43 @@ function UserProfileButton() {
     user?.uid != null && user.uid !== "" ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
   /** Pro Plus ke upar koi paid tier nahi — "Upgrade" mat dikhao */
   const accountCanUpgradeToPaidTier = getNextPaidUpgrade(accountPlanId) != null;
+
+  const ownedOnlyPlanName = DEFAULT_PLANS[ownedOnlyPlanId]?.name ?? String(ownedOnlyPlanId);
+  const ownedPlanLive = getPlanFromPlans(livePlans, ownedOnlyPlanId);
+  const ownedMaxUsersOnline = Math.max(
+    1,
+    numericEntitlement(ownedPlanLive.entitlements, "maxUsers", false) || 1
+  );
+  const ownedMaxUsersLocal = Math.max(
+    1,
+    numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true) || 1
+  );
+  const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId);
+  const ownedCanUpgrade = getNextPaidUpgrade(ownedOnlyPlanId) != null;
+
+  const selectedCompanyPlanId: PlanId = (() => {
+    const cur = String(company?.planId ?? "basic").trim();
+    return (PLAN_TIER_ORDER as readonly string[]).includes(cur) ? (cur as PlanId) : "basic";
+  })();
+  const selectedCompanyPlanName = DEFAULT_PLANS[selectedCompanyPlanId]?.name ?? String(selectedCompanyPlanId);
+  const selectedCompanyPlanLive = getPlanFromPlans(livePlans, selectedCompanyPlanId);
+  const selectedCompanyMaxDevices =
+    selectedCompanyPlanLive.entitlements.hasMultiDeviceSync === true
+      ? Math.max(1, Number(selectedCompanyPlanLive.entitlements.maxDevices) || 1)
+      : 1;
+  const thisCompanyStorageLocal = company ? companyStorageIsLocal(company.storageOption) : false;
+  const thisCompanyMaxUsers = Math.max(
+    1,
+    numericEntitlement(selectedCompanyPlanLive.entitlements, "maxUsers", thisCompanyStorageLocal) || 1
+  );
+
+  const ownedPlanExpiryCompany = React.useMemo(() => {
+    const withExpiry = ownedForUsage.filter((c) => c.planExpiry);
+    if (withExpiry.length === 0) return null;
+    return (
+      withExpiry.find((c) => String(c.planId || "basic").trim() === ownedOnlyPlanId) ?? withExpiry[0]
+    );
+  }, [ownedForUsage, ownedOnlyPlanId]);
 
   if (!user) return null;
 
@@ -669,7 +754,7 @@ function UserProfileButton() {
         </DropdownMenuTrigger>
         <DropdownMenuContent
           className={cn(
-            "w-[min(90vw,320px)] sm:w-64 rounded-xl shadow-lg border bg-popover/95 backdrop-blur supports-[backdrop-filter]:bg-popover/90",
+            "p-0 min-w-0 w-[min(96vw,440px)] sm:w-[min(92vw,520px)] rounded-xl shadow-lg border bg-popover text-popover-foreground",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
           )}
           align="end"
@@ -678,20 +763,31 @@ function UserProfileButton() {
           onMouseEnter={openProfileFromHover}
           onMouseLeave={scheduleProfileHoverClose}
         >
-          <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
-            <div className="flex flex-col space-y-0.5">
-              <p className="text-sm font-medium leading-none truncate">{user.displayName}</p>
-              <p className="text-xs leading-none text-muted-foreground truncate">{user.email}</p>
-            </div>
-          </DropdownMenuLabel>
+          {!company ? (
+            <DropdownMenuLabel className="font-normal px-3 pt-3 pb-2">
+              <div className="flex flex-col space-y-0.5">
+                <p className="text-sm font-medium leading-none truncate">{user.displayName}</p>
+                <p className="text-xs leading-none text-muted-foreground break-words">{user.email}</p>
+              </div>
+            </DropdownMenuLabel>
+          ) : null}
 
-          {company && (
-            <>
-              <DropdownMenuSeparator />
-              <div className="px-3 py-2 space-y-3">
-                {/* Plan / upgrade: owner-only — shared company users must not see paid-plan or billing CTAs */}
-                {company.isOwned === true && (
+          {company ? (
+              <div className="w-full max-w-full px-0 py-0 space-y-0">
+                {/* Plan: owned company = single block; shared company = your account vs this company (owner plan). */}
+                {isSelectedCompanyOwned ? (
+                <ProfileDropdownPlanCard
+                  borderClassName="border-green-500"
+                  tone="emerald"
+                  roundedClassName="rounded-t-lg rounded-b-lg"
+                >
                 <div>
+                  {user.displayName ? (
+                    <p className="text-sm font-medium text-foreground break-words leading-snug mb-1">{user.displayName}</p>
+                  ) : null}
+                  {user.email ? (
+                    <p className="text-xs text-muted-foreground break-words leading-snug mb-3">{user.email}</p>
+                  ) : null}
                   <div className="text-xs text-muted-foreground mb-1">Current Plan</div>
                   <div className="flex items-center justify-between gap-2">
                     <Badge variant="secondary" className="shrink-0">{planName}</Badge>
@@ -737,48 +833,197 @@ function UserProfileButton() {
                       <span className="font-medium text-foreground">{onlineSlotMax}</span>
                     </div>
                   ) : null}
-                </div>
-                )}
-
-                <div className="text-xs space-y-2 pt-2 border-t">
-                  {(dailyLimit > 0 || monthlyLimit > 0) && (
-                    <div className="space-y-1">
-                      {dailyLimit > 0 && (
-                        <div className="text-muted-foreground">
-                          Daily vouchers: <span className="font-medium text-foreground">{dailyUsed ?? "—"}</span> / <span className="font-medium text-foreground">{dailyLimit}</span>
-                        </div>
-                      )}
-                      {monthlyLimit > 0 && (
-                        <div className="text-muted-foreground">
-                          Monthly vouchers: <span className="font-medium text-foreground">{monthlyUsed ?? "—"}</span> / <span className="font-medium text-foreground">{monthlyLimit}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <div className="text-xs text-muted-foreground mt-1.5">
+                    Max users (this company):{" "}
+                    <span className="font-medium text-foreground">
+                      {Math.max(1, numericEntitlement(limitsPlan?.entitlements, "maxUsers", storageIsLocal) || 1)}
+                    </span>
+                  </div>
                   {(maxAttGB > 0 || maxStorGB > 0) && (
-                    <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
                       {maxAttGB > 0 && (
-                        <div className="text-muted-foreground">
-                          Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used / <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
+                        <div>
+                          Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
+                          <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
                         </div>
                       )}
                       {maxStorGB > 0 && (
-                        <div className="text-muted-foreground">
-                          Storage: <span className="font-medium text-foreground">{userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}</span> MB used / <span className="font-medium text-foreground">{userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}</span> MB free
+                        <div>
+                          Storage: <span className="font-medium text-foreground">{userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}</span> MB used /{" "}
+                          <span className="font-medium text-foreground">{userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}</span> MB free
                         </div>
                       )}
                     </div>
                   )}
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className="mt-3 py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
+                  >
+                    <LogOut className="mr-2 h-4 w-4 shrink-0" />
+                    <span>Log out</span>
+                  </DropdownMenuItem>
                 </div>
+                </ProfileDropdownPlanCard>
+                ) : (
+                <div className="w-full max-w-full space-y-0">
+                  <ProfileDropdownPlanCard
+                    borderClassName="border-green-500"
+                    tone="emerald"
+                    roundedClassName="rounded-t-lg rounded-b-none"
+                  >
+                  <div>
+                    {user.displayName ? (
+                      <p className="text-sm font-medium text-foreground break-words leading-snug mb-1">{user.displayName}</p>
+                    ) : null}
+                    {user.email ? (
+                      <p className="text-xs text-muted-foreground break-words leading-snug mb-3">{user.email}</p>
+                    ) : null}
+                    <div className="text-xs text-muted-foreground mb-1">Your account</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <Badge variant="secondary" className="shrink-0">{ownedOnlyPlanName}</Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs shrink-0"
+                        onClick={() => {
+                          clearProfileHoverClose();
+                          setProfileOpen(false);
+                          router.push("/billing");
+                        }}
+                      >
+                        {ownedCanUpgrade ? "Upgrade" : "Billing"}
+                      </Button>
+                    </div>
+                    {!hasOwnedCompanies ? (
+                      <p className="text-xs text-muted-foreground mt-1.5">
+                        You do not own any companies yet. Limits follow your account until you create one.
+                      </p>
+                    ) : null}
+                    {ownedPlanExpiryCompany?.planExpiry && (() => {
+                      const raw = ownedPlanExpiryCompany.planExpiry;
+                      const expiryDate = typeof raw?.toDate === "function" ? raw.toDate() : (raw?.seconds ? new Date(raw.seconds * 1000) : null);
+                      if (!expiryDate) return null;
+                      const now = new Date();
+                      const daysLeft = differenceInDays(expiryDate, now);
+                      return (
+                        <div className="text-xs text-muted-foreground mt-1.5 space-y-0.5">
+                          <div>Your plan renews / expires: <span className="font-medium text-foreground">{format(expiryDate, "MMM d, yyyy")}</span></div>
+                          <div>
+                            {daysLeft < 0 ? (
+                              <span className="font-medium text-destructive">Expired</span>
+                            ) : daysLeft === 0 ? (
+                              <span className="font-medium text-amber-600">Expires today</span>
+                            ) : (
+                              <span className="font-medium text-foreground">{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {ownedOnlineSlotMax > 0 && user?.uid ? (
+                      <div className="text-xs text-muted-foreground mt-1.5">
+                        Your online company slots:{" "}
+                        <span className="font-medium text-foreground">{onlineSlotUsed}</span> /{" "}
+                        <span className="font-medium text-foreground">{ownedOnlineSlotMax}</span>
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-muted-foreground mt-1.5">
+                      Max users per company (your plan):{" "}
+                      <span className="font-medium text-foreground">{ownedMaxUsersOnline}</span> online
+                      {ownedMaxUsersLocal !== ownedMaxUsersOnline ? (
+                        <>
+                          , <span className="font-medium text-foreground">{ownedMaxUsersLocal}</span> local
+                        </>
+                      ) : null}
+                    </div>
+                    {hasOwnedCompanies && (maxAttGB > 0 || maxStorGB > 0) ? (
+                      <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
+                        {maxAttGB > 0 ? (
+                          <div>
+                            Attachments (your companies):{" "}
+                            <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
+                            <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
+                          </div>
+                        ) : null}
+                        {maxStorGB > 0 ? (
+                          <div>
+                            Storage (your account):{" "}
+                            <span className="font-medium text-foreground">
+                              {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}
+                            </span>{" "}
+                            MB used /{" "}
+                            <span className="font-medium text-foreground">
+                              {userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}
+                            </span>{" "}
+                            MB free
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {!hasOwnedCompanies && (maxAttGB > 0 || maxStorGB > 0) ? (
+                      <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
+                        {maxAttGB > 0 ? (
+                          <div>
+                            Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
+                            <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
+                          </div>
+                        ) : null}
+                        {maxStorGB > 0 ? (
+                          <div>
+                            Storage: <span className="font-medium text-foreground">{userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}</span> MB used /{" "}
+                            <span className="font-medium text-foreground">{userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}</span> MB free
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <DropdownMenuItem
+                      onClick={handleLogout}
+                      className="mt-3 py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
+                    >
+                      <LogOut className="mr-2 h-4 w-4 shrink-0" />
+                      <span>Log out</span>
+                    </DropdownMenuItem>
+                  </div>
+                  </ProfileDropdownPlanCard>
+                  <ProfileDropdownPlanCard
+                    borderClassName="border-blue-500"
+                    tone="sky"
+                    roundedClassName="rounded-b-lg rounded-t-none"
+                  >
+                  <div className="space-y-1.5">
+                    <div className="text-xs text-muted-foreground">This company (shared)</div>
+                    <div className="text-xs font-medium text-foreground break-words" title={company.name}>
+                      {company.name}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-xs text-muted-foreground">Owner plan</span>
+                      <Badge variant="outline" className="shrink-0 text-xs">{selectedCompanyPlanName}</Badge>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Sync devices (owner plan): up to{" "}
+                      <span className="font-medium text-foreground">{selectedCompanyMaxDevices}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Max users (this company):{" "}
+                      <span className="font-medium text-foreground">{thisCompanyMaxUsers}</span>
+                    </div>
+                  </div>
+                  </ProfileDropdownPlanCard>
+                </div>
+                )}
               </div>
-            </>
-          )}
+          ) : null}
 
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={handleLogout} className="py-2.5 cursor-pointer">
-            <LogOut className="mr-2 h-4 w-4 shrink-0" />
-            <span>Log out</span>
-          </DropdownMenuItem>
+          {!company ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout} className="py-2.5 px-3 mx-0 rounded-none cursor-pointer w-full">
+                <LogOut className="mr-2 h-4 w-4 shrink-0" />
+                <span>Log out</span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 

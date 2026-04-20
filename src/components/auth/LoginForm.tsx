@@ -13,7 +13,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -30,6 +30,12 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { auth } from "@/lib/firebase";
+import {
+  REMEMBER_EMAIL_ENABLED_KEY,
+  REMEMBER_EMAIL_KEY,
+  readRememberEmailEnabled,
+  readRememberedEmail,
+} from "@/lib/loginRememberEmail";
 
 // One-time handling of redirect result (survives Strict Mode double-mount so we don't consume result twice)
 let redirectResultHandledThisLoad = false;
@@ -39,14 +45,16 @@ const formSchema = z.object({
   password: z.string().min(6, { message: "Password must be at least 6 characters." }),
 });
 
-const REMEMBER_EMAIL_KEY = "remembered_login_email";
-const REMEMBER_EMAIL_ENABLED_KEY = "remembered_login_email_enabled";
+/** Never add a key for password — only email may be persisted when "Remember email" is on. */
 
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
-  const [rememberEmail, setRememberEmail] = useState(false);
+  const [rememberEmail, setRememberEmail] = useState(() => readRememberEmailEnabled());
+  /** Blocks browser autofill into empty fields when "Remember email" is off (readonly until focus). */
+  const [emailAutofillGuard, setEmailAutofillGuard] = useState(() => !readRememberEmailEnabled());
+  const [passwordAutofillGuard, setPasswordAutofillGuard] = useState(() => !readRememberEmailEnabled());
   const router = useRouter();
   const { toast } = useToast();
 
@@ -84,34 +92,45 @@ export function LoginForm() {
       });
   }, [router, toast]);
 
+  useLayoutEffect(() => {
+    const enabled = readRememberEmailEnabled();
+    setRememberEmail(enabled);
+    if (!enabled) {
+      form.reset({ email: "", password: "" });
+      setEmailAutofillGuard(true);
+      setPasswordAutofillGuard(true);
+    } else {
+      const saved = readRememberedEmail();
+      form.reset({ email: saved, password: "" });
+      setEmailAutofillGuard(false);
+      setPasswordAutofillGuard(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- login entry: sync storage once before paint
+  }, []);
+
+  // Browsers often autofill after layout; clear again if user did not opt in to remembered email.
   useEffect(() => {
-    // Prefill email only when user explicitly opted in previously.
-    try {
-      const enabled = localStorage.getItem(REMEMBER_EMAIL_ENABLED_KEY) === "1";
-      setRememberEmail(enabled);
-      const savedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY);
-      if (enabled && savedEmail) {
-        form.setValue("email", savedEmail);
-      }
-    } catch (_) {}
-  }, [form]);
+    if (readRememberEmailEnabled()) return;
+    const timeouts = [50, 200, 600].map((ms) =>
+      window.setTimeout(() => {
+        if (!readRememberEmailEnabled()) {
+          form.setValue("email", "");
+          form.setValue("password", "");
+        }
+      }, ms)
+    );
+    return () => timeouts.forEach(clearTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
     try {
-      // Preference ko login result se independent persist karo so app restart par stable rahe.
-      try {
-        localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, rememberEmail ? "1" : "0");
-        if (rememberEmail) {
-          localStorage.setItem(REMEMBER_EMAIL_KEY, values.email.trim());
-        }
-      } catch (_) {}
-
       await (isSignUp
         ? createUserWithEmailAndPassword(auth, values.email, values.password)
         : signInWithEmailAndPassword(auth, values.email, values.password));
 
-      // Persist only email preference; never store password.
+      // After successful auth only: persist email if opted in — password is never written to storage.
       try {
         if (rememberEmail) {
           localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, "1");
@@ -119,9 +138,12 @@ export function LoginForm() {
         } else {
           localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, "0");
           localStorage.removeItem(REMEMBER_EMAIL_KEY);
+          setEmailAutofillGuard(true);
+          setPasswordAutofillGuard(true);
         }
       } catch (_) {}
 
+      form.setValue("password", "");
       router.push("/company");
 
     } catch (error: any) {
@@ -212,7 +234,7 @@ export function LoginForm() {
   return (
     <div className="rounded-lg border bg-card p-6 shadow-sm">
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
           <FormField
             control={form.control}
             name="email"
@@ -220,7 +242,16 @@ export function LoginForm() {
               <FormItem>
                 <FormLabel>Email</FormLabel>
                 <FormControl>
-                  <Input placeholder="name@example.com" {...field} />
+                  <Input
+                    placeholder="name@example.com"
+                    {...field}
+                    readOnly={emailAutofillGuard}
+                    autoComplete={rememberEmail ? "username" : "off"}
+                    onFocus={(e) => {
+                      setEmailAutofillGuard(false);
+                      field.onFocus?.(e);
+                    }}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -233,7 +264,19 @@ export function LoginForm() {
               <FormItem>
                 <FormLabel>Password</FormLabel>
                 <FormControl>
-                  <Input type="password" placeholder="••••••••" {...field} />
+                  <Input
+                    type="password"
+                    placeholder="••••••••"
+                    {...field}
+                    readOnly={passwordAutofillGuard}
+                    autoComplete={
+                      isSignUp ? "new-password" : rememberEmail ? "current-password" : "new-password"
+                    }
+                    onFocus={(e) => {
+                      setPasswordAutofillGuard(false);
+                      field.onFocus?.(e);
+                    }}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -247,16 +290,29 @@ export function LoginForm() {
               onChange={(event) => {
                 const next = event.target.checked;
                 setRememberEmail(next);
-                // Toggle time pe hi preference save karo (login ke baad reset na lage).
                 try {
                   localStorage.setItem(REMEMBER_EMAIL_ENABLED_KEY, next ? "1" : "0");
-                  if (!next) localStorage.removeItem(REMEMBER_EMAIL_KEY);
+                  if (next) {
+                    const saved = localStorage.getItem(REMEMBER_EMAIL_KEY);
+                    form.setValue("email", saved ?? "");
+                    setEmailAutofillGuard(false);
+                    setPasswordAutofillGuard(false);
+                  } else {
+                    form.setValue("email", "");
+                    form.setValue("password", "");
+                    localStorage.removeItem(REMEMBER_EMAIL_KEY);
+                    setEmailAutofillGuard(true);
+                    setPasswordAutofillGuard(true);
+                  }
                 } catch (_) {}
               }}
               className="h-4 w-4 rounded border-input"
             />
             Remember email
           </label>
+          <p className="text-xs text-muted-foreground">
+            Only the email can be saved on this device. Your password is never stored.
+          </p>
           <Button type="submit" className="w-full" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {isSignUp ? "Sign Up with Email" : "Sign In with Email"}
@@ -268,7 +324,20 @@ export function LoginForm() {
             {isSignUp ? "Already have an account?" : "Don't have an account?"}{' '}
             <Button variant="link" className="p-0 h-auto" onClick={() => {
                 setIsSignUp(!isSignUp);
-                form.reset();
+                form.reset({ email: "", password: "" });
+                try {
+                  const enabled = readRememberEmailEnabled();
+                  setRememberEmail(enabled);
+                  if (enabled) {
+                    const saved = readRememberedEmail();
+                    if (saved) form.setValue("email", saved);
+                    setEmailAutofillGuard(false);
+                    setPasswordAutofillGuard(false);
+                  } else {
+                    setEmailAutofillGuard(true);
+                    setPasswordAutofillGuard(true);
+                  }
+                } catch (_) {}
             }}>
                 {isSignUp ? "Sign In" : "Sign Up"}
             </Button>

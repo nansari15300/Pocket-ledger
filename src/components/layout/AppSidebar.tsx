@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { signOut } from "firebase/auth";
+import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 
@@ -52,7 +52,7 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { firestore, auth } from "@/lib/firebase";
+import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import type { Permission } from "@/lib/permissions";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
@@ -370,13 +370,14 @@ export function AppSidebar() {
   const handleLogout = async () => {
     const { clearNavigationMemory } = await import("@/lib/navigation-memory");
     clearNavigationMemory();
+    pruneRememberedLoginEmailIfDisabled();
     // Local guest logout: local session band karke user ko online login page par le jao.
     if (isLocalGuestEnabled()) {
       disableLocalGuest();
       router.replace("/");
       return;
     }
-    await signOut(auth);
+    await signOutWithFirestoreTeardown(auth);
     // Firebase user logout ke baad explicit login redirect to avoid stale dashboard screen.
     router.replace("/");
   };

@@ -528,7 +528,7 @@ export default function BillingPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Downgrade failed");
-      toast({ title: "Plan downgraded", description: "Your subscription tier was updated." });
+      toast({ title: "Plan updated", description: "Your subscription tier was updated." });
     } catch (e: unknown) {
       toast({
         variant: "destructive",
@@ -580,8 +580,10 @@ export default function BillingPage() {
     return { text: "No", enabled: false };
   };
 
+  const isPaidCompany = currentPlanId !== "basic";
+  /** Paid accounts: plan changes only via table (no donation / free checkout block below). */
   const showStandardCheckout =
-    selectedPlanDetails.isFree || (currentPlanId === "basic" && !selectedPlanDetails.isFree);
+    !isPaidCompany && (!selectedPlanDetails.isFree || selectedPlanId === "basic");
 
   if (loading || !selectedPlanDetails) {
     return (
@@ -756,7 +758,6 @@ export default function BillingPage() {
                   {plans.map((p) => {
                     const isSelected = p.id === selectedPlanId;
                     const change = classifyPlanChange(currentPlanId, p.id);
-                    const isPaidCompany = currentPlanId !== "basic";
                     const curPlanRow = plans.find((x) => x.id === currentPlanId);
                     const loadPay = prorationLoading === `pay:${p.id}`;
                     const loadDown = downgradeLoading === `down:${p.id}`;
@@ -894,33 +895,47 @@ export default function BillingPage() {
                           </Button>
                         );
                     } else if (change === "downgrade") {
-                      if (p.isFree && isPaidCompany) {
-                        footerInner = (
+                      footerInner = (
+                        <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
+                          {downgradeHint}
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full"
+                            disabled={loadDown || !companyId}
+                            onClick={() => handleDowngrade(p.id)}
+                          >
+                            {loadDown ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : p.isFree ? (
+                              "Select this plan"
+                            ) : (
+                              `Downgrade to ${p.name}`
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    } else if (p.isFree && p.id !== currentPlanId) {
+                      footerInner = (
+                        <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                           <p className="text-xs text-muted-foreground text-center leading-snug px-1">
-                            The free plan is not available as a downgrade while your paid subscription is active. Use
-                            support if you need to close a paid account.
+                            No payment — your company switches to this plan immediately.
                           </p>
-                        );
-                      } else {
-                        footerInner = (
-                          <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
-                            {downgradeHint}
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              className="w-full"
-                              disabled={loadDown || !companyId}
-                              onClick={() => handleDowngrade(p.id)}
-                            >
-                              {loadDown ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                `Downgrade to ${p.name}`
-                              )}
-                            </Button>
-                          </div>
-                        );
-                      }
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full"
+                            disabled={loadDown || !companyId}
+                            onClick={() => handleDowngrade(p.id)}
+                          >
+                            {loadDown ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Select this plan"
+                            )}
+                          </Button>
+                        </div>
+                      );
                     } else if (!p.isFree && isPaidCompany) {
                       footerInner = (
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">

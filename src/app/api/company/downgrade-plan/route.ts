@@ -3,7 +3,7 @@ import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { type PlanId } from "@/config/plans";
-import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
+import { getEffectivePlanPrices, getEffectivePlanIsFree } from "@/lib/server/getEffectivePlanPrices";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import { classifyPlanChange, quoteDowngradeNewExpiry, daysLeftRounded } from "@/lib/subscriptionPlanMath";
 
@@ -61,6 +61,62 @@ export async function POST(req: NextRequest) {
     }
 
     const currentPlanId = normalizeCompanyPlanId(cdata.planId);
+    if (currentPlanId === targetPlanId) {
+      return NextResponse.json({ error: "Already on this plan" }, { status: 400 });
+    }
+
+    const targetIsFree = await getEffectivePlanIsFree(targetPlanId);
+    /** Any admin-marked free tier: one-click switch (upgrade/downgrade) without payment. */
+    if (targetIsFree) {
+      const nowMs = Date.now();
+      const currentExpiryMs = cdata.planExpiry?.toMillis?.() ?? null;
+      const previousDaysLeft = daysLeftRounded(nowMs, currentExpiryMs);
+      const planChangeHistory = {
+        oldPlanId: currentPlanId,
+        newPlanId: targetPlanId,
+        oldExpiryMs: currentExpiryMs,
+        newExpiryMs: null as number | null,
+        oldDaysLeft: previousDaysLeft,
+        newDaysLeft: 0,
+        grossNpr: null as number | null,
+        creditNpr: null as number | null,
+        netNpr: 0,
+        termKey: null as string | null,
+        changeKind: "downgrade" as const,
+      };
+      const paymentDocId = `free_select_${uuidv4()}`;
+      const paymentRef = companyRef.collection("payments").doc(paymentDocId);
+      const batch = db.batch();
+      batch.update(companyRef, {
+        planId: targetPlanId,
+        planExpiry: admin.firestore.FieldValue.delete(),
+        planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      batch.set(paymentRef, {
+        paymentId: paymentDocId,
+        userId: decoded.uid,
+        planId: targetPlanId,
+        amount: 0,
+        currency: "npr",
+        gateway: "internal",
+        status: "completed",
+        billingIntent: "subscribe",
+        planChangeFrom: currentPlanId,
+        planChangeTo: targetPlanId,
+        planChangeHistory,
+        planChangeOneTime: true,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      const histRef = companyRef.collection("subscription_history").doc();
+      batch.set(histRef, {
+        ...planChangeHistory,
+        source: "free_plan_select",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      await batch.commit();
+      return NextResponse.json({ ok: true, planChangeHistory });
+    }
+
     const kind = classifyPlanChange(currentPlanId, targetPlanId);
     if (kind !== "downgrade") {
       return NextResponse.json(

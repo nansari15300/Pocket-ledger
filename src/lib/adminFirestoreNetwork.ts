@@ -10,6 +10,7 @@ import {
   firestoreNetworkDisabledByApi,
   markFirestoreNetworkDisabledByApi,
   queueFirestoreNetworkOp,
+  settleAfterFirestoreNetworkEnabled,
 } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
@@ -24,6 +25,7 @@ export async function enterAdminFirestoreOnline(): Promise<void> {
         // `/admin` tab hi enable jahan pehle `disableNetwork` lag chuka ho — warna duplicate enable = da08.
         if (firestoreNetworkDisabledByApi) {
           await enableNetwork(firestore);
+          await settleAfterFirestoreNetworkEnabled();
           markFirestoreNetworkDisabledByApi(false);
         }
       } catch {

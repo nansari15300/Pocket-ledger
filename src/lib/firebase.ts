@@ -1,9 +1,10 @@
 
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, signOut as firebaseAuthSignOut, type Auth } from 'firebase/auth';
 import { disableNetwork, enableNetwork, getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
+import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAtHvZ3PY50rwF5oqHjtRMjbec6NzMl6dM",
@@ -18,6 +19,16 @@ const firebaseConfig = {
 const apps = getApps();
 const app = apps.length > 0 ? apps[0] : initializeApp(firebaseConfig);
 const auth = getAuth(app);
+
+/** Window to mute Firestore watch-teardown noise during / after `signOutWithFirestoreTeardown` (ca9 / b815). */
+let firestoreWatchTeardownSuppressionUntil = 0;
+
+function isFirestoreWatchTeardownAssertionMessage(message: string): boolean {
+  return (
+    message.includes('INTERNAL ASSERTION FAILED') &&
+    (message.includes('ca9') || message.includes('b815') || message.includes('"ve":-1'))
+  );
+}
 
 // Suppress Firebase console errors for offline/unavailable; track PERMISSION_DENIED (skip when logged out)
 if (typeof window !== 'undefined') {
@@ -41,6 +52,13 @@ if (typeof window !== 'undefined') {
     }
     // Firebase Auth: Google endpoints tak reach nahi (Wi‑Fi flap, firewall) — dev console spam kam.
     if (errorMessage.includes('auth/network-request-failed')) {
+      return;
+    }
+    // Firestore 12.12: signOut + snapshot teardown → ca9; AsyncQueue sometimes wraps it as b815 (SDK bug).
+    if (
+      Date.now() < firestoreWatchTeardownSuppressionUntil &&
+      isFirestoreWatchTeardownAssertionMessage(errorMessage)
+    ) {
       return;
     }
     // PERMISSION_DENIED after logout is expected (listeners still firing with null auth) — don't log
@@ -84,6 +102,44 @@ if (typeof window !== 'undefined') {
     }
     originalError.apply(console, args);
   };
+
+  const stringifyReason = (reason: unknown): string => {
+    if (reason instanceof Error) return `${reason.message}\n${reason.stack ?? ''}`;
+    if (typeof reason === 'string') return reason;
+    try {
+      return JSON.stringify(reason);
+    } catch {
+      return String(reason);
+    }
+  };
+
+  window.addEventListener(
+    'unhandledrejection',
+    (event) => {
+      const msg = stringifyReason(event.reason);
+      if (
+        Date.now() < firestoreWatchTeardownSuppressionUntil &&
+        isFirestoreWatchTeardownAssertionMessage(msg)
+      ) {
+        event.preventDefault();
+      }
+    },
+    { capture: true }
+  );
+
+  window.addEventListener(
+    'error',
+    (event) => {
+      const msg = `${event.message ?? ''}\n${(event.error as Error)?.message ?? ''}\n${(event.error as Error)?.stack ?? ''}`;
+      if (
+        Date.now() < firestoreWatchTeardownSuppressionUntil &&
+        isFirestoreWatchTeardownAssertionMessage(msg)
+      ) {
+        event.preventDefault();
+      }
+    },
+    { capture: true }
+  );
 }
 const firestore = getFirestore(app);
 const storage = getStorage(app);
@@ -104,6 +160,15 @@ export function queueFirestoreNetworkOp<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * `enableNetwork` ke turant baad active `onSnapshot` + watch stream retarget overlap → Firestore 12.12 INTERNAL ASSERTION (ca9, ve:-1).
+ * Ek chhota yield + delay se multiplexer state settle ho jata hai.
+ */
+export async function settleAfterFirestoreNetworkEnabled(): Promise<void> {
+  await new Promise<void>((r) => queueMicrotask(r));
+  await new Promise<void>((r) => setTimeout(r, 50));
+}
+
+/**
  * Sirf jab `disableNetwork(firestore)` successfully apply ho chuka ho — flush tab hi `enableNetwork` chalayega.
  * Har flush par `enableNetwork` + active `onSnapshot` race = Firestore 12.x INTERNAL ASSERTION (ca9 / ve:-1) offline→online.
  */
@@ -114,34 +179,56 @@ export function markFirestoreNetworkDisabledByApi(disabled: boolean): void {
   firestoreNetworkDisabledByApi = disabled;
 }
 
+async function syncFirestoreNetworkFromLocalConfigInner(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const mode = window.localStorage.getItem('dataSourceMode');
+    const localFirst =
+      !mode || mode === 'local' ||
+      process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === '1' ||
+      process.env.NEXT_PUBLIC_STATIC_BUILD === '1';
+    const forceOff =
+      process.env.NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK === '1' && localFirst;
+    if (forceOff) {
+      await disableNetwork(firestore);
+      firestoreNetworkDisabledByApi = true;
+    } else {
+      if (firestoreNetworkDisabledByApi) {
+        await enableNetwork(firestore);
+        await settleAfterFirestoreNetworkEnabled();
+      }
+      firestoreNetworkDisabledByApi = false;
+    }
+  } catch {
+    // non-blocking
+  }
+}
+
+export async function enqueueSyncFirestoreNetworkFromLocalConfig(): Promise<void> {
+  await queueFirestoreNetworkOp(syncFirestoreNetworkFromLocalConfigInner);
+}
+
+/**
+ * Logout: `disableNetwork` immediately before/after `signOut` often *worsens* Firestore 12.12 watch races (ca9 → b815).
+ * Strategy: sign out only, short pause so listeners can detach, then mute known SDK assertion noise briefly.
+ */
+export async function signOutWithFirestoreTeardown(authInstance: Auth): Promise<void> {
+  if (typeof window !== 'undefined') {
+    firestoreWatchTeardownSuppressionUntil = Date.now() + 20_000;
+  }
+  // Company picker: dual onSnapshot (owned + shared) + signOut = Firestore 12.12 ca9/b815 — detach first.
+  detachCompanyPickerFirestoreListenersIfAny();
+  await new Promise<void>((r) => setTimeout(r, 80));
+  await firebaseAuthSignOut(authInstance);
+  // Let snapshot teardown run before navigation unmounts the dashboard tree.
+  await new Promise<void>((r) => setTimeout(r, 450));
+}
+
 if (typeof window !== 'undefined') {
   // Pehle yahan local-first = disableNetwork() tha — outbox flush / getDocFromServer tab server tak kabhi nahi pahunchte.
   // Optional: NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK=1 se purani "offline-only" behaviour.
   const applyFirestoreNetworkMode = async () => {
-    await queueFirestoreNetworkOp(async () => {
-      try {
-        const mode = window.localStorage.getItem('dataSourceMode');
-        const localFirst =
-          !mode || mode === 'local' ||
-          process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === '1' ||
-          process.env.NEXT_PUBLIC_STATIC_BUILD === '1';
-        const forceOff =
-          process.env.NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK === '1' && localFirst;
-        if (forceOff) {
-          await disableNetwork(firestore);
-          firestoreNetworkDisabledByApi = true;
-        } else {
-          // Default Firestore session is already online — har load/HMR par `enableNetwork` =
-          // PersistentWriteStream pe redundant handshake → SDK 12.8 INTERNAL ASSERTION da08.
-          if (firestoreNetworkDisabledByApi) {
-            await enableNetwork(firestore);
-          }
-          firestoreNetworkDisabledByApi = false;
-        }
-      } catch {
-        // non-blocking
-      }
-    });
+    await enqueueSyncFirestoreNetworkFromLocalConfig();
   };
 
   void applyFirestoreNetworkMode();

@@ -13,8 +13,8 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { signOut } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
+import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import { useToast } from "@/hooks/use-toast";
 import { MobileFloatingButton } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
@@ -34,7 +34,6 @@ import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
 import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/deviceLimitClient";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +46,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+
+function signOutWithLoginCleanup() {
+  pruneRememberedLoginEmailIfDisabled();
+  return signOutWithFirestoreTeardown(auth);
+}
 
 function DeviceLimitBanner() {
   const { deviceLimitReached, deviceCount, maxDevices } = useDeviceLimitContext();
@@ -238,7 +242,7 @@ function DeviceLimitOverlay() {
           <Link href="/company" className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
             Switch company
           </Link>
-          <Button variant="outline" onClick={() => signOut(auth)} className="rounded-md px-4 py-2 text-sm">
+          <Button variant="outline" onClick={() => void signOutWithLoginCleanup()} className="rounded-md px-4 py-2 text-sm">
             Logout
           </Button>
         </div>
@@ -501,7 +505,7 @@ function DeviceLimitOverlay() {
             </Link>
             <Button
               variant="outline"
-              onClick={() => signOut(auth)}
+              onClick={() => void signOutWithLoginCleanup()}
               className="rounded-md px-4 py-2 text-sm"
             >
               Logout
@@ -553,7 +557,7 @@ function DeviceLimitOverlay() {
             </Link>
             <Button
               variant="outline"
-              onClick={() => signOut(auth)}
+              onClick={() => void signOutWithLoginCleanup()}
               className="rounded-md px-4 py-2 text-sm"
             >
               Logout
@@ -583,7 +587,7 @@ function DeviceLimitOverlay() {
             {rejoining ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             <span className={rejoining ? "ml-2" : ""}>{rejoining ? "Rejoining…" : "Rejoin"}</span>
           </Button>
-          <Button variant="outline" onClick={() => signOut(auth)} className="rounded-md px-4 py-2 text-sm">
+          <Button variant="outline" onClick={() => void signOutWithLoginCleanup()} className="rounded-md px-4 py-2 text-sm">
             Logout
           </Button>
         </div>

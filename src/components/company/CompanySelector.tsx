@@ -36,10 +36,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "../ui/input";
 import { toast } from "@/hooks/use-toast";
-import { collection, onSnapshot, query, where, doc, getDoc } from "firebase/firestore";
-import { auth, firestore } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { signOut } from "firebase/auth";
+import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import {
   shouldPromptCompanyUnlock,
@@ -121,8 +121,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
   }>({ type: null, company: null });
-  const [companies, setCompanies] = useState<CompanyData[]>(initialCompanies);
-  const [loading, setLoading] = useState(true);
+  const [companies, setCompanies] = useState<CompanyData[]>(() =>
+    (initialCompanies ?? []).filter((c) => !c.isDeleted)
+  );
 
   // States for password dialog
   const [companyToUnlock, setCompanyToUnlock] = useState<CompanyData | null>(null);
@@ -135,45 +136,20 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   /** Shared cloud unlock: sirf username yaad — `onlineSharedUnlockRememberUsername`. */
   const [rememberSharedUsername, setRememberSharedUsername] = useState(false);
 
-    useEffect(() => {
+  useEffect(() => {
     if (isLocalOnlyMode()) {
-      // Local-first: registry list (owned + mirrored cloud/shared); online shared bhi select kar sakte ho
-      setLoading(contextCompanyLoading);
       const raw = contextCompanies || [];
       setCompanies(raw.filter((c) => !c.isDeleted));
       return;
     }
+    // Online: parent `/company` page is the single source — Firestore listeners + loading gate live there only.
+    // Duplicate listeners here used to merge with stale `prev` and briefly showed the previous account's companies after login swap.
     if (!user) {
-      setLoading(false);
+      setCompanies([]);
       return;
     }
-    setLoading(true);
-
-    const ownedQuery = query(collection(firestore, "companies"), where("ownerId", "==", user.uid));
-    const sharedQuery = query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email));
-
-    const unsubOwned = onSnapshot(ownedQuery, (snap) => {
-      const owned = snap.docs.map(doc => ({ id: doc.id, ...doc.data(), isOwned: true } as CompanyData)).filter(c => !c.isDeleted);
-      setCompanies(prev => [...owned, ...prev.filter(p => !p.isOwned)]);
-    });
-
-    const unsubShared = onSnapshot(sharedQuery, (snap) => {
-      const shared = snap.docs.map(doc => ({ id: doc.id, ...doc.data(), isOwned: false } as CompanyData)).filter(c => !c.isDeleted);
-       setCompanies(prev => [...shared, ...prev.filter(p => p.isOwned)]);
-    });
-    
-     // Initial load state
-    Promise.all([
-      new Promise(res => { const u = onSnapshot(ownedQuery, () => { res(true); u(); }); }),
-      new Promise(res => { const u = onSnapshot(sharedQuery, () => { res(true); u(); }); })
-    ]).then(() => setLoading(false));
-
-    return () => {
-      unsubOwned();
-      unsubShared();
-    };
-
-  }, [user, contextCompanies, contextCompanyLoading]);
+    setCompanies((initialCompanies ?? []).filter((c) => !c.isDeleted));
+  }, [user, contextCompanies, contextCompanyLoading, initialCompanies]);
 
 
   const handleSelectCompany = (company: CompanyData) => {
@@ -319,12 +295,13 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   const handleLogout = async () => {
     const { clearNavigationMemory } = await import("@/lib/navigation-memory");
     clearNavigationMemory();
+    pruneRememberedLoginEmailIfDisabled();
     if (isLocalGuestEnabled()) {
       disableLocalGuest();
       router.replace("/");
       return;
     }
-    await signOut(auth);
+    await signOutWithFirestoreTeardown(auth);
     router.replace("/");
   };
 

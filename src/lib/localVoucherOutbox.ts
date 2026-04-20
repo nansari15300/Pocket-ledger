@@ -14,7 +14,13 @@ import {
   Timestamp,
   enableNetwork,
 } from "firebase/firestore";
-import { firestore, firestoreNetworkDisabledByApi, queueFirestoreNetworkOp, markFirestoreNetworkDisabledByApi } from "@/lib/firebase";
+import {
+  firestore,
+  firestoreNetworkDisabledByApi,
+  queueFirestoreNetworkOp,
+  markFirestoreNetworkDisabledByApi,
+  settleAfterFirestoreNetworkEnabled,
+} from "@/lib/firebase";
 import { getBrowserDb } from "@/lib/localSqlite";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -264,6 +270,7 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
       if (!firestoreNetworkDisabledByApi) return;
       try {
         await enableNetwork(firestore);
+        await settleAfterFirestoreNetworkEnabled();
       } catch {
         /* ignore */
       }

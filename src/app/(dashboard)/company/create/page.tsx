@@ -9,6 +9,7 @@ import { CreateCompanyDialog } from "@/components/company/CreateCompanyDialog";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { registerCompanyPickerFirestoreDetach } from "@/lib/companyPickerFirestoreDetach";
 
 function CreateCompanyPageLoading() {
   return (
@@ -36,6 +37,7 @@ function CreateCompanyPageContent() {
   // Hydrate: /company/create par hamesha create flow dikhao — pehle yahan `replace("/company")` tha jis se button dead lagta tha.
   useEffect(() => {
     if (isLocalOnlyMode()) {
+      registerCompanyPickerFirestoreDetach(null);
       // Local-first: jab tak SQLite/registry load ho rahi ho wait karo.
       if (authLoading || companyContextLoading) {
         setCheckingCompanies(true);
@@ -49,6 +51,7 @@ function CreateCompanyPageContent() {
     }
 
     if (authLoading || !user || !user.email) {
+      registerCompanyPickerFirestoreDetach(null);
       if (!authLoading && !user) {
         router.replace("/");
       }
@@ -95,10 +98,16 @@ function CreateCompanyPageContent() {
 
     const timeoutId = setTimeout(() => setSettled(false), 10000);
 
-    return () => {
+    const cleanupListeners = () => {
       unsubOwned();
       unsubShared();
       clearTimeout(timeoutId);
+    };
+    registerCompanyPickerFirestoreDetach(cleanupListeners);
+
+    return () => {
+      registerCompanyPickerFirestoreDetach(null);
+      cleanupListeners();
     };
   }, [user, authLoading, router, allCompanies, companyContextLoading]);
 
