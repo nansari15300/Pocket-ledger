@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 
 const STORAGE_KEY = "app-rows-per-page";
 const DEFAULT = 20;
-const MIN = 1;
+const MIN = 10;
 const MAX = 100;
 
 function getStored(overrideDefault?: number): number {
@@ -33,11 +33,20 @@ function setStored(value: number) {
  * Persisted in localStorage so the same value is used everywhere and survives refresh.
  */
 export function useRowsPerPage(defaultOverride?: number): [number, (value: number) => void] {
-  const fallback = defaultOverride != null && Number.isFinite(defaultOverride) ? Math.max(MIN, Math.min(MAX, defaultOverride)) : DEFAULT;
+  const fallback =
+    defaultOverride != null && Number.isFinite(defaultOverride)
+      ? Math.max(MIN, Math.min(MAX, defaultOverride))
+      : DEFAULT;
   const [rowsPerPage, setState] = useState(() => getStored(fallback));
 
   const setRowsPerPage = useCallback((value: number) => {
-    const n = Math.min(MAX, Math.max(MIN, Math.floor(Number(value) || DEFAULT)));
+    const parsed = Number(value);
+    // Keep `All` (0) ephemeral for current view only; don't persist 0 globally.
+    if (parsed === 0) {
+      setState(0);
+      return;
+    }
+    const n = Math.min(MAX, Math.max(MIN, Math.floor(parsed || DEFAULT)));
     setState(n);
     setStored(n);
   }, []);

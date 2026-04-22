@@ -9,7 +9,12 @@ import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
@@ -35,20 +40,24 @@ export function ItemGroupList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings.rows.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
-  
+  // Same quick filters as ExpenseGroupList — footer bar needs this state + filterAndSortEntityGroups.
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+
   const filteredAndSortedGroups = useMemo(() => {
-    return groups
-      .filter((group) => {
-        // Filter out report-only + system parent groups
-        const isReportOnly = (group as any).isReportOnly === true;
-        const isSystemParent =
-          (group as any).isSystemReserved === true ||
-          isSystemParentGroup("item_groups", (group as any).id);
-        if (isReportOnly || isSystemParent) return false;
-        return group.name && group.name.toLowerCase().includes(searchTerm.toLowerCase());
-      })
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [groups, searchTerm]);
+    const base = (groups || []).filter((group) => {
+      const isReportOnly = (group as any).isReportOnly === true;
+      const isSystemParent =
+        (group as any).isSystemReserved === true ||
+        isSystemParentGroup("item_groups", (group as any).id);
+      if (isReportOnly || isSystemParent) return false;
+      return !!group.name;
+    });
+    let list = filterAndSortEntityGroups(base, searchTerm, quickFilter);
+    if (quickFilter === "default") {
+      list = [...list].sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+    }
+    return list;
+  }, [groups, searchTerm, quickFilter]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background">
@@ -141,6 +150,7 @@ export function ItemGroupList({
           )}
         </ul>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
   );
 }

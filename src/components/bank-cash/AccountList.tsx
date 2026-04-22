@@ -10,10 +10,14 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Landmark, Crown } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from 'next/link';
 import usePermissions from "@/hooks/usePermissions";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
 
 export function AccountList({
   accounts,
@@ -34,6 +38,7 @@ export function AccountList({
 }) {
   const { formatCurrency } = useDate();
   const { can } = usePermissions();
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
@@ -41,14 +46,35 @@ export function AccountList({
   const canViewSpecialBalance = can('view_special_account_balance');
 
   const filteredAndSortedAccounts = useMemo(() => {
+      const toDateMs = (raw: unknown): number => {
+        if (!raw) return 0;
+        if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? 0 : raw.getTime();
+        if (typeof (raw as { toDate?: () => Date }).toDate === "function") {
+          const d = (raw as { toDate: () => Date }).toDate();
+          return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+        }
+        const d = new Date(raw as any);
+        return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+      };
+      const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
       return accounts
         .filter(account => {
             if (account.isSpecial && !canViewSpecialAccount) return false;
-            // Add a check to ensure accountName exists before filtering
-            return account.accountName && account.accountName.toLowerCase().includes(searchTerm.toLowerCase());
+            if (!account.accountName || !account.accountName.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+            const bal = Number(account.balance || 0);
+            // Footer quick filters: list short/filter from same control on mobile + desktop.
+            if (quickFilter === "dr") return bal > 0;
+            if (quickFilter === "cr") return bal < 0;
+            if (quickFilter === "settled") return isSettled(bal);
+            if (quickFilter === "non_settled") return !isSettled(bal);
+            return true;
         })
-        .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [accounts, searchTerm, canViewSpecialAccount]);
+        .sort((a, b) => {
+          if (quickFilter === "name") return String(a.accountName || "").localeCompare(String(b.accountName || ""));
+          if (quickFilter === "date") return toDateMs(b.openingBalanceDate) - toDateMs(a.openingBalanceDate);
+          return Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0));
+        });
+  }, [accounts, searchTerm, canViewSpecialAccount, quickFilter]);
 
 
   return (
@@ -154,6 +180,7 @@ export function AccountList({
           )}
         </ul>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
   );
 }

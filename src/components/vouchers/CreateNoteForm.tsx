@@ -21,7 +21,13 @@ import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printe
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -78,7 +84,6 @@ function formatNoteFormValidationErrors(errors: FieldErrors<NoteFormValues>): st
 }
 
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.note && prefixes.note[0]) || "NOTE-";
-const MAX_FILE_SIZE_MB = 0.5;
 
 function getInitialFormValues(initialContext?: string, initialEntityId?: string): NoteFormValues {
     return {
@@ -137,9 +142,17 @@ export function CreateNoteForm({
   const [items, setItems] = useState<Item[]>([]);
   const [expenseAccounts, setExpenseAccounts] = useState<ExpenseAccount[]>([]);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   const initialFilesRef = useRef<string[]>([]);
-  /** Edit dialog: AddVoucherDialog live Firestore snapshot har ~1s naya voucher object deta hai — same id + user ne edit shuru kiya ho to reset mat chalao */
-  const syncedNoteVoucherIdRef = useRef<string | undefined>(undefined);
+  /** Edit: Sale/Payment jaisa — same `voucher.id` par live snapshot se bar-bar reset mat (attachments delete wipe) */
+  const lastResetVoucherIdRef = useRef<string | undefined>(undefined);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   /** Delete confirmation open state (only used when !compactFooter i.e. New Transaction → Note) */
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -213,32 +226,43 @@ export function CreateNoteForm({
 
   useEffect(() => { if (!voucher?.id) fetchVoucherNumber(); }, [voucher?.id, fetchVoucherNumber]);
 
-  // Run validation once when form mounts so Save/Save & Approve enable when required fields are pre-filled (e.g. from Income/Expense page)
-  useEffect(() => {
-    form.trigger();
-  }, [form]);
-
   useEffect(() => {
     if (!voucher) {
-      syncedNoteVoucherIdRef.current = undefined;
+      lastResetVoucherIdRef.current = undefined;
       return;
     }
     const vid = voucher.id as string | undefined;
-    if (vid && syncedNoteVoucherIdRef.current === vid && form.formState.isDirty) {
+    if (vid && lastResetVoucherIdRef.current === vid) {
       return;
     }
-    syncedNoteVoucherIdRef.current = vid;
+    if (vid) lastResetVoucherIdRef.current = vid;
 
+    const d =
+      voucher.date instanceof Date
+        ? voucher.date
+        : voucher.date?.toDate
+          ? voucher.date.toDate()
+          : new Date();
+    // Explicit schema fields only — spread `voucher` can leave voucherNumber undefined briefly vs zod.
     form.reset({
-      ...voucher,
-      date: voucher.date instanceof Date ? voucher.date : (voucher.date?.toDate ? voucher.date.toDate() : new Date()),
+      voucherNumber: String(voucher.voucherNumber ?? "").trim(),
+      date: d,
+      title: String(voucher.title ?? "").trim(),
+      content: typeof voucher.content === "string" ? voucher.content : "",
+      context: String(voucher.context ?? ""),
+      entityId: String(voucher.entityId ?? ""),
+    });
+    queueMicrotask(() => {
+      form.clearErrors();
     });
     if (voucher.fileUrls) {
       setFiles(voucher.fileUrls);
       initialFilesRef.current = Array.isArray(voucher.fileUrls) ? [...voucher.fileUrls] : [];
+      setSavePdfAsImage(shouldSuggestPdfAsImage(voucher.fileUrls));
     } else {
       setFiles([]);
       initialFilesRef.current = [];
+      setSavePdfAsImage(false);
     }
   }, [voucher, form]);
 
@@ -409,13 +433,12 @@ export function CreateNoteForm({
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -498,9 +521,19 @@ export function CreateNoteForm({
     setIsLoading(true);
 
     try {
-        let fileUrls = [...files.filter(f => typeof f === 'string')];
+        let filesForSave = files;
+        if (savePdfAsImage) {
+          const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+          try {
+            filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+          } finally {
+            sonnerToast.dismiss(convToast);
+          }
+        }
+
+        let fileUrls = [...filesForSave.filter(f => typeof f === 'string')];
         let preGeneratedVoucherId: string | undefined;
-        const toUpload = files.filter(f => typeof f !== 'string') as File[];
+        const toUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
 
         if (toUpload.length > 0) {
           const totalNewBytes = toUpload.reduce((s, f) => s + (f.size || 0), 0);
@@ -580,7 +613,13 @@ export function CreateNoteForm({
         if (saveAndNew) {
             form.reset(getInitialFormValues(initialContext, initialEntityId));
             setFiles([]);
+            setSavePdfAsImage(false);
+            initialFilesRef.current = [];
+            lastResetVoucherIdRef.current = undefined;
             fetchVoucherNumber();
+        } else {
+          initialFilesRef.current = [...fileUrls];
+          setFiles(fileUrls);
         }
 
         onSuccess?.();
@@ -890,6 +929,15 @@ export function CreateNoteForm({
                 <FormField control={form.control} name="content" render={({ field }: any) => (<FormItem><FormLabel>Details</FormLabel><FormControl><Textarea placeholder="Details..." {...field} rows={6} /></FormControl></FormItem>)} />
                 <div className="space-y-2">
                   <FormLabel>Attachments</FormLabel>
+                  {showPdfAsImageToggle && (
+                    <VoucherPdfAsImageToggle
+                      id="voucher-save-pdf-as-image-note"
+                      checked={savePdfAsImage}
+                      onCheckedChange={setSavePdfAsImage}
+                      disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                      className="mb-2"
+                    />
+                  )}
                   <RestrictedFileUploader>
                     <div className="flex flex-wrap gap-4">
                       {files.map((file, idx) => (
@@ -897,7 +945,11 @@ export function CreateNoteForm({
                           key={idx} 
                           file={file} 
                           attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
-                          onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== idx)) : undefined}
+                          onRemove={
+                            allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
+                              ? () => setFiles((prev) => prev.filter((_, i) => i !== idx))
+                              : undefined
+                          }
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />
                       ))}

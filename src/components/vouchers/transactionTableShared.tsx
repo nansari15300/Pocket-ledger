@@ -30,6 +30,8 @@ import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
 import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
+import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 export type Context =
   | "party"
@@ -60,11 +62,21 @@ export function OpeningBalanceFileCellContent({
   if (urls.length === 0) {
     return <span>-</span>;
   }
+  const singlePdfOpen =
+    urls.length === 1 && getAttachmentFormatLabel(urls[0]!) === "PDF"
+      ? (e: React.MouseEvent<HTMLDivElement>) => {
+          e.stopPropagation();
+          void openAttachmentInApp(urls[0]!, { kind: "pdf" });
+        }
+      : undefined;
+
   return (
     <AttachmentHoverPortal
       triggerClassName="inline-flex cursor-help"
+      onPreviewDoubleClick={singlePdfOpen}
       preview={
-        <div className="flex max-w-full flex-col gap-3">
+        // w-max: portal ke andar width-fit — max-w-full se chhoti strip + side margins na aaye
+        <div className="flex w-max max-w-none flex-col gap-3">
           {urls.map((url, idx) => (
             <SingleAttachmentHoverPreviewBody
               key={idx}
@@ -751,29 +763,39 @@ export const TransactionRow = React.memo(
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
-              <AttachmentHoverPortal
-                triggerClassName="inline-flex cursor-help"
-                preview={
-                  <div className="flex max-w-full flex-col gap-3">
-                    {(() => {
-                      const rowUrls = (transaction.fileUrls as string[])
-                        .map((x) => String(x).trim())
-                        .filter((s) => s.length > 0);
-                      return rowUrls.map((u, idx) => (
-                        <SingleAttachmentHoverPreviewBody
-                          key={`${u}-${idx}`}
-                          url={u}
-                          gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
-                        />
-                      ));
-                    })()}
-                  </div>
-                }
-              >
-                <span className="inline-flex cursor-help" aria-label="Has attachment">
-                  <CheckCircle className="h-4 w-4 text-green-600" />
-                </span>
-              </AttachmentHoverPortal>
+              (() => {
+                const rowUrls = (transaction.fileUrls as string[])
+                  .map((x) => String(x).trim())
+                  .filter((s) => s.length > 0);
+                const singlePdfOpen =
+                  rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
+                    ? (e: React.MouseEvent<HTMLDivElement>) => {
+                        e.stopPropagation();
+                        void openAttachmentInApp(rowUrls[0]!, { kind: "pdf" });
+                      }
+                    : undefined;
+                return (
+                  <AttachmentHoverPortal
+                    triggerClassName="inline-flex cursor-help"
+                    onPreviewDoubleClick={singlePdfOpen}
+                    preview={
+                      <div className="flex w-max max-w-none flex-col gap-3">
+                        {rowUrls.map((u, idx) => (
+                          <SingleAttachmentHoverPreviewBody
+                            key={`${u}-${idx}`}
+                            url={u}
+                            gallery={rowUrls.length > 1 ? { urls: rowUrls, startIndex: idx } : undefined}
+                          />
+                        ))}
+                      </div>
+                    }
+                  >
+                    <span className="inline-flex cursor-help" aria-label="Has attachment">
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                    </span>
+                  </AttachmentHoverPortal>
+                );
+              })()
             ) : (
               "-"
             )}

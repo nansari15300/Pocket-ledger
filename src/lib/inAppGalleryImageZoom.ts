@@ -12,6 +12,11 @@ function touchDistance(a: Touch, b: Touch): number {
 export type GalleryImageZoomApi = {
   zoomIn: () => void;
   zoomOut: () => void;
+  /** Entire image visible inside viewport (tall stitched JPEG shrinks to see full height). */
+  fitHeight: () => void;
+  /** Image width matches viewport width; scroll vertically to read (default on open). */
+  fitWidth: () => void;
+  /** @deprecated use fitHeight */
   fit: () => void;
   getScale: () => number;
   dispose: () => void;
@@ -44,8 +49,9 @@ export function mountGalleryImageZoom(
   imgWrap.style.cssText =
     "display:block;transform-origin:0 0;transition:transform 0.15s ease-out;will-change:transform";
 
+  /** Natural pixel size — scale transform se zoom; fit-width default ke liye max-height hata kar poora scroll */
   img.style.cssText =
-    "display:block;max-width:100%;width:auto;height:auto;max-height:min(85vh,100vh);object-fit:contain;box-shadow:0 2px 12px rgba(0,0,0,0.4);user-select:none;-webkit-user-drag:none";
+    "display:block;width:auto;height:auto;max-width:none;max-height:none;object-fit:contain;box-shadow:0 2px 12px rgba(0,0,0,0.4);user-select:none;-webkit-user-drag:none";
   img.draggable = false;
 
   imgWrap.appendChild(img);
@@ -57,21 +63,45 @@ export function mountGalleryImageZoom(
   const MIN_ZOOM = 0.5;
   const MAX_ZOOM = 4;
   const ZOOM_STEP = 0.25;
+  /** Fit width/height: lamba image ho to scale 0.5 se chhota zaroori ho sakta hai */
+  const FIT_SCALE_MIN = 0.02;
 
   let baseLayoutW = 0;
   let baseLayoutH = 0;
 
   const emitScale = () => onScaleChange(scale);
 
+  const H_PAD = 16;
+
   const ensureBaseLayout = () => {
     if (baseLayoutW > 0 && baseLayoutH > 0) return;
-    const w = img.offsetWidth;
-    const h = img.offsetHeight;
-    if (w < 2 || h < 2) return;
-    baseLayoutW = w;
-    baseLayoutH = h;
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    if (nw < 2 || nh < 2) return;
+    baseLayoutW = nw;
+    baseLayoutH = nh;
+    img.style.width = `${nw}px`;
+    img.style.height = `${nh}px`;
     imgWrap.style.width = `${baseLayoutW}px`;
     imgWrap.style.height = `${baseLayoutH}px`;
+  };
+
+  const computeFitWidthScale = () => {
+    ensureBaseLayout();
+    if (baseLayoutW <= 0) return 1;
+    const vw = Math.max(scrollHost.clientWidth - H_PAD, 1);
+    return Math.max(FIT_SCALE_MIN, Math.min(MAX_ZOOM, vw / baseLayoutW));
+  };
+
+  const computeFitHeightScale = () => {
+    ensureBaseLayout();
+    if (baseLayoutW <= 0) return 1;
+    const vw = Math.max(scrollHost.clientWidth - H_PAD, 1);
+    const vh = Math.max(scrollHost.clientHeight - H_PAD, 1);
+    return Math.max(
+      FIT_SCALE_MIN,
+      Math.min(MAX_ZOOM, Math.min(vw / baseLayoutW, vh / baseLayoutH))
+    );
   };
 
   let dragPanStartX = 0;
@@ -239,18 +269,33 @@ export function mountGalleryImageZoom(
     if (img.naturalWidth < 1 && img.offsetWidth < 2) return;
     baseLayoutW = 0;
     baseLayoutH = 0;
+    img.style.width = "";
+    img.style.height = "";
     imgWrap.style.width = "";
     imgWrap.style.height = "";
     scale = 1;
     emitScale();
-    requestAnimationFrame(() => {
+
+    let layoutWaitFrames = 0;
+    const finish = () => {
+      if (disposed) return;
       ensureBaseLayout();
+      if (baseLayoutW <= 0) return;
+      if (scrollHost.clientWidth < 2) {
+        layoutWaitFrames += 1;
+        if (layoutWaitFrames > 60) return;
+        requestAnimationFrame(finish);
+        return;
+      }
+      scale = computeFitWidthScale();
+      emitScale();
       syncLayout();
       requestAnimationFrame(() => {
-        ensureBaseLayout();
-        syncLayout();
+        scrollHost.scrollTo({ left: 0, top: 0, behavior: "auto" });
       });
-    });
+    };
+
+    requestAnimationFrame(() => requestAnimationFrame(finish));
   };
 
   if (img.complete && img.naturalWidth > 0) {
@@ -276,8 +321,16 @@ export function mountGalleryImageZoom(
     syncLayout();
   };
 
-  const fit = () => {
-    scale = 1;
+  const fitWidth = () => {
+    scale = computeFitWidthScale();
+    syncLayout();
+    requestAnimationFrame(() => {
+      scrollHost.scrollTo({ left: 0, top: 0, behavior: "auto" });
+    });
+  };
+
+  const fitHeight = () => {
+    scale = computeFitHeightScale();
     syncLayout();
     requestAnimationFrame(() => {
       const sl = Math.max(0, (scrollHost.scrollWidth - scrollHost.clientWidth) / 2);
@@ -285,6 +338,9 @@ export function mountGalleryImageZoom(
       scrollHost.scrollTo({ left: sl, top: st, behavior: "auto" });
     });
   };
+
+  /** Backward compat: pehle "Fit" = poora image screen me — ab fitHeight */
+  const fit = fitHeight;
 
   const dispose = () => {
     if (disposed) return;
@@ -302,6 +358,8 @@ export function mountGalleryImageZoom(
   return {
     zoomIn,
     zoomOut,
+    fitHeight,
+    fitWidth,
     fit,
     getScale: () => scale,
     dispose,

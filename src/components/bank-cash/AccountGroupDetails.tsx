@@ -68,6 +68,7 @@ import {
 import NepaliCalendar from "../ui/nepali-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 
 
 const getInitials = (name: string) => {
@@ -151,7 +152,7 @@ export function AccountGroupDetails({
   const accountIdsInGroup = useMemo(() => accountsInGroup.map((a) => a.id), [accountsInGroup]);
   const childGroups = useMemo(() => allGroups.filter((g) => (g as any).parentId === group.id), [allGroups, group.id]);
 
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
@@ -670,38 +671,21 @@ export function AccountGroupDetails({
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
   const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    const isSpacer = (r: any) => !!(r as any)._spendWiseSpacer;
-    const inGroup = (r: any) => typeof (r as any)._spendWiseGroupColorIndex === "number";
-    const last10Indices: number[] = [];
-    for (let i = list.length - 1; i >= 0 && last10Indices.length < 10; i--) {
-      if (isSpacer(list[i])) continue;
-      last10Indices.unshift(i);
-    }
-    const showIndices = new Set<number>();
-    for (const idx of last10Indices) {
-      const row = list[idx];
-      if (inGroup(row)) {
-        let start = idx;
-        while (start > 0 && (isSpacer(list[start - 1]) || inGroup(list[start - 1]))) {
-          start--;
-          if (!isSpacer(list[start]) && (list[start] as any)._spendWiseGroupFirst) break;
-        }
-        let end = idx;
-        while (end < list.length - 1 && (isSpacer(list[end + 1]) || inGroup(list[end + 1]))) {
-          end++;
-          if (!isSpacer(list[end]) && (list[end] as any)._spendWiseGroupLast) break;
-        }
-        for (let j = start; j <= end; j++) showIndices.add(j);
-      } else {
-        showIndices.add(idx);
-      }
-    }
-    return list.filter((_, i) => showIndices.has(i));
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
   const dateRangeLabel = buildDateRangeText();
 
@@ -817,9 +801,9 @@ export function AccountGroupDetails({
 
   if (isMobile) {
     return (
-      <>
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
+          {/* Mobile: scroll + pager above fixed footer */}
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
               <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
@@ -833,7 +817,11 @@ export function AccountGroupDetails({
           </div>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null) ? "Last 10 Txns" : dateRangeLabel}
+              {!dateRange || (dateRange.from == null && dateRange.to == null)
+                ? rowsPerPage > 0
+                  ? `Last ${rowsPerPage} Txns`
+                  : "All Txns"
+                : dateRangeLabel}
             </span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
               <button
@@ -889,17 +877,20 @@ export function AccountGroupDetails({
                   placeholder="Search transactions"
                   className="pl-8 h-9 text-sm w-full min-w-0"
                   value={mobileSearchTerm}
-                  onChange={(e) => setMobileSearchTerm(e.target.value)}
+                  onChange={(e) => {
+                    setMobileSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
                 />
               </div>
             </div>
           </div>
-          {/* scroll-touch + inline style for APK/WebView touch scroll */}
-          <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
-          >
-            <div className="pb-24">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+            >
+            <div className="pb-2">
             {/* Bank/Cash group pages use their own Statement/Spend-wise toggle, so shared bill-wise preference must stay off here. */}
             <TransactionsTable
               transactions={mobileTransactionsToShow}
@@ -931,6 +922,18 @@ export function AccountGroupDetails({
               blinkMode={spendWiseBlinkMode}
             />
             </div>
+            </div>
+            <MobileTransactionsPager
+              className="mt-auto shrink-0 mb-12"
+              currentPage={currentPage}
+              totalItems={filteredMobileTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+            />
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -1110,7 +1113,7 @@ export function AccountGroupDetails({
           voucher={selectedVoucher}
           onVoucherUpdated={() => setSelectedVoucher(null)}
         />
-      </>
+      </div>
     );
   }
 
@@ -1194,6 +1197,16 @@ export function AccountGroupDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange?.(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

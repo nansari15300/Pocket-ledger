@@ -56,6 +56,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { useCompany } from "@/hooks/useCompany";
 import { useRowsPerPage } from "@/hooks/useRowsPerPage";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditItemGroupDialog } from "./EditItemGroupDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -146,7 +147,7 @@ export function ItemGroupDetails({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const openingModalRef = useRef(false);
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [mobileSearchTerm, setMobileSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
@@ -408,7 +409,9 @@ export function ItemGroupDetails({
   };
 
   const dateRangeLabel = useMemo(() => {
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) return "Last 10 Txns";
+    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
+      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
+    }
     const from = dateRange.from!;
     const to = dateRange.to || from;
     const fromBS = formatDateBS(from);
@@ -418,7 +421,7 @@ export function ItemGroupDetails({
     if (dateSystem === "AD") return `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
     if (dateSystem === "BS") return `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-  }, [dateRange, dateSystem, formatDateBS]);
+  }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
 
   const filteredMobileTransactions = useMemo(() => {
     if (!mobileSearchTerm) return processedTransactions;
@@ -439,14 +442,22 @@ export function ItemGroupDetails({
     });
   }, [processedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
-  // Mobile: show last 10 when no date filter (like Party), all when date filter applied
   const mobileDisplayTransactions = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -568,9 +579,9 @@ export function ItemGroupDetails({
 
   if (isMobile) {
     return (
-      <>
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
+          {/* Mobile: scroll + pager above fixed footer */}
           <div className="flex flex-col flex-shrink-0 border-b bg-background">
             <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
               {onBack && (
@@ -623,16 +634,24 @@ export function ItemGroupDetails({
               )}
               <div className="flex-1 min-w-0 h-9 relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input placeholder="Search transactions" className="pl-8 h-9 text-sm w-full min-w-0" value={mobileSearchTerm} onChange={(e) => setMobileSearchTerm(e.target.value)} />
+                <Input
+                  placeholder="Search transactions"
+                  className="pl-8 h-9 text-sm w-full min-w-0"
+                  value={mobileSearchTerm}
+                  onChange={(e) => {
+                    setMobileSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                />
               </div>
             </div>
           </div>
-          {/* scroll-touch + inline style for APK/WebView touch scroll */}
-          <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
-          >
-            <div className="w-full min-w-0 px-0.5 space-y-px pb-24">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+            >
+            <div className="w-full min-w-0 px-0.5 space-y-px pb-2">
               {openingBalanceForPeriod !== 0 && (
                 <Card className="p-2.5 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
                   <div className="flex items-center justify-between gap-2 min-w-0">
@@ -647,6 +666,18 @@ export function ItemGroupDetails({
                 <MobileTransactionRow key={t.id} transaction={t} />
               ))}
             </div>
+            </div>
+            <MobileTransactionsPager
+              className="mt-auto shrink-0 mb-12"
+              currentPage={currentPage}
+              totalItems={filteredMobileTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+            />
           </div>
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -795,7 +826,7 @@ export function ItemGroupDetails({
           voucher={selectedVoucher}
           onVoucherUpdated={() => setSelectedVoucher(null)}
         />
-      </>
+      </div>
     );
   }
 
@@ -872,6 +903,16 @@ export function ItemGroupDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

@@ -23,16 +23,12 @@ async function renderPdfBlobToScrollHost(
 ): Promise<void> {
   const pdfjsLib = await import("pdfjs-dist");
   const pdfjs = pdfjsLib.default || pdfjsLib;
+  const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
   const version =
-    (pdfjsLib as { version?: string }).version ?? (pdfjs as { version?: string }).version ?? "5.4.624";
-
-  if (typeof window !== "undefined" && pdfjs.GlobalWorkerOptions) {
-    const origin = window.location.origin || "";
-    // Pehle same-origin (offline APK); fail bhaye unpkg fallback
-    pdfjs.GlobalWorkerOptions.workerSrc = origin
-      ? `${origin}/pdf.worker.min.mjs`
-      : `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
-  }
+    (pdfjsLib as { version?: string }).version ??
+    (pdfjs as { version?: string }).version ??
+    PDFJS_WORKER_VERSION_FALLBACK;
+  setPdfJsWorkerSrc(pdfjs, version);
 
   const data = await blob.arrayBuffer();
   if (opts.isCancelled()) return;

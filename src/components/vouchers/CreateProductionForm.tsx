@@ -40,9 +40,15 @@ import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateFinishedGoodDialog } from "@/components/items/CreateFinishedGoodDialog";
 import type { Item } from "@/components/items/types";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -166,6 +172,14 @@ export function CreateProductionForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachFileInputId = useId();
   const [files, setFiles] = useState<(File | string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   const initialFilesRef = useRef<string[]>([]);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
@@ -244,6 +258,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const urls = v.unassignedFile?.url ? [v.unassignedFile.url] : (v.fileUrls || []);
       setFiles(urls);
       initialFilesRef.current = urls.filter((f: any) => typeof f === "string");
+      setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
       if (v.unassignedFile) {
         form.setValue("unassignedFile", v.unassignedFile);
       }
@@ -418,7 +433,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   };
 
-  const MAX_FILE_SIZE_MB = 0.5;
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !allowAttachments) return;
@@ -480,13 +494,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -522,12 +535,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       setIsLoading(true);
 
-      let existingFileUrls = files.filter((f): f is string => typeof f === 'string');
+      let filesForSave = files;
+      if (savePdfAsImage) {
+        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+        try {
+          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+        } finally {
+          sonnerToast.dismiss(convToast);
+        }
+      }
+
+      let existingFileUrls = filesForSave.filter((f): f is string => typeof f === 'string');
       if(data.unassignedFile?.url && !existingFileUrls.includes(data.unassignedFile.url)) {
         existingFileUrls.push(data.unassignedFile.url);
       }
 
-      const newFilesToUpload = files.filter((f): f is File => f instanceof File);
+      const newFilesToUpload = filesForSave.filter((f): f is File => f instanceof File);
       let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
@@ -1162,6 +1185,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
             <FormItem>
               <FormLabel>Attach Files (Optional)</FormLabel>
+              {showPdfAsImageToggle && (
+                <VoucherPdfAsImageToggle
+                  id="voucher-save-pdf-as-image-production"
+                  checked={savePdfAsImage}
+                  onCheckedChange={setSavePdfAsImage}
+                  disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                  className="mb-2"
+                />
+              )}
               <RestrictedFileUploader>
                 <div className="flex flex-wrap gap-4">
                   {files.map((file, index) => (

@@ -15,6 +15,18 @@ const BACKDROP_Z = PANEL_Z - 1;
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
+/** Fit Width/Height: natural-size layout × scale — chhoti scale allowed (lamba stitched JPG) */
+const FIT_ZOOM_MIN = 0.02;
+
+/** Multi-attachment preview: pehli decode hui image se zoom ratio (sab img par same factor) */
+function getFirstSizedImg(root: HTMLElement): HTMLImageElement | null {
+  const list = root.querySelectorAll("img");
+  for (let i = 0; i < list.length; i++) {
+    const el = list[i];
+    if (el.naturalWidth >= 2) return el;
+  }
+  return list[0] ?? null;
+}
 
 type PanSession = {
   active: boolean;
@@ -38,6 +50,8 @@ function useTapInteractionMode(): boolean {
   return tap;
 }
 
+type FitMode = "width" | "height";
+
 type AttachmentHoverPortalProps = {
   /** Hover trigger (icon / thumbnail) */
   children: React.ReactNode;
@@ -46,6 +60,8 @@ type AttachmentHoverPortalProps = {
   disabled?: boolean;
   /** Trigger wrapper class — table icon vs bile FilePreview tile ke liye */
   triggerClassName?: string;
+  /** PDF: nested FilePreview ke canvas par dblclick kabhi img tak nahi — scroll area se open in browser */
+  onPreviewDoubleClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 };
 
 export function AttachmentHoverPortal({
@@ -53,12 +69,15 @@ export function AttachmentHoverPortal({
   preview,
   disabled = false,
   triggerClassName,
+  onPreviewDoubleClick,
 }: AttachmentHoverPortalProps) {
   const { enabled: globalHoverPreviewEnabled } = useFileHoverPreview();
   const effectiveDisabled = disabled || !globalHoverPreviewEnabled;
   const useTapMode = useTapInteractionMode();
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
+  /** Neeche Width / Height — active = blue, doosra gray */
+  const [fitMode, setFitMode] = React.useState<FitMode>("width");
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const triggerRef = React.useRef<HTMLSpanElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -102,6 +121,61 @@ export function AttachmentHoverPortal({
     setPos({ top, left });
   }, []);
 
+  const applyFitWidth = React.useCallback(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const img = getFirstSizedImg(root);
+    if (!img || img.naturalWidth < 2) return;
+
+    const attempt = (n: number) => {
+      if (n > 60) return;
+      if (root.clientWidth < 2) {
+        requestAnimationFrame(() => attempt(n + 1));
+        return;
+      }
+      const cw = Math.max(root.clientWidth - 16, 1);
+      const nw = img.naturalWidth;
+      const z = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, cw / nw));
+      setZoom(z);
+      setFitMode("width");
+      requestAnimationFrame(() => {
+        root.scrollTo({ left: 0, top: 0, behavior: "auto" });
+      });
+    };
+    attempt(0);
+  }, []);
+
+  const applyFitHeight = React.useCallback(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const img = getFirstSizedImg(root);
+    if (!img || img.naturalWidth < 2) return;
+
+    const attempt = (n: number) => {
+      if (n > 60) return;
+      if (root.clientWidth < 2 || root.clientHeight < 2) {
+        requestAnimationFrame(() => attempt(n + 1));
+        return;
+      }
+      const cw = Math.max(root.clientWidth - 16, 1);
+      const ch = Math.max(root.clientHeight - 16, 1);
+      const nw = img.naturalWidth;
+      const nh = img.naturalHeight;
+      const z = Math.min(
+        ZOOM_MAX,
+        Math.max(FIT_ZOOM_MIN, Math.min(cw / nw, ch / nh))
+      );
+      setZoom(z);
+      setFitMode("height");
+      requestAnimationFrame(() => {
+        const sl = Math.max(0, (root.scrollWidth - root.clientWidth) / 2);
+        const st = Math.max(0, (root.scrollHeight - root.clientHeight) / 2);
+        root.scrollTo({ left: sl, top: st, behavior: "auto" });
+      });
+    };
+    attempt(0);
+  }, []);
+
   const handleOpen = React.useCallback(() => {
     if (effectiveDisabled) return;
     cancelClose();
@@ -117,6 +191,7 @@ export function AttachmentHoverPortal({
   React.useEffect(() => {
     if (!open) {
       setZoom(1);
+      setFitMode("width");
       return;
     }
     if (useTapMode) return;
@@ -130,6 +205,100 @@ export function AttachmentHoverPortal({
     };
   }, [open, updatePosition, useTapMode]);
 
+  /** Default: fit to width — `preview` dep mat rakho (har render naya ref = loop) */
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const root = scrollRef.current;
+    if (!root) return;
+    let cancelled = false;
+    const run = () => {
+      if (!cancelled) applyFitWidth();
+    };
+    const imgs = root.querySelectorAll("img");
+    const onLoad = () => {
+      if (!cancelled) run();
+    };
+    imgs.forEach((im) => {
+      if (!im.complete) im.addEventListener("load", onLoad, { once: true });
+    });
+    const id = requestAnimationFrame(() => requestAnimationFrame(run));
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+      imgs.forEach((im) => {
+        if (!im.complete) im.removeEventListener("load", onLoad);
+      });
+    };
+  }, [open, applyFitWidth]);
+
+  /**
+   * Har `<img>` ko `width = naturalW * zoom` — multi-file stack + PDF thumb baad me aaye to MutationObserver.
+   */
+  const [scrollable, setScrollable] = React.useState(false);
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setScrollable(false);
+      return;
+    }
+    const root = scrollRef.current;
+    if (!root) return;
+
+    const syncScrollable = () => {
+      const r = scrollRef.current;
+      if (!r) return;
+      setScrollable(r.scrollWidth > r.clientWidth + 2 || r.scrollHeight > r.clientHeight + 2);
+    };
+
+    const applyLayoutAll = () => {
+      root.querySelectorAll("img").forEach((img) => {
+        if (!img.naturalWidth || img.naturalWidth < 2) return;
+        const nw = img.naturalWidth;
+        img.style.width = `${nw * zoom}px`;
+        img.style.height = "auto";
+        img.style.maxWidth = "none";
+        img.style.display = "block";
+      });
+      syncScrollable();
+      requestAnimationFrame(syncScrollable);
+    };
+
+    const onImgLoad = () => applyLayoutAll();
+    const bindImgLoads = () => {
+      root.querySelectorAll("img").forEach((img) => {
+        if (!img.complete) img.addEventListener("load", onImgLoad, { once: true });
+      });
+    };
+
+    applyLayoutAll();
+    bindImgLoads();
+
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            applyLayoutAll();
+            syncScrollable();
+          })
+        : null;
+    ro?.observe(root);
+
+    const mo =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            bindImgLoads();
+            applyLayoutAll();
+          })
+        : null;
+    mo?.observe(root, { childList: true, subtree: true });
+
+    window.addEventListener("resize", syncScrollable);
+
+    return () => {
+      ro?.disconnect();
+      mo?.disconnect();
+      window.removeEventListener("resize", syncScrollable);
+    };
+  }, [open, zoom]);
+
   React.useEffect(() => () => cancelClose(), [cancelClose]);
 
   React.useEffect(() => {
@@ -141,10 +310,27 @@ export function AttachmentHoverPortal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  /** PC / mouse: zoom &gt; 1 ke baad primary button drag = pan; touch par sirf native scroll */
+  /**
+   * Dialog open hone par Radix / react-remove-scroll wheel ko lock karta hai; portal `body` par hai isliye
+   * native scroll kabhi fire nahi hota — non-passive wheel se yahin scrollTop/Left badhao (baaki jagah bhi safe).
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      el.scrollTop += e.deltaY;
+      el.scrollLeft += e.deltaX;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [open]);
+
+  /** PC: mouse left = pan (scroll area); capture hata diya — img se bubble yahi aata hai */
   const handleScrollPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType !== "mouse" || e.button !== 0) return;
-    if (zoom <= 1) return;
     const el = scrollRef.current;
     if (!el) return;
     panRef.current = {
@@ -246,7 +432,10 @@ export function AttachmentHoverPortal({
           data-attachment-preview-portal=""
           onPointerEnter={useTapMode ? undefined : cancelClose}
           onPointerLeave={useTapMode ? undefined : scheduleClose}
+          /* Bubble par hi stop — capture par mat (warna toolbar button / img tak event pahunchta hi nahi) */
           onPointerDown={(e) => e.stopPropagation()}
+          /* Portal DOM body par hai lekin React bubble table row tak jata hai — dblclick se voucher edit na khule */
+          onDoubleClick={(e) => e.stopPropagation()}
         >
           {/* Title center; tap mode me X dayein (absolute) taaki label geometric center rahe */}
           <div className="relative flex shrink-0 items-center justify-center border-b border-blue-600/25 px-2 py-1.5">
@@ -269,26 +458,22 @@ export function AttachmentHoverPortal({
             ref={scrollRef}
             className={cn(
               "min-h-0 flex-1 select-none overflow-auto bg-white px-2 pb-2 pt-1 dark:bg-zinc-950",
-              zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+              scrollable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
             )}
+            style={{ touchAction: "pan-x pan-y" }}
             onPointerDown={handleScrollPointerDown}
             onPointerMove={handleScrollPointerMove}
             onPointerUp={endPan}
             onPointerCancel={endPan}
             onDragStart={(e) => e.preventDefault()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onPreviewDoubleClick?.(e);
+            }}
           >
-            {/* zoom &gt; 1 par PC me grab se pan; scale yahi par */}
-            <div className="flex w-full items-center justify-center py-1">
-              <div
-                className="inline-block max-w-full"
-                style={{
-                  transform: `scale(${zoom})`,
-                  transformOrigin: "center center",
-                  transition: "transform 0.12s ease-out",
-                }}
-              >
-                {preview}
-              </div>
+            {/* Zoom = img width multiplier — transform scale() hata diya (layout/scroll fix) */}
+            <div className="flex min-w-0 w-full items-start justify-start py-1">
+              <div className="inline-block w-max max-w-none shrink-0">{preview}</div>
             </div>
           </div>
 
@@ -300,7 +485,9 @@ export function AttachmentHoverPortal({
               size="icon"
               className="h-9 w-9 shrink-0"
               aria-label="Zoom out"
-              onClick={() => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))}
+              onClick={() =>
+                setZoom((z) => Math.max(FIT_ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))
+              }
             >
               <ZoomOut className="h-4 w-4" />
             </Button>
@@ -315,8 +502,31 @@ export function AttachmentHoverPortal({
             >
               <ZoomIn className="h-4 w-4" />
             </Button>
-            <Button type="button" variant="secondary" size="sm" className="h-9 shrink-0 px-3 text-xs" onClick={() => setZoom(1)}>
-              Fit
+            <Button
+              type="button"
+              size="sm"
+              className={cn(
+                "h-9 shrink-0 border-0 px-3 text-xs",
+                fitMode === "width"
+                  ? "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700"
+                  : "bg-muted text-muted-foreground hover:bg-muted/90 dark:bg-muted"
+              )}
+              onClick={applyFitWidth}
+            >
+              Width
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className={cn(
+                "h-9 shrink-0 border-0 px-3 text-xs",
+                fitMode === "height"
+                  ? "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700"
+                  : "bg-muted text-muted-foreground hover:bg-muted/90 dark:bg-muted"
+              )}
+              onClick={applyFitHeight}
+            >
+              Height
             </Button>
           </div>
         </div>

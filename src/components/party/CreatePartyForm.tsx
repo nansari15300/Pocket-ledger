@@ -54,6 +54,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { Party, Group } from "./types";
 import { format } from "date-fns";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -569,15 +570,32 @@ export function CreatePartyForm({
     }
   }
 
+  // Dropdown: `companies/${companyId}/groups` listener (`groups`) must win over `processedGroups` alone —
+  // useVouchers uses `authoritativeCompanyId` for reads; CreateGroupDialog writes under registry `companyId`, so mismatch par sirf Ungrouped na dikhe.
   const partyGroupOptions = React.useMemo(() => {
-    // Only user-defined party groups; system parent groups are hidden from selection
+    const selectable = (g: any) =>
+      g?.id &&
+      !g.isDeleted &&
+      !g.isSystemReserved &&
+      g.isAutoUngrouped !== true &&
+      g.isReportOnly !== true &&
+      !isSystemParentGroup("groups", g.id);
+
+    const byId = new Map<string, Group>();
+    for (const g of groups) {
+      if (g?.id) byId.set(g.id, g);
+    }
+    for (const g of processedGroups) {
+      if (g?.id && !byId.has(g.id)) byId.set(g.id, g);
+    }
+    const merged = [...byId.values()].filter(selectable);
     return [
       { value: getUngroupedGroupId("party"), label: "Ungrouped" },
-      ...processedGroups
-      .filter(group => !(group as any).isSystemReserved && (group as any).isAutoUngrouped !== true)
-      .map(group => ({ value: group.id, label: group.name })),
+      ...merged
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+        .map((g) => ({ value: g.id, label: g.name || g.id })),
     ];
-  }, [processedGroups]);
+  }, [groups, processedGroups]);
 
   return (
     <>

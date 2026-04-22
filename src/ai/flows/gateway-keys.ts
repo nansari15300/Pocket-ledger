@@ -41,7 +41,9 @@ function pickStr(v: string | undefined): string | undefined {
 }
 
 /**
- * Merge stored gateway doc with server env (Stripe/Khalti always; eSewa UAT only in dev when fields empty).
+ * Merge stored gateway doc with server env (Stripe/Khalti/eSewa; eSewa UAT only in dev when still empty).
+ * Khalti: Firestore → KHALTI_TEST_PUBLIC_KEY → NEXT_PUBLIC_KHALTI_PUBLIC_KEY / KHALTI_PUBLIC_KEY (local + cloud naming mismatch avoid).
+ * eSewa: Firestore → ESEWA_MERCHANT_CODE / ESEWA_SECRET_KEY → dev UAT defaults.
  * Payment API route should pass `stored` from Firebase Admin read — client `getGatewayKeys()` cannot run unauthenticated on the server.
  */
 export function mergeGatewayKeysWithEnv(stored: GatewayKeys): GatewayKeys {
@@ -51,14 +53,18 @@ export function mergeGatewayKeysWithEnv(stored: GatewayKeys): GatewayKeys {
     pickStr(process.env.STRIPE_SECRET_KEY);
   const khalti =
     pickStr(stored.khaltiPublicKey) ??
-    pickStr(process.env.KHALTI_TEST_PUBLIC_KEY);
+    pickStr(process.env.KHALTI_TEST_PUBLIC_KEY) ??
+    pickStr(process.env.NEXT_PUBLIC_KHALTI_PUBLIC_KEY) ??
+    pickStr(process.env.KHALTI_PUBLIC_KEY);
   const esewaCodeStored = pickStr(stored.esewaMerchantCode);
   const esewaSecretStored = pickStr(stored.esewaSecretKey);
   const esewaCode =
     esewaCodeStored ??
+    pickStr(process.env.ESEWA_MERCHANT_CODE) ??
     (isDevPaymentFallbackEnabled() ? ESEWA_UAT_MERCHANT_CODE : undefined);
   const esewaSecret =
     esewaSecretStored ??
+    pickStr(process.env.ESEWA_SECRET_KEY) ??
     (isDevPaymentFallbackEnabled() ? ESEWA_UAT_SECRET_KEY : undefined);
 
   return {

@@ -536,33 +536,36 @@ export function FilePreview({
     };
   }, [file, fileSize, resolvedStoragePath, layoutW, layoutH, generatePdfThumbnail, setPdfThumbnailSafe, revokeThumbnailUrl]);
 
+  /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
+  const openAttachmentFromFileInfo = useCallback(() => {
+    if (!fileInfo.url) return;
+    const kind = fileInfo.type === "pdf" ? "pdf" : fileInfo.type === "image" ? "image" : "other";
+    const g =
+      attachmentGallery && attachmentGallery.urls.length > 1
+        ? { urls: attachmentGallery.urls, startIndex: attachmentGallery.startIndex }
+        : undefined;
+    const clientList =
+      attachmentClientFileUrls ??
+      (attachmentGallery?.urls && attachmentGallery.urls.length > 0 ? [...attachmentGallery.urls] : undefined);
+    const serverFallback =
+      voucherAttachmentFb &&
+      isLocalFileRef(fileInfo.url) &&
+      voucherAttachmentFb.companyId &&
+      voucherAttachmentFb.voucherId
+        ? {
+            companyId: voucherAttachmentFb.companyId,
+            voucherId: voucherAttachmentFb.voucherId,
+            clientFileUrls: clientList,
+          }
+        : undefined;
+    void openAttachmentInApp(fileInfo.url, { title: fileInfo.name, kind, gallery: g, serverFallback });
+  }, [fileInfo.url, fileInfo.type, fileInfo.name, attachmentGallery, attachmentClientFileUrls, voucherAttachmentFb]);
+
   const handlePreviewClick = (e: React.MouseEvent) => {
     if (children || disabled) return;
     e.preventDefault();
     e.stopPropagation();
-    if (fileInfo.url) {
-      // APK / static / mobile: overlay; desktop: nayi tab (openAttachmentInApp ke andar)
-      const kind = fileInfo.type === "pdf" ? "pdf" : fileInfo.type === "image" ? "image" : "other";
-      const g =
-        attachmentGallery && attachmentGallery.urls.length > 1
-          ? { urls: attachmentGallery.urls, startIndex: attachmentGallery.startIndex }
-          : undefined;
-      const clientList =
-        attachmentClientFileUrls ??
-        (attachmentGallery?.urls && attachmentGallery.urls.length > 0 ? [...attachmentGallery.urls] : undefined);
-      const serverFallback =
-        voucherAttachmentFb &&
-        isLocalFileRef(fileInfo.url) &&
-        voucherAttachmentFb.companyId &&
-        voucherAttachmentFb.voucherId
-          ? {
-              companyId: voucherAttachmentFb.companyId,
-              voucherId: voucherAttachmentFb.voucherId,
-              clientFileUrls: clientList,
-            }
-          : undefined;
-      void openAttachmentInApp(fileInfo.url, { title: fileInfo.name, kind, gallery: g, serverFallback });
-    }
+    openAttachmentFromFileInfo();
   };
 
   // Avatar par bhi hover preview (user); children / explicit off = nested-tooltip se bacho
@@ -669,14 +672,24 @@ export function FilePreview({
       <img
         src={fileInfo.url}
         alt=""
-        className="h-auto max-h-[min(70vh,calc(100dvh-220px))] w-auto max-w-full object-contain"
+        draggable={false}
+        className="h-auto w-auto max-h-none max-w-none object-contain"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          openAttachmentFromFileInfo();
+        }}
       />
     ) : fileInfo.type === "pdf" && pdfThumbnail ? (
       // eslint-disable-next-line @next/next/no-img-element -- PDF first page = cached blob URL, pdf.js dubara portal me nahi
       <img
         src={pdfThumbnail}
         alt=""
-        className="h-auto max-h-[min(70vh,calc(100dvh-220px))] w-auto max-w-full object-contain"
+        draggable={false}
+        className="h-auto w-auto max-h-none max-w-none object-contain"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          openAttachmentFromFileInfo();
+        }}
       />
     ) : fileInfo.type === "pdf" && (isPdfLoading || isLoading) ? (
       <div className="flex min-h-[280px] w-full flex-col items-center justify-center gap-2 px-4 py-8">
@@ -732,6 +745,15 @@ export function FilePreview({
       {showHoverFullPreview ? (
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
+          /* PDF: img ke alawa canvas/blank par dblclick — Sale/Note/journal sab forms */
+          onPreviewDoubleClick={
+            fileInfo.type === "pdf" && fileInfo.url
+              ? (e) => {
+                  e.stopPropagation();
+                  openAttachmentFromFileInfo();
+                }
+              : undefined
+          }
           preview={
             <>
               {hoverPanel}

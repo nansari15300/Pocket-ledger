@@ -2,7 +2,6 @@
 "use client";
 
 import type { Staff } from "@/components/staff/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
@@ -10,9 +9,14 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Briefcase } from "lucide-react";
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -41,6 +45,7 @@ export function StaffList({
   getItemHref?: (staff: Staff) => string | undefined;
 }) {
   const { formatCurrency } = useDate();
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
   const { settings: animationSettings } = useAnimationSettings();
   
   // Get animation settings - check enabled flag explicitly
@@ -49,12 +54,34 @@ export function StaffList({
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
   
   const filteredAndSortedStaff = useMemo(() => {
+    const toDateMs = (raw: unknown): number => {
+      if (!raw) return 0;
+      if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? 0 : raw.getTime();
+      if (typeof (raw as { toDate?: () => Date }).toDate === "function") {
+        const d = (raw as { toDate: () => Date }).toDate();
+        return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+      }
+      const d = new Date(raw as any);
+      return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+    };
+    const isSettled = (bal: number) => Math.abs(Number(bal || 0)) < 1e-6;
     return staff
-      .filter((s) =>
-        s.name && s.name.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [staff, searchTerm]);
+      .filter((s) => {
+        if (!s.name || !s.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+        const bal = Number(s.balance || 0);
+        // Footer quick filters: list short/filter from same control on mobile + desktop.
+        if (quickFilter === "dr") return bal > 0;
+        if (quickFilter === "cr") return bal < 0;
+        if (quickFilter === "settled") return isSettled(bal);
+        if (quickFilter === "non_settled") return !isSettled(bal);
+        return true;
+      })
+      .sort((a, b) => {
+        if (quickFilter === "name") return String(a.name || "").localeCompare(String(b.name || ""));
+        if (quickFilter === "date") return toDateMs(b.openingBalanceDate) - toDateMs(a.openingBalanceDate);
+        return Math.abs(Number(b.balance || 0)) - Math.abs(Number(a.balance || 0));
+      });
+  }, [staff, searchTerm, quickFilter]);
 
 
   return (
@@ -75,12 +102,12 @@ export function StaffList({
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
                     <div className="relative flex-shrink-0">
-                      <Avatar className="h-8 w-8 text-xs">
-                        <AvatarImage src={staffMember.fileUrl} />
-                        <AvatarFallback className="bg-muted text-muted-foreground">
-                          <Briefcase className="h-4 w-4" />
-                        </AvatarFallback>
-                      </Avatar>
+                      <ResolvedEntityAvatar
+                        className="h-8 w-8 text-xs"
+                        src={staffMember.fileUrl}
+                        alt={staffMember.name}
+                        fallbackSlot={<Briefcase className="h-4 w-4 text-muted-foreground" />}
+                      />
                       {(pendingApprovalByStaffId[staffMember.id] ?? 0) > 0 && (
                         <span
                           className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
@@ -140,6 +167,7 @@ export function StaffList({
           )}
         </ul>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
   );
 };

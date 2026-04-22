@@ -9,7 +9,12 @@ import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { isSystemParentGroup } from "@/lib/system-groups";
@@ -39,31 +44,46 @@ export function ExpenseGroupList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings.rows.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   // System groups sirf Reports me – list pages pe hide (Direct Income, Direct Expenses etc. bhi)
   const filteredAndSortedGroups = useMemo(() => {
-    return (groups || [])
-      .filter((group) => {
-        const isReportOnly = (group as any).isReportOnly === true;
-        const isSystem = (group as any).isSystemReserved === true || isSystemParentGroup("expense_groups", (group as any).id);
-        if (isReportOnly || isSystem) return false;
-        if (!searchTerm) return true;
-        return group.name && group.name.toLowerCase().includes(searchTerm.toLowerCase());
-      })
-      .sort((a, b) => {
+    const base = (groups || []).filter((group) => {
+      const isReportOnly = (group as any).isReportOnly === true;
+      const isSystem =
+        (group as any).isSystemReserved === true ||
+        isSystemParentGroup("expense_groups", (group as any).id);
+      if (isReportOnly || isSystem) return false;
+      return !!group.name;
+    });
+    let list = filterAndSortEntityGroups(base, searchTerm, quickFilter);
+    if (quickFilter === "default") {
+      list = [...list].sort((a, b) => {
         const aIsSystem = (a as any).isSystemReserved;
         const bIsSystem = (b as any).isSystemReserved;
         if (aIsSystem && !bIsSystem) return -1;
         if (!aIsSystem && bIsSystem) return 1;
-        return Math.abs(b.balance || 0) - Math.abs(a.balance || 0);
+        return Math.abs((b as any).balance || 0) - Math.abs((a as any).balance || 0);
       });
-  }, [groups, searchTerm]);
+    }
+    return list;
+  }, [groups, searchTerm, quickFilter]);
 
   if (filteredAndSortedGroups.length === 0) {
     return (
-      <div className="p-8 text-center text-sm text-muted-foreground bg-background rounded-b-lg border-t-0 w-full">
-        No groups found.
-      </div>
+      <TooltipProvider delayDuration={200}>
+        <div
+          className={cn(
+            "flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background",
+            disabled && "pointer-events-none opacity-60"
+          )}
+        >
+          <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+            No groups found.
+          </div>
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        </div>
+      </TooltipProvider>
     );
   }
 
@@ -162,6 +182,7 @@ export function ExpenseGroupList({
             </AnimatePresence>
           </ul>
         </ScrollArea>
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
       </div>
     </TooltipProvider>
   );

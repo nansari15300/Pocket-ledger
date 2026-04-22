@@ -140,7 +140,7 @@ function mkBarBtn(label: string, primary?: boolean): HTMLButtonElement {
     "font-weight:600",
     "cursor:pointer",
     "min-height:44px",
-    primary ? "background:#ea580c;color:#fff" : "background:#333;color:#eee",
+    primary ? "background:#2563eb;color:#fff" : "background:#3f3f46;color:#e4e4e7",
   ].join(";");
   return b;
 }
@@ -148,13 +148,15 @@ function mkBarBtn(label: string, primary?: boolean): HTMLButtonElement {
 function setZoomControlsVisible(
   zoomOutBtn: HTMLButtonElement,
   zoomInBtn: HTMLButtonElement,
-  fitBtn: HTMLButtonElement,
+  fitWidthBtn: HTMLButtonElement,
+  fitHeightBtn: HTMLButtonElement,
   visible: boolean
 ) {
   const d = visible ? "" : "none";
   zoomOutBtn.style.display = d;
   zoomInBtn.style.display = d;
-  fitBtn.style.display = d;
+  fitWidthBtn.style.display = d;
+  fitHeightBtn.style.display = d;
 }
 
 /**
@@ -334,14 +336,32 @@ export function openAttachmentGalleryInApp(
   zoomInBtn.setAttribute("aria-label", "Zoom in");
   zoomInBtn.style.minWidth = "44px";
 
-  const fitBtn = mkBarBtn("Fit", true);
-  fitBtn.setAttribute("aria-label", "Fit to screen");
+  const fitWidthBtn = mkBarBtn("Width", true);
+  fitWidthBtn.setAttribute("aria-label", "Fit to width");
+  const fitHeightBtn = mkBarBtn("Height");
+  fitHeightBtn.setAttribute("aria-label", "Fit to height — full image in view");
 
-  setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitBtn, false);
+  const fitBtnBase =
+    "padding:10px 16px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;min-height:44px;";
+  const styleFitButtons = (widthActive: boolean) => {
+    fitWidthBtn.style.cssText =
+      fitBtnBase + (widthActive ? "background:#2563eb;color:#fff;" : "background:#52525b;color:#d4d4d8;");
+    fitHeightBtn.style.cssText =
+      fitBtnBase + (!widthActive ? "background:#2563eb;color:#fff;" : "background:#52525b;color:#d4d4d8;");
+  };
+
+  setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, false);
 
   zoomOutBtn.onclick = () => imageZoomApi?.zoomOut();
   zoomInBtn.onclick = () => imageZoomApi?.zoomIn();
-  fitBtn.onclick = () => imageZoomApi?.fit();
+  fitWidthBtn.onclick = () => {
+    imageZoomApi?.fitWidth();
+    styleFitButtons(true);
+  };
+  fitHeightBtn.onclick = () => {
+    imageZoomApi?.fitHeight();
+    styleFitButtons(false);
+  };
 
   const renderSlide = async () => {
     const seq = ++loadSeq;
@@ -349,7 +369,7 @@ export function openAttachmentGalleryInApp(
     imageZoomApi?.dispose();
     imageZoomApi = null;
     currentImageScale = 1;
-    setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitBtn, false);
+    setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, false);
 
     stageEl.replaceChildren();
     updateNavVisibility();
@@ -380,7 +400,7 @@ export function openAttachmentGalleryInApp(
         img.onerror = () => {
           imageZoomApi?.dispose();
           imageZoomApi = null;
-          setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitBtn, false);
+          setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, false);
           scrollHost.replaceChildren();
           scrollHost.appendChild(
             Object.assign(document.createElement("p"), {
@@ -393,7 +413,35 @@ export function openAttachmentGalleryInApp(
         imageZoomApi = mountGalleryImageZoom(scrollHost, img, (s) => {
           currentImageScale = s;
         });
-        setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitBtn, true);
+        setZoomControlsVisible(zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, true);
+        const syncFitW = () => styleFitButtons(true);
+        if (img.complete && img.naturalWidth > 1) syncFitW();
+        else img.addEventListener("load", syncFitW, { once: true });
+
+        img.addEventListener("dblclick", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const href = String(resolved.src || "").trim();
+          if (!href) return;
+          try {
+            const a = document.createElement("a");
+            a.href = href;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            requestAnimationFrame(() => {
+              try {
+                a.remove();
+              } catch {
+                /* ignore */
+              }
+            });
+          } catch {
+            /* ignore */
+          }
+        });
       } else {
         const wrap = document.createElement("div");
         wrap.style.cssText =
@@ -439,7 +487,7 @@ export function openAttachmentGalleryInApp(
   const closeBtn = mkBarBtn("Close");
   attachPreviewCloseInteraction(closeBtn, safeClose);
 
-  bar.append(titleEl, counterEl, zoomOutBtn, zoomInBtn, fitBtn, closeBtn);
+  bar.append(titleEl, counterEl, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
   root.append(slideHost, bar);
 
   root.addEventListener(

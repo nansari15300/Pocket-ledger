@@ -53,6 +53,7 @@ import { Checkbox } from "../ui/checkbox";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { EditTaxDialog } from "./EditTaxDialog";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
@@ -156,7 +157,7 @@ export function TaxDetails({
     return allTaxes.find((t) => t.id === initialTax.id) || initialTax;
   }, [allTaxes, initialTax]);
 
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
@@ -356,12 +357,15 @@ export function TaxDetails({
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mobileSearchNames, tax?.id]);
 
   const mobileTransactions = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return searchFilteredTransactions;
     const list = searchFilteredTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [searchFilteredTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [searchFilteredTransactions, currentPage, rowsPerPage]);
 
   const taxDropdownOptions = useMemo(
     () => (allTaxes || []).map((t) => ({ value: t.id, label: t.name })),
@@ -370,7 +374,8 @@ export function TaxDetails({
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-    if (total >= 1) setCurrentPage(total);
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
   }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
 
   const handleMobileBack = useCallback(() => {
@@ -500,7 +505,11 @@ export function TaxDetails({
           </div>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null) ? "Last 10 Txns" : dateRangeLabel}
+              {!dateRange || (dateRange.from == null && dateRange.to == null)
+                ? rowsPerPage > 0
+                  ? `Last ${rowsPerPage} Txns`
+                  : "All Txns"
+                : dateRangeLabel}
             </span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
               <button
@@ -596,6 +605,17 @@ export function TaxDetails({
             />
             </div>
           </div>
+          <MobileTransactionsPager
+            className="flex-shrink-0 mb-12"
+            currentPage={currentPage}
+            totalItems={searchFilteredTransactions.length}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(nextRows) => {
+              setRowsPerPage(nextRows);
+              setCurrentPage(1);
+            }}
+            onPageChange={setCurrentPage}
+          />
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
           <Button className="flex-1 h-6 rounded-md bg-green-600 hover:bg-green-700 text-white text-xs font-medium" onClick={() => { openingModalRef.current = true; setMobileFooterDialogOpen("payment_in"); openModalInUrl(); }}>
@@ -810,6 +830,16 @@ export function TaxDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

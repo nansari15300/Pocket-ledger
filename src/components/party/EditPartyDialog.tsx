@@ -485,7 +485,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:w-full sm:max-w-3xl sm:px-6"
+            className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:px-6"
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}

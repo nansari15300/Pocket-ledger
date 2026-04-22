@@ -69,7 +69,7 @@ export function showInAppImagePreview(
       "font-weight:600",
       "cursor:pointer",
       "min-height:44px",
-      primary ? "background:#ea580c;color:#fff" : "background:#333;color:#eee",
+      primary ? "background:#2563eb;color:#fff" : "background:#3f3f46;color:#e4e4e7",
     ].join(";");
     return b;
   };
@@ -92,18 +92,38 @@ export function showInAppImagePreview(
   const zoomInBtn = mkBtn("+");
   zoomInBtn.setAttribute("aria-label", "Zoom in");
   zoomInBtn.style.minWidth = "44px";
-  const fitBtn = mkBtn("Fit", true);
-  fitBtn.setAttribute("aria-label", "Fit to screen");
+  const fitWidthBtn = mkBtn("Width", true);
+  fitWidthBtn.setAttribute("aria-label", "Fit to width");
+  const fitHeightBtn = mkBtn("Height");
+  fitHeightBtn.setAttribute("aria-label", "Fit to height — full image in view");
+
+  /** Width/Height — active blue, inactive gray (AttachmentHoverPortal jaisa) */
+  const fitBtnBase =
+    "padding:10px 16px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;min-height:44px;";
+  const styleFitButtons = (widthActive: boolean) => {
+    fitWidthBtn.style.cssText =
+      fitBtnBase + (widthActive ? "background:#2563eb;color:#fff;" : "background:#52525b;color:#d4d4d8;");
+    fitHeightBtn.style.cssText =
+      fitBtnBase + (!widthActive ? "background:#2563eb;color:#fff;" : "background:#52525b;color:#d4d4d8;");
+  };
 
   zoomOutBtn.onclick = () => imageZoomApi?.zoomOut();
   zoomInBtn.onclick = () => imageZoomApi?.zoomIn();
-  fitBtn.onclick = () => imageZoomApi?.fit();
+  fitWidthBtn.onclick = () => {
+    imageZoomApi?.fitWidth();
+    styleFitButtons(true);
+  };
+  fitHeightBtn.onclick = () => {
+    imageZoomApi?.fitHeight();
+    styleFitButtons(false);
+  };
 
   const showZoomBar = (ok: boolean) => {
     const d = ok ? "" : "none";
     zoomOutBtn.style.display = d;
     zoomInBtn.style.display = d;
-    fitBtn.style.display = d;
+    fitWidthBtn.style.display = d;
+    fitHeightBtn.style.display = d;
   };
   showZoomBar(true);
 
@@ -116,6 +136,11 @@ export function showInAppImagePreview(
   };
 
   imageZoomApi = mountGalleryImageZoom(scrollHost, img, () => {});
+
+  /** Default fit = width (gallery init) — button rang sync */
+  const syncFitButtonsToWidth = () => styleFitButtons(true);
+  if (img.complete && img.naturalWidth > 1) syncFitButtonsToWidth();
+  else img.addEventListener("load", syncFitButtonsToWidth, { once: true });
 
   const bar = document.createElement("div");
   bar.setAttribute("role", "toolbar");
@@ -186,7 +211,14 @@ export function showInAppImagePreview(
     e.stopPropagation();
   });
 
-  bar.append(titleEl, openBtn, zoomOutBtn, zoomInBtn, fitBtn, closeBtn);
+  /** Single-click = pan (gallery); double-click = browser / tab */
+  img.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openInSystemBrowser();
+  });
+
+  bar.append(titleEl, openBtn, zoomOutBtn, zoomInBtn, fitWidthBtn, fitHeightBtn, closeBtn);
   root.append(scrollHost, bar);
 
   root.addEventListener(

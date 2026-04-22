@@ -78,6 +78,7 @@ import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -155,7 +156,7 @@ export function ExpenseAccountDetails({
     [resolvedJournalAccountNames, userNames]
   );
 
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
@@ -402,12 +403,21 @@ export function ExpenseAccountDetails({
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, account.id]);
 
   const mobileTransactions = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return searchFilteredTransactions;
     const list = searchFilteredTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [searchFilteredTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [searchFilteredTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
 
   const buildDateRangeText = () => {
     if (!company) return "All Time";
@@ -588,6 +598,16 @@ export function ExpenseAccountDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange?.(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}
@@ -780,9 +800,9 @@ export function ExpenseAccountDetails({
 
   if (isMobile) {
     return (
-      <>
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-          {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+        {/* Single root: fills ResponsiveMasterDetail slot so flex-1 scroll + pager pin to bottom */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
           {/* Row 1: Back | Title | Showing x of y */}
           <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
             {onBack && (
@@ -798,7 +818,11 @@ export function ExpenseAccountDetails({
           {/* Row 2: Last 10 Txns / date range */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
-              {!dateRange || (dateRange.from == null && dateRange.to == null) ? "Last 10 Txns" : dateRangeLabel}
+              {!dateRange || (dateRange.from == null && dateRange.to == null)
+                ? rowsPerPage > 0
+                  ? `Last ${rowsPerPage} Txns`
+                  : "All Txns"
+                : dateRangeLabel}
             </span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && onDateRangeChange && (
               <button
@@ -859,36 +883,48 @@ export function ExpenseAccountDetails({
               </div>
             </div>
           </div>
-          {/* Transaction list - extends to footer line */}
-          {/* scroll-touch + inline style for APK/WebView touch scroll */}
-          <div
-            className="flex-1 min-h-0 overflow-auto scroll-touch"
-            style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
-          >
-            <div className="pb-24">
-            <TransactionsTable
-              transactions={mobileTransactions}
-              context="expense"
-              contextId={account.id}
-              openingBalance={openingBalanceForPeriod}
-              openingBalanceNarration={account.openingBalanceNarration}
-              openingBalanceAttachmentUrls={account.documentFileUrls}
-              openingBalanceDate={(account as any).openingBalanceDate}
-              showNarration={showNarration}
-              visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              userNames={userNames}
-              journalAccountNames={journalAccountNames}
-              onRowClick={handleEditVoucher}
-              filters={filters}
-              setFilters={setFilters}
-              activeFilter={activeFilter}
-              setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
-              scrollOnlyTransactions
-            />
+          {/* List + pager: grow to fill viewport; pager stays above fixed action bar */}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-touch touch-pan-y"
+              style={{ WebkitOverflowScrolling: "touch" } as React.CSSProperties}
+            >
+              <div className="pb-2">
+                <TransactionsTable
+                  transactions={mobileTransactions}
+                  context="expense"
+                  contextId={account.id}
+                  openingBalance={openingBalanceForPeriod}
+                  openingBalanceNarration={account.openingBalanceNarration}
+                  openingBalanceAttachmentUrls={account.documentFileUrls}
+                  openingBalanceDate={(account as any).openingBalanceDate}
+                  showNarration={showNarration}
+                  visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
+                  userNames={userNames}
+                  journalAccountNames={journalAccountNames}
+                  onRowClick={handleEditVoucher}
+                  filters={filters}
+                  setFilters={setFilters}
+                  activeFilter={activeFilter}
+                  setActiveFilter={setActiveFilter}
+                  periodDr={periodDr}
+                  periodCr={periodCr}
+                  closingBalance={closingBalance}
+                  scrollOnlyTransactions
+                />
+              </div>
             </div>
+            <MobileTransactionsPager
+              className="mt-auto shrink-0 mb-12"
+              currentPage={currentPage}
+              totalItems={searchFilteredTransactions.length}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(nextRows) => {
+                setRowsPerPage(nextRows);
+                setCurrentPage(1);
+              }}
+              onPageChange={setCurrentPage}
+            />
           </div>
         </div>
         {/* Fixed bottom: Add Expense, Add Income, Calendar */}
@@ -1025,7 +1061,7 @@ export function ExpenseAccountDetails({
           voucher={selectedVoucher}
           onVoucherAction={() => setSelectedVoucher(null)}
         />
-      </>
+      </div>
     );
   }
 

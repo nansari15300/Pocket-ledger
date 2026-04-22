@@ -40,6 +40,7 @@ import {
   EntityOpeningBalanceNarrationField,
 } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import usePermissions from "@/hooks/usePermissions";
+import { useVouchers } from "@/hooks/useVouchers";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 
@@ -92,7 +93,8 @@ export function CreateExpenseAccountDialog({
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const { dateSystem } = useDate();
-
+  /** Merge with local `groups` — local-only me listener off; online me bhi registry id vs authoritative id par list poori rahe (CreatePartyForm jaisa). */
+  const { processedExpenseGroups } = useVouchers();
 
   const open = isOpen !== undefined ? isOpen : internalIsOpen;
   const setOpen = onOpenChange !== undefined ? onOpenChange : setInternalIsOpen;
@@ -102,13 +104,23 @@ export function CreateExpenseAccountDialog({
     defaultValues: { name: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
   });
   
+  // Local / SQLite: EditExpenseAccountDialog jaisa — `processedExpenseGroups` se list bharo (listener yahan lagta nahin).
   useEffect(() => {
     if (!companyId || !open) return;
-    // Local-only mode me Firestore live listener avoid karo.
+    if (!isLocalOnlyMode()) return;
+    setGroups((processedExpenseGroups as ExpenseGroup[]) || []);
+  }, [companyId, open, processedExpenseGroups]);
+
+  useEffect(() => {
+    if (!companyId || !open) return;
     if (isLocalOnlyMode()) return;
     const q = query(collection(firestore, `companies/${companyId}/expense_groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-        setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ExpenseGroup)));
+      setGroups(
+        snapshot.docs
+          .map((doc) => ({ id: doc.id, ...doc.data() } as ExpenseGroup))
+          .filter((g) => !(g as any).isDeleted)
+      );
     });
     return () => unsubscribe();
   }, [companyId, open]);
@@ -515,7 +527,7 @@ export function CreateExpenseAccountDialog({
     }
   }
   
-  // Show all groups (including 4 default: Direct/Indirect Income/Expenses) - only exclude report-only parents
+  // Sab groups: pehle `groups` (Firestore/registry path), phir `processedExpenseGroups` se gap bharein — dono khali na rahen.
   const allGroupOptions = useMemo(() => {
     const getParentLabel = (parentId?: string) => {
       // Show two logical parent buckets in picker labels so users can classify account clearly.
@@ -523,9 +535,18 @@ export function CreateExpenseAccountDialog({
       if (parentId === "expenses" || parentId === "direct_expense" || parentId === "indirect_expense") return "Expenses";
       return "";
     };
+    const byId = new Map<string, ExpenseGroup>();
+    for (const g of groups) {
+      if (g?.id) byId.set(g.id, g);
+    }
+    for (const g of processedExpenseGroups) {
+      if (g?.id && !byId.has(g.id)) byId.set(g.id, g as ExpenseGroup);
+    }
+    const merged = [...byId.values()];
     return [
       { value: getUngroupedGroupId("expense"), label: "Ungrouped" },
-      ...groups
+      ...merged
+        .filter((g) => !(g as any).isDeleted)
         .filter((g) => (g as any).isReportOnly !== true)
         .filter((g) => (g as any).isAutoUngrouped !== true)
         .map((g: any) => {
@@ -533,7 +554,7 @@ export function CreateExpenseAccountDialog({
           return { value: g.id, label: parent ? `${parent} / ${g.name}` : g.name };
         }),
     ];
-  }, [groups]);
+  }, [groups, processedExpenseGroups]);
 
   useEffect(() => {
     if (allGroupOptions.length === 0) return;

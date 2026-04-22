@@ -37,6 +37,7 @@ import { CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { startOfDay, endOfDay } from "date-fns";
 import { useTransactions } from "@/hooks/use-transactions";
 
@@ -754,6 +755,21 @@ export function ProfitAndLossPage() {
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            if (!r.from || !r.to) return;
+                            const normalizedRange: DateRange = {
+                              from: startOfDay(r.from),
+                              to: endOfDay(r.to),
+                            };
+                            setDateRange(normalizedRange);
+                            setIsCalendarOpen(false);
+                            if (activeRow) openDetail(activeRow);
+                          }}
+                        />
+                      }
                       valueAD={dateRange}
                       isRange
                       numberOfMonths={calendarMonths}

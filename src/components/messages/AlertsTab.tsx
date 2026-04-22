@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Badge } from "@/components/ui/badge";
+import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
 
 type Notification = {
   id: string;
@@ -71,7 +72,13 @@ export function AlertsTab({
   /** When provided, "Open Voucher" opens voucher in edit (same page or navigate). */
   onOpenVoucher?: (companyId: string, voucherId: string) => void;
   /** When provided, "View changes" opens voucher history instead of edit. */
-  onOpenHistory?: (companyId: string, voucherId: string, notificationTimestamp?: any, changedByUid?: string) => void;
+  onOpenHistory?: (
+    companyId: string,
+    voucherId: string,
+    notificationTimestamp?: any,
+    changedByUid?: string,
+    notificationId?: string
+  ) => void;
 }) {
   const { user, customUser, loading: authLoading } = useAuth();
   /** Alerts har company alag honi chahiye — warna dusri company ke "Transaction edited" yahan dikh jate hain. */
@@ -157,11 +164,14 @@ export function AlertsTab({
     const recompute = () => {
       const mergedById = new Map<string, Notification>();
       Object.values(byRecipient).forEach((m) => m.forEach((v, k) => mergedById.set(k, v)));
-      const sorted = Array.from(mergedById.values()).sort((a: any, b: any) => {
-        const aTs = a?.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
-        const bTs = b?.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
-        return bTs - aTs;
-      });
+      const sorted = Array.from(mergedById.values())
+        // User request: normal "new transaction added" alerts hide; big amount alerts still visible.
+        .filter((n) => !isSuppressibleNewTransactionAlert(n as any))
+        .sort((a: any, b: any) => {
+          const aTs = a?.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
+          const bTs = b?.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
+          return bTs - aTs;
+        });
       setNotifications(sorted);
       setLoading(false);
     };
@@ -415,7 +425,15 @@ export function AlertsTab({
                             ? (
                                 <button
                                   type="button"
-                                  onClick={() => onOpenHistory((n as any).companyId, (n as any).voucherId, (n as any).timestamp, (n as any).attemptedBy?.uid)}
+                                  onClick={() =>
+                                    onOpenHistory(
+                                      (n as any).companyId,
+                                      (n as any).voucherId,
+                                      (n as any).timestamp,
+                                      (n as any).attemptedBy?.uid,
+                                      n.id
+                                    )
+                                  }
                                   className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline"
                                 >
                                   View changes

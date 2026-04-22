@@ -36,6 +36,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
 import { Combobox } from "@/components/ui/combobox";
@@ -54,6 +55,11 @@ import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentU
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 
 
 const fileSchema = z.object({
@@ -99,7 +105,6 @@ const getVoucherPrefix = (prefixes?: Record<string, string[]>, type?: 'payment_i
     }
     return (prefixes?.payment_in && prefixes.payment_in[0]) || "RCPT-";
 }
-const MAX_FILE_SIZE_MB = 0.5;
 
 const getPayeeTypeFromVoucher = (v: any) => {
   if (v?.staffId) return 'staff';
@@ -172,6 +177,14 @@ export function CreatePaymentInForm({
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   /** Edit-mode Save vs dirty: snapshot of URL attachments when voucher loads */
   const initialFilesRef = useRef<string[]>([]);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
@@ -273,6 +286,7 @@ export function CreatePaymentInForm({
         const urls = voucher.fileUrls || [];
         setFiles(urls);
         initialFilesRef.current = [...urls];
+        setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
     }
 }, [voucher, form, isEditingAndConverting]);
 
@@ -340,6 +354,17 @@ export function CreatePaymentInForm({
   
       let docId = savedVoucherId;
       const { files: formFiles, date, ...restOfData } = data;
+
+      let filesForSave = files;
+      if (savePdfAsImage) {
+        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+        try {
+          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+        } finally {
+          sonnerToast.dismiss(convToast);
+        }
+      }
+
       const submissionData: any = {
         ...restOfData,
         date: date.toISOString(),
@@ -350,11 +375,11 @@ export function CreatePaymentInForm({
         taxAccountId: form.getValues('taxAccountId') || null,
         incomeAccountId: form.getValues('incomeAccountId') || null,
         payeeName: form.getValues('payeeName') || null,
-        fileUrls: files.filter(f => typeof f === 'string') as string[],
+        fileUrls: filesForSave.filter(f => typeof f === 'string') as string[],
         type: voucherType
       };
 
-      const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
+      const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
       let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
@@ -473,6 +498,7 @@ export function CreatePaymentInForm({
         if (saveAndNew) {
             form.reset(getInitialFormValues());
             setFiles([]);
+            setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
         }
@@ -575,13 +601,12 @@ export function CreatePaymentInForm({
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -883,6 +908,15 @@ export function CreatePaymentInForm({
               />
                <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
+                {showPdfAsImageToggle && (
+                  <VoucherPdfAsImageToggle
+                    id="voucher-save-pdf-as-image-direct-income"
+                    checked={savePdfAsImage}
+                    onCheckedChange={setSavePdfAsImage}
+                    disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                    className="mb-2"
+                  />
+                )}
                  <div className="flex flex-wrap gap-4">
                   {files.map((file, index) => (
                     <FilePreview 

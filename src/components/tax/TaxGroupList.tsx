@@ -9,7 +9,12 @@ import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { isSystemParentGroup } from "@/lib/system-groups";
@@ -34,21 +39,19 @@ export function TaxGroupList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const filteredAndSortedGroups = useMemo(() => {
-    return groups
-      .filter((group) => {
-        // Filter out report-only + system parent groups (e.g. Duties & Taxes)
-        const isReportOnly = (group as any).isReportOnly === true;
-        const isSystemParent =
-          (group as any).isSystemReserved === true ||
-          isSystemParentGroup("tax_groups", (group as any).id);
-        if (isReportOnly || isSystemParent) return false;
-        return group.name && group.name.toLowerCase().includes(searchTerm.toLowerCase());
-      })
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [groups, searchTerm]);
-
+    const base = groups.filter((group) => {
+      const isReportOnly = (group as any).isReportOnly === true;
+      const isSystemParent =
+        (group as any).isSystemReserved === true ||
+        isSystemParentGroup("tax_groups", (group as any).id);
+      if (isReportOnly || isSystemParent) return false;
+      return !!group.name;
+    });
+    return filterAndSortEntityGroups(base, searchTerm, quickFilter);
+  }, [groups, searchTerm, quickFilter]);
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -141,6 +144,7 @@ export function TaxGroupList({
           )}
         </ul>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
     </TooltipProvider>
   );

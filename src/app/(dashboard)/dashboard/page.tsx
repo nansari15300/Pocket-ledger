@@ -85,6 +85,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
 import { useDashboard } from '@/hooks/useDashboard';
 import AdCalendar from "@/components/ui/ad-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { useAuth } from '@/hooks/useAuth';
 import { adToBs, bsToAd, getBSMonthDays } from "@/lib/bs-date";
 import { motion, AnimatePresence } from 'framer-motion';
@@ -523,6 +524,8 @@ function DashboardPageContent() {
   const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
+  /** Recent card quick chip: click -> all-time unapproved only (date/type/column filters ignore). */
+  const [recentUnapprovedOnly, setRecentUnapprovedOnly] = useState(false);
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
   const [isDateChange, setIsDateChange] = useState(false);
   const [liveTime, setLiveTime] = useState(new Date());
@@ -1009,8 +1012,22 @@ function DashboardPageContent() {
     return { paymentInTotal, paymentOutTotal, otherStats };
   }, [vouchers]);
   
+  // Unapproved quick filter: force all-time + all types + clear table column filters.
+  const effectiveRecentDateRange = recentUnapprovedOnly ? undefined : recentDateRange;
+  const effectiveRecentFilters = recentUnapprovedOnly ? {} : recentFilters;
+  const effectiveRecentVoucherTypes = recentUnapprovedOnly ? ['all'] : recentVoucherTypes;
   const { daybookTransactions: allRecentTransactions } = useTransactions(
-    { id: 'daybook', items: [] }, 'daybook', recentDateRange, undefined, processedAccounts, vouchers, undefined, recentFilters, recentVoucherTypes, journalAccountNames, userNames
+    { id: 'daybook', items: [] },
+    'daybook',
+    effectiveRecentDateRange,
+    undefined,
+    processedAccounts,
+    vouchers,
+    undefined,
+    effectiveRecentFilters,
+    effectiveRecentVoucherTypes,
+    journalAccountNames,
+    userNames
   );
 
   const recentTransactions = useMemo(() => {
@@ -1023,10 +1040,15 @@ function DashboardPageContent() {
         const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
         return creationB - creationA;
       });
+    if (recentUnapprovedOnly) {
+      // Approval pending = isApproved true nahin (same highlight logic as row styling).
+      sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
+      return sorted;
+    }
     const limit = Number(recentRowsPerPage);
     if (!isNaN(limit) && limit > 0) sorted = sorted.slice(0, limit);
     return sorted;
-  }, [allRecentTransactions, recentRowsPerPage]);
+  }, [allRecentTransactions, recentRowsPerPage, recentUnapprovedOnly]);
   
   const handlePrint = () => {
     const shouldInclude = (type: 'party' | 'staff' | 'tax') => {
@@ -1278,8 +1300,29 @@ function DashboardPageContent() {
     }, true);
   }
 
-  const isRecentFilterActive = useMemo(() => recentDateRange !== undefined || (recentVoucherTypes.length > 0 && !recentVoucherTypes.includes('all')) || Object.values(recentFilters).some(v => v), [recentDateRange, recentVoucherTypes, recentFilters]);
-  const clearRecentFilters = () => { setRecentDateRange(undefined); setRecentVoucherTypes(['all']); setRecentFilters({}); };
+  const isRecentFilterActive = useMemo(
+    () =>
+      recentDateRange !== undefined ||
+      (recentVoucherTypes.length > 0 && !recentVoucherTypes.includes('all')) ||
+      Object.values(recentFilters).some(v => v) ||
+      recentUnapprovedOnly,
+    [recentDateRange, recentVoucherTypes, recentFilters, recentUnapprovedOnly]
+  );
+  const clearRecentFilters = () => {
+    setRecentDateRange(undefined);
+    setRecentVoucherTypes(['all']);
+    setRecentFilters({});
+    setRecentUnapprovedOnly(false);
+  };
+  const applyRecentUnapprovedFilter = () => {
+    // User request: button click = all-time unapproved vouchers only.
+    setRecentUnapprovedOnly(true);
+    setRecentDateRange(undefined);
+    setRecentVoucherTypes(['all']);
+    setRecentFilters({});
+    setActiveRecentFilter(null);
+    setRecentRowsPerPage('0');
+  };
   
   const taxBreakdownData = useMemo(() => {
     if (!selectedTaxId) return { inputs: [], outputs: [] };
@@ -1401,6 +1444,16 @@ function DashboardPageContent() {
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempRecentDateRange(r);
+                            setRecentDateRange(r);
+                            setIsRecentCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempRecentDateRange ?? recentDateRange}
                       isRange
                       numberOfMonths={calendarMonths}
@@ -1445,6 +1498,18 @@ function DashboardPageContent() {
                   <span className="text-sm whitespace-nowrap">Show Narration</span>
                 </label>
                 )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={recentUnapprovedOnly ? "default" : "outline"}
+                  className="h-9 whitespace-nowrap"
+                  onClick={() => {
+                    if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
+                    else applyRecentUnapprovedFilter();
+                  }}
+                >
+                  Unapproved
+                </Button>
             </div>
              {isRecentFilterActive && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearRecentFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>}
           </div>

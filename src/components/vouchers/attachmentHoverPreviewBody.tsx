@@ -107,22 +107,32 @@ export function LocalFileRefTooltipPreview({
   const isImage = mime.startsWith("image/");
   const isPdf = mime === "application/pdf" || mime.includes("pdf");
 
+  /** Voucher FilePreview hover jaisa — max-w-full / center flex mat (AttachmentHoverPortal width-fit + scroll) */
   return (
-    <div className="flex max-w-[min(96vw,800px)] flex-shrink-0 flex-col gap-1">
-      <div className="flex min-h-[400px] items-center justify-center overflow-hidden rounded-lg border bg-background">
-        {isImage ? (
-          // eslint-disable-next-line @next/next/no-img-element -- blob: preview
-          <img
-            src={objectUrl}
-            alt=""
-            className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
-            loading="eager"
-            onClick={openAttachment}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === "Enter" && openAttachment()}
-          />
-        ) : isPdf ? (
+    <div className="flex w-max max-w-none flex-shrink-0 flex-col gap-1">
+      {isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element -- blob: preview
+        <img
+          src={objectUrl}
+          alt=""
+          draggable={false}
+          className="block h-auto w-auto max-h-none max-w-none object-contain"
+          loading="eager"
+          /* Single-click = portal scroll/drag; double-click = open (browser / app) */
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            openAttachment();
+          }}
+        />
+      ) : isPdf ? (
+        /* Nested FilePreview ke img par dblclick nahi — React bubble tr.onDoubleClick tak; yahan stop + open */
+        <div
+          className="overflow-hidden rounded-lg border bg-background"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            openAttachment();
+          }}
+        >
           <FilePreview
             file={objectUrl}
             size={800}
@@ -131,15 +141,15 @@ export function LocalFileRefTooltipPreview({
             enableHoverFullPreview={false}
             showFormatBadge={false}
           />
-        ) : (
-          <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
-            <span>Preview not available for this type</span>
-            <Button type="button" size="sm" variant="secondary" onClick={openAttachment}>
-              Open
-            </Button>
-          </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
+          <span>Preview not available for this type</span>
+          <Button type="button" size="sm" variant="secondary" onClick={openAttachment}>
+            Open
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -189,24 +199,32 @@ export function SingleAttachmentHoverPreviewBody({
       ? { urls: [...galleryOpts.urls], startIndex: galleryOpts.startIndex }
       : undefined;
 
+  /** Bahar AttachmentHoverPortal — yahi markup FilePreview hoverPanel ke image branch jaisa (taaki zoom/width sahi) */
   return (
-    <div className="flex w-full max-w-full flex-col gap-1">
-      <div className="flex min-h-[320px] w-full items-center justify-center overflow-hidden rounded-lg border bg-background">
-        {isLocalPending ? (
-          <LocalFileRefTooltipPreview url={u} gallery={galleryOpts} />
-        ) : isImage ? (
-          // eslint-disable-next-line @next/next/no-img-element -- signed URL / data URL preview
-          <img
-            src={u}
-            alt=""
-            className="h-auto max-h-[75vh] w-auto max-w-full cursor-pointer object-contain"
-            loading="eager"
-            onClick={openAtt}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === "Enter" && openAtt()}
-          />
-        ) : (
+    <div className="flex w-max max-w-none flex-col gap-1">
+      {isLocalPending ? (
+        <LocalFileRefTooltipPreview url={u} gallery={galleryOpts} />
+      ) : isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element -- signed URL / data URL preview
+        <img
+          src={u}
+          alt=""
+          draggable={false}
+          className="block h-auto w-auto max-h-none max-w-none object-contain"
+          loading="eager"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            openAtt();
+          }}
+        />
+      ) : (
+        <div
+          className="overflow-hidden rounded-lg border bg-background"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            openAtt();
+          }}
+        >
           <FilePreview
             file={u}
             storagePath={storagePath}
@@ -217,8 +235,8 @@ export function SingleAttachmentHoverPreviewBody({
             showFormatBadge={false}
             attachmentGallery={attachmentGallery}
           />
-        )}
-      </div>
+        </div>
+      )}
       <p className="text-center text-[10px] font-semibold text-muted-foreground">{caption}</p>
     </div>
   );

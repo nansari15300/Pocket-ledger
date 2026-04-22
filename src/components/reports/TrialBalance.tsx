@@ -38,6 +38,7 @@ import { openPrintDirect } from "@/lib/printDirect";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { cn } from "@/lib/utils";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 
@@ -1192,6 +1193,19 @@ export function TrialBalancePage() {
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
                       <AdCalendar
+                        rangePresetSlot={
+                          <DateRangePresetRow
+                            country={company?.country}
+                            onApply={(r) => {
+                              if (!r.from || !r.to) return;
+                              setDateRange({
+                                from: new Date(r.from.getFullYear(), r.from.getMonth(), r.from.getDate(), 12),
+                                to: new Date(r.to.getFullYear(), r.to.getMonth(), r.to.getDate(), 12),
+                              });
+                              setIsCalendarOpen(false);
+                            }}
+                          />
+                        }
                         valueAD={dateRange}
                         isRange
                         numberOfMonths={calendarMonths}

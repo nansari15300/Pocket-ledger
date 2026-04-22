@@ -66,6 +66,7 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "@/components/ui/badge";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -164,7 +165,7 @@ export default function ItemDetails({
   const { can } = usePermissions();
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
@@ -525,7 +526,9 @@ export default function ItemDetails({
   }, [closingBalance, stockView]);
 
   const dateRangeLabel = useMemo(() => {
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) return "Last 10 Txns";
+    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
+      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
+    }
     const from = dateRange.from!;
     const to = dateRange.to || from;
     const fromBS = formatDateBS(from);
@@ -535,7 +538,7 @@ export default function ItemDetails({
     if (dateSystem === "AD") return `AD: ${fromAD}${to !== from ? " to " + toAD : ""}`;
     if (dateSystem === "BS") return `BS: ${fromBS}${to !== from ? " to " + toBS : ""}`;
     return `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
-  }, [dateRange, dateSystem, formatDateBS]);
+  }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
 
   useEffect(() => {
     if (isMobile && dateRange?.from) {
@@ -579,14 +582,23 @@ export default function ItemDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, currentItem?.id]);
 
-  // Mobile: show last 10 when no date filter (like Party), all when date filter applied
+  // Mobile: latest-first paging (page 1 = newest rows)
   const mobileDisplayTransactions = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
   const getOppositeLabel = (t: any) => {
     if (t.type === 'sale' || t.type === 'purchase') {
@@ -752,7 +764,15 @@ export default function ItemDetails({
           )}
           <div className="flex-1 min-w-0 h-9 relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
-                <Input placeholder="Search transactions" className="pl-8 h-9 text-sm w-full min-w-0" value={mobileSearchTerm} onChange={(e) => setMobileSearchTerm(e.target.value)} />
+                <Input
+                  placeholder="Search transactions"
+                  className="pl-8 h-9 text-sm w-full min-w-0"
+                  value={mobileSearchTerm}
+                  onChange={(e) => {
+                    setMobileSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                />
             </div>
         </div>
       </div>
@@ -792,6 +812,17 @@ export default function ItemDetails({
           ))}
         </div>
       </div>
+    <MobileTransactionsPager
+      className="flex-shrink-0 mb-12"
+      currentPage={currentPage}
+      totalItems={filteredMobileTransactions.length}
+      rowsPerPage={rowsPerPage}
+      onRowsPerPageChange={(nextRows) => {
+        setRowsPerPage(nextRows);
+        setCurrentPage(1);
+      }}
+      onPageChange={setCurrentPage}
+    />
     </div>
     {/* Fixed bottom: New Sale, New Purchase, Calendar - same as Party footer style */}
     <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -959,6 +990,16 @@ export default function ItemDetails({
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          setTempDateRange(r);
+                          setDateRange(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                      />
+                    }
                     valueAD={tempDateRange}
                     isRange
                     numberOfMonths={calendarMonths}

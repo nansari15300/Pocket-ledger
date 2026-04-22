@@ -171,3 +171,22 @@ export async function sendTransactionAlert(
 export function isAmountOverOneLakh(amount: number): boolean {
   return typeof amount === "number" && !Number.isNaN(amount) && amount > ONE_LAKH;
 }
+
+/**
+ * Legacy/old builds ke "new transaction added" alerts hide karne ka guard.
+ * User request: normal added notifications band, sirf `large_amount` naya alert dikhna chahiye.
+ */
+export function isSuppressibleNewTransactionAlert(alert: {
+  kind?: unknown;
+  type?: unknown;
+  message?: unknown;
+}): boolean {
+  const type = String(alert.type ?? "").toLowerCase();
+  if (type !== "transaction_alert") return false;
+  const kind = String(alert.kind ?? "").toLowerCase();
+  if (kind === "large_amount") return false;
+  if (kind === "added" || kind === "created" || kind === "new" || kind === "new_transaction") return true;
+  const msg = String(alert.message ?? "").toLowerCase();
+  if (msg.includes("large amount")) return false;
+  return msg.includes("transaction added") || msg.includes("new transaction");
+}

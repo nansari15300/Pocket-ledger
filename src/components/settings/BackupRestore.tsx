@@ -48,6 +48,7 @@ import {
   listCompanyDocsFromBrowserDb,
 } from "@/lib/localCompanyDocMirror";
 import { clearSyncOutboxForCompany } from "@/lib/localVoucherOutbox";
+import { Capacitor } from "@capacitor/core";
 
 /** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
 function fiscalFieldToLocalIso(val: unknown): string | null {
@@ -77,6 +78,82 @@ const collectionsToBackup = [
 
 /** Firestore ek query me ~1000 doc cap — pages se poora subcollection (warna backup adhura) */
 const BACKUP_PAGE_SIZE = 500;
+
+/** Backup blob ko native files API ke liye base64 me badlo. */
+async function blobToBase64DataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = () => reject(r.error ?? new Error("Failed to read blob"));
+    r.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Backup file download/save:
+ * - Web: File System Access "Save As" (location picker) if supported.
+ * - Native APK: Documents me write + share sheet (user can choose destination/app).
+ * - Fallback: anchor download.
+ */
+async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promise<{ where: string }> {
+  if (typeof window !== "undefined") {
+    try {
+      const picker = (window as any).showSaveFilePicker;
+      if (typeof picker === "function") {
+        const handle = await picker({
+          suggestedName: fileName,
+          types: [{ description: "Pocket Ledger Backup", accept: { "application/octet-stream": [".plbp"] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return { where: "Selected folder (Save As)" };
+      }
+    } catch (e: any) {
+      if (e?.name === "AbortError") throw e;
+      // picker unsupported/blocked -> नीचे fallback
+    }
+  }
+
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const { Filesystem, Directory } = await import("@capacitor/filesystem");
+      const { Share } = await import("@capacitor/share");
+      const dataUrl = await blobToBase64DataUrl(blob);
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
+      await Filesystem.writeFile({
+        path: fileName,
+        data: base64,
+        directory: Directory.Documents,
+      });
+      const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Documents });
+      try {
+        // User yahan se target app/location choose kar sakta hai (Drive, Files, etc.)
+        await Share.share({
+          title: fileName,
+          url: uri,
+          dialogTitle: "Save backup file",
+        });
+      } catch {
+        /* share optional */
+      }
+      return { where: `Documents/${fileName}` };
+    }
+  } catch {
+    // native write fail -> browser fallback
+  }
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  return { where: "Browser Downloads folder" };
+}
 
 /** Firestore subcollections `companies/{id}/…` — cloud doc id kabhi `authoritativeCompanyId` hota hai, registry `companyId` se alag */
 async function fetchSubcollectionAllDocsPaginated(
@@ -380,20 +457,21 @@ export function BackupRestore() {
         return;
       }
 
-      const blob = new Blob([finalDataString], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileExtension = 'plbp';
-      a.download = `pocket-ledger_backup_${company.name.replace(/\s+/g, '_')}_${timestamp}.${fileExtension}`;
-
-      a.click();
-      URL.revokeObjectURL(url);
-      toast({ title: "Success", description: "Backup downloaded successfully." });
+      const fileName = `pocket-ledger_backup_${company.name.replace(/\s+/g, '_')}_${timestamp}.${fileExtension}`;
+      const blob = new Blob([finalDataString], { type: "application/octet-stream" });
+      const saved = await saveBackupBlobWithBestEffort(blob, fileName);
+      toast({
+        title: "Success",
+        description: `Backup saved: ${saved.where}`,
+      });
     } catch (error) {
       console.error(error);
+      if ((error as any)?.name === "AbortError") {
+        toast({ title: "Backup cancelled", description: "Save location was not selected." });
+        return;
+      }
       if (error instanceof PermissionDeniedError) {
         toast({ variant: "destructive", title: "Permission Denied", description: error.message });
       } else {

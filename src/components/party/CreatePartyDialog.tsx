@@ -41,9 +41,9 @@ export function CreatePartyDialog({
   return (
     <Dialog open={isOpen} onOpenChange={setOpen}>
   {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-  {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded corners. Keep same as CreateBankAccountDialog. */}
+  {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
   <DialogContent
-    className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-3xl sm:grid sm:flex-none sm:px-6"
+    className="max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:grid sm:flex-none sm:px-6"
     onOpenAutoFocus={(e) => e.preventDefault()}
     onCloseAutoFocus={(e) => e.preventDefault()}
     onPointerDownOutside={(e) => {
@@ -71,8 +71,8 @@ export function CreatePartyDialog({
             Add a new customer or vendor to your records. You can also upload a related file.
           </DialogDescription>
         </DialogHeader>
-        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-        <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+        {/* Scrollable form area: mobile + desktop dono me dialog height ke andar scroll (sm: 90vh cap). */}
+        <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:min-h-0 sm:flex-1 sm:overflow-y-auto">
           <CreatePartyForm onPartyCreated={handlePartyCreated} onNestedDialogOpenChange={setIsNestedOpen} />
         </div>
       </DialogContent>

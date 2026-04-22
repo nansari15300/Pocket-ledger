@@ -118,6 +118,7 @@ import { NotificationBell } from "../vouchers/NotificationBell";
 import { useBalanceMode } from "@/hooks/useBalanceMode";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { getLocalAuthUser } from "@/lib/localApiClient";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
 const getInitials = (name: string) => {
@@ -187,8 +188,6 @@ export function PartyDetails({
   userNames,
   onBack,
   context,
-  /** Reports (e.g. Anusuchi 13): mobile header "Party Details" ki jagah yeh dikhao */
-  mobileDetailHeading,
   /** Jab PartyDetails kisi report ke andar ho: dropdown se party badle bina `/party` par na jao */
   onEmbeddedPartyChange,
 }: {
@@ -205,7 +204,6 @@ export function PartyDetails({
   userNames?: Record<string, string>;
   onBack?: () => void;
   context?: string;
-  mobileDetailHeading?: string;
   onEmbeddedPartyChange?: (partyId: string) => void;
 }) {
   const { company, companyId } = useCompany();
@@ -582,22 +580,26 @@ export function PartyDetails({
       currentPage * rowsPerPage
   ) : searchFilteredTransactions;
 
-  // Mobile: show a simple "last 10" view by default (no date filter),
-  // and all matching transactions when a date filter is applied.
   const mobileTransactions = useMemo(() => {
-    const hasDateFilter =
-      !!dateRange && (dateRange.from != null || dateRange.to != null);
+    if (rowsPerPage <= 0) return searchFilteredTransactions;
+    const total = searchFilteredTransactions.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return searchFilteredTransactions.slice(start, Math.max(start, end));
+  }, [searchFilteredTransactions, currentPage, rowsPerPage]);
 
-    if (hasDateFilter) {
-      // Date filter active → show all filtered transactions on mobile
-      return searchFilteredTransactions;
-    }
-
-    // No date filter → always show the last 10 transactions (any date)
-    const list = searchFilteredTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [searchFilteredTransactions, dateRange]);
+  /** Mobile pager: slice [start,end) — left = purane (low index), right = naye (high index) count. */
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = searchFilteredTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: total - end };
+  }, [searchFilteredTransactions.length, currentPage, rowsPerPage]);
 
   // Party dropdown: hide Owners Capital and Opening Balance (keep current party so selection shows)
   const partyDropdownOptions = useMemo(() => {
@@ -611,10 +613,11 @@ export function PartyDetails({
     }).map((p) => ({ value: p.id, label: p.name }));
   }, [allParties, party?.id]);
 
-  // Default to last page (most recent 10) on open and when date filter or list changes
+  // Keep page in valid range when list size/page-size changes.
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-    if (total >= 1) setCurrentPage(total);
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
   }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
 
   const buildDateRangeText = () => {
@@ -745,21 +748,21 @@ export function PartyDetails({
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: no pb-24 here so scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-          {/* Row 1: Party Details (left) | Showing x of y vouchers (right) - compact */}
-          <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-            {onBack && (
-              <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
+          {/* Master-detail flow: title "Party details" master header me; yahan sirf direct /party/[id] pe back + context. */}
+          {onBack ? (
+            <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
+              <Button variant="ghost" size="icon" onClick={handleMobileBack} className="h-7 w-7 flex-shrink-0" aria-label="Back">
+                <ArrowLeft className="h-3.5 w-3.5" />
               </Button>
-            )}
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">{mobileDetailHeading ?? "Party Details"}</h1>
-            <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-              Showing {mobileTransactions.length} of {searchFilteredTransactions.length} voucher(s)
-            </span>
-          </div>
+              <h1 className="shrink-0 text-base font-bold text-muted-foreground">Party details</h1>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium" title={party.name}>
+                {party.name}
+              </span>
+            </div>
+          ) : null}
           {/* Row 2 (center): Date range - compact; no filter = "Last 10 Txns", else date range; cross to reset when filter is on */}
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-            <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "Last 10 Txns" : dateRangeLabel}</span>
+            <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
             {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
               <button
                 type="button"
@@ -826,7 +829,7 @@ export function PartyDetails({
             className="flex-1 min-h-0 overflow-auto scroll-touch"
             style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
           >
-            <div className="pb-24">
+            <div className="pb-2">
             {/* Unapproved (`isApproved` !== true): pink row tint — TransactionsTable default highlightPendingApproval */}
             <TransactionsTable
               transactions={mobileTransactions}
@@ -868,6 +871,18 @@ export function PartyDetails({
             />
             </div>
           </div>
+          <MobileTransactionsPager
+            className="flex-shrink-0 mb-12"
+            currentPage={currentPage}
+            totalItems={searchFilteredTransactions.length}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={(nextRows) => {
+              setRowsPerPage(nextRows);
+              setCurrentPage(1);
+            }}
+            onPageChange={setCurrentPage}
+            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+          />
         </div>
         {/* Fixed bottom: Bill wise/Statement, Receive, Pay, New Sale, Calendar - open popups */}
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -1171,6 +1186,16 @@ export function PartyDetails({
                     </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

@@ -99,6 +99,8 @@ function ItemsPageContent() {
   const useQueryNav = useMasterDetailQueryNav();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedIdFromUrl = searchParams.get("selected");
+  const viewFromUrl = searchParams.get("view");
 
   const [activeView, setActiveView] = useState("items");
   const { selected, setSelected } = useResponsiveListLayout<Item | ItemGroup>(`items_view_${activeView}`);
@@ -111,6 +113,7 @@ function ItemsPageContent() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyItemsWithPendingApproval, setShowOnlyItemsWithPendingApproval] = useState(false);
+  const [showOnlyItemGroupsWithPendingApproval, setShowOnlyItemGroupsWithPendingApproval] = useState(false);
   const [stockView, setStockView] = useState<StockView>("amount");
   const [itemDisplayUnits, setItemDisplayUnits] = useState<DisplayUnitState>({});
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
@@ -188,7 +191,9 @@ function ItemsPageContent() {
     selected,
     setSelected,
     activeView === "items" ? allItems : processedItemGroups,
-    vouchersLoading
+    vouchersLoading,
+    undefined,
+    selectedIdFromUrl
   );
 
   // Clear search when company changes (prevent email/other data from carrying over)
@@ -197,22 +202,31 @@ function ItemsPageContent() {
   }, [companyId]);
   useEffect(() => {
     setShowOnlyItemsWithPendingApproval(false);
+    setShowOnlyItemGroupsWithPendingApproval(false);
   }, [companyId]);
   useEffect(() => {
     if (activeView !== "items") setShowOnlyItemsWithPendingApproval(false);
+    if (activeView !== "groups") setShowOnlyItemGroupsWithPendingApproval(false);
   }, [activeView]);
 
   // Restore selection when returning from details (e.g. /items?selected=xyz or /items?view=groups&selected=xyz)
-  const selectedIdFromUrl = searchParams.get("selected");
-  const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
     const groupItem = processedItemGroups.find((i) => i.id === selectedIdFromUrl);
     const itemFromList = allItems.find((i) => i.id === selectedIdFromUrl);
-    const item = groupItem || itemFromList;
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    if (groupItem && itemFromList) {
+      if (viewFromUrl === "groups") setActiveView("groups");
+      else setActiveView("items");
+    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (itemFromList) setActiveView("items");
+    else if (groupItem) setActiveView("groups");
+    const item =
+      groupItem && itemFromList
+        ? viewFromUrl === "groups"
+          ? groupItem
+          : itemFromList
+        : groupItem || itemFromList;
     if (item) setSelected(item);
     const canonical =
       viewFromUrl === "groups"
@@ -322,17 +336,27 @@ function ItemsPageContent() {
     return processedItems.filter((p) => p.groupId === selectedItemGroup.id);
   }, [selectedItemGroup, processedItems]);
 
+  const processedItemGroupsForList = useMemo(() => {
+    if (!showOnlyItemGroupsWithPendingApproval || !showApproveOnList) return processedItemGroups;
+    return processedItemGroups.filter((g) => (pendingApprovalByItemGroupId[g.id] ?? 0) > 0);
+  }, [
+    processedItemGroups,
+    showOnlyItemGroupsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByItemGroupId,
+  ]);
+
   // Filtered group count (matches ItemGroupList: exclude report-only + system groups; apply search)
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return (processedItemGroups || []).filter((g) => {
+    return (processedItemGroupsForList || []).filter((g) => {
       const anyG = g as any;
       if (anyG.isReportOnly === true) return false;
       const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("item_groups", anyG.id);
       if (isSystemParent) return false;
       return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
     }).length;
-  }, [processedItemGroups, searchTerm]);
+  }, [processedItemGroupsForList, searchTerm]);
 
   const handleSelect = (item: Item | ItemGroup) => {
     if (useQueryNav) {
@@ -384,6 +408,17 @@ function ItemsPageContent() {
             tooltipShowAllHint="Show all items (click)"
             ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
             ariaLabelShowAll="Show all items"
+          />
+        ) : null}
+        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyItemGroupsWithPendingApproval}
+            onToggle={() => setShowOnlyItemGroupsWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all groups (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all groups"
           />
         ) : null}
         {activeView === "items" ? (
@@ -445,7 +480,7 @@ function ItemsPageContent() {
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             <ItemGroupList
-              groups={processedItemGroups}
+              groups={processedItemGroupsForList}
               onSelectGroup={(g) => handleSelect(g)}
               selectedGroup={selectedItemGroup}
               searchTerm={searchTerm}

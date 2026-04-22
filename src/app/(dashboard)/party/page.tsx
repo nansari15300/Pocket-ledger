@@ -118,6 +118,8 @@ function PartyPageContent() {
 
   const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedIdFromUrl = searchParams.get("selected");
+  const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
   const { setBalanceMode } = useBalanceMode();
 
@@ -136,6 +138,7 @@ function PartyPageContent() {
   const [searchTerm, setSearchTerm] = useState("");
   /** Party list: sirf un jinke paas pending approval (count box click toggle) */
   const [showOnlyPartiesWithPendingApproval, setShowOnlyPartiesWithPendingApproval] = useState(false);
+  const [showOnlyPartyGroupsWithPendingApproval, setShowOnlyPartyGroupsWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -175,6 +178,11 @@ function PartyPageContent() {
     return masterDetailBalanceToneClass((selected as Party | Group).balance);
   }, [selected]);
   const partyMasterDetailTitle = activeView === "groups" ? "Party Groups" : "Parties";
+  /** Mobile party ledger: master row me "Parties" ki jagah context clear ("Party details" + naam). */
+  const responsiveMasterDetailTitle = useMemo(() => {
+    if (isMobile && selectedParty) return "Party details";
+    return partyMasterDetailTitle;
+  }, [isMobile, selectedParty, partyMasterDetailTitle]);
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
   useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
 
@@ -297,6 +305,11 @@ function PartyPageContent() {
     return userDefinedGroups;
   }, [processedPartiesForSelection, initialProcessedGroups, companyId]);
 
+  const groupsForPartyGroupListView = useMemo(() => {
+    if (!showOnlyPartyGroupsWithPendingApproval || !showApproveOnList) return processedGroups;
+    return processedGroups.filter((g) => (pendingApprovalByGroupId[g.id] ?? 0) > 0);
+  }, [processedGroups, showOnlyPartyGroupsWithPendingApproval, showApproveOnList, pendingApprovalByGroupId]);
+
   // ========== MEMORY LOGIC ==========
   usePageMemory(
     "partyPageState", 
@@ -305,13 +318,13 @@ function PartyPageContent() {
     selected,                 
     setSelected,              
     activeView === 'parties' ? partiesForList : processedGroups, 
-    pageDataLoading
+    pageDataLoading,
+    undefined,
+    selectedIdFromUrl
   );
   // ==================================
 
   // Restore selection when returning from details (e.g. /party?selected=xyz or /party?view=groups&selected=xyz)
-  const selectedIdFromUrl = searchParams.get("selected");
-  const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (pageDataLoading) return;
@@ -327,9 +340,18 @@ function PartyPageContent() {
     }
     const groupItem = processedGroups.find((i) => i.id === selectedIdFromUrl);
     const partyItem = processedParties.find((i) => i.id === selectedIdFromUrl);
-    const item = groupItem || partyItem;
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    if (groupItem && partyItem) {
+      if (viewFromUrl === "groups") setActiveView("groups");
+      else setActiveView("parties");
+    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (partyItem) setActiveView("parties");
+    else if (groupItem) setActiveView("groups");
+    const item =
+      groupItem && partyItem
+        ? viewFromUrl === "groups"
+          ? groupItem
+          : partyItem
+        : groupItem || partyItem;
     if (item) setSelected(item);
     // URL me ?selected= / view=groups rakhna: router.replace("/party") se hataane par header Report + static build break ho jata tha
     const canonical =
@@ -402,9 +424,11 @@ function PartyPageContent() {
   }, [companyId]);
   useEffect(() => {
     setShowOnlyPartiesWithPendingApproval(false);
+    setShowOnlyPartyGroupsWithPendingApproval(false);
   }, [companyId]);
   useEffect(() => {
     if (activeView !== "parties") setShowOnlyPartiesWithPendingApproval(false);
+    if (activeView !== "groups") setShowOnlyPartyGroupsWithPendingApproval(false);
   }, [activeView]);
 
   // Mobile overdue: force bill-wise mode while on this page (party default is already bill_wise; restore on leave)
@@ -503,6 +527,17 @@ function PartyPageContent() {
             ariaLabelShowAll="Show all parties"
           />
         ) : null}
+        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyPartyGroupsWithPendingApproval}
+            onToggle={() => setShowOnlyPartyGroupsWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all groups (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all groups"
+          />
+        ) : null}
         {activeView === "parties" ? (
           <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreatePartyOpen(true)}>
@@ -551,7 +586,7 @@ function PartyPageContent() {
             </>
         ) : (
             <PartyGroupList
-              groups={processedGroups}
+              groups={groupsForPartyGroupListView}
               onSelectGroup={handleSelect}
               selectedGroup={selectedGroup}
               searchTerm={searchTerm}
@@ -757,7 +792,7 @@ function PartyPageContent() {
   return (
     <>
       <ResponsiveMasterDetail
-        title={partyMasterDetailTitle}
+        title={responsiveMasterDetailTitle}
         mobileSelectionLabel={mobilePartyGroupSelectionLabel}
         mobileSelectionLabelClassName={mobilePartyGroupSelectionLabelClassName}
         balance={

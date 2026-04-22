@@ -37,10 +37,17 @@ export function usePageMemory<T extends { id: string }>(
           // URL wins whenever a view id is in the URL (e.g. ?view=devices); don't require it in currentItems
           // so that permission-loaded list doesn't cause localStorage to overwrite the URL tab
           // Next.js `useSearchParams` kabhi pehle frame par khali — window.location se `view` check (refresh pe tab galat)
-          const hasViewInLocation =
-            typeof window !== "undefined" && new URLSearchParams(window.location.search).has("view");
+          const loc =
+            typeof window !== "undefined"
+              ? new URLSearchParams(window.location.search)
+              : null;
+          const hasViewInLocation = loc?.has("view") ?? false;
+          // `?selected=` without `view=` still encodes master-detail row — don't let localStorage flip the tab
+          const hasSelectedInLocation = loc?.has("selected") ?? false;
           const urlWins =
-            (urlSelectedId != null && urlSelectedId !== "") || hasViewInLocation;
+            (urlSelectedId != null && urlSelectedId !== "") ||
+            hasViewInLocation ||
+            hasSelectedInLocation;
           // disableAutoSelect: mobile settings list-first — localStorage se purana tab mat lao
           if (!urlWins && !disableAutoSelect && parsed.activeView && parsed.activeView !== activeView) {
             setActiveView(parsed.activeView);

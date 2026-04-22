@@ -117,6 +117,8 @@ function IncomeExpensePageContent() {
   }, [vouchers, processedExpenseAccounts, showApproveOnList]);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedIdFromUrl = searchParams.get("selected");
+  const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
   
   const [activeView, setActiveView] = useState("accounts");
@@ -131,6 +133,8 @@ function IncomeExpensePageContent() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyExpenseAccountsWithPendingApproval, setShowOnlyExpenseAccountsWithPendingApproval] =
+    useState(false);
+  const [showOnlyExpenseGroupsWithPendingApproval, setShowOnlyExpenseGroupsWithPendingApproval] =
     useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
@@ -232,7 +236,9 @@ function IncomeExpensePageContent() {
     selected,                 
     setSelected,              
     activeView === 'accounts' ? processedExpenseAccounts : processedExpenseGroups, 
-    vouchersLoading           
+    vouchersLoading,
+    undefined,
+    selectedIdFromUrl
   );
   // ==================================
 
@@ -242,9 +248,11 @@ function IncomeExpensePageContent() {
   }, [companyId]);
   useEffect(() => {
     setShowOnlyExpenseAccountsWithPendingApproval(false);
+    setShowOnlyExpenseGroupsWithPendingApproval(false);
   }, [companyId]);
   useEffect(() => {
     if (activeView !== "accounts") setShowOnlyExpenseAccountsWithPendingApproval(false);
+    if (activeView !== "groups") setShowOnlyExpenseGroupsWithPendingApproval(false);
   }, [activeView]);
 
   const expenseAccountsForList = useMemo(() => {
@@ -263,17 +271,40 @@ function IncomeExpensePageContent() {
     ).length;
   }, [expenseAccountsForList, searchTerm]);
 
+  const expenseGroupsForList = useMemo(() => {
+    if (!showOnlyExpenseGroupsWithPendingApproval || !showApproveOnList) return processedExpenseGroups;
+    return processedExpenseGroups.filter((g) => (pendingApprovalByExpenseGroupId[g.id] ?? 0) > 0);
+  }, [
+    processedExpenseGroups,
+    showOnlyExpenseGroupsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByExpenseGroupId,
+  ]);
+  const filteredExpenseGroupListCount = useMemo(() => {
+    const searchLower = (searchTerm || "").toLowerCase();
+    return expenseGroupsForList.filter(
+      (g) => (g as any).isReportOnly !== true && g.name && g.name.toLowerCase().includes(searchLower)
+    ).length;
+  }, [expenseGroupsForList, searchTerm]);
+
   // Restore selection when returning from details (e.g. /incomes?selected=xyz or /incomes?view=groups&selected=xyz)
-  const selectedIdFromUrl = searchParams.get("selected");
-  const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
     const groupItem = processedExpenseGroups.find((i) => i.id === selectedIdFromUrl);
     const accountItem = processedExpenseAccounts.find((i) => i.id === selectedIdFromUrl);
-    const item = groupItem || accountItem;
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    if (groupItem && accountItem) {
+      if (viewFromUrl === "groups") setActiveView("groups");
+      else setActiveView("accounts");
+    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (accountItem) setActiveView("accounts");
+    else if (groupItem) setActiveView("groups");
+    const item =
+      groupItem && accountItem
+        ? viewFromUrl === "groups"
+          ? groupItem
+          : accountItem
+        : groupItem || accountItem;
     if (item) setSelected(item);
     const canonical =
       viewFromUrl === "groups"
@@ -453,6 +484,20 @@ function IncomeExpensePageContent() {
                 ariaLabelShowAll="Show all accounts"
               />
             ) : null}
+            {activeView === "groups" &&
+            showApproveOnList &&
+            totalPendingApprovalVoucherCount > 0 &&
+            !listDisabled ? (
+              <PendingApprovalListFilterBadge
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyExpenseGroupsWithPendingApproval}
+                onToggle={() => setShowOnlyExpenseGroupsWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all groups (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all groups"
+              />
+            ) : null}
             {activeView === "accounts" ? (
               <CreateExpenseAccountDialog onExpenseAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
                 <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateAccountOpen(true)}>
@@ -495,10 +540,10 @@ function IncomeExpensePageContent() {
             <>
               <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm font-semibold text-muted-foreground">
                 <Users className="h-4 w-4" />
-                <span>Groups ({processedExpenseGroups.filter((g) => (g as any).isReportOnly !== true).length})</span>
+                <span>Groups ({filteredExpenseGroupListCount})</span>
               </div>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                <ExpenseGroupList groups={processedExpenseGroups} onSelectGroup={(g) => handleSelect(g, 'groups')} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} disabled={listDisabled || !groupDetailsEnabled} pendingApprovalByGroupId={pendingApprovalByExpenseGroupId} getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined} />
+                <ExpenseGroupList groups={expenseGroupsForList} onSelectGroup={(g) => handleSelect(g, 'groups')} selectedGroup={selectedGroup} searchTerm={searchTerm} collapsible={false} disabled={listDisabled || !groupDetailsEnabled} pendingApprovalByGroupId={pendingApprovalByExpenseGroupId} getItemHref={useQueryNav && groupDetailsEnabled ? (g) => `/incomes?view=groups&selected=${g.id}` : undefined} />
               </div>
             </>
         )}

@@ -93,6 +93,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
@@ -103,6 +104,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
@@ -175,7 +181,6 @@ function formatPurchaseFormValidationErrors(errors: FieldErrors<PurchaseFormValu
 
 /* --------------------------------- CONSTS -------------------------------- */
 
-const MAX_FILE_SIZE_MB = 0.5;
 // MAX_ATTACHMENTS is now from permissions: fileAttachmentLimits.maxFileCount
 
 const COLS =
@@ -308,6 +313,14 @@ export function CreatePurchaseForm({
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [files, setFiles] = useState<(File | string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   const initialFilesRef = useRef<string[]>([]);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
@@ -625,6 +638,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === "string") as string[];
+        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
       }
     } else if (voucher) {
       lastResetVoucherIdRef.current = null;
@@ -637,6 +651,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       if (Array.isArray(urlsToSet)) {
         setFiles(urlsToSet);
         initialFilesRef.current = urlsToSet.filter((f: any) => typeof f === 'string') as string[];
+        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsToSet));
       }
     } else {
       lastResetVoucherIdRef.current = null;
@@ -908,7 +923,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           type: "purchase",
         };
 
-        let existingFileUrls = files.filter(
+        let filesForSave = files;
+        if (savePdfAsImage) {
+          const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+          try {
+            filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+          } finally {
+            sonnerToast.dismiss(convToast);
+          }
+        }
+
+        let existingFileUrls = filesForSave.filter(
           (f): f is string => typeof f === "string"
         );
         let preGeneratedVoucherId: string | undefined;
@@ -918,7 +943,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             existingFileUrls.push(data.unassignedFile.url);
         }
 
-        const newFilesToUpload = files.filter(
+        const newFilesToUpload = filesForSave.filter(
           (f): f is File => f instanceof File
         );
 
@@ -1101,6 +1126,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
+            setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
         }
@@ -1122,7 +1148,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     },
     // pendingLinkAllocations, vouchers, processedParties: required so link data is persisted to server on Save (avoids stale closure)
-    [companyId, user, files, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
+    [companyId, user, files, savePdfAsImage, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
   );
 
 
@@ -1251,13 +1277,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -2407,6 +2432,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   <div className="col-span-2 px-[2px]">
                     <FormItem>
                       <FormLabel className="text-sm">Attach Files</FormLabel>
+                      {showPdfAsImageToggle && (
+                        <VoucherPdfAsImageToggle
+                          id="voucher-save-pdf-as-image-purchase-mobile"
+                          checked={savePdfAsImage}
+                          onCheckedChange={setSavePdfAsImage}
+                          disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                          className="mb-2"
+                        />
+                      )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="grid grid-cols-3 gap-2 px-[2px]">
@@ -2667,6 +2701,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
+                      {showPdfAsImageToggle && (
+                        <VoucherPdfAsImageToggle
+                          id="voucher-save-pdf-as-image-purchase-desktop"
+                          checked={savePdfAsImage}
+                          onCheckedChange={setSavePdfAsImage}
+                          disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                          className="mb-2"
+                        />
+                      )}
                       <RestrictedFileUploader>
                         {/* When linked: add/remove disabled; existing files stay clickable to open. Filter by file identity (not index) so remove works reliably. */}
                         <div className="flex flex-wrap gap-4">

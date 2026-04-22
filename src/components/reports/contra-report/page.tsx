@@ -36,6 +36,7 @@ import { RunningBalanceFullChart } from "@/components/reports/RunningBalanceFull
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import AdCalendar from "@/components/ui/ad-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { toast } from "sonner";
 import type { Account } from "@/components/bank-cash/types";
 import { useCalendarMonths } from "@/hooks/use-mobile";
@@ -534,6 +535,15 @@ export default function ContraReportPage() {
                           {(dateSystem === 'AD' || dateSystem === 'Both') && (
                           <div className="flex-1 w-full min-w-0">
                               <AdCalendar
+                              rangePresetSlot={
+                                <DateRangePresetRow
+                                  country={company?.country}
+                                  onApply={(r) => {
+                                    setDateRange(r);
+                                    setIsCalendarOpen(false);
+                                  }}
+                                />
+                              }
                               valueAD={dateRange}
                               isRange
                               numberOfMonths={calendarMonths}

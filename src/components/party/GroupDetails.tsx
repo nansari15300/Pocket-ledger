@@ -118,6 +118,7 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { getLocalAuthUser } from "@/lib/localApiClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
@@ -849,28 +850,21 @@ export function GroupDetails({
     currentPage * rowsPerPage
   );
 
-  // Default to last page (most recent 10) on open and when date filter or list changes
+  // Keep page in valid range when list size/page-size changes.
   useEffect(() => {
     const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
-    setCurrentPage(total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), total));
   }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
-  // Mobile: show a simple "last 10" view by default (no date filter),
-  // and all matching transactions when a date filter is applied.
   const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter =
-      !!dateRange && (dateRange.from != null || dateRange.to != null);
-
-    if (hasDateFilter) {
-      // Date filter active → show all filtered transactions on mobile
-      return filteredMobileTransactions;
-    }
-
-    // No date filter → always show the last 10 transactions (any date)
-    const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return filteredMobileTransactions;
+    const total = filteredMobileTransactions.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return filteredMobileTransactions.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
 
@@ -982,7 +976,7 @@ export function GroupDetails({
           </span>
         </div>
         <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
-          <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "Last 10 Txns" : dateRangeLabel}</span>
+          <span className="text-xs font-medium text-muted-foreground">{!dateRange || (dateRange.from == null && dateRange.to == null) ? "All Time" : dateRangeLabel}</span>
           {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
             <button
               type="button"
@@ -1038,7 +1032,7 @@ export function GroupDetails({
           className="flex-1 min-h-0 overflow-auto scroll-touch"
           style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
         >
-          <div className="pb-24">
+          <div className="pb-2">
           {/* Unapproved: pink row — default `highlightPendingApproval` */}
           <TransactionsTable
             transactions={mobileTransactionsToShow}
@@ -1080,6 +1074,17 @@ export function GroupDetails({
           />
           </div>
         </div>
+        <MobileTransactionsPager
+          className="flex-shrink-0 mb-12"
+          currentPage={currentPage}
+          totalItems={filteredMobileTransactions.length}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(nextRows) => {
+            setRowsPerPage(nextRows);
+            setCurrentPage(1);
+          }}
+          onPageChange={setCurrentPage}
+        />
       </div>
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
         <Button
@@ -1283,6 +1288,16 @@ export function GroupDetails({
                   </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          setTempDateRange(r);
+                          onDateRangeChange(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                      />
+                    }
                     valueAD={tempDateRange}
                     isRange
                     numberOfMonths={calendarMonths}

@@ -35,6 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { toast } from "sonner";
+import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
 import { AlertsTab } from '@/components/messages/AlertsTab';
 import { ChatTab } from '@/components/messages/ChatTab';
 import { AlarmsTab } from '@/components/messages/AlarmsTab';
@@ -91,6 +92,8 @@ export default function MessagesPage() {
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [historyHighlightTimestamp, setHistoryHighlightTimestamp] = useState<any>(null);
   const [historyHighlightUid, setHistoryHighlightUid] = useState<string | undefined>(undefined);
+  /** Alerts -> View changes: same notification ko history dialog se mark-as-read karne ke liye. */
+  const [historyNotificationId, setHistoryNotificationId] = useState<string | null>(null);
   
   const [conversations, setConversations] = useState<any[]>([]);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
@@ -435,7 +438,12 @@ export default function MessagesPage() {
         where("isRead", "==", false)
       );
       const unsubAlerts = onSnapshot(alertsQuery, (snapshot) => {
-        unreadByRecipient[id] = new Set(snapshot.docs.map((d) => d.id));
+        // Hidden alert types ko unread badge me count na karo.
+        unreadByRecipient[id] = new Set(
+          snapshot.docs
+            .filter((d) => !isSuppressibleNewTransactionAlert(d.data() as any))
+            .map((d) => d.id)
+        );
         recompute();
       });
       unsubscribers.push(unsubAlerts);
@@ -654,7 +662,13 @@ export default function MessagesPage() {
   );
 
   const handleOpenHistoryFromAlert = useCallback(
-    async (alertCompanyId: string, voucherId: string, notificationTimestamp?: any, changedByUid?: string) => {
+    async (
+      alertCompanyId: string,
+      voucherId: string,
+      notificationTimestamp?: any,
+      changedByUid?: string,
+      notificationId?: string
+    ) => {
       setCompanyId(alertCompanyId);
       try {
         const snap = await getDoc(doc(firestore, `companies/${alertCompanyId}/vouchers`, voucherId));
@@ -675,6 +689,7 @@ export default function MessagesPage() {
             : null;
           setHistoryHighlightTimestamp(tsMs);
           setHistoryHighlightUid(changedByUid ?? undefined);
+          setHistoryNotificationId(notificationId ?? null);
           setHistoryVoucher(voucher);
         } else {
           toast.info("Voucher not found", { description: "It may have been deleted." });
@@ -686,6 +701,18 @@ export default function MessagesPage() {
     },
     [setCompanyId]
   );
+
+  const handleMarkHistoryAlertAsRead = useCallback(async () => {
+    if (!historyNotificationId) return;
+    try {
+      await updateDoc(doc(firestore, "admin_notifications", historyNotificationId), { isRead: true });
+      toast.success("Marked as read");
+      setHistoryNotificationId(null);
+    } catch (e) {
+      console.error("Failed to mark alert as read from history dialog", e);
+      toast.error("Failed to mark as read");
+    }
+  }, [historyNotificationId]);
 
   return (
     <div className="px-[2px] py-4 sm:py-6 md:py-8 flex flex-col h-full w-full max-w-full">
@@ -768,11 +795,13 @@ export default function MessagesPage() {
                   setHistoryVoucher(null);
                   setHistoryHighlightTimestamp(null);
                   setHistoryHighlightUid(undefined);
+                  setHistoryNotificationId(null);
                 }
               }}
               onHistoryReset={() => setHistoryVoucher((prev: any) => (prev ? { ...prev, history: [] } : null))}
               highlightTimestamp={historyHighlightTimestamp}
               highlightUid={historyHighlightUid}
+              onMarkAsReadFromAlert={historyNotificationId ? handleMarkHistoryAlertAsRead : undefined}
             />
           </>
         )}

@@ -78,6 +78,7 @@ import { CreateNoteForm } from "../vouchers/CreateNoteForm";
 import { useCompany } from "@/hooks/useCompany";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { TransactionsTable, type TransactionColumnKey } from "../vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
 import { useTransactionVisibleColumns, COLUMN_LABELS, useSpendWiseBlinkMode, useShowNotes } from "../vouchers/transactionColumnVisibility";
@@ -152,7 +153,7 @@ export function AccountDetails({
   const { can } = usePermissions();
   const effectiveBalanceMode = "statement" as const;
 
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
@@ -807,40 +808,23 @@ export function AccountDetails({
     return sortedTransactions.filter(t => rowMatches(t));
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, spendWiseView, displayBlocks, mobileSearchNames, account.id]);
 
-  // Mobile: show last 10 by default (no date filter), all when date filter applied. When no date filter, keep full groups (don't cut a group).
+  // Mobile: latest-first paging (page 1 = newest rows), consistent with party page behavior.
   const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter = !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    const isSpacer = (r: any) => !!(r as any)._spendWiseSpacer;
-    const inGroup = (r: any) => typeof (r as any)._spendWiseGroupColorIndex === "number";
-    const last10Indices: number[] = [];
-    for (let i = list.length - 1; i >= 0 && last10Indices.length < 10; i--) {
-      if (isSpacer(list[i])) continue;
-      last10Indices.unshift(i);
-    }
-    const showIndices = new Set<number>();
-    for (const idx of last10Indices) {
-      const row = list[idx];
-      if (inGroup(row)) {
-        let start = idx;
-        while (start > 0 && (isSpacer(list[start - 1]) || inGroup(list[start - 1]))) {
-          start--;
-          if (!isSpacer(list[start]) && (list[start] as any)._spendWiseGroupFirst) break;
-        }
-        let end = idx;
-        while (end < list.length - 1 && (isSpacer(list[end + 1]) || inGroup(list[end + 1]))) {
-          end++;
-          if (!isSpacer(list[end]) && (list[end] as any)._spendWiseGroupLast) break;
-        }
-        for (let j = start; j <= end; j++) showIndices.add(j);
-      } else {
-        showIndices.add(idx);
-      }
-    }
-    return list.filter((_, i) => showIndices.has(i));
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
   useEffect(() => {
     if (!onMobileVoucherListStatsChange) return;
@@ -861,9 +845,11 @@ export function AccountDetails({
   ]);
 
   const dateRangeLabel = useMemo(() => {
-    if (!dateRange || (dateRange.from == null && dateRange.to == null)) return "Last 10 Txns";
+    if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
+      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
+    }
     return buildDateRangeText();
-  }, [dateRange, dateSystem, formatDateBS]);
+  }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
 
   const accountNamesMap = useMemo(
     () => ({
@@ -1014,7 +1000,10 @@ export function AccountDetails({
               placeholder="Search transactions"
               className="pl-8 h-9 text-sm w-full min-w-0"
               value={mobileSearchTerm}
-              onChange={(e) => setMobileSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setMobileSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }}
             />
           </div>
         </div>
@@ -1058,6 +1047,17 @@ export function AccountDetails({
           />
         </div>
       </div>
+      <MobileTransactionsPager
+        className="flex-shrink-0 mb-12"
+        currentPage={currentPage}
+        totalItems={filteredMobileTransactions.length}
+        rowsPerPage={rowsPerPage}
+        onRowsPerPageChange={(nextRows) => {
+          setRowsPerPage(nextRows);
+          setCurrentPage(1);
+        }}
+        onPageChange={setCurrentPage}
+      />
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
              <Button
@@ -1257,6 +1257,16 @@ export function AccountDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

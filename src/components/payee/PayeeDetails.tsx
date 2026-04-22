@@ -46,6 +46,7 @@ import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import AdCalendar from "@/components/ui/ad-calendar";
+import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import {
   Select,
   SelectContent,
@@ -399,6 +400,16 @@ export function PayeeDetails({
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <AdCalendar
+                      rangePresetSlot={
+                        <DateRangePresetRow
+                          country={company?.country}
+                          onApply={(r) => {
+                            setTempDateRange(r);
+                            onDateRangeChange(r);
+                            setIsDesktopCalendarOpen(false);
+                          }}
+                        />
+                      }
                       valueAD={tempDateRange}
                       isRange
                       numberOfMonths={calendarMonths}

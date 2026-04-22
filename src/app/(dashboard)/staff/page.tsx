@@ -89,6 +89,8 @@ function StaffPageContent() {
   }, [vouchers, showApproveOnList, processedStaff]);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedIdFromUrl = searchParams.get("selected");
+  const viewFromUrl = searchParams.get("view");
   const isInitialMount = useRef(true);
   
   const [activeView, setActiveView] = useState("staff");
@@ -103,6 +105,7 @@ function StaffPageContent() {
   
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyStaffWithPendingApproval, setShowOnlyStaffWithPendingApproval] = useState(false);
+  const [showOnlyStaffGroupsWithPendingApproval, setShowOnlyStaffGroupsWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -157,7 +160,9 @@ function StaffPageContent() {
     selected,                 
     setSelected,              
     activeView === 'staff' ? processedStaff : processedStaffGroups, 
-    vouchersLoading           
+    vouchersLoading,
+    undefined,
+    selectedIdFromUrl
   );
   // ==================================
 
@@ -167,9 +172,11 @@ function StaffPageContent() {
   }, [companyId]);
   useEffect(() => {
     setShowOnlyStaffWithPendingApproval(false);
+    setShowOnlyStaffGroupsWithPendingApproval(false);
   }, [companyId]);
   useEffect(() => {
     if (activeView !== "staff") setShowOnlyStaffWithPendingApproval(false);
+    if (activeView !== "groups") setShowOnlyStaffGroupsWithPendingApproval(false);
   }, [activeView]);
 
   const staffForStaffList = useMemo(() => {
@@ -182,16 +189,23 @@ function StaffPageContent() {
   }, [staffForStaffList, searchTerm]);
 
   // Restore selection when returning from details (e.g. /staff?selected=xyz or /staff?view=groups&selected=xyz)
-  const selectedIdFromUrl = searchParams.get("selected");
-  const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
     const groupItem = processedStaffGroups.find((i) => i.id === selectedIdFromUrl);
     const staffItem = processedStaff.find((i) => i.id === selectedIdFromUrl);
-    const item = groupItem || staffItem;
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    if (groupItem && staffItem) {
+      if (viewFromUrl === "groups") setActiveView("groups");
+      else setActiveView("staff");
+    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (staffItem) setActiveView("staff");
+    else if (groupItem) setActiveView("groups");
+    const item =
+      groupItem && staffItem
+        ? viewFromUrl === "groups"
+          ? groupItem
+          : staffItem
+        : groupItem || staffItem;
     if (item) setSelected(item);
     const canonical =
       viewFromUrl === "groups"
@@ -230,16 +244,26 @@ function StaffPageContent() {
       .reduce((acc, group) => acc + group.balance, 0);
   }, [activeView, processedStaff, processedStaffGroups]);
 
+  const processedStaffGroupsForList = useMemo(() => {
+    if (!showOnlyStaffGroupsWithPendingApproval || !showApproveOnList) return processedStaffGroups;
+    return processedStaffGroups.filter((g) => (pendingApprovalByStaffGroupId[g.id] ?? 0) > 0);
+  }, [
+    processedStaffGroups,
+    showOnlyStaffGroupsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByStaffGroupId,
+  ]);
+
   // Filtered group count (matches StaffGroupList: exclude system/report-only + search)
   const filteredStaffGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return (processedStaffGroups || []).filter((g) => {
+    return (processedStaffGroupsForList || []).filter((g) => {
       const anyG = g as any;
       if (anyG.isReportOnly === true || anyG.isSystemReserved === true) return false;
       if (isSystemParentGroup("staff_groups", anyG.id)) return false;
       return anyG.name && (searchLower ? String(anyG.name).toLowerCase().includes(searchLower) : true);
     }).length;
-  }, [processedStaffGroups, searchTerm]);
+  }, [processedStaffGroupsForList, searchTerm]);
 
   const handleSelect = (item: Staff | StaffGroup) => {
     if (useQueryNav) {
@@ -305,6 +329,17 @@ function StaffPageContent() {
                 ariaLabelShowAll="Show all staff"
               />
             ) : null}
+            {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+              <PendingApprovalListFilterBadge
+                count={totalPendingApprovalVoucherCount}
+                pressed={showOnlyStaffGroupsWithPendingApproval}
+                onToggle={() => setShowOnlyStaffGroupsWithPendingApproval((v) => !v)}
+                tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+                tooltipShowAllHint="Show all groups (click)"
+                ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+                ariaLabelShowAll="Show all groups"
+              />
+            ) : null}
             {activeView === "staff" ? (
                 <CreateStaffDialog onStaffCreated={() => {}} groups={processedStaffGroups} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
                     <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateStaffOpen(true)}>
@@ -354,7 +389,7 @@ function StaffPageContent() {
             </div>
             <div className="flex-1 min-h-0 overflow-hidden">
               <StaffGroupList
-                groups={processedStaffGroups}
+                groups={processedStaffGroupsForList}
                 onSelectGroup={handleSelect}
                 selectedGroup={selectedGroup}
                 searchTerm={searchTerm}

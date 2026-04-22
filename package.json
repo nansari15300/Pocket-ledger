@@ -6,7 +6,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "postinstall": "patch-package",
+    "postinstall": "patch-package && node scripts/copy-pdf-worker.cjs",
     "dev": "next dev --hostname 0.0.0.0",
     "allow-dev-port": "powershell -ExecutionPolicy Bypass -File ./scripts/allow-next-dev-port-windows.ps1",
     "build": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build",
@@ -81,7 +81,8 @@
     "nepali-date-converter": "^3.4.0",
     "next": "16.1.4",
     "next-themes": "^0.4.6",
-    "pdfjs-dist": "^5.4.624",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "5.6.205",
     "pdfmake": "^0.3.3",
     "react": "19.2.3",
     "react-day-picker": "^9.13.0",

@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
+import { isSuppressibleNewTransactionAlert } from "@/lib/transactionAlerts";
 
 /** Returns unread alerts count (Messages → Alerts) for the current user + selected company. */
 export function useUnreadAlertsCount(): number {
@@ -23,7 +24,11 @@ export function useUnreadAlertsCount(): number {
       where("companyId", "==", companyId),
       where("isRead", "==", false)
     );
-    const unsub = onSnapshot(q, (snap) => setCount(snap.size));
+    const unsub = onSnapshot(q, (snap) => {
+      // Hidden alert types ko unread badge me count na karo.
+      const visibleUnread = snap.docs.filter((d) => !isSuppressibleNewTransactionAlert(d.data() as any));
+      setCount(visibleUnread.length);
+    });
     return () => unsub();
   }, [user?.uid, companyId]);
 
@@ -137,7 +142,12 @@ export function useUnreadNotificationCount(): number {
         where("isRead", "==", false)
       );
       const unsubAlerts = onSnapshot(alertsQuery, (snap) => {
-        unreadAlertsByRecipient[id] = new Set(snap.docs.map((d) => d.id));
+        // Hidden alert types ko unread badge me count na karo.
+        unreadAlertsByRecipient[id] = new Set(
+          snap.docs
+            .filter((d) => !isSuppressibleNewTransactionAlert(d.data() as any))
+            .map((d) => d.id)
+        );
         recomputeAlerts();
       });
       alertUnsubscribers.push(unsubAlerts);

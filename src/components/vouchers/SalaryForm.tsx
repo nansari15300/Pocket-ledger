@@ -89,6 +89,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
@@ -99,6 +100,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
 import { AddVoucherDialog } from "./AddVoucherDialog";
 import usePermissions from "@/hooks/usePermissions";
@@ -201,7 +207,6 @@ const getVoucherPrefix = (
   );
 };
 
-const MAX_FILE_SIZE_MB = 0.5;
 
 const getInitialFormValues = (
   voucher?: any,
@@ -332,6 +337,14 @@ export function SalaryForm({
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseOpen, setIsCreateExpenseOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   const initialFilesRef = useRef<string[]>([]);
   const [savedVoucherId, setSavedVoucherId] = useState<string | null>(voucher?.id || null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -444,6 +457,7 @@ export function SalaryForm({
             const initialUrls = voucher.fileUrls || [];
             setFiles(initialUrls);
             initialFilesRef.current = initialUrls;
+            setSavePdfAsImage(shouldSuggestPdfAsImage(initialUrls));
             // Sync local OB allocation from the loaded voucher for edit mode.
             setLatestOBAllocated(Number((voucher as any)?.openingBalanceAllocated) || 0);
             // Fresh voucher load should start without pending local draft overrides.
@@ -461,6 +475,7 @@ export function SalaryForm({
             const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
             setFiles(urls);
             initialFilesRef.current = urls.filter((f: any) => typeof f === "string");
+            setSavePdfAsImage(shouldSuggestPdfAsImage(urls));
             setLatestOBAllocated(Number((defaultVoucherData as any)?.openingBalanceAllocated) || 0);
             setHasLocalBillWiseDraftEdits(false);
         } else {
@@ -1141,9 +1156,19 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           }
         }
       }
+
+      let filesForSave = files;
+      if (savePdfAsImage) {
+        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+        try {
+          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+        } finally {
+          sonnerToast.dismiss(convToast);
+        }
+      }
       
-      const existingUrls = files.filter(f => typeof f === 'string') as string[];
-      const newFiles = files.filter(f => f instanceof File) as File[];
+      const existingUrls = filesForSave.filter(f => typeof f === 'string') as string[];
+      const newFiles = filesForSave.filter(f => f instanceof File) as File[];
 
       if (!isLocalMode && newFiles.length > 0) {
         // Storage quota check sirf online upload flow me chale; local-first me skip.
@@ -1330,6 +1355,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
+            setSavePdfAsImage(false);
             setSavedVoucherIdRef(null);
             setLocalSalaryLinkMap({});
             initialSalaryLinkMapRef.current = {};
@@ -1469,13 +1495,12 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -2138,6 +2163,15 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
                       <FormItem className="order-1 md:order-2">
                         <FormLabel>Attach Files (Optional)</FormLabel>
+                        {showPdfAsImageToggle && (
+                          <VoucherPdfAsImageToggle
+                            id="voucher-save-pdf-as-image-salary-mobile"
+                            checked={savePdfAsImage}
+                            onCheckedChange={setSavePdfAsImage}
+                            disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                            className="mb-2"
+                          />
+                        )}
                         <RestrictedFileUploader>
                           {/* Mobile: Attach Files appears above bill-wise. Desktop: it stays to the right of bill-wise. */}
                           <div className="flex flex-wrap gap-4">
@@ -2311,6 +2345,15 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   ) : (
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
+                      {showPdfAsImageToggle && (
+                        <VoucherPdfAsImageToggle
+                          id="voucher-save-pdf-as-image-salary-desktop"
+                          checked={savePdfAsImage}
+                          onCheckedChange={setSavePdfAsImage}
+                          disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                          className="mb-2"
+                        />
+                      )}
                       <RestrictedFileUploader>
                         {/* Payment mode keeps file upload full width because bill-wise section is salary-only. */}
                         <div className="flex flex-wrap gap-4">

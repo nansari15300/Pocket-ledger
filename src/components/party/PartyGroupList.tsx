@@ -10,6 +10,11 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import { useMemo, useState } from "react";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortEntityGroups } from "@/lib/entityGroupListQuickFilter";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
@@ -49,16 +54,10 @@ export function PartyGroupList({
   const isRowAnimationEnabled = animationSettings.rows.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['party group']));
-  
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
+
   const categories: CategorySection[] = useMemo(() => {
-    // Groups are already filtered in page.tsx, so we only need to apply search filter here
-    const filteredGroups = (groups || []).filter((group) => {
-      if (!group || !group.name) return false;
-      
-      // Only apply search filter - groups are already filtered for system groups in page.tsx
-      if (!searchTerm) return true;
-      return group.name.toLowerCase().includes(searchTerm.toLowerCase());
-    });
+    const sortedFlat = filterAndSortEntityGroups(groups || [], searchTerm, quickFilter);
 
     const partyGroups: GroupWithType[] = [];
     const taxGroups: GroupWithType[] = [];
@@ -67,22 +66,22 @@ export function PartyGroupList({
     const expenseGroups: GroupWithType[] = [];
     const itemGroups: GroupWithType[] = [];
 
-    filteredGroups.forEach(group => {
-      const groupType = (group as GroupWithType).groupType || 'party';
+    sortedFlat.forEach((group) => {
+      const groupType = (group as GroupWithType).groupType || "party";
       switch (groupType) {
-        case 'tax':
+        case "tax":
           taxGroups.push(group as GroupWithType);
           break;
-        case 'staff':
+        case "staff":
           staffGroups.push(group as GroupWithType);
           break;
-        case 'account':
+        case "account":
           accountGroups.push(group as GroupWithType);
           break;
-        case 'expense':
+        case "expense":
           expenseGroups.push(group as GroupWithType);
           break;
-        case 'item':
+        case "item":
           itemGroups.push(group as GroupWithType);
           break;
         default:
@@ -90,26 +89,15 @@ export function PartyGroupList({
       }
     });
 
-    // Sort groups within each category
-    const sortGroups = (gs: GroupWithType[]) => {
-      return gs.sort((a, b) => {
-        const aIsSystem = (a as any).isSystemReserved;
-        const bIsSystem = (b as any).isSystemReserved;
-        if (aIsSystem && !bIsSystem) return -1;
-        if (!aIsSystem && bIsSystem) return 1;
-        return Math.abs(b.balance) - Math.abs(a.balance);
-      });
-    };
-
     return [
-      { name: 'Party group', icon: <Users className="h-4 w-4" />, groups: sortGroups(partyGroups) },
-      { name: 'Tax', icon: <Receipt className="h-4 w-4" />, groups: sortGroups(taxGroups) },
-      { name: 'Staff', icon: <Building2 className="h-4 w-4" />, groups: sortGroups(staffGroups) },
-      { name: 'Bank & Cash', icon: <CreditCard className="h-4 w-4" />, groups: sortGroups(accountGroups) },
-      { name: 'Income & Expense', icon: <FileText className="h-4 w-4" />, groups: sortGroups(expenseGroups) },
-      { name: 'Item', icon: <Package className="h-4 w-4" />, groups: sortGroups(itemGroups) },
-    ].filter(cat => cat.groups.length > 0);
-  }, [groups, searchTerm]);
+      { name: "Party group", icon: <Users className="h-4 w-4" />, groups: partyGroups },
+      { name: "Tax", icon: <Receipt className="h-4 w-4" />, groups: taxGroups },
+      { name: "Staff", icon: <Building2 className="h-4 w-4" />, groups: staffGroups },
+      { name: "Bank & Cash", icon: <CreditCard className="h-4 w-4" />, groups: accountGroups },
+      { name: "Income & Expense", icon: <FileText className="h-4 w-4" />, groups: expenseGroups },
+      { name: "Item", icon: <Package className="h-4 w-4" />, groups: itemGroups },
+    ].filter((cat) => cat.groups.length > 0);
+  }, [groups, searchTerm, quickFilter]);
 
   const toggleCategory = (categoryName: string) => {
     const key = categoryName.toLowerCase();
@@ -123,19 +111,14 @@ export function PartyGroupList({
     });
   };
 
-  if (categories.length === 0) {
-    return (
-      <div className="p-8 text-center text-sm text-muted-foreground bg-background rounded-b-lg border-t-0 w-full">
-        No groups found.
-      </div>
-    );
-  }
-
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full min-h-0 min-w-0 w-full flex-col rounded-b-lg border-t-0 bg-background">
         <ScrollArea className="min-h-0 min-w-0 w-full flex-1">
           <div className="px-3 pt-0 pb-2 space-y-2 w-full">
+          {categories.length === 0 ? (
+            <div className="p-8 text-center text-sm text-muted-foreground">No groups found.</div>
+          ) : null}
           <AnimatePresence mode="popLayout">
             {categories.map((category) => {
               const categoryKey = category.name.toLowerCase();
@@ -274,6 +257,7 @@ export function PartyGroupList({
           </AnimatePresence>
         </div>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
       </div>
     </TooltipProvider>
   );

@@ -585,10 +585,28 @@ function EntriesChangesRows({ from, to, renderValue, mode = 'amounts' }: { from:
   );
 }
 
-export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, highlightTimestamp, highlightUid }: { voucher: any; isOpen: boolean; onOpenChange: (v: boolean) => void; onHistoryReset?: () => void; highlightTimestamp?: any; highlightUid?: string; }) {
+export function HistoryDialog({
+  voucher,
+  isOpen,
+  onOpenChange,
+  onHistoryReset,
+  highlightTimestamp,
+  highlightUid,
+  onMarkAsReadFromAlert,
+}: {
+  voucher: any;
+  isOpen: boolean;
+  onOpenChange: (v: boolean) => void;
+  onHistoryReset?: () => void;
+  highlightTimestamp?: any;
+  highlightUid?: string;
+  /** Alerts "View changes" flow: history ke niche mark-as-read action. */
+  onMarkAsReadFromAlert?: () => Promise<void> | void;
+}) {
   const [historyUserNames, setHistoryUserNames] = useState<Record<string, string>>({});
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [isMarkingAlertRead, setIsMarkingAlertRead] = useState(false);
   const [deletingEntryIdx, setDeletingEntryIdx] = useState<number | null>(null);
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   // ms timestamps of entries that were deleted locally — excluded from display immediately
@@ -1111,16 +1129,44 @@ export function HistoryDialog({ voucher, isOpen, onOpenChange, onHistoryReset, h
           </div>
         </div>
 
-        {canReset && (
-          <div className="flex justify-start pt-3 border-t shrink-0">
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setShowResetConfirm(true)}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              Delete All History
-            </Button>
+        {(canReset || onMarkAsReadFromAlert) && (
+          <div className="flex items-center justify-between gap-2 pt-3 border-t shrink-0">
+            <div className="flex items-center gap-2">
+              {canReset && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowResetConfirm(true)}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete All History
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {onMarkAsReadFromAlert && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isMarkingAlertRead}
+                  onClick={async () => {
+                    try {
+                      setIsMarkingAlertRead(true);
+                      await onMarkAsReadFromAlert();
+                    } finally {
+                      setIsMarkingAlertRead(false);
+                    }
+                  }}
+                >
+                  {isMarkingAlertRead && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Mark as Read
+                </Button>
+              )}
+              <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            </div>
           </div>
         )}
 

@@ -64,6 +64,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { HistoryDialog } from "../vouchers/HistoryDialog";
 import { LinkAdvancesToVoucherDialog } from "../vouchers/LinkAdvancesToVoucherDialog";
 import { LinkPaymentToTxnsDialog } from "../vouchers/LinkPaymentToTxnsDialog";
@@ -167,7 +168,7 @@ export function StaffDetails({
     [journalAccountNames, userNames]
   );
 
-  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
+  const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
@@ -540,20 +541,28 @@ export function StaffDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, staff.id]);
   const mobileTransactionsToShow = useMemo(() => {
-    const hasDateFilter =
-      !!dateRange && (dateRange.from != null || dateRange.to != null);
-    if (hasDateFilter) return filteredMobileTransactions;
     const list = filteredMobileTransactions;
-    if (list.length <= 10) return list;
-    return list.slice(-10);
-  }, [filteredMobileTransactions, dateRange]);
+    if (rowsPerPage <= 0) return list;
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return list.slice(start, Math.max(start, end));
+  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+
+  useEffect(() => {
+    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
+    const safeTotal = Math.max(1, total);
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
+  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
-      return "Last 10 Txns";
+      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
     }
     return buildDateRangeText();
-  }, [dateRange]);
+  }, [dateRange, rowsPerPage]);
 
   const accountNamesMap = useMemo(
     () => ({
@@ -671,6 +680,7 @@ export function StaffDetails({
               value={mobileSearchTerm}
               onChange={(e) => {
                 setMobileSearchTerm(e.target.value);
+                setCurrentPage(1);
                 if (!e.target.value) {
                   setIsDateSearchMode(false);
                 }
@@ -723,6 +733,17 @@ export function StaffDetails({
         />
         </div>
       </div>
+      <MobileTransactionsPager
+        className="flex-shrink-0 mb-12"
+        currentPage={currentPage}
+        totalItems={filteredMobileTransactions.length}
+        rowsPerPage={rowsPerPage}
+        onRowsPerPageChange={(nextRows) => {
+          setRowsPerPage(nextRows);
+          setCurrentPage(1);
+        }}
+        onPageChange={setCurrentPage}
+      />
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
         <Button
           type="button"
@@ -924,6 +945,16 @@ export function StaffDetails({
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
                   <AdCalendar
+                    rangePresetSlot={
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          setTempDateRange(r);
+                          handleDateRangeChange(r);
+                          setIsDesktopCalendarOpen(false);
+                        }}
+                      />
+                    }
                     valueAD={tempDateRange}
                     isRange
                     numberOfMonths={calendarMonths}

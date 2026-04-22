@@ -104,6 +104,8 @@ function TaxPageContent() {
   }, [vouchers, processedTaxes, showApproveOnList]);
   const router = useRouter();
   const searchParams = useSearchParams();
+  const selectedIdFromUrl = searchParams.get("selected");
+  const viewFromUrl = searchParams.get("view");
   const isMobile = useIsMobile();
   const useQueryNav = useMasterDetailQueryNav();
 
@@ -119,6 +121,7 @@ function TaxPageContent() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [showOnlyTaxesWithPendingApproval, setShowOnlyTaxesWithPendingApproval] = useState(false);
+  const [showOnlyTaxGroupsWithPendingApproval, setShowOnlyTaxGroupsWithPendingApproval] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
@@ -173,7 +176,9 @@ function TaxPageContent() {
     selected,                 
     setSelected,              
     activeView === 'taxes' ? processedTaxes : processedTaxGroups, 
-    vouchersLoading           
+    vouchersLoading,
+    undefined,
+    selectedIdFromUrl
   );
   // ==================================
 
@@ -183,9 +188,11 @@ function TaxPageContent() {
   }, [companyId]);
   useEffect(() => {
     setShowOnlyTaxesWithPendingApproval(false);
+    setShowOnlyTaxGroupsWithPendingApproval(false);
   }, [companyId]);
   useEffect(() => {
     if (activeView !== "taxes") setShowOnlyTaxesWithPendingApproval(false);
+    if (activeView !== "groups") setShowOnlyTaxGroupsWithPendingApproval(false);
   }, [activeView]);
 
   const taxesForTaxList = useMemo(() => {
@@ -286,16 +293,23 @@ function TaxPageContent() {
     }
   };
 
-  const selectedIdFromUrl = searchParams.get("selected");
-  const viewFromUrl = searchParams.get("view");
   useEffect(() => {
     if (!selectedIdFromUrl) return;
     if (vouchersLoading) return;
     const groupItem = processedTaxGroups.find((i) => i.id === selectedIdFromUrl);
     const taxItem = processedTaxes.find((i) => i.id === selectedIdFromUrl);
-    const item = groupItem || taxItem;
-    if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
+    if (groupItem && taxItem) {
+      if (viewFromUrl === "groups") setActiveView("groups");
+      else setActiveView("taxes");
+    } else if (viewFromUrl === "groups" && groupItem) setActiveView("groups");
     else if (taxItem) setActiveView("taxes");
+    else if (groupItem) setActiveView("groups");
+    const item =
+      groupItem && taxItem
+        ? viewFromUrl === "groups"
+          ? groupItem
+          : taxItem
+        : groupItem || taxItem;
     if (item) setSelected(item);
     const canonical =
       viewFromUrl === "groups"
@@ -314,17 +328,27 @@ function TaxPageContent() {
     return processedTaxes.filter(p => p.groupId === selectedGroup.id);
   }, [selectedGroup, processedTaxes]);
 
+  const processedTaxGroupsForList = useMemo(() => {
+    if (!showOnlyTaxGroupsWithPendingApproval || !showApproveOnList) return processedTaxGroups;
+    return processedTaxGroups.filter((g) => (pendingApprovalByTaxGroupId[g.id] ?? 0) > 0);
+  }, [
+    processedTaxGroups,
+    showOnlyTaxGroupsWithPendingApproval,
+    showApproveOnList,
+    pendingApprovalByTaxGroupId,
+  ]);
+
   // Filtered group count (matches TaxGroupList: exclude report-only + system groups; apply search)
   const filteredGroupCount = useMemo(() => {
     const searchLower = (searchTerm || "").toLowerCase();
-    return (processedTaxGroups || []).filter((g) => {
+    return (processedTaxGroupsForList || []).filter((g) => {
       const anyG = g as any;
       if (anyG.isReportOnly === true) return false;
       const isSystemParent = anyG.isSystemReserved === true || isSystemParentGroup("tax_groups", anyG.id);
       if (isSystemParent) return false;
       return g.name && (searchLower ? g.name.toLowerCase().includes(searchLower) : true);
     }).length;
-  }, [processedTaxGroups, searchTerm]);
+  }, [processedTaxGroupsForList, searchTerm]);
 
   if (vouchersLoading) {
     return <LoadingSpinner />;
@@ -363,6 +387,17 @@ function TaxPageContent() {
             ariaLabelShowAll="Show all taxes"
           />
         ) : null}
+        {activeView === "groups" && showApproveOnList && totalPendingApprovalVoucherCount > 0 ? (
+          <PendingApprovalListFilterBadge
+            count={totalPendingApprovalVoucherCount}
+            pressed={showOnlyTaxGroupsWithPendingApproval}
+            onToggle={() => setShowOnlyTaxGroupsWithPendingApproval((v) => !v)}
+            tooltipFilterHint={`Only groups with pending approval — ${totalPendingApprovalVoucherCount} voucher(s) (click)`}
+            tooltipShowAllHint="Show all groups (click)"
+            ariaLabelFilter={`Filter ${totalPendingApprovalVoucherCount} pending approval vouchers`}
+            ariaLabelShowAll="Show all groups"
+          />
+        ) : null}
         {activeView === "taxes" ? (
           <CreateTaxDialog onTaxCreated={() => {}} isOpen={isCreateTaxOpen} onOpenChange={setIsCreateTaxOpen}>
             <PermissionButton permission="create_records" size="sm" onClick={() => setIsCreateTaxOpen(true)}>
@@ -394,7 +429,7 @@ function TaxPageContent() {
                 <span>Groups ({filteredGroupCount})</span>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
-                <TaxGroupList groups={processedTaxGroups} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByTaxGroupId} getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined} />
+                <TaxGroupList groups={processedTaxGroupsForList} onSelectGroup={handleSelect} selectedGroup={selectedGroup} searchTerm={searchTerm} pendingApprovalByGroupId={pendingApprovalByTaxGroupId} getItemHref={useQueryNav ? (g) => `/tax?view=groups&selected=${g.id}` : undefined} />
               </div>
             </>
         )}

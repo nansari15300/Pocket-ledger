@@ -81,7 +81,13 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
+import {
+  convertPdfAttachmentsToJpegIfEnabled,
+  shouldSuggestPdfAsImage,
+} from "@/lib/voucherAttachmentPdfAsImage";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateBankAccountDialog } from "@/components/bank-cash/CreateBankAccountDialog";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
@@ -177,7 +183,6 @@ function formatJournalFormValidationErrors(errors: FieldErrors<JournalFormValues
 }
 
 const getVoucherPrefix = (prefixes?: Record<string, string[]>) => (prefixes?.journal && prefixes.journal[0]) || "JRNL-";
-const MAX_FILE_SIZE_MB = 0.5;
 
 function getInitialFormValues(voucher?: any): JournalFormValues {
     if (!voucher) {
@@ -309,6 +314,14 @@ export function CreateJournalForm({
   const [journalTaxPrefillName, setJournalTaxPrefillName] = React.useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  const [savePdfAsImage, setSavePdfAsImage] = useState(false);
+  const showPdfAsImageToggle = useMemo(
+    () =>
+      allowAttachments &&
+      fileAttachmentLimits.maxFileCount > 0 &&
+      (fileAttachmentLimits.allowPDF || shouldSuggestPdfAsImage(files)),
+    [allowAttachments, fileAttachmentLimits.maxFileCount, fileAttachmentLimits.allowPDF, files]
+  );
   const initialFilesRef = useRef<string[]>([]);
   // Track initial allocations when voucher loads so link/unlink changes are detected for isFormDirty.
   const initialJournalAllocationsRef = useRef<{ debit: Allocation[]; credit: Allocation[] }>({ debit: [], credit: [] });
@@ -439,6 +452,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         const urlsEdit = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
         setFiles(urlsEdit);
         initialFilesRef.current = urlsEdit.filter((f: any) => typeof f === "string");
+        setSavePdfAsImage(shouldSuggestPdfAsImage(urlsEdit));
         if (voucher.unassignedFile) {
           form.setValue("unassignedFile", voucher.unassignedFile);
         }
@@ -468,6 +482,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const urlsNew = voucher.unassignedFile?.url ? [voucher.unassignedFile.url] : (voucher.fileUrls || []);
           setFiles(urlsNew);
           initialFilesRef.current = urlsNew.filter((f: any) => typeof f === "string");
+          setSavePdfAsImage(shouldSuggestPdfAsImage(urlsNew));
           if (voucher.unassignedFile) {
             form.setValue("unassignedFile", voucher.unassignedFile, { shouldDirty: false });
           }
@@ -1236,10 +1251,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           return;
         }
       }
+
+      let filesForSave = files;
+      if (savePdfAsImage) {
+        const convToast = sonnerToast.loading("Converting PDF attachments to image…");
+        try {
+          filesForSave = await convertPdfAttachmentsToJpegIfEnabled(files, true);
+        } finally {
+          sonnerToast.dismiss(convToast);
+        }
+      }
       
-      let fileUrls: string[] = files.filter(f => typeof f === 'string') as string[];
+      let fileUrls: string[] = filesForSave.filter(f => typeof f === 'string') as string[];
       let preGeneratedVoucherId: string | undefined;
-      const newFilesToUpload = files.filter(f => typeof f !== 'string') as File[];
+      const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
 
       if (newFilesToUpload.length > 0) {
         const totalNewBytes = newFilesToUpload.reduce((sum, f) => sum + (f.size || 0), 0);
@@ -1390,6 +1415,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
+            setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
         }
@@ -1530,13 +1556,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
       try {
-        const maxBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+        const maxBytes = attachmentMaxBytes();
         const processedFile = await compressVoucherAttachment(file, maxBytes);
         if (processedFile.size > maxBytes) {
           toast({
             variant: "destructive",
-            title: "File Still Too Large",
-            description: `After compression the file is still over ${MAX_FILE_SIZE_MB} MB. Try a smaller PDF or image.`,
+            ...attachmentStillTooLargeToastFields(),
           });
           continue;
         }
@@ -2164,6 +2189,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* File lines ke baad, link cards se pehle — pehle attach phir link; same UX as payment/contra */}
               <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
+                {showPdfAsImageToggle && (
+                  <VoucherPdfAsImageToggle
+                    id="voucher-save-pdf-as-image-journal"
+                    checked={savePdfAsImage}
+                    onCheckedChange={setSavePdfAsImage}
+                    disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                    className="mb-2"
+                  />
+                )}
                 <RestrictedFileUploader>
                   <div className="flex flex-wrap gap-4">
                       {files.map((file, index) => (

@@ -49,12 +49,13 @@ export function ResponsiveMasterDetail({
     if (mobileListOnly && hasSelectedItem) {
       return (
         <div className="h-full w-full overflow-hidden bg-background flex flex-col">
-          <div className="p-2 border-b flex items-center gap-2 flex-shrink-0">
-            <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={onBackToList} aria-label="Back to list">
-              <ArrowLeft className="h-4 w-4" />
+          {/* py kam: row height ~aadha; title `text-base` / label `text-sm` same */}
+          <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
+            <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0" onClick={onBackToList} aria-label="Back to list">
+              <ArrowLeft className="h-3.5 w-3.5" />
             </Button>
-            <div className="flex-1 min-w-0 flex items-center gap-1.5">
-              <h1 className="text-base font-bold shrink-0">{title}</h1>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <h1 className="shrink-0 text-base font-bold">{title}</h1>
               {mobileSelectionLabel ? (
                 <>
                   <span className="text-muted-foreground/55 shrink-0 select-none" aria-hidden>
