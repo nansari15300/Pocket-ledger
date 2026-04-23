@@ -32,6 +32,12 @@ import { Calendar } from "../ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { CreateTaxForm } from "./CreateTaxForm";
 
 
@@ -70,6 +76,7 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
   
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setIsOpen;
+  const isMobile = useIsMobile();
 
 
   useEffect(() => {
@@ -95,7 +102,6 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
 
   const handleTaxCreated = (isSaveAndNew: boolean, newId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
     onTaxCreated(newId, newTax);
-    if(!isSaveAndNew) setOpen(false);
   };
 
   return (
@@ -103,9 +109,8 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogPortal>
         <DialogOverlay />
-        {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
         <DialogContent
-            className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 z-50 sm:max-h-none sm:w-full sm:max-w-lg sm:grid sm:flex-none sm:px-6"
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => {
@@ -121,15 +126,20 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
                 if (isInsideNested) e.preventDefault();
             }}
           >
-            <DialogHeader>
+            <DialogHeader className={masterEntityDialogHeaderClassName}>
               <DialogTitle>Add a New Tax Type</DialogTitle>
               <DialogDescription>
                 Fill in the details for the new tax.
               </DialogDescription>
             </DialogHeader>
-            {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-            <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
-              <CreateTaxForm onTaxCreated={handleTaxCreated} groups={groups} onNestedDialogOpenChange={setIsNestedOpen} prefillName={prefillTaxName} />
+            <div className={masterEntityDialogFormWrapperClassName}>
+              <CreateTaxForm
+                onTaxCreated={handleTaxCreated}
+                onCloseDialogRequest={() => setOpen(false)}
+                groups={groups}
+                onNestedDialogOpenChange={setIsNestedOpen}
+                prefillName={prefillTaxName}
+              />
             </div>
           </DialogContent>
       </DialogPortal>

@@ -22,7 +22,6 @@ import { AddLocalCompanyUserDialog } from "./AddLocalCompanyUserDialog";
 import { useState, useEffect, useMemo } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company as CompanyData } from "@/hooks/useCompany";
-import { useSidebar } from "../ui/sidebar";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -694,7 +693,6 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
   const router = useRouter();
   const { user } = useAuth();
   const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
-  const { isOpen } = useSidebar();
   const [dialogState, setDialogState] = useState<{
     type: "share" | "addLocalUser" | "delete" | null;
     company: CompanyData | null;
@@ -868,13 +866,12 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className={cn("w-full justify-between h-9", !isOpen && "justify-center aspect-square p-0")} data-theme-header="company-selector">
-            <div className="flex items-center gap-2 truncate">
-              <Building2 />
-              {isOpen && <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>}
-              
+          <Button variant="outline" className="h-9 max-w-[240px] justify-between" data-theme-header="company-selector">
+            <div className="flex min-w-0 items-center gap-2">
+              <Building2 className="h-4 w-4 shrink-0" />
+              <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>
             </div>
-            {isOpen && <ChevronDown className="ml-2 h-4 w-4" />}
+            <ChevronDown className="ml-2 h-4 w-4 shrink-0" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>

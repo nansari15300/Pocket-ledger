@@ -61,6 +61,9 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesPartyLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 function PartyPageContent() {
   const { user } = useAuth();
@@ -183,6 +186,42 @@ function PartyPageContent() {
     if (isMobile && selectedParty) return "Party details";
     return partyMasterDetailTitle;
   }, [isMobile, selectedParty, partyMasterDetailTitle]);
+  const mobileDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selectedParty) return null;
+    // Fixed 8x8 slot: keep box size same, avatar sits with 1px inset on all sides.
+    const fileUrl = String((selectedParty as any).fileUrl || "").trim();
+    const initials = (selectedParty.name || "NA")
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
+    const openPreview = () => {
+      // Mobile header avatar tap: open full in-app attachment preview.
+      if (!fileUrl) return;
+      void openAttachmentInApp(fileUrl, { title: selectedParty.name });
+    };
+    return (
+      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
+        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+          <button
+            type="button"
+            className="inline-flex h-full w-full items-center justify-center rounded-full"
+            onClick={openPreview}
+            aria-label={`Preview ${selectedParty.name} avatar`}
+          >
+            <ResolvedEntityAvatar
+              className="h-full w-full text-xs"
+              src={fileUrl}
+              alt={selectedParty.name}
+              fallbackText={initials || "NA"}
+            />
+          </button>
+        </EntityFileAttachmentHover>
+      </div>
+    );
+  }, [isMobile, selectedParty]);
   // Header Report: sessionStorage sync — URL ?selected= flicker / router.replace race se button stable rahe
   useSyncMasterDetailHeaderId("party", selectedParty?.id ?? selectedGroup?.id ?? null);
 
@@ -795,6 +834,7 @@ function PartyPageContent() {
         title={responsiveMasterDetailTitle}
         mobileSelectionLabel={mobilePartyGroupSelectionLabel}
         mobileSelectionLabelClassName={mobilePartyGroupSelectionLabelClassName}
+        mobileDetailHeaderEnd={mobileDetailHeaderAvatar}
         balance={
           <span className={cn(
               "font-semibold",

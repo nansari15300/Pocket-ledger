@@ -50,6 +50,9 @@ import { PermissionButton } from "@/components/permission";
 import usePermissions from "@/hooks/usePermissions";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -157,6 +160,43 @@ function IncomeExpensePageContent() {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as ExpenseAccount | ExpenseGroup).balance);
   }, [selected]);
+  const mobileIncomesDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+    const selectedEntity = selected as ExpenseAccount | ExpenseGroup;
+    const name = selectedEntity.name || "Account";
+    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const initials = name
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "NA";
+    const openPreview = () => {
+      // Income/Expense mobile header avatar: tap opens full preview.
+      if (!fileUrl) return;
+      void openAttachmentInApp(fileUrl, { title: name });
+    };
+    return (
+      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
+        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+          <button
+            type="button"
+            className="inline-flex h-full w-full items-center justify-center rounded-full"
+            onClick={openPreview}
+            aria-label={`Preview ${name} avatar`}
+          >
+            <ResolvedEntityAvatar
+              className="h-full w-full text-xs"
+              src={fileUrl}
+              alt={name}
+              fallbackText={initials}
+            />
+          </button>
+        </EntityFileAttachmentHover>
+      </div>
+    );
+  }, [isMobile, selected]);
   const incomesMasterDetailTitle = activeView === "groups" ? "Income & Expense Groups" : "Income & Expense";
   useSyncMasterDetailHeaderId("incomes", selectedAccount?.id ?? selectedGroup?.id ?? null);
   const incomesMenuEnabled = featureConfig.incomes !== false;
@@ -595,6 +635,7 @@ function IncomeExpensePageContent() {
         title={incomesMasterDetailTitle}
         mobileSelectionLabel={mobileIncomesSelectionLabel}
         mobileSelectionLabelClassName={mobileIncomesSelectionLabelClassName}
+        mobileDetailHeaderEnd={mobileIncomesDetailHeaderAvatar}
         balance={
             <span className={cn(
                 "font-semibold",

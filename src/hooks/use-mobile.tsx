@@ -32,6 +32,18 @@ export function isRealMobilePhone(): boolean {
 // Portrait = height >= width. Used to hide PC icon on mobile in portrait only.
 function getIsPortrait(): boolean {
   if (typeof window === 'undefined') return false;
+  // Soft keyboard open/close par `innerHeight` rapidly change hota hai (especially tablet),
+  // jisse portrait/landscape galat flip ho kar view mode remount/back trigger kar sakta hai.
+  // Prefer stable screen orientation APIs first.
+  const orientationType = window.screen?.orientation?.type;
+  if (typeof orientationType === "string" && orientationType.length > 0) {
+    return orientationType.startsWith("portrait");
+  }
+  // iOS/Safari fallback: screen dimensions keyboard se usually stable rehte hain.
+  if (typeof window.screen?.height === "number" && typeof window.screen?.width === "number") {
+    return window.screen.height >= window.screen.width;
+  }
+  // Last fallback only.
   return window.innerHeight >= window.innerWidth;
 }
 

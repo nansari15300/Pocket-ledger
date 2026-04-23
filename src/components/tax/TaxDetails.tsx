@@ -44,6 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -366,6 +367,15 @@ export function TaxDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [searchFilteredTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = searchFilteredTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [searchFilteredTransactions.length, currentPage, rowsPerPage]);
 
   const taxDropdownOptions = useMemo(
     () => (allTaxes || []).map((t) => ({ value: t.id, label: t.name })),
@@ -378,36 +388,57 @@ export function TaxDetails({
     setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
   }, [dateRange, searchFilteredTransactions.length, rowsPerPage]);
 
-  const handleMobileBack = useCallback(() => {
-    if (mobileFooterDialogOpen) {
-      setMobileFooterDialogOpen(null);
-      closeModalInUrl();
-      return;
+  // Desktop pagination: latest-side first with per-page opening/totals alignment.
+  const desktopPaginationMeta = useMemo(() => {
+    const list = searchFilteredTransactions;
+    const total = list.length;
+    if (rowsPerPage <= 0) {
+      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        totalPages: 1,
+        pageTransactions: list,
+        beforeCount: 0,
+        afterCount: 0,
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
     }
-    if (isCalendarOpen) {
-      setIsCalendarOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    if (isVoucherDialogOpen) {
-      setIsVoucherDialogOpen(false);
-      setSelectedVoucher(null);
-      closeModalInUrl();
-      return;
-    }
-    if (isNoteOpen) {
-      setIsNoteOpen(false);
-      closeModalInUrl();
-      return;
-    }
-    onBack?.();
-  }, [mobileFooterDialogOpen, isCalendarOpen, isVoucherDialogOpen, isNoteOpen, closeModalInUrl, onBack]);
-  
-  const totalPages = Math.ceil(searchFilteredTransactions.length / rowsPerPage);
-  const paginatedTransactions = searchFilteredTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  );
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    const pageTransactions = list.slice(start, Math.max(start, end));
+    const previousTx = start > 0 ? list[start - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    const openingForPage =
+      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
+        ? previousRunningBalance
+        : openingBalanceForPeriod;
+    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      totalPages: totalPagesLocal,
+      pageTransactions,
+      beforeCount: start,
+      afterCount: Math.max(0, total - end),
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [searchFilteredTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  const totalPages = desktopPaginationMeta.totalPages;
+  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -473,6 +504,8 @@ export function TaxDetails({
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
   const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const masterTaxOpening = Number((tax as any).openingBalance) || 0;
 
   const handleNepaliSelect = (bsDate: BSDate, adDate: Date) => {
     const range = dateRange;
@@ -492,17 +525,6 @@ export function TaxDetails({
       <>
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
           {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-          <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-            {onBack && (
-              <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            )}
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">Tax Details</h1>
-            <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-              Showing {mobileTransactions.length} of {searchFilteredTransactions.length} voucher(s)
-            </span>
-          </div>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
               {!dateRange || (dateRange.from == null && dateRange.to == null)
@@ -522,7 +544,7 @@ export function TaxDetails({
               </button>
             )}
           </div>
-          <div className="px-3 py-3 border-b flex-shrink-0">
+          <div className="px-3 py-2 border-b flex-shrink-0">
             <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
@@ -576,7 +598,7 @@ export function TaxDetails({
               transactions={mobileTransactions}
               context="tax"
               contextId={tax.id}
-              openingBalance={openingBalanceForPeriod}
+              openingBalance={desktopPaginationMeta.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={tax.openingBalanceNarration}
@@ -592,9 +614,9 @@ export function TaxDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={desktopPaginationMeta.periodDrForPage}
+              periodCr={desktopPaginationMeta.periodCrForPage}
+              closingBalance={desktopPaginationMeta.closingForPage}
               isTaxContext={isTaxContext ?? true}
               scrollOnlyTransactions
               statusFilter={statusFilter}
@@ -615,6 +637,7 @@ export function TaxDetails({
               setCurrentPage(1);
             }}
             onPageChange={setCurrentPage}
+            edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
           />
         </div>
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -777,22 +800,29 @@ export function TaxDetails({
                   fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
                 />
               </EntityFileAttachmentHover>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{tax.name}</h2>
-                <EditTaxDialog
-                  tax={tax}
-                  allTaxes={allTaxes}
-                  onTaxUpdated={onTaxUpdated}
-                  onTaxDeleted={() => onTaxDeleted(tax.id)}
-                  hasTransactions={processedTransactions.length > 0}
-                >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </EditTaxDialog>
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                  {formatCurrency(closingBalance, {showDrCr: true})}
+              <div className="flex flex-col min-w-0 gap-0.5">
+                <div className="flex items-center gap-2 flex-nowrap min-w-0">
+                  <h2 className="text-xl font-semibold truncate">{tax.name}</h2>
+                  <EditTaxDialog
+                    tax={tax}
+                    allTaxes={allTaxes}
+                    onTaxUpdated={onTaxUpdated}
+                    onTaxDeleted={() => onTaxDeleted(tax.id)}
+                    hasTransactions={processedTransactions.length > 0}
+                  >
+                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0">
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </EditTaxDialog>
+                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, {showDrCr: true})}
+                  </div>
                 </div>
+                <EntityLedgerOpeningHints
+                  masterOpening={masterTaxOpening}
+                  periodOpeningBroughtForward={openingBalanceForPeriod}
+                  hasDateFilter={hasLedgerDateFilter}
+                />
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -865,8 +895,8 @@ export function TaxDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                  <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                  <XCircle className="h-4 w-4" />
                 </Button>
               )}
               <NotificationBell context="Tax" entityId={tax.id} />
@@ -891,7 +921,7 @@ export function TaxDetails({
                   transactions={paginatedTransactions}
                   context="tax"
                   contextId={tax.id}
-                  openingBalance={openingBalanceForPeriod}
+                  openingBalance={desktopPaginationMeta.openingForPage}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={tax.openingBalanceNarration}
@@ -912,9 +942,9 @@ export function TaxDetails({
                   }
                   showNarration={showNarration}
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-                  periodDr={periodDr}
-                  periodCr={periodCr}
-                  closingBalance={closingBalance}
+                  periodDr={desktopPaginationMeta.periodDrForPage}
+                  periodCr={desktopPaginationMeta.periodCrForPage}
+                  closingBalance={desktopPaginationMeta.closingForPage}
                   onRowClick={handleEditVoucher}
                   userNames={userNames}
                   filters={filters}
@@ -933,7 +963,6 @@ export function TaxDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{searchFilteredTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-tax" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-tax" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -985,7 +1014,23 @@ export function TaxDetails({
                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                 viewMode="statement"
               />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1003,43 +1048,24 @@ export function TaxDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {searchFilteredTransactions.length}</p>
             </div>
           </div>
         </div>

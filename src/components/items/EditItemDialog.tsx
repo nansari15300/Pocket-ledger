@@ -49,7 +49,11 @@ import {
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -64,7 +68,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher } from "@/lib/voucherActionsClient";
 
 import { firestore } from "@/lib/firebase";
-import { uploadFile } from "@/lib/storage";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   collection,
@@ -101,7 +104,11 @@ import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { isProfileDocumentFile, stageItemAvatarAndAttachments } from "@/lib/entityProfileLocalFiles";
+import {
+  isProfileDocumentFile,
+  stageItemAvatarAndAttachments,
+  uploadItemAvatarAndAttachmentsRemote,
+} from "@/lib/entityProfileLocalFiles";
 import {
   Tooltip,
   TooltipContent,
@@ -287,7 +294,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const { companyId, company } = useCompany();
   const { user } = useAuth();
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
-  /** Naye file attachments — offline par `uploadFile` fail; staging yahi flag se */
+  /** Naye file attachments — offline par local staging; online par `uploadItemAvatarAndAttachmentsRemote` */
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedItemGroups, processedTaxes } = useVouchers();
   const processedItemGroupsRef = useRef(processedItemGroups);
@@ -408,166 +415,166 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     }
   }, [isOpen, item, form]);
 
-  async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
+  function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
 
-    const toastId = sonnerToast.loading("Updating item...");
-    try {
-      const existingFileUrls = files.filter((f): f is string => typeof f === "string");
-      const newFilesToUpload = files.filter((f): f is File => f instanceof File);
+    const filesSnap = files;
+    const itemRefSnap = item;
+    setIsOpen(false);
 
-      let fileUrls: string[] = [];
+    void (async () => {
+      const toastId = sonnerToast.loading("Updating item...");
+      try {
+        const existingFileUrls = filesSnap.filter((f): f is string => typeof f === "string");
+        const newFilesToUpload = filesSnap.filter((f): f is File => f instanceof File);
 
-      // Static / local company: Firestore `updateDoc` fail — IndexedDB + outbox (baqi entities jaisa)
-      if (isLocalOnlyMode()) {
-        fileUrls = [...existingFileUrls];
-        if (newFilesToUpload.length > 0 && canAttachDocuments) {
-          const staged = await stageItemAvatarAndAttachments({
-            companyId,
-            itemId: item.id,
-            avatarFile: null,
-            attachmentFiles: newFilesToUpload,
-            maxAttachments: 5,
-          });
-          fileUrls = [...fileUrls, ...staged.newAttachmentUrls];
-        }
-      } else {
-        // Item attachments — `canAddFileImagePdf` bina sirf `canAddAvatar` pe mat roko (CreateItemDialog jaisa)
-        if (canAttachDocuments && newFilesToUpload.length > 0) {
-          const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
-          const limitCheck = await checkStorageLimit(
-            companyId,
-            company?.planId,
-            { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
-            company?.storageOption
-          );
-          if (!limitCheck.allowed) {
-            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
-            return;
+        let fileUrls: string[] = [];
+
+        // Static / local company: Firestore `updateDoc` fail — IndexedDB + outbox (baqi entities jaisa)
+        if (isLocalOnlyMode()) {
+          fileUrls = [...existingFileUrls];
+          if (newFilesToUpload.length > 0 && canAttachDocuments) {
+            const staged = await stageItemAvatarAndAttachments({
+              companyId,
+              itemId: itemRefSnap.id,
+              avatarFile: null,
+              attachmentFiles: newFilesToUpload,
+              maxAttachments: 5,
+            });
+            fileUrls = [...fileUrls, ...staged.newAttachmentUrls];
+          }
+        } else {
+          // Item attachments — `canAddFileImagePdf` bina sirf `canAddAvatar` pe mat roko (CreateItemDialog jaisa)
+          if (canAttachDocuments && newFilesToUpload.length > 0) {
+            const totalNewBytes = newFilesToUpload.reduce((s, f) => s + (f.size || 0), 0);
+            const limitCheck = await checkStorageLimit(
+              companyId,
+              company?.planId,
+              { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
+              company?.storageOption
+            );
+            if (!limitCheck.allowed) {
+              sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+              return;
+            }
+          }
+
+          if (canAttachDocuments && newFilesToUpload.length > 0) {
+            const staged = await uploadItemAvatarAndAttachmentsRemote({
+              companyId,
+              itemId: itemRefSnap.id,
+              avatarFile: null,
+              attachmentFiles: newFilesToUpload,
+              maxAttachments: 5,
+            });
+            const totalNewBytes = newFilesToUpload.reduce((s, f) => s + f.size, 0);
+            if (totalNewBytes > 0) {
+              await incrementCompanyStorage(companyId, {
+                attachmentsBytes: totalNewBytes,
+                storageBytes: totalNewBytes,
+              });
+            }
+            fileUrls = [...existingFileUrls, ...staged.newAttachmentUrls];
+          } else {
+            fileUrls = [...existingFileUrls];
           }
         }
 
-        const uploadedUrls = canAttachDocuments
-          ? await Promise.all(
-              newFilesToUpload.map(async (file) => {
-                const res = await uploadFile(
-                  { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
-                  companyId,
-                  company?.name,
-                  "avatar",
-                  undefined,
-                  undefined,
-                  undefined,
-                  new Date()
-                );
-                if (res.success && res.url) {
-                  await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-                  return res.url;
-                }
-                return null;
-              })
-            )
-          : [];
-        const filtered = uploadedUrls.filter((u): u is string => !!u);
-        fileUrls = [...existingFileUrls, ...filtered];
-      }
+        const narrationClean = values.openingBalanceNarration?.trim() || null;
+        const balance = (values.openingBalance || 0) * (values.openingBalanceRate || 0);
+        const stockQty = computeItemStockQty(values);
 
-      const narrationClean = values.openingBalanceNarration?.trim() || null;
-      const balance = (values.openingBalance || 0) * (values.openingBalanceRate || 0);
-      const stockQty = computeItemStockQty(values);
-
-      /** Explicit fields — `undefined` Firestore / SQLite JSON me avoid */
-      const updatePayload: Record<string, unknown> = {
-        name: values.name,
-        type: values.type,
-        hsCode: values.hsCode?.trim() || null,
-        salePrice: values.salePrice,
-        isSalePriceTaxInclusive: values.isSalePriceTaxInclusive,
-        purchasePrice: values.purchasePrice,
-        isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive,
-        openingBalance: values.openingBalance,
-        openingBalanceUnit: values.openingBalanceUnit || null,
-        openingBalanceTaxId: values.openingBalanceTaxId || null,
-        isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive || false,
-        openingBalanceDate: values.openingBalanceDate || null,
-        openingBalanceRate: values.openingBalanceRate ?? 0,
-        groupId: values.groupId || null,
-        unitConversions: values.unitConversions || [],
-        salePriceUnit: values.salePriceUnit || null,
-        purchasePriceUnit: values.purchasePriceUnit || null,
-        saleTaxId: values.saleTaxId || null,
-        purchaseTaxId: values.purchaseTaxId || null,
-        openingBalanceNarration: narrationClean,
-        fileUrls,
-      };
-
-      if (isLocalOnlyMode()) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", item.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: item.id,
-          companyId,
-          ownerId: user?.uid ?? (item as any).ownerId,
-          debit: item.debit ?? 0,
-          credit: item.credit ?? 0,
-          balance: item.balance ?? 0,
-          stockQty: item.stockQty ?? 0,
-          isDeleted: false,
-          createdAt: (item as any).createdAt ?? new Date().toISOString(),
+        /** Explicit fields — `undefined` Firestore / SQLite JSON me avoid */
+        const updatePayload: Record<string, unknown> = {
+          name: values.name,
+          type: values.type,
+          hsCode: values.hsCode?.trim() || null,
+          salePrice: values.salePrice,
+          isSalePriceTaxInclusive: values.isSalePriceTaxInclusive,
+          purchasePrice: values.purchasePrice,
+          isPurchasePriceTaxInclusive: values.isPurchasePriceTaxInclusive,
+          openingBalance: values.openingBalance,
+          openingBalanceUnit: values.openingBalanceUnit || null,
+          openingBalanceTaxId: values.openingBalanceTaxId || null,
+          isOpeningBalanceTaxInclusive: values.isOpeningBalanceTaxInclusive || false,
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceRate: values.openingBalanceRate ?? 0,
+          groupId: values.groupId || null,
+          unitConversions: values.unitConversions || [],
+          salePriceUnit: values.salePriceUnit || null,
+          purchasePriceUnit: values.purchasePriceUnit || null,
+          saleTaxId: values.saleTaxId || null,
+          purchaseTaxId: values.purchaseTaxId || null,
+          openingBalanceNarration: narrationClean,
+          fileUrls,
         };
-        const payload: Record<string, unknown> = {
-          ...base,
-          ...updatePayload,
-          balance,
-          stockQty,
-          id: item.id,
-          companyId,
-        };
-        await upsertCompanyDocInBrowserDb(companyId, "items", item.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "items", "update", item.id, payload);
-        const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
-        const isLocalGuestUser = user?.uid === "local_guest_user";
-        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
-          id: toastId,
-          description: showSyncHint
-            ? `"${values.name}" saved locally.`
-            : `"${values.name}" has been successfully updated.`,
-        });
-        setIsOpen(false);
+
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", itemRefSnap.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: itemRefSnap.id,
+            companyId,
+            ownerId: user?.uid ?? (itemRefSnap as any).ownerId,
+            debit: itemRefSnap.debit ?? 0,
+            credit: itemRefSnap.credit ?? 0,
+            balance: itemRefSnap.balance ?? 0,
+            stockQty: itemRefSnap.stockQty ?? 0,
+            isDeleted: false,
+            createdAt: (itemRefSnap as any).createdAt ?? new Date().toISOString(),
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            ...updatePayload,
+            balance,
+            stockQty,
+            id: itemRefSnap.id,
+            companyId,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "items", itemRefSnap.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "items", "update", itemRefSnap.id, payload);
+          const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+          const isLocalGuestUser = user?.uid === "local_guest_user";
+          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
+            id: toastId,
+            description: showSyncHint
+              ? `"${values.name}" saved locally.`
+              : `"${values.name}" has been successfully updated.`,
+          });
+          setTimeout(() => {
+            onItemUpdated({
+              id: itemRefSnap.id,
+              ...values,
+              fileUrls,
+              openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+            });
+          }, 100);
+          return;
+        }
+
+        const itemRef = doc(firestore, `companies/${companyId}/items`, itemRefSnap.id);
+        await updateDoc(itemRef, updatePayload);
+
+        sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         setTimeout(() => {
           onItemUpdated({
-            id: item.id,
+            id: itemRefSnap.id,
             ...values,
             fileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
         }, 100);
-        return;
-      }
-
-      const itemRef = doc(firestore, `companies/${companyId}/items`, item.id);
-      await updateDoc(itemRef, updatePayload);
-
-      sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      setIsOpen(false);
-      setTimeout(() => {
-        onItemUpdated({
-          id: item.id,
-          ...values,
-          fileUrls,
-          openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+      } catch (error) {
+        console.error("Error updating item:", error);
+        sonnerToast.error("Error Updating Item", {
+          id: toastId,
+          description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
-      }, 100);
-    } catch (error) {
-      console.error("Error updating item:", error);
-      sonnerToast.error("Error Updating Item", {
-        id: toastId,
-        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
-      });
-    }
+      }
+    })();
   }
 
   const handleDelete = async () => {
@@ -829,19 +836,16 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className={cnStaticMobileFullscreenDialog(
-              isMobile,
-              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
-            )}
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-5xl")}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Item/Service</DialogTitle>
             <DialogDescription>Update the details for {item.name}.</DialogDescription>
           </DialogHeader>
-          {/* Scrollable form area: fills dialog height (85vh mobile, 90vh PC); keep overflow-y-auto and flex-1 on all breakpoints. */}
-          <div className="overflow-y-auto min-h-0 flex-1 pr-1">
+          <div className={masterEntityDialogFormWrapperClassName}>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
                 <Tabs value={itemType} onValueChange={(v) => form.setValue('type', v as "item" | "service")}>
@@ -1248,6 +1252,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               </DialogFooter>
             </form>
           </Form>
+          </div>
           </div>
         </DialogContent>
       </Dialog>

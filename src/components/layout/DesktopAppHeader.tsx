@@ -12,6 +12,7 @@ import {
   ChevronsRight,
   Users,
   ChevronDown,
+  ChevronUp,
   CalendarDays,
   Expand,
   Minimize,
@@ -29,6 +30,8 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { format, differenceInDays } from "date-fns";
@@ -1110,17 +1113,23 @@ function DateSystemSwitcher() {
           <Smartphone className="h-4 w-4" />
         </Button>
       )}
-      <UserProfileButton />
     </div>
   );
 }
 
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
+  const pathname = usePathname();
   const { allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isSuperAdminUser = isSuperAdmin || isSuperAdminByEmail;
 
   useEffect(() => {
     if (isLocalOnlyMode()) {
@@ -1131,9 +1140,14 @@ export function DesktopAppHeader() {
         (!!user?.email &&
           !!c.ownerEmail &&
           c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
-      const mapped = (contextCompanies || [])
-        .filter((c) => !c.isDeleted)
-        .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[];
+      const mapped = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+        (contextCompanies || [])
+          .filter((c) => !c.isDeleted)
+          .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[],
+        user,
+        isSuperAdminUser,
+        pathname
+      );
       setCompanies(mapped);
       if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
         listLocalCompanies()
@@ -1167,7 +1181,7 @@ export function DesktopAppHeader() {
       where("sharedWithEmails", "array-contains", user.email)
     );
     // SuperAdmin: also show companies where ownerEmail matches, so they can use app like a normal user
-    const ownedByEmailQuery = isSuperAdmin
+    const ownedByEmailQuery = isSuperAdminUser
       ? query(
           collection(firestore, "companies"),
           where("ownerEmail", "==", user.email)
@@ -1211,7 +1225,12 @@ export function DesktopAppHeader() {
         }
       });
 
-      const next = Array.from(companyMap.values());
+      const next = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+        Array.from(companyMap.values()),
+        user,
+        isSuperAdminUser,
+        pathname
+      );
       // Avoid no-op state writes — lekin sirf id/isOwned mat compare karo; rename (name) change par bhi next apply ho (selector live rahe)
       setCompanies((prev) => {
         const sameLength = prev.length === next.length;
@@ -1290,7 +1309,7 @@ export function DesktopAppHeader() {
       unsubShared();
       unsubOwnedByEmail();
     };
-  }, [user, isSuperAdmin, contextCompanies, companyContextLoading]);
+  }, [user, isSuperAdminUser, contextCompanies, companyContextLoading, pathname]);
 
   const onCompanyCreated = () => {
     // This is now handled automatically by the onSnapshot listeners.
@@ -1299,16 +1318,41 @@ export function DesktopAppHeader() {
 
   /** Mobile: ek hi row + horizontal scroll; Sync ledger / hover switch / fullscreen yahan se hata */
   const headerIsMobile = useIsMobile();
+  // Mobile header arrow toggle state: compact single-row vs expanded wrapped controls.
+  const [mobileHeaderExpanded, setMobileHeaderExpanded] = useState(false);
+  // Expanded mobile header: global tap/click se auto-collapse behavior.
+  const mobileHeaderRootRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!headerIsMobile || !mobileHeaderExpanded) return;
+    const handleGlobalPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      // Toggle button click ko local handler manage kare; baki kahin bhi click = collapse.
+      if (target instanceof Element && target.closest("[data-mobile-header-expand-toggle='true']")) return;
+      setMobileHeaderExpanded(false);
+    };
+    document.addEventListener("pointerdown", handleGlobalPointerDown, true);
+    return () => document.removeEventListener("pointerdown", handleGlobalPointerDown, true);
+  }, [headerIsMobile, mobileHeaderExpanded]);
 
   return (
-    <header className="relative sticky top-0 z-30 border-b bg-background px-2 py-2">
+    <header ref={mobileHeaderRootRef} className="relative sticky top-0 z-30 border-b bg-background px-2 py-2">
       <div
         className={cn(
           "flex items-center gap-2 w-full min-w-0",
-          headerIsMobile ? "flex-nowrap overflow-x-auto overscroll-x-contain" : "flex-wrap"
+          headerIsMobile ? (mobileHeaderExpanded ? "items-start" : "flex-nowrap") : "flex-wrap"
         )}
       >
-        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
+        <div
+          className={cn(
+            "flex items-center gap-2 min-w-0",
+            headerIsMobile
+              ? mobileHeaderExpanded
+                ? "flex-1 flex-wrap overflow-visible"
+                : "flex-1 overflow-hidden"
+              : "flex-shrink-0"
+          )}
+        >
           <SidebarTrigger />
           {loading ? (
             <div className="h-8 w-32 animate-pulse rounded-md bg-muted" />
@@ -1316,6 +1360,13 @@ export function DesktopAppHeader() {
             <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
           )}
           <DateSystemSwitcher />
+          {/* Mobile request: report shortcuts should also move with the same horizontal scroll strip. */}
+          {headerIsMobile ? (
+            <>
+              <MobileReportButtonsOnly />
+              <ReportListButton />
+            </>
+          ) : null}
         </div>
 
         <HeaderActions />
@@ -1323,17 +1374,36 @@ export function DesktopAppHeader() {
         {/* Desktop: spacer; mobile par grow hata kar saari cheezein scroll row me */}
         {!headerIsMobile ? <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" /> : null}
 
-        <div className="flex items-center gap-2 flex-shrink-0 min-w-0">
+        <div className="flex items-center gap-2 flex-shrink-0 min-w-0 ml-auto">
+          {/* Mobile request: always show expand/collapse arrow + account avatar on the right. */}
+          {headerIsMobile ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 flex-shrink-0"
+                data-mobile-header-expand-toggle="true"
+                onClick={() => setMobileHeaderExpanded((prev) => !prev)}
+                title={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+                aria-label={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+              >
+                {mobileHeaderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </Button>
+              <UserProfileButton />
+            </>
+          ) : null}
           <AddNewButtonOnReportPage />
-          <MobileReportButtonsOnly />
           {!headerIsMobile && (
             <>
+              {/* Desktop keeps report affordances on the right cluster (mobile handled in scroll strip above). */}
+              <UserProfileButton />
+              <ReportListButton />
               <CopyLedgerHeaderButton />
               <GlobalFileHoverPreviewSwitch />
               <ScreenControls />
             </>
           )}
-          <ReportListButton />
         </div>
       </div>
     </header>

@@ -491,8 +491,11 @@ export function AccountGroupDetails({
     const hasSpendWiseGroups = sortedTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
     if (!hasSpendWiseGroups) {
       const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
-      const start = (currentPage - 1) * rowsPerPage;
-      const paginatedTransactions = sortedTransactions.slice(start, start + rowsPerPage);
+      const safePage = Math.min(Math.max(1, currentPage), totalPages);
+      const total = sortedTransactions.length;
+      const end = total - (safePage - 1) * rowsPerPage;
+      const start = Math.max(0, end - rowsPerPage);
+      const paginatedTransactions = sortedTransactions.slice(start, Math.max(start, end));
       return { totalPages, paginatedTransactions };
     }
     const blocks = displayBlocks;
@@ -514,13 +517,42 @@ export function AccountGroupDetails({
     }
     if (currentPageBlocks.length > 0) pages.push(currentPageBlocks);
     const totalPages = Math.max(1, pages.length);
-    const pageIndex = Math.min(currentPage - 1, totalPages - 1);
+    const safePage = Math.min(Math.max(1, currentPage), totalPages);
+    const pageIndex = Math.max(0, totalPages - safePage);
     const blockIndices = pages[pageIndex] ?? [];
     const paginatedTransactions = blockIndices.length > 0
       ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
       : sortedTransactions;
     return { totalPages, paginatedTransactions };
   }, [sortedTransactions, displayBlocks, rowsPerPage, currentPage]);
+  // Page-break dynamic opening: first visible txn ke pehle ka balance opening row me dikhana.
+  const desktopPageLedgerStats = useMemo(() => {
+    const pageRows = paginatedTransactions as any[];
+    let openingForPage = openingBalanceForPeriod;
+    const firstTxn = pageRows[0];
+    const firstIdx =
+      firstTxn != null ? (sortedTransactions as any[]).findIndex((t: any) => t === firstTxn) : -1;
+    const previousTx = firstIdx > 0 ? (sortedTransactions as any[])[firstIdx - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
+      openingForPage = previousRunningBalance;
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
 
   const transactionDates = useMemo(() => {
     const dates = new Set<number>();
@@ -680,6 +712,15 @@ export function AccountGroupDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = filteredMobileTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
@@ -804,17 +845,6 @@ export function AccountGroupDetails({
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
           {/* Mobile: scroll + pager above fixed footer */}
-          <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-            {onBack && (
-              <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            )}
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">Bank Group Details</h1>
-            <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-              Showing {mobileTransactionsToShow.filter((t: any) => !(t as any)._spendWiseSpacer).length} of {filteredMobileTransactions.filter((t: any) => !(t as any)._spendWiseSpacer).length} voucher(s)
-            </span>
-          </div>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
               {!dateRange || (dateRange.from == null && dateRange.to == null)
@@ -834,7 +864,7 @@ export function AccountGroupDetails({
               </button>
             )}
           </div>
-          <div className="px-3 py-3 border-b flex-shrink-0">
+          <div className="px-3 py-2 border-b flex-shrink-0">
             <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {isBalanceMasked ? (
                 "*****"
@@ -898,7 +928,7 @@ export function AccountGroupDetails({
               contextId={group.id}
               groupEntityType="account"
               forceBalanceMode="statement"
-              openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
+              openingBalance={isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -913,9 +943,9 @@ export function AccountGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={isBalanceMasked ? undefined : periodDr}
-              periodCr={isBalanceMasked ? undefined : periodCr}
-              closingBalance={isBalanceMasked ? undefined : closingBalance}
+              periodDr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage}
+              periodCr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage}
+              closingBalance={isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage}
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
               disableLayoutAnimation={disableTableLayoutAnimation}
@@ -933,6 +963,7 @@ export function AccountGroupDetails({
                 setCurrentPage(1);
               }}
               onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
             />
           </div>
         </div>
@@ -1232,8 +1263,8 @@ export function AccountGroupDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                  <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                  <XCircle className="h-4 w-4" />
                 </Button>
               )}
               <DropdownMenu>
@@ -1243,10 +1274,20 @@ export function AccountGroupDetails({
                     <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[200px] max-h-60 overflow-y-auto">
+                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
                   {accounts.map(p => (
                     <DropdownMenuItem key={p.id} disabled>
-                      {p.accountName}
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="truncate text-left">{p.accountName}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 text-xs font-semibold tabular-nums",
+                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
+                          )}
+                        >
+                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
+                        </span>
+                      </div>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -1280,7 +1321,7 @@ export function AccountGroupDetails({
               forceBalanceMode="statement"
               showNarration={showNarration}
               visibleColumns={visibleColumns}
-              openingBalance={isBalanceMasked ? 0 : openingBalanceForPeriod}
+              openingBalance={isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -1307,9 +1348,9 @@ export function AccountGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={isBalanceMasked ? undefined : periodDr}
-              periodCr={isBalanceMasked ? undefined : periodCr}
-              closingBalance={isBalanceMasked ? undefined : closingBalance}
+              periodDr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage}
+              periodCr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage}
+              closingBalance={isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage}
               isBalanceMasked={isBalanceMasked}
               disableLayoutAnimation={disableTableLayoutAnimation}
               blinkMode={spendWiseBlinkMode}
@@ -1325,7 +1366,6 @@ export function AccountGroupDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{displayTransactionCount} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-account-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1430,7 +1470,25 @@ export function AccountGroupDetails({
                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                 viewMode={spendWiseView ? "spend_wise" : "statement"}
               />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+              <p className="text-sm font-medium flex-shrink-0">
+                Page {currentPage} of {totalPages}
+              </p>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1449,43 +1507,23 @@ export function AccountGroupDetails({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactionCount}</p>
             </div>
           </div>
         </div>

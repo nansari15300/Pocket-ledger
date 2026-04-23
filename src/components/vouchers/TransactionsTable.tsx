@@ -72,7 +72,7 @@ type MobileBlock =
   | { type: "single"; item: any };
 type TableBlock =
   | { type: "spacer"; id: string }
-  | { type: "group"; colorIndex: number; items: any[] }
+  | { type: "group"; colorIndex: number; items: any[]; clippedTop?: boolean; clippedBottom?: boolean }
   | { type: "single"; item: any };
 
 interface TransactionsTableProps {
@@ -487,10 +487,13 @@ export function TransactionsTable({
   // Ensure openingBalance is a valid number (handle undefined, null, NaN)
   const safeOpeningBalance = (typeof openingBalance === 'number' && !isNaN(openingBalance)) ? openingBalance : 0;
   const displayOpeningBalance = safeOpeningBalance / conversionFactor;
-  // Bill-wise: show outstanding in balance column for opening balance row (0 when Paid/Settled)
+  // Bill-wise party/staff: opening row Balance = remaining on opening (unpaid on OB). Other ledgers
+  // (tax, bank, expense, item, …) always use period ledger opening — never the bill-wise outstanding field.
   const obOutstandingDisplay = openingBalanceOutstanding != null ? openingBalanceOutstanding / conversionFactor : null;
-  const displayOpeningBalanceForRow = obOutstandingDisplay != null
-    ? (safeOpeningBalance >= 0 ? obOutstandingDisplay : -obOutstandingDisplay)
+  const useOutstandingForOpeningRowBalance =
+    isBillWiseMode && (context === "party" || context === "staff") && obOutstandingDisplay != null;
+  const displayOpeningBalanceForRow = useOutstandingForOpeningRowBalance
+    ? (safeOpeningBalance >= 0 ? obOutstandingDisplay! : -obOutstandingDisplay!)
     : displayOpeningBalance;
   const obAmount = Math.abs(displayOpeningBalance);
   const obStatusLabel = obOutstandingDisplay != null
@@ -798,6 +801,30 @@ export function TransactionsTable({
         i++;
         continue;
       }
+      const groupId = typeof t._spendWiseGroupId === "string" ? t._spendWiseGroupId : "";
+      if (groupId) {
+        const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
+        const items: any[] = [];
+        while (i < tableTransactions.length) {
+          const cur = tableTransactions[i] as any;
+          if (cur._spendWiseSpacer) break;
+          if (String(cur._spendWiseGroupId || "") !== groupId) break;
+          items.push(cur);
+          i++;
+        }
+        const firstItem = items[0] as any;
+        const lastItem = items[items.length - 1] as any;
+        const clippedTop = firstItem?._spendWiseGroupFirst !== true;
+        const clippedBottom = lastItem?._spendWiseGroupLast !== true;
+        if (items.length > 0 && (items.length > 1 || clippedTop || clippedBottom || items.some((row: any) => row?._spendWiseChild === true))) {
+          blocks.push({ type: "group", colorIndex, items, clippedTop, clippedBottom });
+          continue;
+        }
+        if (items.length === 1) {
+          blocks.push({ type: "single", item: items[0] });
+          continue;
+        }
+      }
       if (t._spendWiseGroupFirst === true) {
         const colorIndex = typeof t._spendWiseGroupColorIndex === "number" ? t._spendWiseGroupColorIndex : 0;
         const items: any[] = [];
@@ -906,6 +933,12 @@ export function TransactionsTable({
       const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
       const statusDetailVouchers = showStatusInCard ? getStatusDetailVouchers(t, { billWiseOnly: statusBillWiseOnly }) : [];
       const showStatusDetailInCard = showNarration && statusDetailVouchers.length > 0;
+      // Mobile card narration: Note vouchers should surface note title (same intent as desktop narration row).
+      const mobileNarrationLabel = t.type === "note" ? "Title" : "Narration";
+      const mobileNarrationValue =
+        t.type === "note"
+          ? (String(t.title || "").trim() || String(t.narration || "").trim() || "—")
+          : (String(t.narration || "").trim() || "—");
       const useNeutralStatus = ["Journal", "Note", "Contra", "Salary"].includes(statusLabel);
       const isPaidStatus = statusLabel === "Paid";
       const isUnpaidStatus = statusLabel === "Partial" || statusLabel === "Unpaid" || statusLabel === "Overdue";
@@ -913,15 +946,16 @@ export function TransactionsTable({
       const swBorder = !insideGroup && typeof (t as any)._spendWiseGroupColorIndex === "number"
         ? ((t as any)._spendWiseGroupColorIndex === 1 ? "border-l-4 border-l-green-500" : (t as any)._spendWiseGroupColorIndex === 2 ? "border-l-4 border-l-pink-500" : "border-l-4 border-l-blue-500")
         : "";
+      // Mobile transaction cards: slightly thicker border for clearer box visibility.
       return (
         <Card
           key={key}
           className={cn(
-            "p-2.5 min-w-0 w-full overflow-hidden border border-border/80 shadow-sm cursor-pointer transition-colors",
+            "p-2.5 min-w-0 w-full overflow-hidden border-[1.5px] border-border/80 shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
             isPendingApproval
-              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border border-black/30 dark:border-white/30"
+              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-[1.5px] border-black/30 dark:border-white/30"
               : "bg-card hover:bg-muted/30"
           )}
           onClick={() => onRowClick?.(t)}
@@ -936,8 +970,8 @@ export function TransactionsTable({
           </div>
           <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
             <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
-              <span className="font-semibold">Narration : </span>
-              {t.narration || "—"}
+              <span className="font-semibold">{mobileNarrationLabel} : </span>
+              {mobileNarrationValue}
             </p>
             {showStatusInCard && (statusLabel || showStatusDetailInCard) ? (
               <div className="shrink-0 flex flex-col items-end gap-0.5">
@@ -1148,7 +1182,8 @@ export function TransactionsTable({
       <Table
         className={cn(
           ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full",
-          hasSpendWiseGroups && "border-separate border-spacing-0 table-fixed",
+          // Spend-wise on small screens: keep natural column widths and allow horizontal scroll instead of header overlap.
+          hasSpendWiseGroups && "border-separate border-spacing-0 w-max min-w-full",
           "border-b-2 border-border"
         )}
         scrollContainer={false}
@@ -1378,16 +1413,23 @@ export function TransactionsTable({
                     if (block.type === "group") {
                       // Stable key by first item (payment_in) so date reorder doesn't remount — all cards animate same speed
                       const groupKey = `group-${block.items[0]?.id ?? block.items.map((t: any) => t.id).join("-")}`;
-                      const tableGroupCardClass = (colorIndex: number) =>
+                      const tableGroupCardClass = (colorIndex: number, clippedTop?: boolean, clippedBottom?: boolean) =>
                         cn(
                           // Add a same-color outer outline so rounded corners look uniformly thick.
-                          "rounded-xl overflow-hidden border-2 shadow-sm",
+                          "overflow-hidden border-2 shadow-sm",
+                          clippedTop && clippedBottom
+                            ? "rounded-none border-y-0"
+                            : clippedTop
+                              ? "rounded-b-xl border-t-0"
+                              : clippedBottom
+                                ? "rounded-t-xl border-b-0"
+                                : "rounded-xl",
                           colorIndex === 1 && "border-green-500 bg-green-50/50 dark:bg-green-950/20",
                           colorIndex === 2 && "border-pink-500 bg-pink-50/50 dark:bg-pink-950/20",
                           (colorIndex === 0 || colorIndex === 3) && "border-blue-500 bg-blue-50/50 dark:bg-blue-950/20",
-                          colorIndex === 1 && "outline outline-1 outline-green-500/80",
-                          colorIndex === 2 && "outline outline-1 outline-pink-500/80",
-                          (colorIndex === 0 || colorIndex === 3) && "outline outline-1 outline-blue-500/80"
+                          !clippedTop && !clippedBottom && colorIndex === 1 && "outline outline-1 outline-green-500/80",
+                          !clippedTop && !clippedBottom && colorIndex === 2 && "outline outline-1 outline-pink-500/80",
+                          !clippedTop && !clippedBottom && (colorIndex === 0 || colorIndex === 3) && "outline outline-1 outline-blue-500/80"
                         );
                       return (
                         <tr key={groupKey}>
@@ -1401,9 +1443,10 @@ export function TransactionsTable({
                               initial={false}
                               exit={{ transition: { duration: 0 } }}
                               transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
-                              className={tableGroupCardClass(block.colorIndex)}
+                              className={tableGroupCardClass(block.colorIndex, block.clippedTop, block.clippedBottom)}
                             >
-                              <table className="w-full border-0 border-collapse table-fixed">
+                              {/* Inner spend-wise rows should follow the same min-width contract as the outer header table. */}
+                              <table className="w-full min-w-full border-0 border-collapse table-fixed">
                                 {spendWiseColWidths.length > 0 && (
                                   <colgroup>
                                     {spendWiseColWidths.map((width, i) => (

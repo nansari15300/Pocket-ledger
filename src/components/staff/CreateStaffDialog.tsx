@@ -10,6 +10,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { CreateStaffForm } from "./CreateStaffForm";
 import type { StaffGroup } from "./types";
 
@@ -48,6 +55,8 @@ export function CreateStaffDialog({
     setOpen(false);
   }, [setOpen]);
 
+  const isMobile = useIsMobile();
+
   const handleStaffCreated = (isSaveAndNew: boolean, newId: string) => {
     onStaffCreated(newId);
     if (!isSaveAndNew) {
@@ -58,9 +67,8 @@ export function CreateStaffDialog({
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent
-        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 z-50 sm:max-h-none sm:w-full sm:max-w-3xl sm:grid sm:flex-none sm:px-6"
+        className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
@@ -82,15 +90,20 @@ export function CreateStaffDialog({
           if (isInsideNested) e.preventDefault();
         }}
       >
-        <DialogHeader>
+        <DialogHeader className={masterEntityDialogHeaderClassName}>
           <DialogTitle>Create a New Staff Member</DialogTitle>
           <DialogDescription>
             Add a new employee to your records. You can also upload a related file.
           </DialogDescription>
         </DialogHeader>
-        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-        <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
-          <CreateStaffForm onStaffCreated={handleStaffCreated} groups={groups} onNestedDialogOpenChange={setIsNestedOpen} defaultName={defaultName} />
+        <div className={masterEntityDialogFormWrapperClassName}>
+          <CreateStaffForm
+            onStaffCreated={handleStaffCreated}
+            onCloseDialogRequest={() => setOpen(false)}
+            groups={groups}
+            onNestedDialogOpenChange={setIsNestedOpen}
+            defaultName={defaultName}
+          />
         </div>
       </DialogContent>
     </Dialog>

@@ -472,11 +472,48 @@ export default function ItemDetails({
       ),
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
-  const totalPages = Math.ceil(sortedTransactions.length / rowsPerPage);
-  const paginatedTransactions = sortedTransactions.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
+  const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage)) : 1;
+  const paginatedTransactions = useMemo(() => {
+    if (rowsPerPage <= 0) return sortedTransactions;
+    const total = sortedTransactions.length;
+    const safePage = Math.min(Math.max(1, currentPage), totalPages);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return sortedTransactions.slice(start, Math.max(start, end));
+  }, [sortedTransactions, rowsPerPage, currentPage, totalPages]);
+  // Page-break dynamic opening: opening row ko current page start transaction ke hisab se sync karo.
+  const desktopPageLedgerStats = useMemo(() => {
+    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
+    let openingForPage = openingBalanceForPeriod;
+    const firstTxn = pageRows[0] as any;
+    if (firstTxn?.id) {
+      const firstIdx = (sortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
+      if (firstIdx > 0) {
+        for (let i = firstIdx - 1; i >= 0; i--) {
+          const prev = (sortedTransactions as any[])[i] as any;
+          if (!prev || prev._spendWiseSpacer) continue;
+          const prevBal =
+            typeof prev.balance === "number"
+              ? prev.balance
+              : typeof prev.runningBalance === "number"
+                ? prev.runningBalance
+                : undefined;
+          if (typeof prevBal === "number" && !Number.isNaN(prevBal)) {
+            openingForPage = prevBal;
+          }
+          break;
+        }
+      }
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
 
   const handlePrint = () => {
     if (!company || !currentItem) return;
@@ -593,6 +630,15 @@ export default function ItemDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = filteredMobileTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
@@ -688,18 +734,6 @@ export default function ItemDetails({
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
       <div className="flex flex-col flex-shrink-0 border-b bg-background">
-        {/* Row 1: Back | Item Details | Showing x of y vouchers - Party-style */}
-        <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
-          {onBack && (
-            <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleMobileBack}>
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          )}
-          <h1 className="text-base font-bold truncate flex-1 min-w-0">Item Details</h1>
-          <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-            Showing {mobileDisplayTransactions.length} of {filteredMobileTransactions.length} voucher(s)
-          </span>
-        </div>
         {/* Row 2: Date range label + X icon - Party-style */}
         <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0 bg-background">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -714,7 +748,7 @@ export default function ItemDetails({
             </button>
           )}
         </div>
-        <div className="px-3 py-3 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
+        <div className="px-3 py-2 border-b flex items-center justify-between gap-2 flex-shrink-0 bg-background">
             <span className="text-sm font-medium text-muted-foreground flex-1">{balanceText}</span>
             <div className="flex items-center gap-2">
                 <span className={cn("text-2xl font-bold", headerStockValue >= 0 ? "text-green-600" : "text-red-600")}>
@@ -822,6 +856,7 @@ export default function ItemDetails({
         setCurrentPage(1);
       }}
       onPageChange={setCurrentPage}
+      edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
     />
     </div>
     {/* Fixed bottom: New Sale, New Purchase, Calendar - same as Party footer style */}
@@ -1025,8 +1060,8 @@ export default function ItemDetails({
               </Popover>
             )}
             {isFilterActive && (
-              <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+              <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                <XCircle className="h-4 w-4" />
               </Button>
             )}
             <Button
@@ -1071,13 +1106,13 @@ export default function ItemDetails({
                     item={currentItem}
                     displayUnit={displayUnit}
                     setDisplayUnit={setItemDisplayUnit ? handleUnitChange : undefined}
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={desktopPageLedgerStats.openingForPage}
                     openingBalanceNarration={currentItem.openingBalanceNarration}
                     openingBalanceAttachmentUrls={currentItem.fileUrls}
                     openingBalanceDate={(currentItem as any).openingBalanceDate}
-                    periodDr={periodDr}
-                    periodCr={periodCr}
-                    closingBalance={closingBalance}
+                    periodDr={desktopPageLedgerStats.periodDrForPage}
+                    periodCr={desktopPageLedgerStats.periodCrForPage}
+                    closingBalance={desktopPageLedgerStats.closingForPage}
                     
                     filters={filters}
                     setFilters={setFilters}
@@ -1100,7 +1135,6 @@ export default function ItemDetails({
          <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
              <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-               <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
                <div className="flex items-center space-x-2 flex-shrink-0">
                  <Checkbox id="show-narration-item" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                  <label htmlFor="show-narration-item" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1170,7 +1204,25 @@ export default function ItemDetails({
                  onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                  viewMode="statement"
                />
-               <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+               <p className="text-sm font-medium flex-shrink-0">
+                 Page {currentPage} of {totalPages}
+               </p>
+               <Button
+                 variant="outline"
+                 className="h-8 w-8 p-0"
+                 onClick={() => setCurrentPage(totalPages)}
+                 disabled={currentPage === totalPages}
+               >
+                 <ChevronsLeft className="h-4 w-4" />
+               </Button>
+               <Button
+                 variant="outline"
+                 className="h-8 w-8 p-0"
+                 onClick={() => setCurrentPage(currentPage + 1)}
+                 disabled={currentPage === totalPages}
+               >
+                 <ChevronLeft className="h-4 w-4" />
+               </Button>
                <Select
                  value={`${rowsPerPage}`}
                  onValueChange={(value) => {
@@ -1188,43 +1240,23 @@ export default function ItemDetails({
                    <SelectItem value="0">All</SelectItem>
                  </SelectContent>
                </Select>
-               <p className="text-sm font-medium flex-shrink-0">
-                 Page {currentPage} of {totalPages}
-               </p>
-               <div className="flex items-center space-x-1 flex-shrink-0">
-                 <Button
-                   variant="outline"
-                   className="h-8 w-8 p-0"
-                   onClick={() => setCurrentPage(1)}
-                   disabled={currentPage === 1}
-                 >
-                   <ChevronsLeft className="h-4 w-4" />
-                 </Button>
-                 <Button
-                   variant="outline"
-                   className="h-8 w-8 p-0"
-                   onClick={() => setCurrentPage(currentPage - 1)}
-                   disabled={currentPage === 1}
-                 >
-                   <ChevronLeft className="h-4 w-4" />
-                 </Button>
-                 <Button
-                   variant="outline"
-                   className="h-8 w-8 p-0"
-                   onClick={() => setCurrentPage(currentPage + 1)}
-                   disabled={currentPage === totalPages}
-                 >
-                   <ChevronRight className="h-4 w-4" />
-                 </Button>
-                 <Button
-                   variant="outline"
-                   className="h-8 w-8 p-0"
-                   onClick={() => setCurrentPage(totalPages)}
-                   disabled={currentPage === totalPages}
-                 >
-                   <ChevronsRight className="h-4 w-4" />
-                 </Button>
-               </div>
+               <Button
+                 variant="outline"
+                 className="h-8 w-8 p-0"
+                 onClick={() => setCurrentPage(currentPage - 1)}
+                 disabled={currentPage === 1}
+               >
+                 <ChevronRight className="h-4 w-4" />
+               </Button>
+               <Button
+                 variant="outline"
+                 className="h-8 w-8 p-0"
+                 onClick={() => setCurrentPage(1)}
+                 disabled={currentPage === 1}
+               >
+                 <ChevronsRight className="h-4 w-4" />
+               </Button>
+               <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
              </div>
            </div>
          </div>

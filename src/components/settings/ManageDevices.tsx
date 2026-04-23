@@ -27,6 +27,15 @@ import { Switch } from "@/components/ui/switch";
 import { getOrCreateDeviceId, removeThisDevice, trimDeviceHistoryToLimit, addDeviceHistoryEntryWhenRemoved } from "@/lib/deviceLimitClient";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { cn } from "@/lib/utils";
+import {
+  canPickWebBackupFolder,
+  clearWebBackupDirectoryHandle,
+  isNativeRuntime,
+  readBackupSaveLocationPrefs,
+  saveBackupSaveLocationPrefs,
+  storeWebBackupDirectoryHandle,
+  type BackupNativeDirectory,
+} from "@/lib/backupSaveLocation";
 
 type DeviceRow = {
   id: string;
@@ -73,12 +82,29 @@ export function ManageDevices() {
   const [savingHistoryLimit, setSavingHistoryLimit] = useState(false);
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [confirmDeleteAllHistory, setConfirmDeleteAllHistory] = useState(false);
+  const [webUseSelectedFolder, setWebUseSelectedFolder] = useState(false);
+  const [webFolderLabel, setWebFolderLabel] = useState<string | null>(null);
+  const [nativeDirectory, setNativeDirectory] = useState<BackupNativeDirectory>("DOCUMENTS");
+  const [nativeSubfolder, setNativeSubfolder] = useState("PocketLedgerBackups");
+  const [savingBackupLocation, setSavingBackupLocation] = useState(false);
 
   const { refreshDeviceCheck } = useDeviceLimitContext();
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company?.ownerEmail === user.email));
   const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
   const plan = getPlanFromPlans(livePlans, company?.planId as any);
   const maxDevices = Math.max(1, Number(plan?.entitlements?.maxDevices) || 1);
+  const isStaticAppBuild = process.env.NEXT_PUBLIC_STATIC_BUILD === "1";
+  const supportsWebFolderPicker = canPickWebBackupFolder();
+  const nativeRuntime = isNativeRuntime();
+
+  useEffect(() => {
+    // Device-local backup destination preference hydrate for mobile/PC static builds.
+    const prefs = readBackupSaveLocationPrefs();
+    setWebUseSelectedFolder(prefs.webUseSelectedFolder);
+    setWebFolderLabel(prefs.webFolderLabel);
+    setNativeDirectory(prefs.nativeDirectory);
+    setNativeSubfolder(prefs.nativeSubfolder);
+  }, []);
 
   useEffect(() => {
     if (!companyId) {
@@ -271,6 +297,64 @@ export function ManageDevices() {
     }
   };
 
+  const handlePickWebFolder = async () => {
+    if (!supportsWebFolderPicker) return;
+    try {
+      const picker = (window as any).showDirectoryPicker;
+      const handle = await picker({ mode: "readwrite" });
+      const ok = await storeWebBackupDirectoryHandle(handle);
+      if (!ok) {
+        toast({ variant: "destructive", title: "Failed", description: "Could not store selected folder on this device." });
+        return;
+      }
+      const nextLabel = String(handle?.name || "Selected folder");
+      const prev = readBackupSaveLocationPrefs();
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        webUseSelectedFolder: true,
+        webFolderLabel: nextLabel,
+      });
+      setWebUseSelectedFolder(true);
+      setWebFolderLabel(nextLabel);
+      // Show a clear confirmation so user knows backup will now save to this folder.
+      toast({ title: "Backup location saved", description: `Folder set to ${nextLabel}.` });
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      toast({ variant: "destructive", title: "Failed", description: "Could not select backup folder." });
+    }
+  };
+
+  const handleClearWebFolder = async () => {
+    await clearWebBackupDirectoryHandle();
+    const prev = readBackupSaveLocationPrefs();
+    saveBackupSaveLocationPrefs({
+      ...prev,
+      webUseSelectedFolder: false,
+      webFolderLabel: null,
+    });
+    setWebUseSelectedFolder(false);
+    setWebFolderLabel(null);
+    // Reset makes future backup fall back to Save As picker.
+    toast({ title: "Backup location cleared", description: "Backup will ask location again." });
+  };
+
+  const handleSaveNativeLocation = async () => {
+    setSavingBackupLocation(true);
+    try {
+      const prev = readBackupSaveLocationPrefs();
+      const cleanSubfolder = String(nativeSubfolder || "").trim().replace(/^[\\/]+|[\\/]+$/g, "");
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        nativeDirectory,
+        nativeSubfolder: cleanSubfolder || "PocketLedgerBackups",
+      });
+      setNativeSubfolder(cleanSubfolder || "PocketLedgerBackups");
+      toast({ title: "Backup location saved", description: "Default backup folder updated for this device." });
+    } finally {
+      setSavingBackupLocation(false);
+    }
+  };
+
   if (!companyId || !company) {
     return (
       <Card>
@@ -299,6 +383,68 @@ export function ManageDevices() {
   if (!isCompanyOwner) {
     return (
       <div className="space-y-8">
+        {isStaticAppBuild && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Smartphone className="h-5 w-5" />
+                Device backup location
+              </CardTitle>
+              <CardDescription>
+                Set default backup save location for this device so backup does not fail with location not set.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!nativeRuntime && supportsWebFolderPicker ? (
+                <>
+                  <div className="text-sm text-muted-foreground">
+                    Current folder: <span className="font-medium text-foreground">{webFolderLabel || "Not set"}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" onClick={handlePickWebFolder}>
+                      Choose folder
+                    </Button>
+                    <Button type="button" variant="ghost" onClick={handleClearWebFolder} disabled={!webFolderLabel}>
+                      Clear
+                    </Button>
+                  </div>
+                </>
+              ) : nativeRuntime ? (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="native-backup-dir-non-owner">Directory</Label>
+                    <select
+                      id="native-backup-dir-non-owner"
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={nativeDirectory}
+                      onChange={(e) => setNativeDirectory(e.target.value === "EXTERNAL" ? "EXTERNAL" : "DOCUMENTS")}
+                    >
+                      <option value="DOCUMENTS">Documents</option>
+                      <option value="EXTERNAL">External storage</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="native-backup-subfolder-non-owner">Subfolder</Label>
+                    <Input
+                      id="native-backup-subfolder-non-owner"
+                      value={nativeSubfolder}
+                      onChange={(e) => setNativeSubfolder(e.target.value)}
+                      placeholder="PocketLedgerBackups"
+                    />
+                  </div>
+                  <Button type="button" onClick={handleSaveNativeLocation} disabled={savingBackupLocation}>
+                    {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
+                  </Button>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  This browser does not support fixed folder permission. Backup will ask location each time.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -332,6 +478,84 @@ export function ManageDevices() {
 
   return (
     <div className="space-y-8">
+      {isStaticAppBuild && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Smartphone className="h-5 w-5" />
+              Device backup location
+            </CardTitle>
+            <CardDescription>
+              Set default backup save location for this device so backup does not fail with location not set.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {!nativeRuntime && supportsWebFolderPicker ? (
+              <>
+                <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="web-use-fixed-folder" className="text-sm font-medium">Use selected folder automatically</Label>
+                    <p className="text-xs text-muted-foreground">When on, backup saves directly to the chosen folder.</p>
+                  </div>
+                  <Switch
+                    id="web-use-fixed-folder"
+                    checked={webUseSelectedFolder}
+                    onCheckedChange={(checked) => {
+                      const prev = readBackupSaveLocationPrefs();
+                      saveBackupSaveLocationPrefs({ ...prev, webUseSelectedFolder: checked });
+                      setWebUseSelectedFolder(checked);
+                    }}
+                    disabled={!webFolderLabel}
+                  />
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Current folder: <span className="font-medium text-foreground">{webFolderLabel || "Not set"}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={handlePickWebFolder}>
+                    Choose folder
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={handleClearWebFolder} disabled={!webFolderLabel}>
+                    Clear
+                  </Button>
+                </div>
+              </>
+            ) : nativeRuntime ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="native-backup-dir-owner">Directory</Label>
+                  <select
+                    id="native-backup-dir-owner"
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={nativeDirectory}
+                    onChange={(e) => setNativeDirectory(e.target.value === "EXTERNAL" ? "EXTERNAL" : "DOCUMENTS")}
+                  >
+                    <option value="DOCUMENTS">Documents</option>
+                    <option value="EXTERNAL">External storage</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="native-backup-subfolder-owner">Subfolder</Label>
+                  <Input
+                    id="native-backup-subfolder-owner"
+                    value={nativeSubfolder}
+                    onChange={(e) => setNativeSubfolder(e.target.value)}
+                    placeholder="PocketLedgerBackups"
+                  />
+                </div>
+                <Button type="button" onClick={handleSaveNativeLocation} disabled={savingBackupLocation}>
+                  {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This browser does not support fixed folder permission. Backup will ask location each time.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

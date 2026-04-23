@@ -6,6 +6,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
+import { isLocalOnlyMode } from '@/lib/localMode';
+import { resolvePostAuthCompanyRoute } from '@/lib/postAuthCompanyRoute';
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
@@ -13,7 +15,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-        router.push('/company');
+        // Static/local build: if remembered company unlock is still valid, open that company dashboard directly.
+        const next = isLocalOnlyMode() ? resolvePostAuthCompanyRoute(user.uid) : '/company';
+        router.push(next);
     }
   }, [user, loading, router]);
 

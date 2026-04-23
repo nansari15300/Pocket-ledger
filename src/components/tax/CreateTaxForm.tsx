@@ -13,7 +13,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   EntityProfilePhotoBlock,
@@ -63,7 +68,23 @@ const formSchema = z.object({
 
 const MAX_FILE_SIZE_MB = 0.5;
 
-export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, prefillName }: { onTaxCreated?: (isSaveAndNew: boolean, newId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => void, groups: TaxGroup[], onNestedDialogOpenChange?: (open: boolean) => void, prefillName?: string }) {
+export function CreateTaxForm({
+  onTaxCreated,
+  onCloseDialogRequest,
+  groups,
+  onNestedDialogOpenChange,
+  prefillName,
+}: {
+  onTaxCreated?: (
+    isSaveAndNew: boolean,
+    newId: string,
+    newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }
+  ) => void;
+  onCloseDialogRequest?: () => void;
+  groups: TaxGroup[];
+  onNestedDialogOpenChange?: (open: boolean) => void;
+  prefillName?: string;
+}) {
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -186,18 +207,21 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    
-    // Close dialog immediately for better UX
-    onTaxCreated?.(options.saveAndNew || false, '');
-
-    processAndSave(form.getValues(), options.saveAndNew);
+    void (async () => {
+      const isValid = await form.trigger();
+      if (!isValid) {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        return;
+      }
+      if (!options.saveAndNew) {
+        onCloseDialogRequest?.();
+      } else {
+        setIsLoading(true);
+      }
+      void processAndSave(form.getValues(), options.saveAndNew || false);
+    })();
   }
 
   async function processAndSave(values: z.infer<typeof formSchema>, saveAndNew: boolean = false) {
@@ -335,7 +359,7 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "tax"));
       const taxRef = doc(collection(firestore, `companies/${companyId}/taxes`));
       const newTaxId = taxRef.id;
-      const staged = await stageEntityAvatarAndDocuments({
+      const staged = await uploadEntityAvatarAndDocumentsRemote({
         companyId: companyId!,
         collectionSeg: "taxes",
         entityId: newTaxId,
@@ -499,7 +523,8 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
   return (
     <>
     <Form {...form}>
-      <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6">
+      <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <FormField
             control={form.control}
@@ -643,8 +668,8 @@ export function CreateTaxForm({ onTaxCreated, groups, onNestedDialogOpenChange, 
               detailLabel="tax"
             />
         </div>
-        
-        <div className="flex justify-end gap-2">
+        </div>
+        <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-2 border-t border-border/80 bg-background/95 py-3">
            <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New

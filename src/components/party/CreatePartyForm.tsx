@@ -8,7 +8,12 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { collection, doc, serverTimestamp, onSnapshot, query, setDoc, Timestamp } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
@@ -58,7 +63,7 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
-import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
 
 
@@ -91,6 +96,12 @@ const formSchema = z
 
 type FormValues = z.infer<typeof formSchema>;
 
+const PARTY_TOAST_OK_MS = 1200;
+
+type PartySaveFilesSnapshot = {
+  avatar: { file: File; preview: string } | null;
+  documents: File[];
+};
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -104,9 +115,12 @@ function createLocalEntityId(prefix: string): string {
 export function CreatePartyForm({
   onPartyCreated,
   onNestedDialogOpenChange,
+  onCloseDialogRequest,
 }: {
   onPartyCreated?: (isSaveAndNew: boolean, newId: string) => void;
   onNestedDialogOpenChange?: (open: boolean) => void;
+  /** "Create Party" (not Save & New): dialog band turant; save background; files snapshot se */
+  onCloseDialogRequest?: () => void;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -296,13 +310,6 @@ export function CreatePartyForm({
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
       return;
     }
-    
-    onPartyCreated?.(options.saveAndNew || false, '');
-
-    processAndSave(form.getValues(), options.saveAndNew);
-  }
-
-  async function processAndSave(values: FormValues, saveAndNew: boolean = false) {
     if ((!user || !user.email) && !isStaticAppBuild()) {
       toast({
         variant: "destructive",
@@ -311,23 +318,40 @@ export function CreatePartyForm({
       });
       return;
     }
-    
-    // Offline/online dono me same flow; network fail par local+outbox fallback hoga.
-    const toastId = sonnerToast.loading("Saving party...");
-    setIsLoading(true);
+
+    const values = form.getValues();
+    const files: PartySaveFilesSnapshot = {
+      avatar: avatarToUpload,
+      documents: [...documentFiles],
+    };
+    if (!options.saveAndNew) {
+      onCloseDialogRequest?.();
+    } else {
+      setIsLoading(true);
+    }
+    void processAndSave(values, options.saveAndNew || false, files);
+  }
+
+  async function processAndSave(
+    values: FormValues,
+    saveAndNew: boolean,
+    files: PartySaveFilesSnapshot
+  ) {
+    const avatarToUploadSnap = files.avatar;
+    const documentFilesSnap = files.documents;
 
     try {
       if (isLocalOnlyMode()) {
         // Local-only mode: IndexedDB pending files + SQLite row (online upload nahin)
         if (!companyId) {
           sonnerToast.error("No company selected", {
-            id: toastId,
             description: "Select a company before saving a party.",
+            duration: 4000,
           });
           return;
         }
         const totalAttachBytesLocal =
-          (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+          (avatarToUploadSnap?.file.size ?? 0) + documentFilesSnap.reduce((s, f) => s + f.size, 0);
         if (totalAttachBytesLocal > 0) {
           const limitCheck = await checkStorageLimit(
             companyId!,
@@ -336,7 +360,7 @@ export function CreatePartyForm({
             company?.storageOption
           );
           if (!limitCheck.allowed) {
-            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            sonnerToast.error("Storage limit reached", { description: limitCheck.message, duration: 4000 });
             setIsLoading(false);
             return;
           }
@@ -347,8 +371,8 @@ export function CreatePartyForm({
           companyId: companyId!,
           collectionSeg: "parties",
           entityId: localId,
-          avatarFile: avatarToUpload?.file ?? null,
-          documentFiles,
+          avatarFile: avatarToUploadSnap?.file ?? null,
+          documentFiles: documentFilesSnap,
         });
         const nowTs = Timestamp.now();
         const payload: Record<string, unknown> = {
@@ -375,11 +399,9 @@ export function CreatePartyForm({
         await upsertCompanyDocInBrowserDb(companyId!, "parties", localId, payload);
         await enqueueCompanyDocOutbox(companyId!, "parties", "create", localId, payload);
         const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
-          id: toastId,
-          description: showSyncHint
-            ? `"${values.name}" was saved locally and will sync when online.`
-            : `"${values.name}" was saved locally.`,
+        sonnerToast.success(showSyncHint ? "Saved — will sync" : "Saved", {
+          duration: PARTY_TOAST_OK_MS,
+          description: showSyncHint ? "Background" : values.name,
         });
         if (saveAndNew) {
           form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
@@ -398,17 +420,17 @@ export function CreatePartyForm({
         entityLabel: "Party",
       });
       if (duplicateDecision.decision === "active_exists") {
-        sonnerToast.error("Duplicate Party Name", {
-          id: toastId,
+        sonnerToast.error("Duplicate party name", {
           description: "A party with this name already exists.",
+          duration: 4000,
         });
         setIsLoading(false);
         return;
       }
       if (duplicateDecision.decision === "restored" && duplicateDecision.restoredId) {
-        sonnerToast.success("Party Restored!", {
-          id: toastId,
-          description: `"${values.name.trim()}" was restored from Recycle Bin.`,
+        sonnerToast.success("Restored", {
+          duration: PARTY_TOAST_OK_MS,
+          description: values.name.trim(),
         });
         onPartyCreated?.(saveAndNew, duplicateDecision.restoredId);
         setIsLoading(false);
@@ -416,7 +438,7 @@ export function CreatePartyForm({
       }
 
       const totalAttachBytes =
-        (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+        (avatarToUploadSnap?.file.size ?? 0) + documentFilesSnap.reduce((s, f) => s + f.size, 0);
       if (totalAttachBytes > 0) {
         const limitCheck = await checkStorageLimit(
           companyId!,
@@ -425,7 +447,7 @@ export function CreatePartyForm({
           company?.storageOption
         );
         if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+          sonnerToast.error("Storage limit reached", { description: limitCheck.message, duration: 4000 });
           setIsLoading(false);
           return;
         }
@@ -435,12 +457,13 @@ export function CreatePartyForm({
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "party"));
       const partyRef = doc(collection(firestore, `companies/${companyId}/parties`));
       const newPartyId = partyRef.id;
-      const staged = await stageEntityAvatarAndDocuments({
+      // Online: direct Storage → HTTPS URLs in Firestore (dusre device; `local:` + syncPendingFiles par depend nahi)
+      const staged = await uploadEntityAvatarAndDocumentsRemote({
         companyId: companyId!,
         collectionSeg: "parties",
         entityId: newPartyId,
-        avatarFile: avatarToUpload?.file ?? null,
-        documentFiles,
+        avatarFile: avatarToUploadSnap?.file ?? null,
+        documentFiles: documentFilesSnap,
       });
 
       await setDoc(partyRef, {
@@ -473,10 +496,7 @@ export function CreatePartyForm({
         await balanceOpeningBalanceWithCapital(companyId!, "parties", newPartyId, 0, values.openingBalance);
       }
 
-      sonnerToast.success("Party Created!", {
-        id: toastId,
-        description: `"${values.name}" has been successfully created.`,
-      });
+      sonnerToast.success("Saved", { duration: PARTY_TOAST_OK_MS, description: values.name });
 
       if (saveAndNew) {
         form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
@@ -489,12 +509,11 @@ export function CreatePartyForm({
     } catch (error) {
       console.error("Error creating party:", error);
       const staticMode = isLocalOnlyMode();
-      const isOfflineFallback = staticMode && isLikelyOfflineFirestoreError(error);
       if (staticMode) {
         try {
           if (!companyId) throw new Error("Select a company before saving a party.");
           const totalCatch =
-            (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
+            (avatarToUploadSnap?.file.size ?? 0) + documentFilesSnap.reduce((s, f) => s + f.size, 0);
           if (totalCatch > 0) {
             const lim = await checkStorageLimit(
               companyId!,
@@ -511,8 +530,8 @@ export function CreatePartyForm({
             companyId: companyId!,
             collectionSeg: "parties",
             entityId: localId,
-            avatarFile: avatarToUpload?.file ?? null,
-            documentFiles,
+            avatarFile: avatarToUploadSnap?.file ?? null,
+            documentFiles: documentFilesSnap,
           });
           const nowTs = Timestamp.now();
           const payload: Record<string, unknown> = {
@@ -541,11 +560,9 @@ export function CreatePartyForm({
           // Reconnect par server sync ke liye outbox row.
           await enqueueCompanyDocOutbox(companyId!, "parties", "create", localId, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-          sonnerToast.success(showSyncHint ? "Saved. Will sync when online." : "Saved.", {
-            id: toastId,
-            description: showSyncHint
-              ? `"${values.name}" was saved locally and will sync when online.`
-              : `"${values.name}" was saved locally.`,
+          sonnerToast.success(showSyncHint ? "Saved — will sync" : "Saved", {
+            duration: PARTY_TOAST_OK_MS,
+            description: showSyncHint ? "Background" : values.name,
           });
           if (saveAndNew) {
             form.reset({ name: "", address: "", phone: "", email: "", pan: "", openingBalanceNarration: "", password: "", confirmPassword: "", openingBalance: 0, openingBalanceDate: undefined, groupId: getUngroupedGroupId("party") });
@@ -554,16 +571,13 @@ export function CreatePartyForm({
           }
           onPartyCreated?.(saveAndNew, localId);
         } catch (offlineErr) {
-          sonnerToast.error("Error", {
-            id: toastId,
+          sonnerToast.error("Couldn’t save", {
             description: offlineErr instanceof Error ? offlineErr.message : "Failed to save party offline.",
+            duration: 5000,
           });
         }
       } else {
-        sonnerToast.error("Error", {
-          id: toastId,
-          description: "Failed to create party. Please try again.",
-        });
+        sonnerToast.error("Couldn’t create party", { description: "Please try again.", duration: 5000 });
       }
     } finally {
       setIsLoading(false);
@@ -600,7 +614,11 @@ export function CreatePartyForm({
   return (
     <>
     <Form {...form}>
-      <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6">
+      <form
+        onSubmit={(e) => handleFormSubmit(e)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto py-1 pr-1">
         <FormField
           control={form.control}
           name="name"
@@ -866,7 +884,8 @@ export function CreatePartyForm({
           )}
         />
 
-        <div className="flex justify-end gap-4 pt-4">
+        </div>
+        <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-4 border-t border-border/80 bg-background/95 py-3">
           {onPartyCreated && (
             <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

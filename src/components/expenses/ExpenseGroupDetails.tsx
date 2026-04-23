@@ -275,6 +275,15 @@ export function ExpenseGroupDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [searchFilteredTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = searchFilteredTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [searchFilteredTransactions.length, currentPage, rowsPerPage]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
@@ -368,10 +377,42 @@ export function ExpenseGroupDetails({
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
-  const paginatedTransactions = sortedTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  );
+  const paginatedTransactions = useMemo(() => {
+    if (rowsPerPage <= 0) return sortedTransactions;
+    const total = sortedTransactions.length;
+    const safePage = Math.min(Math.max(1, currentPage), totalPages);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return sortedTransactions.slice(start, Math.max(start, end));
+  }, [sortedTransactions, rowsPerPage, currentPage, totalPages]);
+  // Page-break dynamic opening: current page ke first transaction se opening derive karo.
+  const desktopPageLedgerStats = useMemo(() => {
+    const pageRows = paginatedTransactions as any[];
+    let openingForPage = openingBalanceForPeriod;
+    const firstTxn = pageRows[0];
+    const firstIdx =
+      firstTxn != null ? (sortedTransactions as any[]).findIndex((t: any) => t === firstTxn) : -1;
+    const previousTx = firstIdx > 0 ? (sortedTransactions as any[])[firstIdx - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
+      openingForPage = previousRunningBalance;
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
   
   const handleOpenNoteDialog = (accountId?: string) => {
     if (accountsInGroup.length === 1) {
@@ -434,17 +475,6 @@ export function ExpenseGroupDetails({
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden w-full">
           {/* Mobile: scroll + pager above fixed footer */}
-          <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-            {onBack && (
-              <Button variant="ghost" size="icon" onClick={handleMobileBack} className="flex-shrink-0 h-8 w-8">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-            )}
-            <h1 className="text-base font-bold truncate flex-1 min-w-0">In/Exp Group Details</h1>
-            <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-              Showing {mobileTransactionsToShow.length} of {searchFilteredTransactions.length} voucher(s)
-            </span>
-          </div>
           <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
             <span className="text-xs font-medium text-muted-foreground">
               {!dateRange || (dateRange.from == null && dateRange.to == null)
@@ -464,7 +494,7 @@ export function ExpenseGroupDetails({
               </button>
             )}
           </div>
-          <div className="px-3 py-3 border-b flex-shrink-0">
+          <div className="px-3 py-2 border-b flex-shrink-0">
             <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
@@ -521,7 +551,7 @@ export function ExpenseGroupDetails({
               transactions={mobileTransactionsToShow}
               context="group"
               contextId={group.id}
-              openingBalance={openingBalanceForPeriod}
+              openingBalance={desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -534,9 +564,9 @@ export function ExpenseGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={desktopPageLedgerStats.periodDrForPage}
+              periodCr={desktopPageLedgerStats.periodCrForPage}
+              closingBalance={desktopPageLedgerStats.closingForPage}
               scrollOnlyTransactions
             />
             </div>
@@ -551,6 +581,7 @@ export function ExpenseGroupDetails({
                 setCurrentPage(1);
               }}
               onPageChange={setCurrentPage}
+              edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
             />
           </div>
         </div>
@@ -821,8 +852,8 @@ export function ExpenseGroupDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                  <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                  <XCircle className="h-4 w-4" />
                 </Button>
               )}
               <DropdownMenu>
@@ -832,10 +863,20 @@ export function ExpenseGroupDetails({
                     <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[200px] max-h-60 overflow-y-auto">
+                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto">
                   {accountsInGroup.map((p) => (
                     <DropdownMenuItem key={p.id} disabled>
-                      {p.name}
+                      <div className="flex w-full items-center justify-between gap-3">
+                        <span className="truncate text-left">{p.name}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 text-xs font-semibold tabular-nums",
+                            (Number((p as any).balance) || 0) >= 0 ? "text-green-600" : "text-red-600"
+                          )}
+                        >
+                          {formatCurrency(Number((p as any).balance) || 0, { showDrCr: true })}
+                        </span>
+                      </div>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -857,7 +898,7 @@ export function ExpenseGroupDetails({
               contextId={group.id}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
-              openingBalance={openingBalanceForPeriod}
+              openingBalance={desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -867,9 +908,9 @@ export function ExpenseGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={desktopPageLedgerStats.periodDrForPage}
+              periodCr={desktopPageLedgerStats.periodCrForPage}
+              closingBalance={desktopPageLedgerStats.closingForPage}
             />
             {paginatedTransactions.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
@@ -883,7 +924,6 @@ export function ExpenseGroupDetails({
         <div className="flex-shrink-0 border-t py-2 px-4 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-expense-group" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-expense-group" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -935,7 +975,25 @@ export function ExpenseGroupDetails({
                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+              <p className="text-sm font-medium flex-shrink-0">
+                Page {currentPage} of {totalPages}
+              </p>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -954,43 +1012,23 @@ export function ExpenseGroupDetails({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
             </div>
           </div>
         </div>

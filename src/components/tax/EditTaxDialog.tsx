@@ -7,7 +7,12 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, query, collection } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { useAuth } from "@/hooks/useAuth";
@@ -34,6 +39,12 @@ import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
@@ -74,6 +85,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const { companyId, company } = useCompany();
   const { user } = useAuth();
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const isMobile = useIsMobile();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedTaxGroups } = useVouchers();
   const processedTaxGroupsRef = useRef(processedTaxGroups);
@@ -147,120 +159,139 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     return () => unsubscribe();
   }, [isOpen, companyId, toast, processedTaxGroups]);
 
-  async function onSubmit(values: FormValues): Promise<void> {
+  function onSubmit(values: FormValues): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
 
-    const toastId = sonnerToast.loading("Updating tax...");
-    const isLocalGuestUser = user?.uid === "local_guest_user";
-    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
-    try {
-      let fileUrl: string | null = typeof file === "string" ? file : null;
-      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
-      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
-      const totalBytes =
-        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
-      if (totalBytes > 0 && companyId) {
-        const limitCheck = await checkStorageLimit(
-          companyId,
-          company?.planId,
-          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
-          company?.storageOption
-        );
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+    const fileSnap = file;
+    const docSlotsSnap = docSlots;
+    const taxRefSnap = tax;
+    setIsOpen(false);
+
+    void (async () => {
+      const toastId = sonnerToast.loading("Updating tax...");
+      const isLocalGuestUser = user?.uid === "local_guest_user";
+      const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      try {
+        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
+        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
+        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const totalBytes =
+          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+        if (totalBytes > 0 && companyId) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            return;
+          }
+        }
+
+        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
+        let documentFileUrls = [...keptDocUrls];
+        if (companyId && (needAvatarUpload || needNewDocsUpload)) {
+          const runRemote = () =>
+            uploadEntityAvatarAndDocumentsRemote({
+              companyId,
+              collectionSeg: "taxes",
+              entityId: taxRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          const runStage = () =>
+            stageEntityAvatarAndDocuments({
+              companyId,
+              collectionSeg: "taxes",
+              entityId: taxRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          let st: { fileUrl: string | null; documentFileUrls: string[] };
+          if (!isLocalOnlyMode()) {
+            st = await runRemote();
+          } else if (typeof navigator !== "undefined" && navigator.onLine) {
+            try {
+              st = await runRemote();
+            } catch (e) {
+              console.warn("[EditTax] Remote file upload failed, using local staging", e);
+              st = await runStage();
+            }
+          } else {
+            st = await runStage();
+          }
+          if (st.fileUrl) fileUrl = st.fileUrl;
+          documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
+        }
+
+        const oldOpeningBalance = taxRefSnap.openingBalance || 0;
+        const newOpeningBalance = values.openingBalance || 0;
+        const narrationClean = values.openingBalanceNarration?.trim() || null;
+        const updatePayload = {
+          name: values.name,
+          rate: values.rate,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate || null,
+          groupId: values.groupId || null,
+          fileUrl,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          openingBalanceNarration: narrationClean,
+        };
+
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "taxes", taxRefSnap.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: taxRefSnap.id,
+            companyId,
+            ownerId: user?.uid ?? "local_guest_user",
+            balance: taxRefSnap.balance,
+            debit: taxRefSnap.debit,
+            credit: taxRefSnap.credit,
+            isDeleted: false,
+          };
+          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: taxRefSnap.id, companyId };
+          await upsertCompanyDocInBrowserDb(companyId, "taxes", taxRefSnap.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
+          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
+            id: toastId,
+            description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
+          });
+          onTaxUpdated();
           return;
         }
-      }
 
-      if (file instanceof File && companyId && canAddAvatar) {
-        const st = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "taxes",
-          entityId: tax.id,
-          avatarFile: file,
-          documentFiles: [],
-        });
-        if (st.fileUrl) fileUrl = st.fileUrl;
-      }
+        if (totalBytes > 0 && companyId) {
+          await incrementCompanyStorage(companyId, {
+            attachmentsBytes: totalBytes,
+            storageBytes: totalBytes,
+          });
+        }
 
-      let documentFileUrls = [...keptDocUrls];
-      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
-        const st2 = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "taxes",
-          entityId: tax.id,
-          avatarFile: null,
-          documentFiles: newDocFiles,
-        });
-        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
-      }
+        const taxRef = doc(firestore, `companies/${companyId}/taxes`, taxRefSnap.id);
+        await updateDoc(taxRef, updatePayload);
 
-      const oldOpeningBalance = tax.openingBalance || 0;
-      const newOpeningBalance = values.openingBalance || 0;
-      const narrationClean = values.openingBalanceNarration?.trim() || null;
-      const updatePayload = {
-        name: values.name,
-        rate: values.rate,
-        openingBalance: newOpeningBalance,
-        openingBalanceDate: values.openingBalanceDate || null,
-        groupId: values.groupId || null,
-        fileUrl,
-        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-        openingBalanceNarration: narrationClean,
-      };
+        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
+          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
+          await balanceOpeningBalanceWithCapital(companyId, "taxes", taxRefSnap.id, oldOpeningBalance, newOpeningBalance);
+        }
 
-      if (isLocalOnlyMode()) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "taxes", tax.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: tax.id,
-          companyId,
-          ownerId: user?.uid ?? "local_guest_user",
-          balance: tax.balance,
-          debit: tax.debit,
-          credit: tax.credit,
-          isDeleted: false,
-        };
-        const payload: Record<string, unknown> = { ...base, ...updatePayload, id: tax.id, companyId };
-        await upsertCompanyDocInBrowserDb(companyId, "taxes", tax.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "taxes", "update", tax.id, payload);
-        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
-          id: toastId,
-          description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
-        });
-        setIsOpen(false);
+        sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         onTaxUpdated();
-        return;
-      }
-
-      if (totalBytes > 0 && companyId) {
-        await incrementCompanyStorage(companyId, {
-          attachmentsBytes: totalBytes,
-          storageBytes: totalBytes,
+      } catch (error) {
+        console.error("Error updating tax:", error);
+        sonnerToast.error("Error Updating Tax", {
+          id: toastId,
+          description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
       }
-
-      const taxRef = doc(firestore, `companies/${companyId}/taxes`, tax.id);
-      await updateDoc(taxRef, updatePayload);
-
-      if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-        const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, "taxes", tax.id, oldOpeningBalance, newOpeningBalance);
-      }
-
-      sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      setIsOpen(false);
-      onTaxUpdated();
-    } catch (error) {
-      console.error("Error updating tax:", error);
-      sonnerToast.error("Error Updating Tax", {
-        id: toastId,
-        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
-      });
-    }
+    })();
   }
 
   const handleDelete = async () => {
@@ -393,18 +424,20 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className="sm:max-w-lg z-50"
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Tax</DialogTitle>
             <DialogDescription>Update the details for {tax.name}.</DialogDescription>
           </DialogHeader>
+          <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                     control={form.control}
@@ -547,8 +580,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   name="openingBalanceNarration"
                   detailLabel="tax"
                 />
-
-              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+            </div>
+              <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
                   <Button variant="ghost">Cancel</Button>
                 </DialogClose>
@@ -573,12 +606,13 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1">
+                <Button type="submit" className="col-span-2 sm:col-span-1 sm:ml-auto">
                   Save Changes
                 </Button>
               </DialogFooter>
             </form>
           </Form>
+          </div>
         </DialogContent>
       </Dialog>
       

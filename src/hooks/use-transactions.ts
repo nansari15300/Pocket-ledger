@@ -676,16 +676,15 @@ export function useTransactions(
              return { processedTransactions: [], totalTransactions: 0, openingBalanceForPeriod: 0, periodDr: 0, periodCr: 0, closingBalance: 0, daybookSummary: null };
         }
         
-        const transactionsToProcess = passedTransactions || vouchers;
+        // Always use the full voucher list for ledger math. Passing a pre-filtered list (e.g. date-sliced
+        // or page-sliced) made pre-period & opening balance wrong: opening must be master OB + all txns
+        // strictly before the visible date range, which requires every voucher for the entity.
+        // `passedTransactions` is kept in the API for compatibility; it is not used to build the list.
+        const transactionsToProcess = vouchers ?? [];
         
         let entityTransactions: any[] = [];
         
-        // If passedTransactions is provided, use them directly (they're already filtered for the entity)
-        // EXCEPTION: For item context, always filter by itemId. For group context, always apply group filter
-        // so that only notes/vouchers linked to group members show (e.g. item group: only notes with entityId in group items)
-        if (passedTransactions && passedTransactions.length >= 0 && context !== 'item' && context !== 'group') {
-            entityTransactions = passedTransactions;
-        } else if (transactionContext && entity.id === 'all') {
+        if (transactionContext && entity.id === 'all') {
             entityTransactions = transactionsToProcess.filter((v: any) => v.type === transactionContext);
         } else if (context === 'group' && 'items' in entity) {
             // Check if this is "All Journal Vouchers" view
@@ -794,9 +793,7 @@ export function useTransactions(
             });
         }
 
-        if (transactionContext && !passedTransactions) {
-            // Only filter by transactionContext if passedTransactions is not provided
-            // If passedTransactions is provided, they're already filtered
+        if (transactionContext) {
             const contextType = transactionContext === 'payment-in' ? 'payment_in' : 
                               transactionContext === 'payment-out' ? 'payment_out' : transactionContext;
             entityTransactions = entityTransactions.filter((v: any) => {
@@ -1817,10 +1814,9 @@ export function useTransactions(
             openingBalanceLinkedVoucherNos = Array.from(new Set(openingBalanceLinkedVoucherNos));
             }
         }
-        if ((context === 'account' || context === 'tax') && openingBalanceOutstanding === undefined) {
-            openingBalanceOutstanding = Math.max(0, Math.abs(openingBalanceForPeriod));
-            openingBalanceLinkedVoucherNos = [];
-        }
+        // Do not set `openingBalanceOutstanding` for account/tax: that field is for party/staff (and some
+        // groups) bill-wise “remaining on opening”. Faking it to |period opening| made the table Balance
+        // column use “outstanding” and show Settled/0 when period opening was 0, hiding the real ledger.
 
         return {
             processedTransactions: withBalance,
@@ -1835,7 +1831,7 @@ export function useTransactions(
             openingBalanceLinkedVoucherNos,
         };
 
-  }, [entity, context, vouchers, dateRange, stockView, entityList, passedTransactions, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter]);
+  }, [entity, context, vouchers, dateRange, stockView, entityList, transactionContext, filters, voucherTypes, formatDate, formatDateBS, journalAccountNames, userNames, formatCurrency, daybookUserIdFilter]);
 
   return result;
 }

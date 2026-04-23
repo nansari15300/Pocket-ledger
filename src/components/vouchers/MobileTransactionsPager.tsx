@@ -31,7 +31,7 @@ export function MobileTransactionsPager({
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
   return (
-    <div className={cn("border-t bg-muted/20 px-2 py-0.5 font-semibold", className)}>
+    <div className={cn("border-t bg-muted/20 px-2 py-0.5 font-bold", className)}>
       <div className="overflow-x-auto">
         <div className="flex w-max min-w-full items-center justify-between gap-1.5">
           <div className="flex min-w-0 items-center gap-1">
@@ -39,7 +39,7 @@ export function MobileTransactionsPager({
               type="button"
               variant="default"
               size="sm"
-              className="h-5 shrink-0 px-1.5 text-[10px] font-semibold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+              className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
               onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
               disabled={safePage >= totalPages}
             >
@@ -47,7 +47,7 @@ export function MobileTransactionsPager({
             </Button>
             {edgeCounts != null && rowsPerPage > 0 ? (
               <span
-                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-semibold tabular-nums text-muted-foreground"
+                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
                 title="Older vouchers before this page"
                 aria-label={`${edgeCounts.before} vouchers before this page`}
               >
@@ -55,14 +55,13 @@ export function MobileTransactionsPager({
               </span>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-1 text-[10px] font-semibold">
-            {/* Short label — mobile pager row tight; "transactions" lamba tha */}
-            <span className="whitespace-nowrap text-muted-foreground">trxn</span>
+          <div className="flex shrink-0 items-center gap-1 text-[10px] font-bold">
+            <span className="whitespace-nowrap text-muted-foreground">Showing</span>
             <Select
               value={String(rowsPerPage)}
               onValueChange={(value) => onRowsPerPageChange(Number(value) || 0)}
             >
-              <SelectTrigger className="h-5 w-[70px] text-[10px] font-semibold">
+              <SelectTrigger className="h-5 w-[70px] text-[10px] font-bold">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -74,11 +73,14 @@ export function MobileTransactionsPager({
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
+            <span className="whitespace-nowrap text-muted-foreground">
+              Trxn Of <span className="tabular-nums">{totalItems}</span>
+            </span>
           </div>
           <div className="flex min-w-0 items-center gap-1">
             {edgeCounts != null && rowsPerPage > 0 ? (
               <span
-                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-semibold tabular-nums text-muted-foreground"
+                className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
                 title="Newer vouchers after this page"
                 aria-label={`${edgeCounts.after} vouchers after this page`}
               >
@@ -89,7 +91,7 @@ export function MobileTransactionsPager({
               type="button"
               variant="default"
               size="sm"
-              className="h-5 shrink-0 px-1.5 text-[10px] font-semibold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
+              className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
               onClick={() => onPageChange(Math.max(1, safePage - 1))}
               disabled={safePage <= 1}
             >

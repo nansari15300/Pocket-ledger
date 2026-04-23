@@ -46,6 +46,9 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 type DisplayUnitState = Record<string, string>;
 
@@ -142,6 +145,43 @@ function ItemsPageContent() {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Item | ItemGroup).balance);
   }, [selected]);
+  const mobileItemsDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+    const selectedEntity = selected as Item | ItemGroup;
+    const name = selectedEntity.name || "Item";
+    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const initials = name
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "NA";
+    const openPreview = () => {
+      // Item mobile header avatar: tap to open full preview.
+      if (!fileUrl) return;
+      void openAttachmentInApp(fileUrl, { title: name });
+    };
+    return (
+      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
+        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+          <button
+            type="button"
+            className="inline-flex h-full w-full items-center justify-center rounded-full"
+            onClick={openPreview}
+            aria-label={`Preview ${name} avatar`}
+          >
+            <ResolvedEntityAvatar
+              className="h-full w-full text-xs"
+              src={fileUrl}
+              alt={name}
+              fallbackText={initials}
+            />
+          </button>
+        </EntityFileAttachmentHover>
+      </div>
+    );
+  }, [isMobile, selected]);
   const itemsMasterDetailTitle = activeView === "groups" ? "Item Groups" : "Items";
   useSyncMasterDetailHeaderId("items", selectedItem?.id ?? selectedItemGroup?.id ?? null);
 
@@ -537,6 +577,7 @@ function ItemsPageContent() {
       title={itemsMasterDetailTitle}
       mobileSelectionLabel={mobileItemsSelectionLabel}
       mobileSelectionLabelClassName={mobileItemsSelectionLabelClassName}
+      mobileDetailHeaderEnd={mobileItemsDetailHeaderAvatar}
       balance={
         <span
           className={cn(

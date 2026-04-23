@@ -61,6 +61,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -410,11 +411,13 @@ export function AccountDetails({
       const linkedOuts = vouchers.filter((v: any) => linkedOutFilter(v, pi.id));
       const hasLinkedGroup = linkedOuts.length > 0;
       const colorIdx = nextColor();
+      const spendWiseGroupId = `sw-group-in-${pi.id}`;
       const groupRunning = (t.debit || 0) - (t.credit || 0);
       if (hasLinkedGroup) {
         rows.push({
           ...t,
           _rowKey: nextRowKey(),
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: false,
           _spendWiseRunningBalance: groupRunning,
@@ -424,6 +427,7 @@ export function AccountDetails({
         rows.push({
           ...t,
           _rowKey: nextRowKey(),
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseGroupFirst: true,
           _spendWiseGroupLast: true,
           _spendWiseRunningBalance: groupRunning,
@@ -444,6 +448,7 @@ export function AccountDetails({
           ...outRow,
           id: `${po.id}-in-${pi.id}`,
           _rowKey: nextRowKey(),
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: idx === linkedOuts.length - 1,
@@ -459,11 +464,13 @@ export function AccountDetails({
     const openingBase = getOpeningBalanceBaseAmount(openingBalanceForPeriod, openingSide);
     if (openingBase > 0 && ((openingSide === "cr" && openingLinkedInIds.size > 0) || (openingSide === "dr" && openingLinkedOutIds.size > 0))) {
       const colorIdx = nextColor();
+      const spendWiseGroupId = "sw-group-opening-balance";
       const openingIsCr = openingSide === "cr";
       let openingRunning = openingIsCr ? -openingBase : openingBase;
       rows.push({
         id: "__opening_balance_group__",
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         type: "opening_balance",
         voucherNumber: getOpeningBalanceVoucherLabel(openingSide),
         date: undefined,
@@ -500,6 +507,7 @@ export function AccountDetails({
           debit: openingIsCr ? linkedAmount : 0,
           credit: openingIsCr ? 0 : linkedAmount,
           _rowKey: nextRowKey(),
+          _spendWiseGroupId: spendWiseGroupId,
           _spendWiseChild: true,
           _spendWiseGroupFirst: false,
           _spendWiseGroupLast: idx === openingLinkedRows.length - 1,
@@ -534,11 +542,13 @@ export function AccountDetails({
       const remainder = fullAmount - alreadyShown;
       if (remainder <= 0) return;
       const colorIdx = nextColor();
+      const spendWiseGroupId = `sw-group-unlinked-${t.id}`;
       const isOutflow = (t.credit || 0) > (t.debit || 0);
       const remainderRow = {
         ...voucherToOutRow(t),
         id: t.id,
         _rowKey: nextRowKey(),
+        _spendWiseGroupId: spendWiseGroupId,
         debit: isOutflow ? 0 : remainder,
         credit: isOutflow ? remainder : 0,
         _spendWiseGroupFirst: true,
@@ -605,8 +615,11 @@ export function AccountDetails({
     const hasSpendWiseGroups = sortedTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
     if (!hasSpendWiseGroups) {
       const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
-      const start = (currentPage - 1) * rowsPerPage;
-      return { totalPages, paginatedTransactions: sortedTransactions.slice(start, start + rowsPerPage) };
+      const safePage = Math.min(Math.max(1, currentPage), totalPages);
+      const total = sortedTransactions.length;
+      const end = total - (safePage - 1) * rowsPerPage;
+      const start = Math.max(0, end - rowsPerPage);
+      return { totalPages, paginatedTransactions: sortedTransactions.slice(start, Math.max(start, end)) };
     }
     const blocks = displayBlocks;
     if (!blocks.length) {
@@ -627,16 +640,54 @@ export function AccountDetails({
     }
     if (currentPageBlocks.length > 0) pages.push(currentPageBlocks);
     const totalPages = Math.max(1, pages.length);
-    const pageIndex = Math.min(currentPage - 1, totalPages - 1);
+    // Latest-side first: page 1 should show newest block-set.
+    const safePage = Math.min(Math.max(1, currentPage), totalPages);
+    const pageIndex = Math.max(0, totalPages - safePage);
     const blockIndices = pages[pageIndex] ?? [];
     const paginatedTransactions = blockIndices.length > 0
       ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
       : sortedTransactions;
     return { totalPages, paginatedTransactions };
   }, [sortedTransactions, displayBlocks, rowsPerPage, currentPage]);
+  // Page-break dynamic opening: first visible txn se pehle ka running balance opening row me dikhana.
+  const desktopPageLedgerStats = useMemo(() => {
+    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
+    let openingForPage = openingBalanceForPeriod;
+    const firstTxn = pageRows[0] as any;
+    if (firstTxn?.id) {
+      const firstIdx = (sortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
+      if (firstIdx > 0) {
+        for (let i = firstIdx - 1; i >= 0; i--) {
+          const prev = (sortedTransactions as any[])[i] as any;
+          if (!prev || prev._spendWiseSpacer) continue;
+          const prevBal =
+            typeof prev.balance === "number"
+              ? prev.balance
+              : typeof prev.runningBalance === "number"
+                ? prev.runningBalance
+                : undefined;
+          if (typeof prevBal === "number" && !Number.isNaN(prevBal)) {
+            openingForPage = prevBal;
+          }
+          break;
+        }
+      }
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [paginatedTransactions, sortedTransactions, openingBalanceForPeriod]);
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
+  // Books opening + (date par filter) view-start: table ke opening row se align
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const masterAccountOpening = Number(account.openingBalance) || 0;
 
   const clearFilters = () => {
     if(onDateRangeChange) {
@@ -819,6 +870,58 @@ export function AccountDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = filteredMobileTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
+  const mobilePageLedgerStats = useMemo(() => {
+    const list = filteredMobileTransactions as any[];
+    if (rowsPerPage <= 0) {
+      const pageRows = list.filter((t: any) => !(t as any)?._spendWiseSpacer);
+      const pageDr = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
+    }
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    const pageRows = list
+      .slice(start, Math.max(start, end))
+      .filter((t: any) => !(t as any)?._spendWiseSpacer);
+    let openingForPage = openingBalanceForPeriod;
+    const previousTx = start > 0 ? list[start - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
+      openingForPage = previousRunningBalance;
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [filteredMobileTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
@@ -903,9 +1006,6 @@ export function AccountDetails({
               <ArrowLeft className="h-4 w-4" />
             </Button>
           ) : null}
-          <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0 ml-auto">
-            Showing {mobileTransactionsToShow.length} of {filteredMobileTransactions.length} voucher(s)
-          </span>
         </div>
       )}
       {/* Last 10 Txns / date range label */}
@@ -922,25 +1022,8 @@ export function AccountDetails({
           </button>
         )}
       </div>
-      {/* Profile — mobile list jaisa local:uuid resolve */}
-      <div className="px-3 pt-2 pb-1 flex justify-center flex-shrink-0 border-b">
-        <EntityFileAttachmentHover fileUrl={account.fileUrl} triggerClassName="inline-flex rounded-full">
-          <ResolvedEntityAvatar
-            className="h-14 w-14 text-lg border"
-            src={account.fileUrl}
-            alt={account.accountName}
-            fallbackSlot={
-              account.isSpecial ? (
-                <Crown className="h-7 w-7 text-amber-500" />
-              ) : (
-                <Landmark className="h-7 w-7 text-muted-foreground" />
-              )
-            }
-          />
-        </EntityFileAttachmentHover>
-      </div>
       {/* Balance row */}
-      <div className="px-3 py-3 border-b flex-shrink-0">
+      <div className="px-3 py-2 border-b flex-shrink-0">
         <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {showMaskedBalance ? (
             "*****"
@@ -1021,7 +1104,7 @@ export function AccountDetails({
             context="account"
             contextId={account.id}
             forceBalanceMode="statement"
-            openingBalance={openingBalanceForPeriod}
+            openingBalance={showMaskedBalance ? 0 : mobilePageLedgerStats.openingForPage}
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
             openingBalanceNarration={(account as any).openingBalanceNarration}
@@ -1038,9 +1121,9 @@ export function AccountDetails({
             setFilters={setFilters}
             activeFilter={activeFilter}
             setActiveFilter={setActiveFilter}
-            periodDr={showMaskedBalance ? undefined : periodDr}
-            periodCr={showMaskedBalance ? undefined : periodCr}
-            closingBalance={showMaskedBalance ? undefined : closingBalance}
+            periodDr={showMaskedBalance ? undefined : mobilePageLedgerStats.periodDrForPage}
+            periodCr={showMaskedBalance ? undefined : mobilePageLedgerStats.periodCrForPage}
+            closingBalance={showMaskedBalance ? undefined : mobilePageLedgerStats.closingForPage}
             isBalanceMasked={showMaskedBalance}
             scrollOnlyTransactions
             blinkMode={spendWiseBlinkMode}
@@ -1057,6 +1140,7 @@ export function AccountDetails({
           setCurrentPage(1);
         }}
         onPageChange={setCurrentPage}
+        edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
       />
       
         <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
@@ -1192,33 +1276,42 @@ export function AccountDetails({
                   }
                 />
               </EntityFileAttachmentHover>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
-                {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
-                  <EditAccountDialog
-                    account={account}
-                    allAccounts={allAccounts}
-                    onAccountUpdated={onAccountUpdated}
-                    onAccountDeleted={onAccountDeleted}
-                    hasTransactions={processedTransactions.length > 0}
-                  >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  </EditAccountDialog>
-                )}
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                  {showMaskedBalance ? (
-                    "*****"
-                  ) : closingBalance === 0 ? (
-                    "Settled"
-                  ) : (
-                    <>
-                      <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
-                      <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
-                    </>
+              <div className="flex flex-col min-w-0 gap-0.5">
+                <div className="flex items-center gap-2 flex-nowrap min-w-0">
+                  <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
+                  {account.id !== 'all' && (!account.isSpecial || can('manage_special_bank_accounts')) && (
+                    <EditAccountDialog
+                      account={account}
+                      allAccounts={allAccounts}
+                      onAccountUpdated={onAccountUpdated}
+                      onAccountDeleted={onAccountDeleted}
+                      hasTransactions={processedTransactions.length > 0}
+                    >
+                      <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </EditAccountDialog>
                   )}
+                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0 flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {showMaskedBalance ? (
+                      "*****"
+                    ) : closingBalance === 0 ? (
+                      "Settled"
+                    ) : (
+                      <>
+                        <span>{formatCurrency(Math.abs(closingBalance), { showDrCr: false })}</span>
+                        <span className="text-sm">{closingBalance >= 0 ? "Dr" : "Cr"}</span>
+                      </>
+                    )}
+                  </div>
                 </div>
+                {!showMaskedBalance && (
+                  <EntityLedgerOpeningHints
+                    masterOpening={masterAccountOpening}
+                    periodOpeningBroughtForward={openingBalanceForPeriod}
+                    hasDateFilter={hasLedgerDateFilter}
+                  />
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -1292,9 +1385,8 @@ export function AccountDetails({
                 </Popover>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                  <XCircle className="mr-2 h-4 w-4" />
-                  Clear Filters
+                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                  <XCircle className="h-4 w-4" />
                 </Button>
               )}
               <Button
@@ -1336,7 +1428,7 @@ export function AccountDetails({
               context="account"
               contextId={account.id}
               forceBalanceMode="statement"
-              openingBalance={showMaskedBalance ? 0 : openingBalanceForPeriod}
+              openingBalance={showMaskedBalance ? 0 : desktopPageLedgerStats.openingForPage}
               openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceNarration={(account as any).openingBalanceNarration}
@@ -1367,9 +1459,9 @@ export function AccountDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={showMaskedBalance ? undefined : periodDr}
-              periodCr={showMaskedBalance ? undefined : periodCr}
-              closingBalance={showMaskedBalance ? undefined : closingBalance}
+              periodDr={showMaskedBalance ? undefined : desktopPageLedgerStats.periodDrForPage}
+              periodCr={showMaskedBalance ? undefined : desktopPageLedgerStats.periodCrForPage}
+              closingBalance={showMaskedBalance ? undefined : desktopPageLedgerStats.closingForPage}
               isBalanceMasked={showMaskedBalance}
               scrollOnlyTransactions
               blinkMode={spendWiseBlinkMode}
@@ -1380,7 +1472,6 @@ export function AccountDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{displayTransactionCount} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-account" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-account" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1485,7 +1576,25 @@ export function AccountDetails({
                 onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
                 viewMode={spendWiseView ? "spend_wise" : "statement"}
               />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+              <p className="text-sm font-medium flex-shrink-0">
+                Page {currentPage} of {totalPages}
+              </p>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1503,43 +1612,23 @@ export function AccountDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactionCount}</p>
             </div>
           </div>
         </div>

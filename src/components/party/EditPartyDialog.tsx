@@ -8,7 +8,12 @@ import { useState, useEffect, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import type { Party, Group } from "@/components/party/types";
 import { Button } from "@/components/ui/button";
@@ -65,6 +70,8 @@ const formSchema = z.object({
 
 const MAX_FILE_SIZE_MB = 0.5;
 
+/** Save toast — lamba "Saving…" hata, chhota feedback (PC/mobile). */
+const PARTY_TOAST_OK_MS = 1200;
 
 export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, children, hasTransactions }: {
   party: Party;
@@ -228,147 +235,163 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       return;
     }
 
-    const toastId = sonnerToast.loading("Updating party...");
     const isLocalGuestUser = user?.uid === "local_guest_user";
     const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
-    try {
-      let fileUrl: string | null = typeof file === "string" ? file : null;
-      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
-      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
-      const totalBytes =
-        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
-      if (totalBytes > 0 && companyId) {
-        const limitCheck = await checkStorageLimit(
-          companyId,
-          company?.planId,
-          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
-          company?.storageOption
-        );
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+    const fileSnap = file;
+    const docSlotsSnap = docSlots;
+    const partyRefSnap = party;
+
+    setIsOpen(false);
+
+    void (async () => {
+      try {
+        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
+        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
+        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const totalBytes =
+          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+        if (totalBytes > 0 && companyId) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { description: limitCheck.message, duration: 4000 });
+            return;
+          }
+        }
+
+        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
+        let documentFileUrls = [...keptDocUrls];
+        if (companyId && (needAvatarUpload || needNewDocsUpload)) {
+          const runRemote = () =>
+            uploadEntityAvatarAndDocumentsRemote({
+              companyId,
+              collectionSeg: "parties",
+              entityId: partyRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          const runStage = () =>
+            stageEntityAvatarAndDocuments({
+              companyId,
+              collectionSeg: "parties",
+              entityId: partyRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+
+          let st: { fileUrl: string | null; documentFileUrls: string[] };
+          if (!isLocalOnlyMode()) {
+            st = await runRemote();
+          } else if (typeof navigator !== "undefined" && navigator.onLine) {
+            try {
+              st = await runRemote();
+            } catch (e) {
+              console.warn("[EditParty] Remote file upload failed, using local staging", e);
+              st = await runStage();
+            }
+          } else {
+            st = await runStage();
+          }
+          if (st.fileUrl) fileUrl = st.fileUrl;
+          documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
+        }
+
+        const oldOpeningBalance = partyRefSnap.openingBalance || 0;
+        const newOpeningBalance = values.openingBalance || 0;
+        const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
+        const narrationClean = values.openingBalanceNarration?.trim() || null;
+
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: partyRefSnap.id,
+            companyId,
+            ownerId: user?.uid ?? "local_guest_user",
+            balance: partyRefSnap.balance ?? 0,
+            debit: partyRefSnap.debit ?? 0,
+            credit: partyRefSnap.credit ?? 0,
+            isDeleted: false,
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: partyRefSnap.id,
+            name: values.name,
+            address: values.address ?? "",
+            phone: values.phone ?? "",
+            email: values.email ?? "",
+            pan: values.pan ?? "",
+            openingBalance: newOpeningBalance,
+            openingBalanceDate: values.openingBalanceDate ?? null,
+            openingBalanceNarration: narrationClean,
+            groupId: resolvedGroupId,
+            companyId,
+            fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
+            documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "parties", partyRefSnap.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "parties", "update", partyRefSnap.id, payload);
+          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          onPartyUpdated({
+            id: partyRefSnap.id,
+            ...values,
+            fileUrl: fileUrl || "",
+            documentFileUrls,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+          });
+          sonnerToast.success(showSyncHint ? "Saved — will sync" : "Updated", {
+            duration: PARTY_TOAST_OK_MS,
+            description: showSyncHint ? "Background sync" : values.name,
+          });
           return;
         }
-      }
 
-      if (file instanceof File && companyId && canAddAvatar) {
-        const st = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "parties",
-          entityId: party.id,
-          avatarFile: file,
-          documentFiles: [],
-        });
-        if (st.fileUrl) fileUrl = st.fileUrl;
-      }
+        if (totalBytes > 0 && companyId) {
+          await incrementCompanyStorage(companyId, {
+            attachmentsBytes: totalBytes,
+            storageBytes: totalBytes,
+          });
+        }
 
-      let documentFileUrls = [...keptDocUrls];
-      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
-        const st2 = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "parties",
-          entityId: party.id,
-          avatarFile: null,
-          documentFiles: newDocFiles,
-        });
-        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
-      }
-
-      const oldOpeningBalance = party.openingBalance || 0;
-      const newOpeningBalance = values.openingBalance || 0;
-      const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
-      const narrationClean = values.openingBalanceNarration?.trim() || null;
-
-      // Local-first (default web): Firestore updateDoc yahan fail hota tha — SQLite + outbox (create party jaisa).
-      if (isLocalOnlyMode()) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: party.id,
-          companyId,
-          ownerId: user?.uid ?? "local_guest_user",
-          balance: party.balance ?? 0,
-          debit: party.debit ?? 0,
-          credit: party.credit ?? 0,
-          isDeleted: false,
-        };
-        const payload: Record<string, unknown> = {
-          ...base,
-          id: party.id,
+        const partyRef = doc(firestore, `companies/${companyId}/parties`, partyRefSnap.id);
+        await updateDoc(partyRef, {
           name: values.name,
-          address: values.address ?? "",
-          phone: values.phone ?? "",
           email: values.email ?? "",
+          phone: values.phone ?? "",
           pan: values.pan ?? "",
+          address: values.address ?? "",
           openingBalance: newOpeningBalance,
           openingBalanceDate: values.openingBalanceDate ?? null,
           openingBalanceNarration: narrationClean,
-          groupId: resolvedGroupId,
-          companyId,
-          fileUrl: fileUrl ?? (base.fileUrl as string | null) ?? null,
+          fileUrl: fileUrl ?? null,
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-        };
-        await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
-        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Party updated!", {
-          id: toastId,
-          description: showSyncHint
-            ? `"${values.name}" saved locally; sync when online.`
-            : `"${values.name}" has been updated.`,
+          groupId: resolvedGroupId,
         });
-        setIsOpen(false);
+
+        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
+          await balanceOpeningBalanceWithCapital(companyId, "parties", partyRefSnap.id, oldOpeningBalance, newOpeningBalance);
+        }
+
         onPartyUpdated({
-          id: party.id,
+          id: partyRefSnap.id,
           ...values,
           fileUrl: fileUrl || "",
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
-        return;
-      }
-
-      if (totalBytes > 0 && companyId) {
-        await incrementCompanyStorage(companyId, {
-          attachmentsBytes: totalBytes,
-          storageBytes: totalBytes,
+        sonnerToast.success("Updated", { duration: PARTY_TOAST_OK_MS, description: values.name });
+      } catch (error) {
+        console.error("Error updating party:", error);
+        sonnerToast.error("Couldn’t save", {
+          duration: 5000,
+          description: error instanceof Error ? error.message : "Please try again.",
         });
       }
-
-      const partyRef = doc(firestore, `companies/${companyId}/parties`, party.id);
-      // Firestore undefined reject karti hai — ...values spread se leak na ho.
-      await updateDoc(partyRef, {
-        name: values.name,
-        email: values.email ?? "",
-        phone: values.phone ?? "",
-        pan: values.pan ?? "",
-        address: values.address ?? "",
-        openingBalance: newOpeningBalance,
-        openingBalanceDate: values.openingBalanceDate ?? null,
-        openingBalanceNarration: narrationClean,
-        fileUrl: fileUrl ?? null,
-        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-        groupId: resolvedGroupId,
-      });
-
-      if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-        await balanceOpeningBalanceWithCapital(companyId, "parties", party.id, oldOpeningBalance, newOpeningBalance);
-      }
-
-      sonnerToast.success("Party Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      setIsOpen(false);
-      onPartyUpdated({
-        id: party.id,
-        ...values,
-        fileUrl: fileUrl || "",
-        documentFileUrls,
-        openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
-      });
-    } catch (error) {
-      console.error("Error updating party:", error);
-      sonnerToast.error("Error Updating Party", {
-        id: toastId,
-        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
-      });
-    }
+    })();
   }
 
   const handleDelete = async () => {

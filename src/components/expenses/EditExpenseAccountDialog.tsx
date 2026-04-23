@@ -4,7 +4,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon } from "lucide-react";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -36,6 +41,12 @@ import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
@@ -74,6 +85,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   const { companyId, company } = useCompany();
   const { user } = useAuth();
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
+  const isMobile = useIsMobile();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { processedExpenseGroups } = useVouchers();
   const processedExpenseGroupsRef = useRef(processedExpenseGroups);
@@ -145,119 +157,138 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     return () => unsubscribe();
   }, [companyId, isOpen, processedExpenseGroups]);
 
-  async function onSubmit(values: z.infer<typeof formSchema>): Promise<void> {
+  function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
 
-    const toastId = sonnerToast.loading("Updating expense account...");
-    const isLocalGuestUser = user?.uid === "local_guest_user";
-    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
-    try {
-      let fileUrl: string | null = typeof file === "string" ? file : null;
-      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
-      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
-      const totalBytes =
-        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
-      if (totalBytes > 0 && companyId) {
-        const limitCheck = await checkStorageLimit(
-          companyId,
-          company?.planId,
-          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
-          company?.storageOption
-        );
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+    const fileSnap = file;
+    const docSlotsSnap = docSlots;
+    const accountRefSnap = account;
+    setIsOpen(false);
+
+    void (async () => {
+      const toastId = sonnerToast.loading("Updating expense account...");
+      const isLocalGuestUser = user?.uid === "local_guest_user";
+      const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      try {
+        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
+        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
+        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const totalBytes =
+          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+        if (totalBytes > 0 && companyId) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            return;
+          }
+        }
+
+        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
+        let documentFileUrls = [...keptDocUrls];
+        if (companyId && (needAvatarUpload || needNewDocsUpload)) {
+          const runRemote = () =>
+            uploadEntityAvatarAndDocumentsRemote({
+              companyId,
+              collectionSeg: "expense_accounts",
+              entityId: accountRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          const runStage = () =>
+            stageEntityAvatarAndDocuments({
+              companyId,
+              collectionSeg: "expense_accounts",
+              entityId: accountRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          let st: { fileUrl: string | null; documentFileUrls: string[] };
+          if (!isLocalOnlyMode()) {
+            st = await runRemote();
+          } else if (typeof navigator !== "undefined" && navigator.onLine) {
+            try {
+              st = await runRemote();
+            } catch (e) {
+              console.warn("[EditExpenseAccount] Remote file upload failed, using local staging", e);
+              st = await runStage();
+            }
+          } else {
+            st = await runStage();
+          }
+          if (st.fileUrl) fileUrl = st.fileUrl;
+          documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
+        }
+
+        const oldOpeningBalance = accountRefSnap.openingBalance || 0;
+        const newOpeningBalance = values.openingBalance || 0;
+        const narrationClean = values.openingBalanceNarration?.trim() || null;
+        const updatePayload = {
+          name: values.name,
+          groupId: values.groupId || null,
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate || null,
+          openingBalanceNarration: narrationClean,
+          fileUrl,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        };
+
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "expense_accounts", accountRefSnap.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: accountRefSnap.id,
+            companyId,
+            balance: accountRefSnap.balance,
+            debit: accountRefSnap.debit,
+            credit: accountRefSnap.credit,
+            isDeleted: false,
+            type: accountRefSnap.type,
+          };
+          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
+          await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", accountRefSnap.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", accountRefSnap.id, payload);
+          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
+            id: toastId,
+            description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
+          });
+          onAccountUpdated();
           return;
         }
-      }
 
-      if (file instanceof File && companyId && canAddAvatar) {
-        const st = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "expense_accounts",
-          entityId: account.id,
-          avatarFile: file,
-          documentFiles: [],
-        });
-        if (st.fileUrl) fileUrl = st.fileUrl;
-      }
+        if (totalBytes > 0 && companyId) {
+          await incrementCompanyStorage(companyId, {
+            attachmentsBytes: totalBytes,
+            storageBytes: totalBytes,
+          });
+        }
 
-      let documentFileUrls = [...keptDocUrls];
-      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
-        const st2 = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "expense_accounts",
-          entityId: account.id,
-          avatarFile: null,
-          documentFiles: newDocFiles,
-        });
-        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
-      }
+        const accountRef = doc(firestore, `companies/${companyId}/expense_accounts`, accountRefSnap.id);
+        await updateDoc(accountRef, updatePayload);
 
-      const oldOpeningBalance = account.openingBalance || 0;
-      const newOpeningBalance = values.openingBalance || 0;
-      const narrationClean = values.openingBalanceNarration?.trim() || null;
-      const updatePayload = {
-        name: values.name,
-        groupId: values.groupId || null,
-        openingBalance: newOpeningBalance,
-        openingBalanceDate: values.openingBalanceDate || null,
-        openingBalanceNarration: narrationClean,
-        fileUrl,
-        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-      };
+        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
+          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
+          await balanceOpeningBalanceWithCapital(companyId, "expense_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
+        }
 
-      if (isLocalOnlyMode()) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "expense_accounts", account.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: account.id,
-          companyId,
-          balance: account.balance,
-          debit: account.debit,
-          credit: account.credit,
-          isDeleted: false,
-          type: account.type,
-        };
-        const payload: Record<string, unknown> = { ...base, ...updatePayload, id: account.id, companyId };
-        await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", account.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", account.id, payload);
-        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
-          id: toastId,
-          description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
-        });
-        setIsOpen(false);
+        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         onAccountUpdated();
-        return;
-      }
-
-      if (totalBytes > 0 && companyId) {
-        await incrementCompanyStorage(companyId, {
-          attachmentsBytes: totalBytes,
-          storageBytes: totalBytes,
+      } catch (error) {
+        console.error("Error updating account:", error);
+        sonnerToast.error("Error Updating Account", {
+          id: toastId,
+          description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
       }
-
-      const accountRef = doc(firestore, `companies/${companyId}/expense_accounts`, account.id);
-      await updateDoc(accountRef, updatePayload);
-
-      if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-        const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, "expense_accounts", account.id, oldOpeningBalance, newOpeningBalance);
-      }
-
-      sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
-      setIsOpen(false);
-      onAccountUpdated();
-    } catch (error) {
-      console.error("Error updating account:", error);
-      sonnerToast.error("Error Updating Account", {
-        id: toastId,
-        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
-      });
-    }
+    })();
   }
 
   const handleDelete = async () => {
@@ -382,18 +413,20 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent 
-            className="sm:max-w-lg z-50"
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Expense Account</DialogTitle>
             <DialogDescription>Update the details for {account.name}.</DialogDescription>
           </DialogHeader>
+          <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-2">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
               <FormField
                 control={form.control}
                 name="name"
@@ -506,8 +539,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 name="openingBalanceNarration"
                 detailLabel="income/expense account"
               />
-
-              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+            </div>
+              <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
                   <Button variant="ghost">Cancel</Button>
                 </DialogClose>
@@ -532,13 +565,14 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1">
+                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save Changes
                   </Button>
               </DialogFooter>
             </form>
           </Form>
+          </div>
         </DialogContent>
       </Dialog>
       

@@ -49,6 +49,9 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 function BankCashPageContent() {
   const { user } = useAuth();
@@ -150,10 +153,46 @@ function BankCashPageContent() {
   }, [isMobile, activeView, selectedAccount?.id]);
 
   const mobileBankDetailHeaderEnd = useMemo(() => {
-    if (!isMobile || activeView !== "accounts" || !selectedAccount || !bankMobileVoucherStats) return null;
-    const { showing, total } = bankMobileVoucherStats;
-    return `Showing ${showing} of ${total} voucher(s)`;
-  }, [isMobile, activeView, selectedAccount, bankMobileVoucherStats]);
+    if (!isMobile || !selected) return null;
+    const selectedEntity = selected as Account | AccountGroup;
+    // Union-safe label: account uses `accountName`, group uses `name`.
+    const name =
+      activeView === "accounts"
+        ? (String((selectedEntity as Account).accountName || "").trim() || "Account")
+        : (String((selectedEntity as AccountGroup).name || "").trim() || "Account");
+    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const initials = String(name)
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "NA";
+    const openPreview = () => {
+      // Bank/Cash mobile header avatar: tap for full preview.
+      if (!fileUrl) return;
+      void openAttachmentInApp(fileUrl, { title: String(name) });
+    };
+    return (
+      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
+        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+          <button
+            type="button"
+            className="inline-flex h-full w-full items-center justify-center rounded-full"
+            onClick={openPreview}
+            aria-label={`Preview ${name} avatar`}
+          >
+            <ResolvedEntityAvatar
+              className="h-full w-full text-xs"
+              src={fileUrl}
+              alt={String(name)}
+              fallbackText={initials}
+            />
+          </button>
+        </EntityFileAttachmentHover>
+      </div>
+    );
+  }, [isMobile, selected, activeView]);
   
    const processedAccountGroups = useMemo(() => {
     const canViewSpecialBalance = can('view_special_account_balance');

@@ -326,9 +326,6 @@ export function AccountGroupDetails({
            <div className="py-2 px-4 sm:px-6 md:px-8 border-t overflow-auto min-h-0 scrollbar-slim-dim">
              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
                <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-                 <span className="whitespace-nowrap flex-shrink-0">
-                   Showing {paginatedTransactions.length} of {processedTransactions.length} transaction(s).
-                 </span>
                  <DropdownMenu>
                    <DropdownMenuTrigger asChild>
                      <Button variant="outline" size="sm" className="h-8 gap-1 flex-shrink-0">
@@ -399,6 +396,7 @@ export function AccountGroupDetails({
                      <ChevronsRight className="h-4 w-4" />
                    </Button>
                  </div>
+                <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {processedTransactions.length}</p>
                </div>
              </div>
            </div>

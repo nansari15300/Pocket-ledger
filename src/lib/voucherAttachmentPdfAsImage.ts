@@ -9,6 +9,7 @@ import { attachmentMaxBytes } from "@/lib/attachmentCompressionUi";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { convertPdfToStitchedJpegFile } from "@/lib/pdfToImageExport";
 import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 export function looksLikePdfAttachmentUrl(url: string): boolean {
   const low = url.toLowerCase();
@@ -73,6 +74,13 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
     }
 
     const url = item;
+
+    // Static/local mode: linked string attachments (local refs / remote URLs) ko touch na karo.
+    // Sirf newly-picked File PDFs convert hon, taaki edit/save flow me stale/CORS linked PDFs se error na aaye.
+    if (isLocalOnlyMode()) {
+      out.push(url);
+      continue;
+    }
 
     /* Offline `local:uuid` — URL me extension nahi; IndexedDB blob sniff se PDF tabhi convert */
     if (isLocalFileRef(url)) {

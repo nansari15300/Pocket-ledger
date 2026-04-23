@@ -7,7 +7,12 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, setDoc, collection, serverTimestamp, query, onSnapshot, Timestamp } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   EntityProfilePhotoBlock,
@@ -74,12 +79,15 @@ type FormValues = z.infer<typeof formSchema>;
 
 export function CreateStaffForm({
   onStaffCreated,
+  onCloseDialogRequest,
   groups: initialGroups,
   onClose,
   onNestedDialogOpenChange,
   defaultName,
 }: {
   onStaffCreated?: (isSaveAndNew: boolean, newId: string) => void;
+  /** Shuts parent dialog immediately (like CreateParty) — then save runs in background. */
+  onCloseDialogRequest?: () => void;
   groups: StaffGroup[];
   onClose?: () => void;
   onNestedDialogOpenChange?: (open: boolean) => void;
@@ -303,18 +311,21 @@ export function CreateStaffForm({
   // ---------------------------
   // Submit
   // ---------------------------
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    
-    // Optimistic close
-    onStaffCreated?.(options.saveAndNew || false, '');
-
-    await processAndSave(form.getValues(), options.saveAndNew);
+    void (async () => {
+      const isValid = await form.trigger();
+      if (!isValid) {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        return;
+      }
+      if (!options.saveAndNew) {
+        onCloseDialogRequest?.();
+      } else {
+        setIsLoading(true);
+      }
+      void processAndSave(form.getValues(), options.saveAndNew || false);
+    })();
   }
 
   async function processAndSave(values: FormValues, saveAndNew: boolean = false) {
@@ -444,7 +455,8 @@ export function CreateStaffForm({
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "staff"));
       const staffRef = doc(collection(firestore, `companies/${companyId}/staff`));
       const newStaffId = staffRef.id;
-      const staged = await stageEntityAvatarAndDocuments({
+      // Online: Storage → HTTPS URLs in Firestore (other devices; not only local: + syncPendingFiles)
+      const staged = await uploadEntityAvatarAndDocumentsRemote({
         companyId: companyId!,
         collectionSeg: "staff",
         entityId: newStaffId,
@@ -584,8 +596,8 @@ export function CreateStaffForm({
   return (
     <>
       <Form {...form}>
-        {/* Single scroll: do not add max-h/overflow-y-auto here; dialog wrapper in CreateStaffDialog is the only scroll container. */}
-        <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-6">
+        <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1 sm:pr-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Name */}
             <FormField
@@ -811,9 +823,9 @@ export function CreateStaffForm({
               detailLabel="staff"
             />
           </div>
+          </div>
 
-          {/* Buttons */}
-          <div className="flex justify-end gap-4">
+          <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-4 border-t border-border/80 bg-background/95 py-3">
             <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & New

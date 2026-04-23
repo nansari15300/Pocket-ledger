@@ -26,6 +26,8 @@ import {
   NOTIFICATION_PREFS_CHANGED_EVENT,
 } from "@/lib/localUserNotificationSettings";
 import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from "@/lib/localFiscalSplitStore";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 
 
 export type DisplaySettings = {
@@ -353,6 +355,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const sharedSnapRef = useRef<any>(null);
   const ownedByEmailSnapRef = useRef<any>(null);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isSuperAdminUser = isSuperAdmin || isSuperAdminByEmail;
   /** Local + online dono: `app_settings/plans` merged entitlements (sirf static config/plans nahi). */
   const livePlans = useLivePlans();
   // Har plans-snapshot par naya object → `normalizeLocalCompany` unstable tha → deps wale effects (local registry + Firestore list) bar-bar → useVouchers listeners reset = "auto refresh" feel.
@@ -581,27 +589,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     planSyncBurstRef.current = 0;
     runSyncNow();
 
-    // Periodic plan API band: pehle har ~7 min `companyPlanServerSync` — ab sirf mount + tab visible + online par.
-
-    const onVis = () => {
-      if (document.visibilityState !== "visible") return;
-      const now = Date.now();
-      if (now - planSyncBurstRef.current < 45_000) return;
-      planSyncBurstRef.current = now;
-      runSyncNow();
-    };
+    // Mount + go-online only — tab `visibilitychange` hata: doosre tab se wapas aane par plan sync se poora tree re-render = "page refresh" jaisa.
 
     const onOnline = () => {
       planSyncBurstRef.current = 0;
       runSyncNow();
     };
 
-    document.addEventListener("visibilitychange", onVis);
     window.addEventListener("online", onOnline);
 
     return () => {
       cancelled = true;
-      document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("online", onOnline);
     };
   }, [user, companyId, authLoading, normalizeLocalCompany]);
@@ -667,7 +665,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (cancelled) return;
       const normalizedLocalCompanies = localCompanies.map((c) => normalizeLocalCompany(c as unknown as Company));
       await Promise.all(normalizedLocalCompanies.map((c) => upsertLocalCompany(c as any)));
-      setAllCompanies(normalizedLocalCompanies);
+      setAllCompanies(
+        filterSharedOnlyCompaniesForSuperAdminInMainApp(normalizedLocalCompanies, user, isSuperAdminUser, pathname)
+      );
       if (!companyId) {
         setCompany(null);
         setLoading(false);
@@ -681,7 +681,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [user, companyId, normalizeLocalCompany, localRegistryEpoch]);
+  }, [user, companyId, normalizeLocalCompany, localRegistryEpoch, isSuperAdminUser, pathname]);
 
   useEffect(() => {
     if (isLocalOnlyMode()) return;
@@ -761,7 +761,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
-    const mergedCompanies = Array.from(companyMap.values());
+    let mergedCompanies = Array.from(companyMap.values());
+    mergedCompanies = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+      mergedCompanies,
+      user,
+      isSuperAdminUser,
+      pathname
+    );
     // Sync engine: persist all online-category companies to local DB on every server snapshot update.
     const onlineCompanies = mergedCompanies.filter(
       (c) => ((c.storageOption || "firebase") as string).toLowerCase() !== "local"
@@ -787,7 +793,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     );
     setAllCompanies(mergedCompanies);
     setLoading(false);
-  }, [user?.uid, user?.email, normalizeLocalCompany]);
+  }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser, pathname]);
 
   useEffect(() => {
     if (isLocalOnlyMode()) {
@@ -851,7 +857,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       console.error("Shared Companies listener error:", err);
     });
 
-    const ownedByEmailQuery = isSuperAdmin && user?.email
+    const ownedByEmailQuery = isSuperAdminUser && user?.email
       ? query(collection(firestore, "companies"), where("ownerEmail", "==", user.email))
       : null;
     const unsubOwnedByEmail = ownedByEmailQuery

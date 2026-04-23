@@ -43,7 +43,7 @@ export function CreatePartyDialog({
   {children && <DialogTrigger asChild>{children}</DialogTrigger>}
   {/* MOBILE: max-h 85vh; PC (sm+): max-h 90vh taaki lamba form scroll ho — inner div overflow-y-auto. */}
   <DialogContent
-    className="max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:grid sm:flex-none sm:px-6"
+    className="z-50 max-h-[85vh] w-[98vw] max-w-[98vw] flex min-h-0 flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:w-full sm:max-w-3xl sm:px-6"
     onOpenAutoFocus={(e) => e.preventDefault()}
     onCloseAutoFocus={(e) => e.preventDefault()}
     onPointerDownOutside={(e) => {
@@ -65,15 +65,19 @@ export function CreatePartyDialog({
       if (isInsideNested) e.preventDefault();
     }}
   >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>Create a New Party</DialogTitle>
           <DialogDescription>
             Add a new customer or vendor to your records. You can also upload a related file.
           </DialogDescription>
         </DialogHeader>
-        {/* Scrollable form area: mobile + desktop dono me dialog height ke andar scroll (sm: 90vh cap). */}
-        <div className="py-4 overflow-y-auto min-h-0 flex-1 sm:min-h-0 sm:flex-1 sm:overflow-y-auto">
-          <CreatePartyForm onPartyCreated={handlePartyCreated} onNestedDialogOpenChange={setIsNestedOpen} />
+        {/* Edit Party jaisa: flex column, form ke andar body scroll + sticky footer (create buttons). */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
+          <CreatePartyForm
+            onPartyCreated={handlePartyCreated}
+            onNestedDialogOpenChange={setIsNestedOpen}
+            onCloseDialogRequest={() => setOpen(false)}
+          />
         </div>
       </DialogContent>
     </Dialog>

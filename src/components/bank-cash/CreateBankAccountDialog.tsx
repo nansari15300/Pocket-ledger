@@ -7,7 +7,12 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { doc, setDoc, collection, serverTimestamp, query, onSnapshot, Timestamp } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
@@ -51,7 +56,11 @@ import { Combobox } from "../ui/combobox";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -329,17 +338,21 @@ export function CreateBankAccountDialog({
   };
 
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    if (!options.saveAndNew) {
-      setIsOpen(false);
-    }
-    processAndSave(form.getValues(), options.saveAndNew);
+    void (async () => {
+      const isValid = await form.trigger();
+      if (!isValid) {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        return;
+      }
+      if (!options.saveAndNew) {
+        setIsOpen(false);
+      } else {
+        setIsLoading(true);
+      }
+      void processAndSave(form.getValues(), options.saveAndNew || false);
+    })();
   }
 
   async function processAndSave(values: z.infer<typeof formSchema>, saveAndNew: boolean = false) {
@@ -403,8 +416,6 @@ export function CreateBankAccountDialog({
         if (saveAndNew) {
           form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
           clearUploads();
-        } else {
-          setIsOpen(false);
         }
         return;
       }
@@ -431,7 +442,6 @@ export function CreateBankAccountDialog({
           description: `"${values.accountName.trim()}" was restored from Recycle Bin.`,
         });
         onAccountCreated(duplicateDecision.restoredId);
-        setIsOpen(false);
         setIsLoading(false);
         return;
       }
@@ -457,7 +467,7 @@ export function CreateBankAccountDialog({
         values.groupId?.trim() || (await ensureUngroupedGroup(companyId!, user.uid, "bank"));
       const accountRef = doc(collection(firestore, `companies/${companyId}/bank_accounts`));
       const newAccountId = accountRef.id;
-      const staged = await stageEntityAvatarAndDocuments({
+      const staged = await uploadEntityAvatarAndDocumentsRemote({
         companyId: companyId!,
         collectionSeg: "bank_accounts",
         entityId: newAccountId,
@@ -498,8 +508,6 @@ export function CreateBankAccountDialog({
       if (saveAndNew) {
         form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
         clearUploads();
-      } else {
-        setIsOpen(false);
       }
     } catch (error) {
       console.error("Error creating account:", error);
@@ -552,8 +560,6 @@ export function CreateBankAccountDialog({
           if (saveAndNew) {
             form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
             clearUploads();
-          } else {
-            setIsOpen(false);
           }
         } catch (offlineErr) {
           sonnerToast.error("Error Creating Account", {
@@ -608,8 +614,6 @@ export function CreateBankAccountDialog({
           if (saveAndNew) {
             form.reset({ ...form.getValues(), accountName: "", bankName: "", accountNumber: "", ifscCode: "", openingBalance: 0, openingBalanceDate: undefined, openingBalanceNarration: "", groupId: getUngroupedGroupId("bank"), isSpecial: false });
             clearUploads();
-          } else {
-            setIsOpen(false);
           }
         } catch {
           sonnerToast.error("Error Creating Account", { id: toastId, description: "Account could not be saved. Please try again." });
@@ -628,10 +632,7 @@ export function CreateBankAccountDialog({
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Must match CreatePartyDialog height/size. */}
         <DialogContent 
-            className={cnStaticMobileFullscreenDialog(
-              isMobile,
-              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-2xl sm:grid sm:flex-none sm:px-6"
-            )}
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => {
@@ -652,14 +653,14 @@ export function CreateBankAccountDialog({
                }
             }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Create a New Bank/Cash Account</DialogTitle>
             <DialogDescription>Add a new bank or cash account to manage your transactions.</DialogDescription>
           </DialogHeader>
-          {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-          <div className="overflow-y-auto min-h-0 flex-1 pr-1 sm:flex-none sm:overflow-visible">
+          <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-4">
+            <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                   control={form.control}
@@ -960,8 +961,9 @@ export function CreateBankAccountDialog({
                   name="openingBalanceNarration"
                   detailLabel="bank/cash account"
                 />
+            </div>
 
-                <DialogFooter className="mt-4">
+                <DialogFooter className="mt-0 shrink-0 border-t border-border/80 bg-background/95 py-3">
                   <DialogClose asChild>
                     <Button variant="ghost">Cancel</Button>
                   </DialogClose>

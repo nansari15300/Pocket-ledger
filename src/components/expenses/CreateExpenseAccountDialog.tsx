@@ -24,6 +24,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
@@ -32,7 +38,12 @@ import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   EntityProfilePhotoBlock,
@@ -95,6 +106,7 @@ export function CreateExpenseAccountDialog({
   const { dateSystem } = useDate();
   /** Merge with local `groups` — local-only me listener off; online me bhi registry id vs authoritative id par list poori rahe (CreatePartyForm jaisa). */
   const { processedExpenseGroups } = useVouchers();
+  const isMobile = useIsMobile();
 
   const open = isOpen !== undefined ? isOpen : internalIsOpen;
   const setOpen = onOpenChange !== undefined ? onOpenChange : setInternalIsOpen;
@@ -251,17 +263,21 @@ export function CreateExpenseAccountDialog({
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    if (!options.saveAndNew) {
+    void (async () => {
+      const isValid = await form.trigger();
+      if (!isValid) {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        return;
+      }
+      if (!options.saveAndNew) {
         setOpen(false);
-    }
-    processAndSave(form.getValues(), options.saveAndNew);
+      } else {
+        setIsLoading(true);
+      }
+      void processAndSave(form.getValues(), options.saveAndNew || false);
+    })();
   }
 
   async function processAndSave(values: z.infer<typeof formSchema>, saveAndNew: boolean = false) {
@@ -336,8 +352,6 @@ export function CreateExpenseAccountDialog({
             openingBalanceNarration: "",
           });
           clearUploads();
-        } else {
-          setOpen(false);
         }
         return;
       }
@@ -363,7 +377,6 @@ export function CreateExpenseAccountDialog({
           description: `"${values.name.trim()}" was restored from Recycle Bin.`,
         });
         onExpenseAccountCreated(duplicateDecision.restoredId);
-        setOpen(false);
         setIsLoading(false);
         return;
       }
@@ -396,7 +409,7 @@ export function CreateExpenseAccountDialog({
 
       const accRef = doc(collection(firestore, `companies/${companyId}/expense_accounts`));
       const createdId = accRef.id;
-      const staged = await stageEntityAvatarAndDocuments({
+      const staged = await uploadEntityAvatarAndDocumentsRemote({
         companyId: companyId!,
         collectionSeg: "expense_accounts",
         entityId: createdId,
@@ -450,8 +463,6 @@ export function CreateExpenseAccountDialog({
           openingBalanceNarration: "",
         });
         clearUploads();
-      } else {
-        setOpen(false);
       }
     } catch (error) {
       console.error("Error creating expense account:", error);
@@ -569,9 +580,8 @@ export function CreateExpenseAccountDialog({
     <>
     <Dialog open={open} onOpenChange={setOpen} modal={true}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      {/* MOBILE DIALOG SPEC (do not change when fixing other errors): height 85%, width 98%, left/right 2px gap (px-0.5), rounded. Match CreatePartyDialog / CreateBankAccountDialog. */}
       <DialogContent 
-        className="max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-none sm:w-full sm:max-w-lg sm:grid sm:flex-none sm:px-6"
+        className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-2xl")}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => {
@@ -592,7 +602,7 @@ export function CreateExpenseAccountDialog({
            }
         }}
       >
-        <DialogHeader>
+        <DialogHeader className={masterEntityDialogHeaderClassName}>
           <DialogTitle>{defaultGroupType === "income" ? "Create Income Account" : "Create Expense Account"}</DialogTitle>
           <DialogDescription>
             {defaultGroupType === "income"
@@ -600,10 +610,10 @@ export function CreateExpenseAccountDialog({
               : "Add a new category for your expenses, like \"Office Rent\" or \"Utilities\"."}
           </DialogDescription>
         </DialogHeader>
-        {/* Scrollable form area: fills 85vh dialog; do not remove overflow-y-auto / min-h-0 / flex-1. */}
-        <div className="overflow-y-auto min-h-0 flex-1 sm:flex-none sm:overflow-visible">
+        <div className={masterEntityDialogFormWrapperClassName}>
         <Form {...form}>
-          <form onSubmit={handleFormSubmit} className="space-y-4 py-4">
+          <form onSubmit={handleFormSubmit} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 sm:pr-2">
             <FormField
               control={form.control}
               name="name"
@@ -715,7 +725,8 @@ export function CreateExpenseAccountDialog({
               name="openingBalanceNarration"
               detailLabel="income/expense account"
             />
-            <DialogFooter className="mt-4">
+            </div>
+            <DialogFooter className="mt-0 shrink-0 border-t border-border/80 bg-background/95 py-3">
               <DialogClose asChild>
                 <Button variant="ghost">Cancel</Button>
               </DialogClose>

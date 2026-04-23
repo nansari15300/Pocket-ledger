@@ -13,7 +13,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useEffect, useLayoutEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -36,6 +36,8 @@ import {
   readRememberEmailEnabled,
   readRememberedEmail,
 } from "@/lib/loginRememberEmail";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { resolvePostAuthCompanyRoute } from "@/lib/postAuthCompanyRoute";
 
 // One-time handling of redirect result (survives Strict Mode double-mount so we don't consume result twice)
 let redirectResultHandledThisLoad = false;
@@ -57,6 +59,15 @@ export function LoginForm() {
   const [passwordAutofillGuard, setPasswordAutofillGuard] = useState(() => !readRememberEmailEnabled());
   const router = useRouter();
   const { toast } = useToast();
+  // Keep post-login navigation consistent: static/local can skip company picker only within valid remember window.
+  const navigateAfterAuth = useCallback((firebaseUid: string | undefined, replace?: boolean) => {
+    const next = isLocalOnlyMode() ? resolvePostAuthCompanyRoute(firebaseUid) : "/company";
+    if (replace) {
+      router.replace(next);
+      return;
+    }
+    router.push(next);
+  }, [router]);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -73,7 +84,8 @@ export function LoginForm() {
     getRedirectResult(auth)
       .then((result) => {
         if (result?.user) {
-          router.replace("/company");
+          // Redirect-flow login should also honor remembered company unlock on static/local builds.
+          navigateAfterAuth(result.user.uid, true);
         }
       })
       .catch((error: any) => {
@@ -90,7 +102,7 @@ export function LoginForm() {
           description,
         });
       });
-  }, [router, toast]);
+  }, [navigateAfterAuth, toast]);
 
   useLayoutEffect(() => {
     const enabled = readRememberEmailEnabled();
@@ -144,7 +156,8 @@ export function LoginForm() {
       } catch (_) {}
 
       form.setValue("password", "");
-      router.push("/company");
+      // Email/password login: choose dashboard directly when remember window for last company is valid.
+      navigateAfterAuth(auth.currentUser?.uid);
 
     } catch (error: any) {
       toast({
@@ -184,7 +197,8 @@ export function LoginForm() {
         const credential = GoogleAuthProvider.credential(idToken);
         const result = await signInWithCredential(auth, credential);
         if (result?.user) {
-          router.replace("/company");
+          // Native Google login: same post-auth company routing as other login methods.
+          navigateAfterAuth(result.user.uid, true);
           return;
         }
       }
@@ -193,7 +207,8 @@ export function LoginForm() {
       try {
         const result = await signInWithPopup(auth, provider);
         if (result?.user) {
-          router.replace("/company");
+          // Popup Google login: same post-auth company routing as other login methods.
+          navigateAfterAuth(result.user.uid, true);
           return;
         }
       } catch (popupError: any) {

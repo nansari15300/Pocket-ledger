@@ -54,6 +54,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
@@ -575,10 +576,55 @@ export function PartyDetails({
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames, mobileSearchNames, party.id]);
 
   const totalPages = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions = rowsPerPage > 0 ? searchFilteredTransactions.slice(
-      (currentPage - 1) * rowsPerPage,
-      currentPage * rowsPerPage
-  ) : searchFilteredTransactions;
+  // Desktop pagination: default latest-side page (page 1 = newest chunk), so first open me recent side dikhai de.
+  const desktopPaginationMeta = useMemo(() => {
+    const list = searchFilteredTransactions;
+    const total = list.length;
+    if (rowsPerPage <= 0) {
+      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        pageTransactions: list,
+        beforeCount: 0,
+        afterCount: 0,
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
+    }
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    const pageTransactions = list.slice(start, Math.max(start, end));
+    const previousTx = start > 0 ? list[start - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    // Page change par opening row ko us page ke first transaction se just pehle wale running balance par set karo.
+    const openingForPage =
+      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
+        ? previousRunningBalance
+        : openingBalanceForPeriod;
+    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      pageTransactions,
+      beforeCount: start,
+      afterCount: Math.max(0, total - end),
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [searchFilteredTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
   const mobileTransactions = useMemo(() => {
     if (rowsPerPage <= 0) return searchFilteredTransactions;
@@ -702,6 +748,10 @@ export function PartyDetails({
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
   const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const masterPartyOpening = Number(party.openingBalance) || 0;
+  // Party page: opening row Balance me hamesha original ledger opening dikhana hai (outstanding-based replacement nahi).
+  const partyOpeningOutstandingForTable: number | undefined = undefined;
 
   const handleMobileBack = useCallback(() => {
     if (mobileFooterDialogOpen) {
@@ -779,6 +829,14 @@ export function PartyDetails({
             <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
+            {party.id !== "all" && (
+              <EntityLedgerOpeningHints
+                className="text-center mt-1"
+                masterOpening={masterPartyOpening}
+                periodOpeningBroughtForward={openingBalanceForPeriod}
+                hasDateFilter={hasLedgerDateFilter}
+              />
+            )}
           </div>
           {/* Dropdown + Edit icon + Search - same size (equal width & height) */}
           <div className="p-2 border-b flex-shrink-0">
@@ -835,8 +893,8 @@ export function PartyDetails({
               transactions={mobileTransactions}
               context="party"
               contextId={party.id}
-              openingBalance={openingBalanceForPeriod}
-              openingBalanceOutstanding={openingBalanceOutstanding}
+              openingBalance={desktopPaginationMeta.openingForPage}
+              openingBalanceOutstanding={partyOpeningOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}
@@ -854,9 +912,9 @@ export function PartyDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={desktopPaginationMeta.periodDrForPage}
+              periodCr={desktopPaginationMeta.periodCrForPage}
+              closingBalance={desktopPaginationMeta.closingForPage}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
@@ -1122,23 +1180,32 @@ export function PartyDetails({
                   />
                 )}
               </EntityFileAttachmentHover>
-              <div className="flex items-center gap-2 flex-nowrap min-w-0">
-                <h2 className="text-xl font-semibold truncate">{party.name}</h2>
-                {party.id !== 'all' && !(party as any).isSystemAccount && (
-                  <EditPartyDialog
-                    party={party}
-                    onPartyUpdated={onPartyUpdated}
-                    onPartyDeleted={() => onPartyDeleted(party.id)}
-                    hasTransactions={processedTransactions.length > 0}
-                  >
-                    <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  </EditPartyDialog>
-                )}
-                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                  {formatCurrency(closingBalance, { showDrCr: true })}
+              <div className="flex flex-col min-w-0 gap-0.5">
+                <div className="flex items-center gap-2 flex-nowrap min-w-0">
+                  <h2 className="text-xl font-semibold truncate">{party.name}</h2>
+                  {party.id !== 'all' && !(party as any).isSystemAccount && (
+                    <EditPartyDialog
+                      party={party}
+                      onPartyUpdated={onPartyUpdated}
+                      onPartyDeleted={() => onPartyDeleted(party.id)}
+                      hasTransactions={processedTransactions.length > 0}
+                    >
+                      <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </EditPartyDialog>
+                  )}
+                  <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                    {formatCurrency(closingBalance, { showDrCr: true })}
+                  </div>
                 </div>
+                {party.id !== "all" && (
+                  <EntityLedgerOpeningHints
+                    masterOpening={masterPartyOpening}
+                    periodOpeningBroughtForward={openingBalanceForPeriod}
+                    hasDateFilter={hasLedgerDateFilter}
+                  />
+                )}
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
@@ -1152,11 +1219,6 @@ export function PartyDetails({
                     transactionDates={transactionDates}
                     className="w-auto"
                   />
-                  {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-                    <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onDateRangeChange(undefined)} aria-label="Clear date filter">
-                      <XCircle className="h-4 w-4" />
-                    </Button>
-                  )}
                 </div>
               )}
               {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1219,16 +1281,12 @@ export function PartyDetails({
                     />
                   </PopoverContent>
                 </Popover>
-                  {dateRange != null && (dateRange.from != null || dateRange.to != null) && (
-                    <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onDateRangeChange(undefined)} aria-label="Clear date filter">
-                      <XCircle className="h-4 w-4" />
-                    </Button>
-                  )}
                 </div>
               )}
               {isFilterActive && (
-                <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                  <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+                // Header par BS/AD alag clear buttons hatakar single clear button rakha gaya.
+                <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                  <XCircle className="h-4 w-4" />
                 </Button>
               )}
               <NotificationBell context="Party" entityId={party.id} />
@@ -1269,8 +1327,8 @@ export function PartyDetails({
               transactions={paginatedTransactions}
               context="party"
               contextId={party.id}
-              openingBalance={openingBalanceForPeriod}
-              openingBalanceOutstanding={openingBalanceOutstanding}
+              openingBalance={desktopPaginationMeta.openingForPage}
+              openingBalanceOutstanding={partyOpeningOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}
@@ -1301,9 +1359,9 @@ export function PartyDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={desktopPaginationMeta.periodDrForPage}
+              periodCr={desktopPaginationMeta.periodCrForPage}
+              closingBalance={desktopPaginationMeta.closingForPage}
               isAllVouchersView={isAllVouchersView}
               hideDebitColumn={false}
               hideCreditColumn={false}
@@ -1322,7 +1380,6 @@ export function PartyDetails({
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-              <span className="whitespace-nowrap flex-shrink-0">{statusFilteredTransactions.length} transaction(s).</span>
               <div className="flex items-center space-x-2 flex-shrink-0">
                 <Checkbox id="show-narration-party" checked={showNarration} onCheckedChange={(checked: boolean) => handleShowNarrationChange(Boolean(checked))} />
                 <label htmlFor="show-narration-party" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1377,7 +1434,26 @@ export function PartyDetails({
                 }}
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               />
-              <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+              {/* Pager shape requested: (xx) << < [rows] > >> (xx) */}
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                // Left side = older pages; jump to oldest end.
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                // Left single step = move toward older records.
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
               <Select
                 value={`${rowsPerPage}`}
                 onValueChange={(value) => {
@@ -1395,43 +1471,27 @@ export function PartyDetails({
                   <SelectItem value="0">All</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-sm font-medium flex-shrink-0">
-                Page {currentPage} of {totalPages}
-              </p>
-              <div className="flex items-center space-x-1 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronsLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage - 1)}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 w-8 p-0"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronsRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                // Right single step = move back toward newest records.
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-8 w-8 p-0"
+                // Right side = newest end (page 1 in latest-first pagination).
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
+              {/* Footer count right-side short controls ke paas hi rahe. */}
+              <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {statusFilteredTransactions.length}</p>
             </div>
           </div>
         </div>

@@ -50,7 +50,11 @@ import {
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog } from "@/lib/staticMobileFullscreenDialog";
+import {
+  cnMasterEntityDialogContent,
+  masterEntityDialogHeaderClassName,
+  masterEntityDialogFormWrapperClassName,
+} from "@/lib/masterEntityDialogClasses";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
 
@@ -64,14 +68,13 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher } from "@/lib/voucherActionsClient";
 
 import { firestore } from "@/lib/firebase";
-import { uploadFile } from "@/lib/storage";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import {
   collection,
   query,
-  addDoc,
-  serverTimestamp,
   doc,
+  setDoc,
+  serverTimestamp,
   updateDoc,
   onSnapshot,
   Timestamp,
@@ -115,6 +118,7 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
   stageItemAvatarAndAttachments,
+  uploadItemAvatarAndAttachmentsRemote,
 } from "@/lib/entityProfileLocalFiles";
 
 function createLocalEntityId(prefix: string): string {
@@ -503,17 +507,21 @@ export function CreateItemDialog({
   };
 
 
-  async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
+  function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
-    const isValid = await form.trigger();
-    if (!isValid) {
-      sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
-      return;
-    }
-    if (!options.saveAndNew) {
-      setIsOpen(false);
-    }
-    processAndSave(form.getValues(), options.saveAndNew);
+    void (async () => {
+      const isValid = await form.trigger();
+      if (!isValid) {
+        sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
+        return;
+      }
+      if (!options.saveAndNew) {
+        setIsOpen(false);
+      } else {
+        setIsLoading(true);
+      }
+      void processAndSave(form.getValues(), options.saveAndNew || false);
+    })();
   }
 
   async function processAndSave(values: z.infer<typeof formSchema>, saveAndNew: boolean = false) {
@@ -613,62 +621,50 @@ export function CreateItemDialog({
           description: `"${values.name.trim()}" was restored from Recycle Bin.`,
         });
         onItemCreated(duplicateDecision.restoredId);
-        setIsOpen(false);
         setIsLoading(false);
         return;
       }
       
+      const itemRef = doc(collection(firestore, `companies/${companyId}/items`));
+      const newItemId = itemRef.id;
+
       const fileUrls: string[] = [];
       const avatarUpload = profileFile instanceof File ? profileFile : null;
       const newDocFiles = docSlots.filter((f): f is File => f instanceof File);
-      const uploadableFiles: File[] = [...(avatarUpload ? [avatarUpload] : []), ...newDocFiles];
-      if (uploadableFiles.length > 0 && companyId && (canAddAvatar || canAttachDocuments)) {
-        const totalNewBytes = uploadableFiles.reduce((s, f) => s + (f.size || 0), 0);
-        const limitCheck = await checkStorageLimit(
-          companyId,
-          company?.planId,
-          { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
-          company?.storageOption
-        );
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
-          setIsLoading(false);
-          return;
-        }
-        if (avatarUpload && canAddAvatar) {
-          const res = await uploadFile(
-            { name: avatarUpload.name, type: avatarUpload.type, arrayBuffer: await avatarUpload.arrayBuffer() },
+      if (
+        companyId &&
+        ((canAddAvatar && avatarUpload) || (canAttachDocuments && newDocFiles.length > 0))
+      ) {
+        const totalNewBytes =
+          (canAddAvatar && avatarUpload ? avatarUpload.size : 0) +
+          (canAttachDocuments ? newDocFiles.reduce((s, f) => s + f.size, 0) : 0);
+        if (totalNewBytes > 0) {
+          const limitCheck = await checkStorageLimit(
             companyId,
-            company?.name,
-            "avatar",
-            undefined,
-            undefined,
-            undefined,
-            new Date()
+            company?.planId,
+            { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes },
+            company?.storageOption
           );
-          if (res.success && res.url) {
-            fileUrls.push(res.url);
-            await incrementCompanyStorage(companyId, { attachmentsBytes: avatarUpload.size, storageBytes: avatarUpload.size });
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            setIsLoading(false);
+            return;
           }
         }
-        if (canAttachDocuments) {
-          for (const file of newDocFiles) {
-            if (fileUrls.length >= 6) break;
-            const res = await uploadFile(
-              { name: file.name, type: file.type, arrayBuffer: await file.arrayBuffer() },
-              companyId,
-              company?.name,
-              "avatar",
-              undefined,
-              undefined,
-              undefined,
-              new Date()
-            );
-            if (res.success && res.url) {
-              fileUrls.push(res.url);
-              await incrementCompanyStorage(companyId, { attachmentsBytes: file.size, storageBytes: file.size });
-            }
-          }
+        const staged = await uploadItemAvatarAndAttachmentsRemote({
+          companyId,
+          itemId: newItemId,
+          avatarFile: canAddAvatar && avatarUpload ? avatarUpload : null,
+          attachmentFiles: canAttachDocuments ? newDocFiles : [],
+          maxAttachments: 5,
+        });
+        if (staged.avatarUrl) fileUrls.push(staged.avatarUrl);
+        fileUrls.push(...staged.newAttachmentUrls);
+        if (totalNewBytes > 0) {
+          await incrementCompanyStorage(companyId, {
+            attachmentsBytes: totalNewBytes,
+            storageBytes: totalNewBytes,
+          });
         }
       }
       
@@ -725,12 +721,12 @@ export function CreateItemDialog({
           openingBalanceNarration: values.openingBalanceNarration?.trim() || null,
       };
 
-      const docRef = await addDoc(collection(firestore, `companies/${companyId}/items`), submissionData);
+      await setDoc(itemRef, submissionData);
 
       sonnerToast.success("Item Created!", { id: toastId, description: `"${values.name}" has been successfully created.` });
       
       if (onItemCreated) {
-        onItemCreated(docRef.id);
+        onItemCreated(newItemId);
       }
       if (saveAndNew) {
         form.reset(getInitialFormValues(itemType));
@@ -887,21 +883,18 @@ const capitalizeFirstLetter = (str: string) => {
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {/* Mobile: 85vh height, 98vw width. PC: 90% screen height & width (90vh / 90vw) so dialog uses most of viewport. */}
         <DialogContent
-            className={cnStaticMobileFullscreenDialog(
-              isMobile,
-              "max-h-[85vh] w-[98vw] max-w-[98vw] flex flex-col rounded-xl px-0.5 sm:max-h-[90vh] sm:h-[90vh] sm:w-[90vw] sm:max-w-[90vw] sm:flex sm:flex-col sm:px-6"
-            )}
+            className={cn(cnMasterEntityDialogContent(isMobile), "sm:max-w-5xl")}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Create a New Item</DialogTitle>
             <DialogDescription>Add a new product or service to your records.</DialogDescription>
           </DialogHeader>
-          {/* Scrollable form area: fills dialog height (85vh mobile, 90vh PC). */}
-          <div className="overflow-y-auto min-h-0 flex-1 pr-1">
+          <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>
-            <form onSubmit={(e) => handleFormSubmit(e)} className="space-y-4 py-4">
+            <form onSubmit={(e) => handleFormSubmit(e)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
 
               <Tabs value={itemType} onValueChange={(value) => form.setValue('type', value as 'item' | 'service' | 'finished_good')} className="w-full mb-4">
                   <TabsList>
@@ -1300,7 +1293,8 @@ const capitalizeFirstLetter = (str: string) => {
                 detailLabel="item"
               />
 
-              <DialogFooter className="mt-4 border-t pt-4">
+            </div>
+              <DialogFooter className="mt-0 shrink-0 border-t border-border/80 bg-background/95 py-3">
                   <DialogClose asChild>
                       <Button type="button" variant="ghost">Cancel</Button>
                   </DialogClose>

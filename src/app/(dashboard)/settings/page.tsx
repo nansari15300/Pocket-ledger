@@ -34,7 +34,8 @@ import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
-    { id: "devices", title: "Synced devices", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
+    // Device settings now includes synced devices + backup save location for static builds.
+    { id: "devices", title: "Device settings", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
     { id: "theme", title: "Theme Settings", icon: Palette, permission: "configure_company_settings" as const, href: null },
     { id: "animation", title: "Animation Settings", icon: Zap, permission: "configure_company_settings" as const, href: null },

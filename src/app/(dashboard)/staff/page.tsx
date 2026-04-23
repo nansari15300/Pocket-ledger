@@ -40,6 +40,9 @@ import { isSystemParentGroup } from "@/lib/system-groups";
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { PendingApprovalListFilterBadge } from "@/components/layout/PendingApprovalListFilterBadge";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 
 function StaffPageContent() {
   const { user } = useAuth();
@@ -123,6 +126,43 @@ function StaffPageContent() {
     if (!selected) return undefined;
     return masterDetailBalanceToneClass((selected as Staff | StaffGroup).balance);
   }, [selected]);
+  const mobileStaffDetailHeaderAvatar = useMemo(() => {
+    if (!isMobile || !selected) return null;
+    const selectedEntity = selected as Staff | StaffGroup;
+    const name = selectedEntity.name || "Staff";
+    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const initials = name
+      .split(" ")
+      .filter(Boolean)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "NA";
+    const openPreview = () => {
+      // Header avatar tap should open full preview (same behavior as Party mobile details).
+      if (!fileUrl) return;
+      void openAttachmentInApp(fileUrl, { title: name });
+    };
+    return (
+      <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
+        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+          <button
+            type="button"
+            className="inline-flex h-full w-full items-center justify-center rounded-full"
+            onClick={openPreview}
+            aria-label={`Preview ${name} avatar`}
+          >
+            <ResolvedEntityAvatar
+              className="h-full w-full text-xs"
+              src={fileUrl}
+              alt={name}
+              fallbackText={initials}
+            />
+          </button>
+        </EntityFileAttachmentHover>
+      </div>
+    );
+  }, [isMobile, selected]);
   const staffMasterDetailTitle = activeView === "groups" ? "Staff Groups" : "Staff";
   useSyncMasterDetailHeaderId("staff", selectedStaff?.id ?? selectedGroup?.id ?? null);
 
@@ -438,6 +478,7 @@ function StaffPageContent() {
       title={staffMasterDetailTitle}
       mobileSelectionLabel={mobileStaffSelectionLabel}
       mobileSelectionLabelClassName={mobileStaffSelectionLabelClassName}
+      mobileDetailHeaderEnd={mobileStaffDetailHeaderAvatar}
       balance={
         <span className={cn(
             "font-semibold",

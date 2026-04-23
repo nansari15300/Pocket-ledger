@@ -7,7 +7,12 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, getDoc } from "firebase/firestore";
-import { stageEntityAvatarAndDocuments, isProfileAvatarImageFile, isProfileDocumentFile } from "@/lib/entityProfileLocalFiles";
+import {
+  stageEntityAvatarAndDocuments,
+  uploadEntityAvatarAndDocumentsRemote,
+  isProfileAvatarImageFile,
+  isProfileDocumentFile,
+} from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 
 import { Button } from "@/components/ui/button";
@@ -34,7 +39,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { cnStaticMobileFullscreenDialog, IS_STATIC_APK } from "@/lib/staticMobileFullscreenDialog";
+import { IS_STATIC_APK } from "@/lib/staticMobileFullscreenDialog";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
@@ -48,6 +53,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
 import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
+import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "@/lib/masterEntityDialogClasses";
 
 /** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
 function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
@@ -240,101 +246,151 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     }
   }, [isOpen, account, form, company]); // added company dep
 
-  async function onSubmit(values: FormValues): Promise<void> {
+  function onSubmit(values: FormValues): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
 
-    const toastId = sonnerToast.loading("Updating account...");
-    const isLocalGuestUser = user?.uid === "local_guest_user";
-    const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
-    try {
-      let fileUrl: string | null = typeof file === "string" ? file : null;
-      const newDocFiles = docSlots.filter((x): x is File => x instanceof File);
-      const keptDocUrls = docSlots.filter((x): x is string => typeof x === "string");
-      const totalBytes =
-        (file instanceof File ? file.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
-      if (totalBytes > 0 && companyId) {
-        const limitCheck = await checkStorageLimit(
-          companyId,
-          company?.planId,
-          { attachmentsBytes: totalBytes, storageBytes: totalBytes },
-          company?.storageOption
-        );
-        if (!limitCheck.allowed) {
-          sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+    const fileSnap = file;
+    const docSlotsSnap = docSlots;
+    const accountRefSnap = account;
+    setIsOpen(false);
+
+    void (async () => {
+      const toastId = sonnerToast.loading("Updating account...");
+      const isLocalGuestUser = user?.uid === "local_guest_user";
+      const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      try {
+        let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
+        const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
+        const keptDocUrls = docSlotsSnap.filter((x): x is string => typeof x === "string");
+        const totalBytes =
+          (fileSnap instanceof File ? fileSnap.size : 0) + newDocFiles.reduce((s, f) => s + f.size, 0);
+        if (totalBytes > 0 && companyId) {
+          const limitCheck = await checkStorageLimit(
+            companyId,
+            company?.planId,
+            { attachmentsBytes: totalBytes, storageBytes: totalBytes },
+            company?.storageOption
+          );
+          if (!limitCheck.allowed) {
+            sonnerToast.error("Storage limit reached", { id: toastId, description: limitCheck.message });
+            return;
+          }
+        }
+
+        const needAvatarUpload = fileSnap instanceof File && canAddAvatar;
+        const needNewDocsUpload = newDocFiles.length > 0 && canAttachDocuments;
+        let documentFileUrls = [...keptDocUrls];
+        if (companyId && (needAvatarUpload || needNewDocsUpload)) {
+          const runRemote = () =>
+            uploadEntityAvatarAndDocumentsRemote({
+              companyId,
+              collectionSeg: "bank_accounts",
+              entityId: accountRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          const runStage = () =>
+            stageEntityAvatarAndDocuments({
+              companyId,
+              collectionSeg: "bank_accounts",
+              entityId: accountRefSnap.id,
+              avatarFile: needAvatarUpload ? (fileSnap as File) : null,
+              documentFiles: needNewDocsUpload ? newDocFiles : [],
+            });
+          let st: { fileUrl: string | null; documentFileUrls: string[] };
+          if (!isLocalOnlyMode()) {
+            st = await runRemote();
+          } else if (typeof navigator !== "undefined" && navigator.onLine) {
+            try {
+              st = await runRemote();
+            } catch (e) {
+              console.warn("[EditAccount] Remote file upload failed, using local staging", e);
+              st = await runStage();
+            }
+          } else {
+            st = await runStage();
+          }
+          if (st.fileUrl) fileUrl = st.fileUrl;
+          documentFileUrls = [...keptDocUrls, ...st.documentFileUrls];
+        }
+
+        const oldOpeningBalance = accountRefSnap.openingBalance || 0;
+        const newOpeningBalance = values.openingBalance || 0;
+        const narrationClean = values.openingBalanceNarration?.trim() || null;
+
+        /** Firestore `undefined` field skip / local mirror — explicit payload (EditExpenseAccountDialog jaisa) */
+        const updatePayload: Record<string, unknown> = {
+          accountName: values.accountName,
+          accountType: values.accountType,
+          bankName: values.bankName ?? "",
+          accountNumber: values.accountNumber ?? "",
+          ifscCode: values.ifscCode ?? "",
+          openingBalance: newOpeningBalance,
+          openingBalanceDate: values.openingBalanceDate ?? null,
+          openingBalanceNarration: narrationClean,
+          groupId: values.groupId || null,
+          isSpecial: values.isSpecial,
+          useFor: values.useFor ?? { in: [], out: [] },
+          fileUrl,
+          documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
+        };
+
+        // Static / local company: IndexedDB + outbox — `updateDoc` network par fail hota tha
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "bank_accounts", accountRefSnap.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: accountRefSnap.id,
+            companyId,
+            balance: accountRefSnap.balance,
+            debit: accountRefSnap.debit,
+            credit: accountRefSnap.credit,
+            isDeleted: false,
+            ownerId: accountRefSnap.ownerId,
+          };
+          const payload: Record<string, unknown> = { ...base, ...updatePayload, id: accountRefSnap.id, companyId };
+          await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, payload);
+          const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
+            id: toastId,
+            description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
+          });
+          onAccountUpdated({
+            id: accountRefSnap.id,
+            ...values,
+            fileUrl: fileUrl || "",
+            documentFileUrls,
+            openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+            useFor: {
+              in: values.useFor?.in || [],
+              out: values.useFor?.out || [],
+            } as { in: string[]; out: string[] },
+          });
           return;
         }
-      }
 
-      if (file instanceof File && companyId && canAddAvatar) {
-        const st = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "bank_accounts",
-          entityId: account.id,
-          avatarFile: file,
-          documentFiles: [],
-        });
-        if (st.fileUrl) fileUrl = st.fileUrl;
-      }
+        if (totalBytes > 0 && companyId) {
+          await incrementCompanyStorage(companyId, {
+            attachmentsBytes: totalBytes,
+            storageBytes: totalBytes,
+          });
+        }
 
-      let documentFileUrls = [...keptDocUrls];
-      if (newDocFiles.length > 0 && companyId && canAttachDocuments) {
-        const st2 = await stageEntityAvatarAndDocuments({
-          companyId,
-          collectionSeg: "bank_accounts",
-          entityId: account.id,
-          avatarFile: null,
-          documentFiles: newDocFiles,
-        });
-        documentFileUrls = [...documentFileUrls, ...st2.documentFileUrls];
-      }
+        const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, accountRefSnap.id);
+        await updateDoc(accountRef, updatePayload);
 
-      const oldOpeningBalance = account.openingBalance || 0;
-      const newOpeningBalance = values.openingBalance || 0;
-      const narrationClean = values.openingBalanceNarration?.trim() || null;
+        // Automatically balance opening balance change with Capital Account
+        if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
+          const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
+          await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
+        }
 
-      /** Firestore `undefined` field skip / local mirror — explicit payload (EditExpenseAccountDialog jaisa) */
-      const updatePayload: Record<string, unknown> = {
-        accountName: values.accountName,
-        accountType: values.accountType,
-        bankName: values.bankName ?? "",
-        accountNumber: values.accountNumber ?? "",
-        ifscCode: values.ifscCode ?? "",
-        openingBalance: newOpeningBalance,
-        openingBalanceDate: values.openingBalanceDate ?? null,
-        openingBalanceNarration: narrationClean,
-        groupId: values.groupId || null,
-        isSpecial: values.isSpecial,
-        useFor: values.useFor ?? { in: [], out: [] },
-        fileUrl,
-        documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
-      };
-
-      // Static / local company: IndexedDB + outbox — `updateDoc` network par fail hota tha
-      if (isLocalOnlyMode()) {
-        const fromDb = await getCompanyDocFromBrowserDb(companyId, "bank_accounts", account.id);
-        const base: Record<string, unknown> = fromDb ?? {
-          id: account.id,
-          companyId,
-          balance: account.balance,
-          debit: account.debit,
-          credit: account.credit,
-          isDeleted: false,
-          ownerId: account.ownerId,
-        };
-        const payload: Record<string, unknown> = { ...base, ...updatePayload, id: account.id, companyId };
-        await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", account.id, payload);
-        await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", account.id, payload);
-        const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-        sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
-          id: toastId,
-          description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
-        });
-        setIsOpen(false);
+        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
         onAccountUpdated({
-          id: account.id,
+          id: accountRefSnap.id,
           ...values,
           fileUrl: fileUrl || "",
           documentFileUrls,
@@ -344,45 +400,14 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             out: values.useFor?.out || [],
           } as { in: string[]; out: string[] },
         });
-        return;
-      }
-
-      if (totalBytes > 0 && companyId) {
-        await incrementCompanyStorage(companyId, {
-          attachmentsBytes: totalBytes,
-          storageBytes: totalBytes,
+      } catch (error) {
+        console.error("Error updating account:", error);
+        sonnerToast.error("Error Updating Account", {
+          id: toastId,
+          description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
       }
-
-      const accountRef = doc(firestore, `companies/${companyId}/bank_accounts`, account.id);
-      await updateDoc(accountRef, updatePayload);
-
-      // Automatically balance opening balance change with Capital Account
-      if (Math.abs(newOpeningBalance - oldOpeningBalance) > 0.01) {
-        const { balanceOpeningBalanceWithCapital } = await import("@/lib/voucherActionsClient");
-        await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", account.id, oldOpeningBalance, newOpeningBalance);
-      }
-
-      sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
-      setIsOpen(false);
-      onAccountUpdated({
-        id: account.id,
-        ...values,
-        fileUrl: fileUrl || "",
-        documentFileUrls,
-        openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
-        useFor: {
-          in: values.useFor?.in || [],
-          out: values.useFor?.out || [],
-        } as { in: string[]; out: string[] },
-      });
-    } catch (error) {
-      console.error("Error updating account:", error);
-      sonnerToast.error("Error Updating Account", {
-        id: toastId,
-        description: error instanceof Error ? error.message : "An error occurred. Please try again.",
-      });
-    }
+    })();
   }
 
   const handleDelete = async () => {
@@ -506,24 +531,27 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
         {isOpen && <div className="fixed inset-0 bg-black/45 backdrop-blur-sm z-40" />}
         <DialogContent
-            className={cnStaticMobileFullscreenDialog(isMobile, "sm:max-w-2xl z-50", staticMobileFullscreen && "flex flex-col")}
+            className={cn(
+              cnMasterEntityDialogContent(isMobile),
+              "sm:max-w-2xl",
+              staticMobileFullscreen && "min-h-0 h-[100dvh] max-h-[100dvh]"
+            )}
             onOpenAutoFocus={(e) => e.preventDefault()}
             onCloseAutoFocus={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
             onInteractOutside={(e) => { if (isCreateGroupOpen) e.preventDefault(); }}
         >
-          <DialogHeader>
+          <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Edit Account</DialogTitle>
             <DialogDescription>Update the details for {account.accountName}.</DialogDescription>
           </DialogHeader>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <Form {...form}>
             <form
               onSubmit={form.handleSubmit(onSubmit)}
-              className={cn(
-                "space-y-4 py-4 overflow-y-auto pr-2",
-                staticMobileFullscreen ? "min-h-0 flex-1 max-h-none" : "max-h-[70vh]"
-              )}
+              className="flex min-h-0 flex-1 flex-col"
             >
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-2">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField
                     control={form.control}
@@ -802,8 +830,9 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                   name="openingBalanceNarration"
                   detailLabel="bank/cash account"
                 />
+            </div>
 
-              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+              <DialogFooter className="mt-0 shrink-0 grid grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
                   <Button variant="ghost">Cancel</Button>
                 </DialogClose>
@@ -834,6 +863,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               </DialogFooter>
             </form>
           </Form>
+          </div>
         </DialogContent>
       </Dialog>
       

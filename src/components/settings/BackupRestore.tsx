@@ -49,6 +49,11 @@ import {
 } from "@/lib/localCompanyDocMirror";
 import { clearSyncOutboxForCompany } from "@/lib/localVoucherOutbox";
 import { Capacitor } from "@capacitor/core";
+import {
+  readBackupSaveLocationPrefs,
+  readWebBackupDirectoryHandle,
+  isNativeRuntime,
+} from "@/lib/backupSaveLocation";
 
 /** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
 function fiscalFieldToLocalIso(val: unknown): string | null {
@@ -96,8 +101,32 @@ async function blobToBase64DataUrl(blob: Blob): Promise<string> {
  * - Fallback: anchor download.
  */
 async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promise<{ where: string }> {
+  const savePrefs = readBackupSaveLocationPrefs();
   if (typeof window !== "undefined") {
     try {
+      // Device settings: when user enabled fixed web folder, save directly there and skip Save As dialog.
+      if (!isNativeRuntime() && savePrefs.webUseSelectedFolder) {
+        const dirHandle = await readWebBackupDirectoryHandle();
+        if (!dirHandle) {
+          throw new Error("Backup location not set. Open Settings > Device settings and choose a folder.");
+        }
+        if (typeof dirHandle.queryPermission === "function") {
+          const p = await dirHandle.queryPermission({ mode: "readwrite" });
+          if (p !== "granted" && typeof dirHandle.requestPermission === "function") {
+            const req = await dirHandle.requestPermission({ mode: "readwrite" });
+            if (req !== "granted") {
+              throw new Error("Selected backup folder permission denied. Please reselect folder in Device settings.");
+            }
+          }
+        }
+        const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        const label = savePrefs.webFolderLabel || "Selected folder";
+        return { where: `${label}/${fileName}` };
+      }
+
       const picker = (window as any).showSaveFilePicker;
       if (typeof picker === "function") {
         const handle = await picker({
@@ -121,12 +150,27 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
       const { Share } = await import("@capacitor/share");
       const dataUrl = await blobToBase64DataUrl(blob);
       const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
+      // Device settings: prefer saved native directory + subfolder so backup destination stays consistent.
+      const nativeDirectory =
+        savePrefs.nativeDirectory === "EXTERNAL"
+          ? ((Directory as unknown as Record<string, unknown>).ExternalStorage ?? Directory.Documents)
+          : Directory.Documents;
+      const rawSubfolder = String(savePrefs.nativeSubfolder || "").trim();
+      const safeSubfolder = rawSubfolder.replace(/^[\\/]+|[\\/]+$/g, "");
+      if (safeSubfolder) {
+        await Filesystem.mkdir({
+          path: safeSubfolder,
+          directory: nativeDirectory as any,
+          recursive: true,
+        }).catch(() => undefined);
+      }
+      const finalPath = safeSubfolder ? `${safeSubfolder}/${fileName}` : fileName;
       await Filesystem.writeFile({
-        path: fileName,
+        path: finalPath,
         data: base64,
-        directory: Directory.Documents,
+        directory: nativeDirectory as any,
       });
-      const { uri } = await Filesystem.getUri({ path: fileName, directory: Directory.Documents });
+      const { uri } = await Filesystem.getUri({ path: finalPath, directory: nativeDirectory as any });
       try {
         // User yahan se target app/location choose kar sakta hai (Drive, Files, etc.)
         await Share.share({
@@ -137,7 +181,8 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
       } catch {
         /* share optional */
       }
-      return { where: `Documents/${fileName}` };
+      const dirLabel = savePrefs.nativeDirectory === "EXTERNAL" ? "ExternalStorage" : "Documents";
+      return { where: `${dirLabel}/${finalPath}` };
     }
   } catch {
     // native write fail -> browser fallback

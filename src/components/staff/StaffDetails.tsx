@@ -55,6 +55,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
+import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import { EditStaffDialog } from "./EditStaffDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -232,6 +233,9 @@ export function StaffDetails({
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
+  // Books opening + (date par filter) view-start: table first opening row se align
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const masterStaffOpening = Number(staff.openingBalance) || 0;
 
   const clearFilters = () => {
     handleDateRangeChange(undefined);
@@ -388,19 +392,57 @@ export function StaffDetails({
     [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
   );
   
-  const totalPages = useMemo(() => {
-    return rowsPerPage > 0 ? Math.ceil(sortedTransactions.length / rowsPerPage) : 1;
-  }, [sortedTransactions.length, rowsPerPage]);
-  
-  const paginatedTransactions = useMemo(() => {
-    if (rowsPerPage > 0) {
-      return sortedTransactions.slice(
-        (currentPage - 1) * rowsPerPage,
-        currentPage * rowsPerPage
-      );
+  // Desktop pagination: page 1 latest-side; opening row values should follow visible page.
+  const desktopPaginationMeta = useMemo(() => {
+    const list = sortedTransactions;
+    const total = list.length;
+    if (rowsPerPage <= 0) {
+      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        totalPages: 1,
+        pageTransactions: list,
+        beforeCount: 0,
+        afterCount: 0,
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
     }
-    return sortedTransactions;
-  }, [sortedTransactions, currentPage, rowsPerPage]);
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    const pageTransactions = list.slice(start, Math.max(start, end));
+    const previousTx = start > 0 ? list[start - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    const openingForPage =
+      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
+        ? previousRunningBalance
+        : openingBalanceForPeriod;
+    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      totalPages: totalPagesLocal,
+      pageTransactions,
+      beforeCount: start,
+      afterCount: Math.max(0, total - end),
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [sortedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  const totalPages = desktopPaginationMeta.totalPages;
+  const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -550,6 +592,55 @@ export function StaffDetails({
     const start = Math.max(0, end - rowsPerPage);
     return list.slice(start, Math.max(start, end));
   }, [filteredMobileTransactions, currentPage, rowsPerPage]);
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const total = filteredMobileTransactions.length;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { before: start, after: Math.max(0, total - end) };
+  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
+  const mobilePaginationMeta = useMemo(() => {
+    const list = filteredMobileTransactions as any[];
+    if (rowsPerPage <= 0) {
+      const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
+    }
+    const total = list.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    const pageTransactions = list.slice(start, Math.max(start, end));
+    const previousTx = start > 0 ? list[start - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    const openingForPage =
+      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
+        ? previousRunningBalance
+        : openingBalanceForPeriod;
+    const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [filteredMobileTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
@@ -578,26 +669,18 @@ export function StaffDetails({
   const renderMobileView = () => (
     <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
       {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-      {/* Row 1: Staff Details | Showing x of y voucher(s) */}
-      <div className="px-2 py-1.5 border-b flex items-center justify-between gap-2 flex-shrink-0">
-        {onBack && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleMobileBack}
-            className="flex-shrink-0 h-8 w-8"
-          >
-            <ArrowLeft className="h-4 w-4" />
+      {/* Top row: Party-style header (label + selected account name). */}
+      {onBack ? (
+        <div className="flex flex-shrink-0 items-center gap-1.5 border-b px-2 py-1">
+          <Button variant="ghost" size="icon" onClick={handleMobileBack} className="h-7 w-7 flex-shrink-0" aria-label="Back">
+            <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
-        )}
-        <h1 className="text-base font-bold truncate flex-1 min-w-0">
-          Staff Details
-        </h1>
-        <span className="text-xs text-muted-foreground whitespace-nowrap flex-shrink-0">
-          Showing {mobileTransactionsToShow.length} of{" "}
-          {filteredMobileTransactions.length} voucher(s)
-        </span>
-      </div>
+          <h1 className="shrink-0 text-base font-bold text-muted-foreground">Staff details</h1>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={staff.name}>
+            {staff.name}
+          </span>
+        </div>
+      ) : null}
       {/* Row 2: Last 10 Txns or date range label */}
       <div className="px-2 py-1 border-b flex justify-center items-center gap-1.5 flex-shrink-0">
         <span className="text-xs font-medium text-muted-foreground">
@@ -616,7 +699,7 @@ export function StaffDetails({
           )}
       </div>
       {/* Balance - same as bank mobile: amount + Dr/Cr */}
-      <div className="px-3 py-3 border-b flex-shrink-0">
+      <div className="px-3 py-2 border-b flex-shrink-0">
         <p className={cn("text-2xl font-bold flex justify-center items-baseline gap-px", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
           {closingBalance === 0 ? (
             "Settled Up"
@@ -700,7 +783,7 @@ export function StaffDetails({
           transactions={mobileTransactionsToShow}
           context="staff"
           contextId={staff.id}
-          openingBalance={openingBalanceForPeriod}
+          openingBalance={mobilePaginationMeta.openingForPage}
           openingBalanceOutstanding={openingBalanceOutstanding}
           openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
           openingBalanceNarration={staff.openingBalanceNarration}
@@ -715,9 +798,9 @@ export function StaffDetails({
           }
           journalAccountNames={{}}
           accountNames={accountNamesMap}
-          periodDr={periodDr}
-          periodCr={periodCr}
-          closingBalance={closingBalance}
+          periodDr={mobilePaginationMeta.periodDrForPage}
+          periodCr={mobilePaginationMeta.periodCrForPage}
+          closingBalance={mobilePaginationMeta.closingForPage}
           onRowClick={handleEditVoucher}
           onHistoryVoucher={handleHistoryVoucher}
           onAddLink={handleAddLink}
@@ -743,6 +826,7 @@ export function StaffDetails({
           setCurrentPage(1);
         }}
         onPageChange={setCurrentPage}
+        edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
       />
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
         <Button
@@ -892,21 +976,28 @@ export function StaffDetails({
                 <Briefcase className="h-6 w-6" />
               </AvatarFallback>
             </Avatar>
-            <div className="flex items-center gap-2 flex-nowrap min-w-0">
-              <h2 className="text-xl font-semibold truncate">{staff.name}</h2>
-              <EditStaffDialog
-                staff={staff}
-                allGroups={allGroups}
-                onStaffUpdated={onStaffUpdated}
-                onStaffDeleted={() => onStaffDeleted(staff.id)}
-              >
-                <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </EditStaffDialog>
-              <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance < 0 ? "text-red-600" : "text-green-600")}>
-                {formatCurrency(closingBalance, { showDrCr: true })}
+            <div className="flex flex-col min-w-0 gap-0.5">
+              <div className="flex items-center gap-2 flex-nowrap min-w-0">
+                <h2 className="text-xl font-semibold truncate">{staff.name}</h2>
+                <EditStaffDialog
+                  staff={staff}
+                  allGroups={allGroups}
+                  onStaffUpdated={onStaffUpdated}
+                  onStaffDeleted={() => onStaffDeleted(staff.id)}
+                >
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </EditStaffDialog>
+                <div className={cn("text-lg font-bold whitespace-nowrap flex-shrink-0", closingBalance < 0 ? "text-red-600" : "text-green-600")}>
+                  {formatCurrency(closingBalance, { showDrCr: true })}
+                </div>
               </div>
+              <EntityLedgerOpeningHints
+                masterOpening={masterStaffOpening}
+                periodOpeningBroughtForward={openingBalanceForPeriod}
+                hasDateFilter={hasLedgerDateFilter}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -980,8 +1071,8 @@ export function StaffDetails({
               </Popover>
             )}
             {isFilterActive && (
-              <Button variant="ghost" size="sm" onClick={clearFilters} className="h-10 flex-shrink-0">
-                <XCircle className="mr-2 h-4 w-4"/>Clear Filters
+              <Button variant="ghost" size="icon" onClick={clearFilters} className="h-10 w-10 flex-shrink-0 text-muted-foreground hover:text-foreground" aria-label="Clear date filter">
+                <XCircle className="h-4 w-4" />
               </Button>
             )}
             <Button
@@ -1028,7 +1119,7 @@ export function StaffDetails({
                   transactions={paginatedTransactions}
                   context="staff"
                   contextId={staff.id}
-                  openingBalance={openingBalanceForPeriod}
+                  openingBalance={desktopPaginationMeta.openingForPage}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={staff.openingBalanceNarration}
@@ -1052,9 +1143,9 @@ export function StaffDetails({
                   visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
                   journalAccountNames={{}}
                   accountNames={accountNamesMap}
-                  periodDr={periodDr}
-                  periodCr={periodCr}
-                  closingBalance={closingBalance}
+                  periodDr={desktopPaginationMeta.periodDrForPage}
+                  periodCr={desktopPaginationMeta.periodCrForPage}
+                  closingBalance={desktopPaginationMeta.closingForPage}
                   onRowClick={handleEditVoucher}
                   onHistoryVoucher={handleHistoryVoucher}
                   onAddLink={handleAddLink}
@@ -1077,7 +1168,6 @@ export function StaffDetails({
       <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
           <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
-            <span className="whitespace-nowrap flex-shrink-0">{displayTransactions.length} transaction(s).</span>
             <div className="flex items-center space-x-2 flex-shrink-0">
               <Checkbox id="show-narration-staff" checked={showNarration} onCheckedChange={(checked) => handleShowNarrationChange(Boolean(checked))} />
               <label htmlFor="show-narration-staff" className="text-sm font-medium leading-none whitespace-nowrap">Show Narration</label>
@@ -1129,7 +1219,23 @@ export function StaffDetails({
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
             />
-            <p className="text-sm font-medium flex-shrink-0">Rows per page</p>
+            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
+            <Button
+              variant="outline"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(currentPage + 1)}
+              disabled={currentPage === totalPages}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
             <Select
               value={`${rowsPerPage}`}
               onValueChange={(value) => {
@@ -1147,43 +1253,24 @@ export function StaffDetails({
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-sm font-medium flex-shrink-0">
-              Page {currentPage} of {totalPages}
-            </p>
-            <div className="flex items-center space-x-1 flex-shrink-0">
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                className="h-8 w-8 p-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(currentPage - 1)}
+              disabled={currentPage === 1}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              className="h-8 w-8 p-0"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+            <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
+            <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {displayTransactions.length}</p>
           </div>
         </div>
       </div>

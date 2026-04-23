@@ -74,8 +74,14 @@ export function ResponsiveMasterDetail({
               ) : null}
             </div>
             {mobileDetailHeaderEnd ? (
-              <div className="flex-shrink-0 text-xs text-muted-foreground whitespace-nowrap max-w-[45%] truncate text-right">
-                {mobileDetailHeaderEnd}
+              <div className="flex-shrink-0">
+                {typeof mobileDetailHeaderEnd === "string" || typeof mobileDetailHeaderEnd === "number" ? (
+                  <div className="text-xs text-muted-foreground whitespace-nowrap max-w-[45%] truncate text-right">
+                    {mobileDetailHeaderEnd}
+                  </div>
+                ) : (
+                  mobileDetailHeaderEnd
+                )}
               </div>
             ) : null}
           </div>
