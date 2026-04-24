@@ -75,6 +75,20 @@ try {
     console.log("[build-static] Replaced deleteCompanyAction with stub");
   }
 
+  // Next.js 16+ uses .next/lock; stale file after a crash, or dev+build overlap, blocks build.
+  const nextLock = path.join(root, ".next", "lock");
+  if (fs.existsSync(nextLock)) {
+    try {
+      fs.unlinkSync(nextLock);
+      console.log("[build-static] Removed .next/lock (was blocking acquire)");
+    } catch (e) {
+      console.error(
+        "[build-static] Cannot remove .next/lock — stop `npm run dev` and any other Next process, then run build again."
+      );
+      throw e;
+    }
+  }
+
   execSync("node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack", {
     cwd: root,
     stdio: "inherit",

@@ -1,13 +1,12 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import DesktopItemDetails from '@/components/items/ItemDetails';
 import { useVouchers } from '@/hooks/useVouchers';
 import { useState } from 'react';
-import type { StockView } from '@/components/items/ItemDetails';
+import type { StockView } from '@/components/items/types';
 import { useRouter } from 'next/navigation';
+import ItemDetails from '@/components/items/ItemDetails';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
-import { useIsMobile } from '@/hooks/use-mobile';
 
 export function ItemDetailsClient() {
   const params = useParams();
@@ -15,7 +14,6 @@ export function ItemDetailsClient() {
   const { processedItems, loading, vouchers } = useVouchers();
   const [stockView, setStockView] = useState<StockView>('amount');
   const [itemDisplayUnits, setItemDisplayUnits] = useState<Record<string, string>>({});
-  const isMobile = useIsMobile();
   const itemId = params.id as string;
   const item = processedItems.find((p) => p.id === itemId);
 
@@ -24,7 +22,7 @@ export function ItemDetailsClient() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
-      <DesktopItemDetails
+      <ItemDetails
         item={item}
         onItemUpdated={() => {}}
         onItemDeleted={() => router.push('/items')}
@@ -38,3 +36,4 @@ export function ItemDetailsClient() {
     </div>
   );
 }
+

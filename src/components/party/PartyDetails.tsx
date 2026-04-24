@@ -416,6 +416,15 @@ export function PartyDetails({
   );
   
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance, openingBalanceOutstanding, openingBalanceLinkedVoucherNos } = useTransactions(party, "party", dateRange, undefined, allParties, passedTransactions, context, filters, undefined, resolvedJournalAccountNames, mergedUserNames);
+
+  // View/period brought-forward can be 0 (date range) while books still have an opening; running balance must
+  // start from the same value as the opening row (see TransactionsTable booksOpeningBalance).
+  const ledgerOpeningForRunning = useMemo(() => {
+    const master = Number(party?.openingBalance) || 0;
+    if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(master) > 1e-6) return master;
+    return openingBalanceForPeriod;
+  }, [openingBalanceForPeriod, party?.openingBalance]);
+
   
   // Fetch missing user names directly from Firestore and store in local state
   useEffect(() => {
@@ -547,9 +556,9 @@ export function PartyDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(statusFilteredTransactions, sortBy, sortOrder, undefined, company),
-        openingBalanceForPeriod
+        ledgerOpeningForRunning
       ),
-    [statusFilteredTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [statusFilteredTransactions, sortBy, sortOrder, ledgerOpeningForRunning, company]
   );
 
   const searchFilteredTransactions = useMemo(() => {
@@ -587,10 +596,10 @@ export function PartyDetails({
         pageTransactions: list,
         beforeCount: 0,
         afterCount: 0,
-        openingForPage: openingBalanceForPeriod,
+        openingForPage: ledgerOpeningForRunning,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
-        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+        closingForPage: ledgerOpeningForRunning + pageDr - pageCr,
       };
     }
     const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
@@ -611,7 +620,7 @@ export function PartyDetails({
     const openingForPage =
       typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
         ? previousRunningBalance
-        : openingBalanceForPeriod;
+        : ledgerOpeningForRunning;
     const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
     return {
@@ -623,7 +632,7 @@ export function PartyDetails({
       periodCrForPage,
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,
     };
-  }, [searchFilteredTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  }, [searchFilteredTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
   const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
   const mobileTransactions = useMemo(() => {
@@ -750,8 +759,9 @@ export function PartyDetails({
   const balanceLabel = closingBalance >= 0 ? "To Receive" : "To Pay";
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterPartyOpening = Number(party.openingBalance) || 0;
-  // Party page: opening row Balance me hamesha original ledger opening dikhana hai (outstanding-based replacement nahi).
-  const partyOpeningOutstandingForTable: number | undefined = undefined;
+  // Statement: full period opening in Balance. Bill-wise: same as print — remaining on OB, status + linked voucher nos.
+  const partyOpeningBalanceOutstandingForTable =
+    balanceMode === "bill_wise" ? openingBalanceOutstanding : undefined;
 
   const handleMobileBack = useCallback(() => {
     if (mobileFooterDialogOpen) {
@@ -894,7 +904,8 @@ export function PartyDetails({
               context="party"
               contextId={party.id}
               openingBalance={desktopPaginationMeta.openingForPage}
-              openingBalanceOutstanding={partyOpeningOutstandingForTable}
+              booksOpeningBalance={masterPartyOpening}
+              openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}
@@ -1328,7 +1339,8 @@ export function PartyDetails({
               context="party"
               contextId={party.id}
               openingBalance={desktopPaginationMeta.openingForPage}
-              openingBalanceOutstanding={partyOpeningOutstandingForTable}
+              booksOpeningBalance={masterPartyOpening}
+              openingBalanceOutstanding={partyOpeningBalanceOutstandingForTable}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}

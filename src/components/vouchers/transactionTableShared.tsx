@@ -483,11 +483,17 @@ const getOverdueDays = (t: any): number => {
 };
 
 
-/** Status detail: list all linked voucher nos only (no "from"/"to" prefix). When billWiseOnly: use only bill-wise links. */
+/** Status detail: list all linked voucher nos only (no "from"/"to" prefix). When billWiseOnly: ONLY bill-wise fields — never fall back to spend-wise–mixed linkedFromVoucherNos. */
 export const getStatusDetail = (t: any, opts?: { billWiseOnly?: boolean }) => {
-  const useBillWise = opts?.billWiseOnly && (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
-  const fromRaw = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
-  const toRaw = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  const billWiseOnly = opts?.billWiseOnly === true;
+  const fromRaw = (
+    billWiseOnly
+      ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
+      : (t.linkedFromVoucherNos as string[] | undefined)
+  ) || [];
+  const toRaw = (
+    billWiseOnly ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)
+  ) || [];
   const all = Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
   if (all.length === 0) return "";
   return all.join(", ");
@@ -506,9 +512,15 @@ export const getStatusDetailLines = (statusDetail: string): string[] => {
 
 /** Same as getStatusDetail but returns array of voucher strings for per-voucher styling (e.g. cyclical colors). */
 export const getStatusDetailVouchers = (t: any, opts?: { billWiseOnly?: boolean }): string[] => {
-  const useBillWise = opts?.billWiseOnly && (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
-  const fromRaw = (useBillWise ? (t.linkedFromVoucherNosBillWise as string[] | undefined) : (t.linkedFromVoucherNos as string[] | undefined)) || [];
-  const toRaw = (useBillWise ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  const billWiseOnly = opts?.billWiseOnly === true;
+  const fromRaw = (
+    billWiseOnly
+      ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
+      : (t.linkedFromVoucherNos as string[] | undefined)
+  ) || [];
+  const toRaw = (
+    billWiseOnly ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)
+  ) || [];
   return Array.from(new Set([...fromRaw, ...toRaw])).filter(Boolean);
 };
 
@@ -640,7 +652,16 @@ export const TransactionRow = React.memo(
     const isSpendWiseInGroup = isSpendWiseGroupFirst || isSpendWiseGroupLast || isSpendWiseChild || (transaction as any)._spendWiseGroupFirst;
     const hasSpendWiseColor = typeof spendWiseGroupColorIndex === "number";
     const swColor = hasSpendWiseColor && (spendWiseGroupColorIndex === 1 ? "green" : spendWiseGroupColorIndex === 2 ? "pink" : "blue");
-    const spendWiseBorderFirst = isSpendWiseGroupFirst && hasSpendWiseColor && cn(
+    // Bank spend-wise: split-group page edges — bank Account / Group details set _spendWisePageShow*; else full-group first/last.
+    const effSpendTop =
+      typeof (transaction as any)._spendWisePageShowTopEdge === "boolean"
+        ? (transaction as any)._spendWisePageShowTopEdge
+        : isSpendWiseGroupFirst;
+    const effSpendBottom =
+      typeof (transaction as any)._spendWisePageShowBottomEdge === "boolean"
+        ? (transaction as any)._spendWisePageShowBottomEdge
+        : isSpendWiseGroupLast;
+    const spendWiseBorderFirst = effSpendTop && hasSpendWiseColor && cn(
       "[&>td]:border-t [&>td]:border-b-0 [&>td]:border-solid",
       swColor === "green" && "[&>td]:border-t-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td]:border-t-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
@@ -648,7 +669,7 @@ export const TransactionRow = React.memo(
       "[&>td:first-child]:border-l [&>td:last-child]:border-r",
       "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
     );
-    const spendWiseBorderMid = !isSpendWiseGroupFirst && !isSpendWiseGroupLast && isSpendWiseInGroup && hasSpendWiseColor && cn(
+    const spendWiseBorderMid = !effSpendTop && !effSpendBottom && isSpendWiseInGroup && hasSpendWiseColor && cn(
       "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
       swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
@@ -689,6 +710,31 @@ export const TransactionRow = React.memo(
       credit = credit / factor;
       balance = balance / factor;
     }
+
+    // Blink animation: Dr/Cr/Balance numerals + Dr/Cr suffix only — not group border / full cell (see MainRow, no row-level animate).
+    const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
+    const shouldBlinkByAll =
+      activeBlinkModes.includes("all") &&
+      isSpendWiseGroupLast &&
+      hasSpendWiseColor &&
+      balance !== 0 &&
+      !isBalanceMasked;
+    const shouldBlinkByGroup =
+      activeBlinkModes.includes("group") &&
+      isSpendWiseGroupLast &&
+      hasSpendWiseColor &&
+      balance !== 0 &&
+      !isBalanceMasked &&
+      (spendWiseGroupSize ?? 0) > 1;
+    const shouldBlinkByRowMode =
+      activeBlinkModes.includes("row") &&
+      isSelectedRowBlink &&
+      hasSpendWiseColor &&
+      balance !== 0 &&
+      !isBalanceMasked;
+    const isGroupBalanceNonZero = shouldBlinkByAll || shouldBlinkByGroup || shouldBlinkByRowMode;
+    const shouldAnimateSpendWiseAmountText =
+      isGroupBalanceNonZero || ((isRelatedBlink || isSelectedRowBlink) && !isSelected);
 
     const formatBalanceCell = (value: number) => {
       const isItemQty = context === "item" && stockView === "qty";
@@ -802,10 +848,14 @@ export const TransactionRow = React.memo(
           </TableCell>
         )}
         {showCol("dr") && (
-          <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>{formatAmountCell(debit)}</TableCell>
+          <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+            {formatAmountCell(debit)}
+          </TableCell>
         )}
         {showCol("cr") && (
-          <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>{formatAmountCell(credit)}</TableCell>
+          <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+            {formatAmountCell(credit)}
+          </TableCell>
         )}
         {showCol("status") && !hideStatusColumn &&
           (() => {
@@ -884,46 +934,29 @@ export const TransactionRow = React.memo(
             // When balance/outstanding is 0 show "Settled" (running balance and bill-wise both)
             const valueToShow = useOutstandingForBalance ? displayValue : balance;
             const isZeroBalance = !isBalanceMasked && (typeof valueToShow === "number" && Math.abs(valueToShow) < 1e-6);
-            /** Spend-wise blink multi-select: row mode is selection-driven; all/group remain balance-driven. */
-            const activeBlinkModes = Array.isArray(blinkMode) ? blinkMode : [];
-            const shouldBlinkByAll =
-              activeBlinkModes.includes("all") &&
-              isSpendWiseGroupLast &&
-              hasSpendWiseColor &&
-              balance !== 0 &&
-              !isBalanceMasked;
-            const shouldBlinkByGroup =
-              activeBlinkModes.includes("group") &&
-              isSpendWiseGroupLast &&
-              hasSpendWiseColor &&
-              balance !== 0 &&
-              !isBalanceMasked &&
-              (spendWiseGroupSize ?? 0) > 1;
-            const shouldBlinkByRow =
-              activeBlinkModes.includes("row") &&
-              // Row mode should blink only the clicked row (and only when that row is multi-row eligible).
-              isSelectedRowBlink &&
-              hasSpendWiseColor &&
-              balance !== 0 &&
-              !isBalanceMasked;
-            const isGroupBalanceNonZero = shouldBlinkByAll || shouldBlinkByGroup || shouldBlinkByRow;
             return (
               <TableCell
                 className={cn(
                   "text-right font-semibold",
                   isZeroBalance ? "text-green-600" : (displayValue >= 0 ? "text-green-600" : "text-red-600"),
-                  ensureMinGaps && "min-w-[115px] px-[5px]",
-                  isGroupBalanceNonZero && "animate-spend-wise-balance-blink"
+                  ensureMinGaps && "min-w-[115px] px-[5px]"
                 )}
                 {...(isZeroBalance ? { "data-cell-settled": "true" } : {})}
               >
-                {isBalanceMasked
-                  ? "*****"
-                  : isZeroBalance
-                    ? "Settled"
-                    : useOutstandingForBalance
-                      ? formatBalanceCell(displayValue)
-                      : formatBalanceCell(balance)}
+                {isBalanceMasked ? (
+                  "*****"
+                ) : isZeroBalance ? (
+                  "Settled"
+                ) : (
+                  <span
+                    className={cn(
+                      "inline",
+                      shouldAnimateSpendWiseAmountText && !isZeroBalance && "animate-spend-wise-balance-blink"
+                    )}
+                  >
+                    {useOutstandingForBalance ? formatBalanceCell(displayValue) : formatBalanceCell(balance)}
+                  </span>
+                )}
               </TableCell>
             );
           })()}
@@ -986,18 +1019,18 @@ export const TransactionRow = React.memo(
     const showNarrationRow =
       showNarration &&
       (narrationText || (showCol("status") && !hideStatusColumn && statusDetailText));
-    const spendWiseBorderLast = isSpendWiseGroupLast && !showNarrationRow && hasSpendWiseColor && cn(
+    const spendWiseBorderLast = effSpendBottom && !showNarrationRow && hasSpendWiseColor && cn(
       "[&>td]:border-b [&>td]:border-solid [&>td]:pb-1",
-      !isSpendWiseGroupFirst && "[&>td]:border-t-0",
+      !effSpendTop && "[&>td]:border-t-0",
       swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td]:border-b-blue-500 [&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
       "[&>td:first-child]:border-l [&>td:last-child]:border-r",
       "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
     );
-    const spendWiseBorderLastNarr = isSpendWiseGroupLast && showNarrationRow && hasSpendWiseColor && cn(
+    const spendWiseBorderLastNarr = effSpendBottom && showNarrationRow && hasSpendWiseColor && cn(
       "[&>td]:border-b-0 [&>td]:border-solid",
-      !isSpendWiseGroupFirst && "[&>td]:border-t-0",
+      !effSpendTop && "[&>td]:border-t-0",
       swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
       swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
       swColor === "blue" && "[&>td:first-child]:border-l-blue-500 [&>td:last-child]:border-r-blue-500",
@@ -1031,18 +1064,19 @@ export const TransactionRow = React.memo(
       isSpendWiseOutflowRow || (context === "group" && isSpendWiseChild && !isSpendWiseInflowRow) || spendWiseGroupStandaloneOutflow;
     /** Extra gap below last row of each group so containers don't touch during layout animation */
     const groupGapBottom = "[&>td]:pb-3";
+    // Page split: effSpendBottom = visible “close” of group box (no next page) — padding/border matches that, not only logical last.
     const spendWiseMainInset = inSpendWiseGroup && cn(
       spendWiseChildNeedsIndent ? "[&>td:first-child]:pl-[30px]" : "[&>td:first-child]:pl-[6px]",
       "[&>td:last-child]:pr-[6px]",
       isSpendWiseGroupFirst && "[&>td]:pt-[6px]",
-      isSpendWiseGroupLast && !showNarrationRow && cn("[&>td]:pb-[6px]", groupGapBottom),
+      effSpendBottom && !showNarrationRow && cn("[&>td]:pb-[6px]", groupGapBottom),
       !isSpendWiseGroupFirst && "[&>td]:pt-[3px]"
     );
     const spendWiseNarrInset = inSpendWiseGroup && cn(
       spendWiseChildNeedsIndent ? "[&>td:first-child]:pl-[30px]" : "[&>td:first-child]:pl-[6px]",
       "[&>td:last-child]:pr-[6px]",
-      isSpendWiseGroupLast && cn("[&>td]:pb-[6px]", groupGapBottom),
-      !isSpendWiseGroupLast && "[&>td]:pb-[3px]"
+      effSpendBottom && cn("[&>td]:pb-[6px]", groupGapBottom),
+      !effSpendBottom && "[&>td]:pb-[3px]"
     );
 
     const rowExitTransition = isRowAnimationEnabled && animateLayout
@@ -1093,10 +1127,7 @@ export const TransactionRow = React.memo(
           isSelected && !showNarrationRow && "[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_hsl(var(--primary)),inset_0_2px_0_0_hsl(var(--primary)),inset_0_-2px_0_0_hsl(var(--primary))]",
           isSelected && !showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
           isSelected && showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl",
-          // Use the same single-pass blink style as spend-wise balance for smoother related-row highlight.
-          isRelatedBlink && !isSelected && "animate-spend-wise-balance-blink",
-          // In Blink row mode, blink only the clicked multi-row entry's selected row.
-          isSelectedRowBlink && "animate-spend-wise-balance-blink",
+          // Spend-wise blink: animation on Dr/Cr/Balance text only (see shouldAnimateSpendWiseAmountText), not on tr/border.
           // Keep transaction row compact when narration is visible (override default TableCell p-1).
           showNarrationRow && "[&>td]:pt-0.5 [&>td]:pb-0",
           !showNarrationRow && "md:[&>td]:pb-1",
@@ -1139,7 +1170,7 @@ export const TransactionRow = React.memo(
           "narration-row border-b cursor-pointer",
           isBillWise && "-mt-1.5",
           spendWiseNarrInset,
-          isSpendWiseGroupLast && cn(
+          effSpendBottom && cn(
             "[&>td]:border-b [&>td]:border-t-0 [&>td]:border-solid [&>td]:pb-0.5",
             swColor === "green" && "[&>td]:border-b-green-500 [&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
             swColor === "pink" && "[&>td]:border-b-pink-500 [&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
@@ -1147,7 +1178,7 @@ export const TransactionRow = React.memo(
             "[&>td:first-child]:border-l [&>td:last-child]:border-r",
             "[&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-br-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden"
           ),
-          (isSpendWiseGroupFirst || isSpendWiseChild) && !isSpendWiseGroupLast && cn(
+          !effSpendBottom && hasSpendWiseColor && cn(
             "[&>td]:border-t-0 [&>td]:border-b-0 [&>td]:border-solid",
             swColor === "green" && "[&>td:first-child]:border-l-green-500 [&>td:last-child]:border-r-green-500",
             swColor === "pink" && "[&>td:first-child]:border-l-pink-500 [&>td:last-child]:border-r-pink-500",
@@ -1166,8 +1197,6 @@ export const TransactionRow = React.memo(
           isNote && !isSelected && "bg-amber-50 hover:bg-amber-100 [&>td]:bg-amber-50 [&>td]:hover:bg-amber-100",
           isPaid && !isSelected && "opacity-75 bg-muted/20 [&>td]:bg-muted/20",
           !isSelected && !isPendingApproval && !isSpendWiseChild && !isNote && !isPaid && "hover:bg-muted/20 [&>td]:hover:bg-muted/20",
-          // Use the same single-pass blink style as spend-wise balance for smoother related-row highlight.
-          isRelatedBlink && !isSelected && "animate-spend-wise-balance-blink",
           // Avoid extra bottom expansion in sub-row; we only want a small top gap.
           "md:[&>td]:pb-0"
         )}

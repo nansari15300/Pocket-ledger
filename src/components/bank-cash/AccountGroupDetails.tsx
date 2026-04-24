@@ -46,6 +46,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { getOpeningBalanceBaseAmount, getOpeningBalanceVoucherLabel, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
+import {
+  attachSpendWisePageEdgeFlags,
+  buildSpendWiseDisplayBlocks,
+  packFlatListByDataLineBudgetFromEnd,
+} from "@/lib/spendWisePagination";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import usePermissions from "@/hooks/usePermissions";
@@ -454,95 +459,58 @@ export function AccountGroupDetails({
     [sortedTransactions]
   );
 
-  /** Rows-per-page overwrite: paginate by full groups so we never split a group across pages. */
-  const displayBlocks = useMemo(() => {
-    const list = sortedTransactions;
-    if (!list.length) return [];
-    const blocks: any[][] = [];
-    let i = 0;
-    while (i < list.length) {
-      const start = i;
-      const first = list[i] as any;
-      if (first._spendWiseSpacer) {
-        blocks.push([first]);
-        i++;
-        continue;
-      }
-      let end = i;
-      while (end < list.length) {
-        const cur = list[end] as any;
-        if (cur._spendWiseGroupLast === true) {
-          end++;
-          if (end < list.length && (list[end] as any)._spendWiseSpacer) end++;
-          break;
-        }
-        end++;
-      }
-      blocks.push(list.slice(start, end));
-      i = end;
-    }
-    return blocks;
-  }, [sortedTransactions]);
+  /** Statement: one row per block; spend-wise: blocks for search — pagination uses @/lib/spendWisePagination (data-line budget + split borders). */
+  const displayBlocks = useMemo(
+    () => buildSpendWiseDisplayBlocks(sortedTransactions, spendWiseView),
+    [sortedTransactions, spendWiseView]
+  );
 
   const { totalPages, paginatedTransactions } = useMemo(() => {
     if (rowsPerPage <= 0) {
       return { totalPages: 1, paginatedTransactions: sortedTransactions };
     }
-    const hasSpendWiseGroups = sortedTransactions.some((t: any) => (t as any)._spendWiseGroupFirst === true);
-    if (!hasSpendWiseGroups) {
-      const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / rowsPerPage));
-      const safePage = Math.min(Math.max(1, currentPage), totalPages);
-      const total = sortedTransactions.length;
-      const end = total - (safePage - 1) * rowsPerPage;
-      const start = Math.max(0, end - rowsPerPage);
-      const paginatedTransactions = sortedTransactions.slice(start, Math.max(start, end));
-      return { totalPages, paginatedTransactions };
-    }
-    const blocks = displayBlocks;
-    if (!blocks.length) {
-      return { totalPages: 1, paginatedTransactions: sortedTransactions };
-    }
-    const rowCounts = blocks.map((b) => b.length);
-    const pages: number[][] = [];
-    let pageRows = 0;
-    let currentPageBlocks: number[] = [];
-    for (let i = 0; i < blocks.length; i++) {
-      if (pageRows + rowCounts[i] > rowsPerPage && currentPageBlocks.length > 0) {
-        pages.push(currentPageBlocks);
-        currentPageBlocks = [];
-        pageRows = 0;
+    if (spendWiseView) {
+      const full = sortedTransactions as any[];
+      const pageRanges = packFlatListByDataLineBudgetFromEnd(full, rowsPerPage);
+      if (pageRanges.length === 0) {
+        return { totalPages: 1, paginatedTransactions: [] as any[] };
       }
-      currentPageBlocks.push(i);
-      pageRows += rowCounts[i];
+      const totalPages = pageRanges.length;
+      const safePage = Math.min(Math.max(1, currentPage), totalPages);
+      const { start, end } = pageRanges[safePage - 1]!;
+      const { list } = attachSpendWisePageEdgeFlags(full, start, end);
+      return { totalPages, paginatedTransactions: list as any[] };
     }
-    if (currentPageBlocks.length > 0) pages.push(currentPageBlocks);
-    const totalPages = Math.max(1, pages.length);
+    const total = sortedTransactions.length;
+    const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
     const safePage = Math.min(Math.max(1, currentPage), totalPages);
-    const pageIndex = Math.max(0, totalPages - safePage);
-    const blockIndices = pages[pageIndex] ?? [];
-    const paginatedTransactions = blockIndices.length > 0
-      ? ([] as any[]).concat(...blockIndices.map((idx) => blocks[idx]))
-      : sortedTransactions;
-    return { totalPages, paginatedTransactions };
-  }, [sortedTransactions, displayBlocks, rowsPerPage, currentPage]);
-  // Page-break dynamic opening: first visible txn ke pehle ka balance opening row me dikhana.
+    const end = total - (safePage - 1) * rowsPerPage;
+    const start = Math.max(0, end - rowsPerPage);
+    return { totalPages, paginatedTransactions: sortedTransactions.slice(start, Math.max(start, end)) };
+  }, [sortedTransactions, spendWiseView, rowsPerPage, currentPage]);
+  // Page-break opening: first visible data row + pehle non-spacer ka running balance (AccountDetails jaisa).
   const desktopPageLedgerStats = useMemo(() => {
-    const pageRows = paginatedTransactions as any[];
+    const pageRows = (paginatedTransactions as any[]).filter((t: any) => !(t as any)?._spendWiseSpacer);
     let openingForPage = openingBalanceForPeriod;
-    const firstTxn = pageRows[0];
-    const firstIdx =
-      firstTxn != null ? (sortedTransactions as any[]).findIndex((t: any) => t === firstTxn) : -1;
-    const previousTx = firstIdx > 0 ? (sortedTransactions as any[])[firstIdx - 1] : null;
-    const previousRunningBalance =
-      previousTx != null
-        ? (typeof previousTx.balance === "number"
-            ? previousTx.balance
-            : typeof previousTx.runningBalance === "number"
-              ? previousTx.runningBalance
-              : undefined)
-        : undefined;
-    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
-      openingForPage = previousRunningBalance;
+    const firstTxn = pageRows[0] as any;
+    if (firstTxn?.id) {
+      const firstIdx = (sortedTransactions as any[]).findIndex((t: any) => t?.id === firstTxn.id);
+      if (firstIdx > 0) {
+        for (let i = firstIdx - 1; i >= 0; i--) {
+          const prev = (sortedTransactions as any[])[i] as any;
+          if (!prev || prev._spendWiseSpacer) continue;
+          const prevBal =
+            typeof prev.balance === "number"
+              ? prev.balance
+              : typeof prev.runningBalance === "number"
+                ? prev.runningBalance
+                : undefined;
+          if (typeof prevBal === "number" && !Number.isNaN(prevBal)) {
+            openingForPage = prevBal;
+          }
+          break;
+        }
+      }
     }
     const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
@@ -685,7 +653,7 @@ export function AccountGroupDetails({
   const filteredMobileTransactions = useMemo(() => {
     if (!mobileSearchTerm) return sortedTransactions;
     const lowerCaseSearch = mobileSearchTerm.toLowerCase();
-    return sortedTransactions.filter((t: any) => {
+    const rowMatches = (t: any) => {
       if ((t as any)._spendWiseSpacer) return false;
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
@@ -699,34 +667,175 @@ export function AccountGroupDetails({
         String(debitCreditAmount).toLowerCase().includes(lowerCaseSearch) ||
         String(t.balance).toLowerCase().includes(lowerCaseSearch)
       );
-    });
-  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
+    };
+    if (spendWiseView && displayBlocks.length > 0) {
+      const included = new Set<number>();
+      for (let i = 0; i < displayBlocks.length; i++) {
+        const block = displayBlocks[i];
+        const isSpacerBlock = block.length === 1 && (block[0] as any)._spendWiseSpacer;
+        if (isSpacerBlock) continue;
+        if (block.some((r: any) => rowMatches(r))) included.add(i);
+      }
+      for (let i = 0; i < displayBlocks.length; i++) {
+        const block = displayBlocks[i];
+        const isSpacerBlock = block.length === 1 && (block[0] as any)._spendWiseSpacer;
+        if (isSpacerBlock && (included.has(i - 1) || included.has(i + 1))) included.add(i);
+      }
+      return ([] as any[]).concat(...displayBlocks.filter((_, i) => included.has(i)));
+    }
+    return sortedTransactions.filter((t) => rowMatches(t));
+  }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, spendWiseView, displayBlocks, mobileSearchNames, group.id]);
+
+  const mobileFilterBlocks = useMemo(
+    () => buildSpendWiseDisplayBlocks(filteredMobileTransactions, spendWiseView),
+    [filteredMobileTransactions, spendWiseView]
+  );
 
   const mobileTransactionsToShow = useMemo(() => {
     const list = filteredMobileTransactions;
     if (rowsPerPage <= 0) return list;
+    if (spendWiseView) {
+      const pageRanges = packFlatListByDataLineBudgetFromEnd(list as any[], rowsPerPage);
+      if (pageRanges.length === 0) return [] as any[];
+      const totalPagesLocal = pageRanges.length;
+      const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+      const { start, end } = pageRanges[safePage - 1]!;
+      const { list: withFlags } = attachSpendWisePageEdgeFlags(list as any[], start, end);
+      return withFlags;
+    }
+    const blocks = mobileFilterBlocks;
+    const n = blocks.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(n / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const endB = n - (safePage - 1) * rowsPerPage;
+    const startB = Math.max(0, endB - rowsPerPage);
+    return blocks.slice(startB, endB).flat();
+  }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, currentPage, rowsPerPage]);
+
+  const mobilePagerEdgeCounts = useMemo(() => {
+    const list = filteredMobileTransactions;
+    if (rowsPerPage <= 0) return { before: 0, after: 0 };
+    if (spendWiseView) {
+      const pageRanges = packFlatListByDataLineBudgetFromEnd(list as any[], rowsPerPage);
+      if (pageRanges.length === 0) return { before: 0, after: 0 };
+      const totalPagesLocal = pageRanges.length;
+      const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+      const { start, end } = pageRanges[safePage - 1]!;
+      return { before: start, after: Math.max(0, list.length - end) };
+    }
     const total = list.length;
     const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     const end = total - (safePage - 1) * rowsPerPage;
     const start = Math.max(0, end - rowsPerPage);
-    return list.slice(start, Math.max(start, end));
-  }, [filteredMobileTransactions, currentPage, rowsPerPage]);
-  const mobilePagerEdgeCounts = useMemo(() => {
-    const total = filteredMobileTransactions.length;
-    if (rowsPerPage <= 0) return { before: 0, after: 0 };
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
     return { before: start, after: Math.max(0, total - end) };
-  }, [filteredMobileTransactions.length, currentPage, rowsPerPage]);
+  }, [filteredMobileTransactions, spendWiseView, currentPage, rowsPerPage]);
 
+  const mobilePageLedgerStats = useMemo(() => {
+    const list = filteredMobileTransactions as any[];
+    if (rowsPerPage <= 0) {
+      const pageRows = list.filter((t: any) => !(t as any)?._spendWiseSpacer);
+      const pageDr = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const pageCr = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage: pageDr,
+        periodCrForPage: pageCr,
+        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+      };
+    }
+    if (spendWiseView) {
+      const pageRanges = packFlatListByDataLineBudgetFromEnd(list, rowsPerPage);
+      if (pageRanges.length === 0) {
+        return {
+          openingForPage: openingBalanceForPeriod,
+          periodDrForPage: 0,
+          periodCrForPage: 0,
+          closingForPage: openingBalanceForPeriod,
+        };
+      }
+      const totalPagesLocal = pageRanges.length;
+      const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+      const { start, end } = pageRanges[safePage - 1]!;
+      const pageSlice = list.slice(start, end);
+      const pageRows = pageSlice.filter((t: any) => !t?._spendWiseSpacer);
+      let openingForPage = openingBalanceForPeriod;
+      const previousTx = start > 0 ? (list[start - 1] as any) : null;
+      const previousRunningBalance =
+        previousTx != null
+          ? (typeof previousTx.balance === "number"
+              ? previousTx.balance
+              : typeof previousTx.runningBalance === "number"
+                ? previousTx.runningBalance
+                : undefined)
+          : undefined;
+      if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
+        openingForPage = previousRunningBalance;
+      }
+      const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        openingForPage,
+        periodDrForPage,
+        periodCrForPage,
+        closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+      };
+    }
+    const blocks = mobileFilterBlocks;
+    const n = blocks.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(n / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const endB = n - (safePage - 1) * rowsPerPage;
+    const startB = Math.max(0, endB - rowsPerPage);
+    const pageSlice = blocks.slice(startB, endB).flat();
+    const start = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
+    const pageRows = pageSlice.filter((t: any) => !(t as any)?._spendWiseSpacer);
+    let openingForPage = openingBalanceForPeriod;
+    const previousTx = start > 0 ? (list[start - 1] as any) : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    if (typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)) {
+      openingForPage = previousRunningBalance;
+    }
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, rowsPerPage, currentPage, openingBalanceForPeriod]);
+
+  const effectiveMobilePageCount = useMemo(() => {
+    if (rowsPerPage <= 0) return 1;
+    if (spendWiseView) {
+      const p = packFlatListByDataLineBudgetFromEnd(filteredMobileTransactions as any[], rowsPerPage);
+      return Math.max(1, p.length);
+    }
+    return Math.max(1, Math.ceil(mobileFilterBlocks.length / rowsPerPage));
+  }, [rowsPerPage, spendWiseView, filteredMobileTransactions, mobileFilterBlocks.length]);
+
+  // Page index stay valid: mobile = data-line or block count; desktop = totalPages.
   useEffect(() => {
-    const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
-    const safeTotal = Math.max(1, total);
-    setCurrentPage((prev) => Math.min(Math.max(1, prev), safeTotal));
-  }, [dateRange, filteredMobileTransactions.length, rowsPerPage]);
+    const cap = isMobile ? effectiveMobilePageCount : totalPages;
+    setCurrentPage((prev) => Math.min(Math.max(1, prev), cap));
+  }, [
+    isMobile,
+    effectiveMobilePageCount,
+    totalPages,
+    dateRange,
+    group.id,
+    sortedTransactions.length,
+    filteredMobileTransactions.length,
+    mobileSearchTerm,
+  ]);
 
   const dateRangeLabel = buildDateRangeText();
 
@@ -928,7 +1037,7 @@ export function AccountGroupDetails({
               contextId={group.id}
               groupEntityType="account"
               forceBalanceMode="statement"
-              openingBalance={isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage}
+              openingBalance={isBalanceMasked ? 0 : mobilePageLedgerStats.openingForPage}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceDate={(group as any).openingBalanceDate}
@@ -943,9 +1052,9 @@ export function AccountGroupDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodDrForPage}
-              periodCr={isBalanceMasked ? undefined : desktopPageLedgerStats.periodCrForPage}
-              closingBalance={isBalanceMasked ? undefined : desktopPageLedgerStats.closingForPage}
+              periodDr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodDrForPage}
+              periodCr={isBalanceMasked ? undefined : mobilePageLedgerStats.periodCrForPage}
+              closingBalance={isBalanceMasked ? undefined : mobilePageLedgerStats.closingForPage}
               isBalanceMasked={isBalanceMasked}
               scrollOnlyTransactions
               disableLayoutAnimation={disableTableLayoutAnimation}

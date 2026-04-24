@@ -53,6 +53,7 @@ import {
   readBackupSaveLocationPrefs,
   readWebBackupDirectoryHandle,
   isNativeRuntime,
+  ensureNativeBackupStoragePermission,
 } from "@/lib/backupSaveLocation";
 
 /** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
@@ -102,29 +103,34 @@ async function blobToBase64DataUrl(blob: Blob): Promise<string> {
  */
 async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promise<{ where: string }> {
   const savePrefs = readBackupSaveLocationPrefs();
+  let webPreferredFolderFailed = false;
   if (typeof window !== "undefined") {
     try {
       // Device settings: when user enabled fixed web folder, save directly there and skip Save As dialog.
       if (!isNativeRuntime() && savePrefs.webUseSelectedFolder) {
         const dirHandle = await readWebBackupDirectoryHandle();
         if (!dirHandle) {
-          throw new Error("Backup location not set. Open Settings > Device settings and choose a folder.");
-        }
-        if (typeof dirHandle.queryPermission === "function") {
-          const p = await dirHandle.queryPermission({ mode: "readwrite" });
-          if (p !== "granted" && typeof dirHandle.requestPermission === "function") {
-            const req = await dirHandle.requestPermission({ mode: "readwrite" });
-            if (req !== "granted") {
-              throw new Error("Selected backup folder permission denied. Please reselect folder in Device settings.");
+          // Missing saved handle: fall back to Save As instead of hard failing.
+          webPreferredFolderFailed = true;
+        } else {
+          if (typeof dirHandle.queryPermission === "function") {
+            const p = await dirHandle.queryPermission({ mode: "readwrite" });
+            if (p !== "granted" && typeof dirHandle.requestPermission === "function") {
+              const req = await dirHandle.requestPermission({ mode: "readwrite" });
+              if (req !== "granted") {
+                webPreferredFolderFailed = true;
+              }
             }
           }
+          if (!webPreferredFolderFailed) {
+            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            const label = savePrefs.webFolderLabel || "Selected folder";
+            return { where: `${label}/${fileName}` };
+          }
         }
-        const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        const label = savePrefs.webFolderLabel || "Selected folder";
-        return { where: `${label}/${fileName}` };
       }
 
       const picker = (window as any).showSaveFilePicker;
@@ -136,7 +142,11 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
-        return { where: "Selected folder (Save As)" };
+        return {
+          where: webPreferredFolderFailed
+            ? "Selected folder (Save As fallback)"
+            : "Selected folder (Save As)",
+        };
       }
     } catch (e: any) {
       if (e?.name === "AbortError") throw e;
@@ -148,6 +158,11 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
     if (Capacitor.isNativePlatform()) {
       const { Filesystem, Directory } = await import("@capacitor/filesystem");
       const { Share } = await import("@capacitor/share");
+      // Static build/native: request storage permission before writing backup file.
+      const granted = await ensureNativeBackupStoragePermission();
+      if (!granted) {
+        throw new Error("Storage permission denied. Allow device storage permission from Device location settings.");
+      }
       const dataUrl = await blobToBase64DataUrl(blob);
       const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
       // Device settings: prefer saved native directory + subfolder so backup destination stays consistent.
@@ -157,6 +172,8 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
           : Directory.Documents;
       const rawSubfolder = String(savePrefs.nativeSubfolder || "").trim();
       const safeSubfolder = rawSubfolder.replace(/^[\\/]+|[\\/]+$/g, "");
+      const pickedNativeFolderPath = String((savePrefs as any).nativeFolderPath || "").trim();
+      const hasPickedNativeFolder = pickedNativeFolderPath.length > 0;
       if (safeSubfolder) {
         await Filesystem.mkdir({
           path: safeSubfolder,
@@ -164,25 +181,48 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
           recursive: true,
         }).catch(() => undefined);
       }
+      // If user selected folder from Device location dialog, prefer absolute-path write there; fallback to configured directory/subfolder.
       const finalPath = safeSubfolder ? `${safeSubfolder}/${fileName}` : fileName;
-      await Filesystem.writeFile({
-        path: finalPath,
-        data: base64,
-        directory: nativeDirectory as any,
-      });
-      const { uri } = await Filesystem.getUri({ path: finalPath, directory: nativeDirectory as any });
+      let savedUri = "";
+      let savedWhere = "";
+      if (hasPickedNativeFolder) {
+        const normalizedBase = pickedNativeFolderPath.replace(/[\\/]+$/g, "");
+        const absoluteFilePath = `${normalizedBase}/${fileName}`;
+        try {
+          await Filesystem.writeFile({
+            path: absoluteFilePath,
+            data: base64,
+            recursive: true,
+          } as any);
+          const absUri = await Filesystem.getUri({ path: absoluteFilePath } as any);
+          savedUri = String((absUri as any)?.uri || "");
+          savedWhere = absoluteFilePath;
+        } catch {
+          // Fallback: plugin/path format may vary by device; continue with standard Documents/External flow.
+        }
+      }
+      if (!savedUri) {
+        await Filesystem.writeFile({
+          path: finalPath,
+          data: base64,
+          directory: nativeDirectory as any,
+        });
+        const fallbackUri = await Filesystem.getUri({ path: finalPath, directory: nativeDirectory as any });
+        savedUri = String((fallbackUri as any)?.uri || "");
+        const dirLabel = savePrefs.nativeDirectory === "EXTERNAL" ? "ExternalStorage" : "Documents";
+        savedWhere = `${dirLabel}/${finalPath}`;
+      }
       try {
         // User yahan se target app/location choose kar sakta hai (Drive, Files, etc.)
         await Share.share({
           title: fileName,
-          url: uri,
+          url: savedUri,
           dialogTitle: "Save backup file",
         });
       } catch {
         /* share optional */
       }
-      const dirLabel = savePrefs.nativeDirectory === "EXTERNAL" ? "ExternalStorage" : "Documents";
-      return { where: `${dirLabel}/${finalPath}` };
+      return { where: savedWhere };
     }
   } catch {
     // native write fail -> browser fallback

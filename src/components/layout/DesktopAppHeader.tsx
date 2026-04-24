@@ -36,7 +36,8 @@ import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { format, differenceInDays } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
-import { useRouter, usePathname, useParams, useSearchParams } from "next/navigation";
+import { useRouter, usePathname, useParams } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -133,7 +134,7 @@ function ScreenControls() {
 
 function ReportListButton() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const { setReportListOpen } = useReportList();
   const isMobile = useIsMobile();
   // Only show report list icon on main Reports page ($/reports), not on entity-specific report pages
@@ -179,7 +180,7 @@ function AddNewButtonOnReportPage() {
 function ReportButtonForPartyOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("party");
   // Path-based: /party/[id] or /party/group/[id]; Query-based (mobile/APK): /party?selected=id or /party?view=groups&selected=id
@@ -217,7 +218,7 @@ function ReportButtonForPartyOrGroup() {
 function ReportButtonForBankAccountOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("bank-cash");
   const idFromPath = params?.id as string | undefined;
@@ -253,7 +254,7 @@ function ReportButtonForBankAccountOrGroup() {
 function ReportButtonForStaffOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("staff");
   const idFromPath = params?.id as string | undefined;
@@ -289,7 +290,7 @@ function ReportButtonForStaffOrGroup() {
 function ReportButtonForItemOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("items");
   const idFromPath = params?.id as string | undefined;
@@ -325,7 +326,7 @@ function ReportButtonForItemOrGroup() {
 function ReportButtonForTaxOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("tax");
   const idFromPath = params?.id as string | undefined;
@@ -361,7 +362,7 @@ function ReportButtonForTaxOrGroup() {
 function ReportButtonForExpenseAccountOrGroup() {
   const pathname = usePathname();
   const params = useParams();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const idFromStore = useMasterDetailHeaderIdSnapshot("incomes");
   const idFromPath = params?.id as string | undefined;
@@ -1320,19 +1321,20 @@ export function DesktopAppHeader() {
   const headerIsMobile = useIsMobile();
   // Mobile header arrow toggle state: compact single-row vs expanded wrapped controls.
   const [mobileHeaderExpanded, setMobileHeaderExpanded] = useState(false);
-  // Expanded mobile header: global tap/click se auto-collapse behavior.
+  // Expanded mobile header: auto-collapse on tap. Use **click** in bubble (not pointerdown + capture) so
+  // the control (Report, company, etc.) runs first; then we collapse. Toggle is excluded.
   const mobileHeaderRootRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!headerIsMobile || !mobileHeaderExpanded) return;
-    const handleGlobalPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      // Toggle button click ko local handler manage kare; baki kahin bhi click = collapse.
+    const handleDocumentClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
       if (target instanceof Element && target.closest("[data-mobile-header-expand-toggle='true']")) return;
       setMobileHeaderExpanded(false);
     };
-    document.addEventListener("pointerdown", handleGlobalPointerDown, true);
-    return () => document.removeEventListener("pointerdown", handleGlobalPointerDown, true);
+    document.addEventListener("click", handleDocumentClick, false);
+    return () => document.removeEventListener("click", handleDocumentClick, false);
   }, [headerIsMobile, mobileHeaderExpanded]);
 
   return (

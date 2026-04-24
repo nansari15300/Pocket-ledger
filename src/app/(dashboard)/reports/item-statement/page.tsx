@@ -1,5 +1,3 @@
-"use client";
-
 import { Suspense } from "react";
 import DesktopItemStatementPage from "@/components/reports/DesktopItemStatementPage";
 
@@ -11,9 +9,9 @@ function ItemStatementLoading() {
   );
 }
 
+// Server page: Suspense must sit here (not under "use client") for static export + useSearchParams in DesktopItemStatementPage.
 export default function ItemStatementPage() {
   return (
-    // Wrap URL-query consumers used inside desktop statement component.
     <Suspense fallback={<ItemStatementLoading />}>
       <DesktopItemStatementPage />
     </Suspense>

@@ -58,7 +58,8 @@ import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogDescription } f
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
 import { EditItemDialog } from "./EditItemDialog";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
@@ -153,7 +154,7 @@ export default function ItemDetails({
   const { company } = useCompany(); 
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);

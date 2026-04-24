@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
@@ -72,7 +73,7 @@ export default function DesktopItemStatementPage() {
   const { company } = useCompany();
   const { formatDateBS, formatDate, formatCurrency, dateSystem } = useDate();
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const searchParams = useLocationSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();

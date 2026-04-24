@@ -1427,6 +1427,8 @@ export function useTransactions(
                     } else if (t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense') {
                         const myNo = t.voucherNumber ?? t.voucher_number ?? '';
                         const allocs = (t.allocations as { voucherId: string; amount: number }[] | undefined) || [];
+                        // "From" side for bill-wise status: journal→payment only (not spend-wise linkedPaymentInIds below).
+                        const linkedFromVoucherNosBillWise: string[] = [];
                         // Incoming: journal se RCPT/PYMT link hone par "from JRNL" dikhana; bill-wise view mein bhi.
                         vouchers.forEach((v: any) => {
                             if (v.type !== 'journal') return;
@@ -1434,7 +1436,10 @@ export function useTransactions(
                             const vAllocs = (v.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
                             if (!vAllocs.some((a: any) => a.voucherId === t.id)) return;
                             const no = v.voucherNumber ?? v.voucher_number ?? '';
-                            if (no && !linkedFromVoucherNos.includes(no)) linkedFromVoucherNos.push(no);
+                            if (no && !linkedFromVoucherNos.includes(no)) {
+                                linkedFromVoucherNos.push(no);
+                                linkedFromVoucherNosBillWise.push(no);
+                            }
                         });
                         // Bill-wise only: allocations (sale/purchase/salary/OB) — for party/staff/group billwise view we show only these in status.
                         const linkedToVoucherNosBillWise: string[] = [];
@@ -1471,6 +1476,7 @@ export function useTransactions(
                         // Dedupe so status shows each voucher no once (source: voucher allocations).
                         const fromDeduped = Array.from(new Set(linkedFromVoucherNos));
                         const toDeduped = Array.from(new Set(linkedToVoucherNos));
+                        const fromBillWiseDeduped = Array.from(new Set(linkedFromVoucherNosBillWise));
                         const toBillWiseDeduped = Array.from(new Set(linkedToVoucherNosBillWise));
                         return {
                             ...t,
@@ -1488,7 +1494,7 @@ export function useTransactions(
                             outstanding,
                             linkedFromVoucherNos: fromDeduped,
                             linkedToVoucherNos: toDeduped,
-                            linkedFromVoucherNosBillWise: fromDeduped,
+                            linkedFromVoucherNosBillWise: fromBillWiseDeduped,
                             linkedToVoucherNosBillWise: toBillWiseDeduped,
                         };
                     }

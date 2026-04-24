@@ -14,6 +14,8 @@ export type BackupSaveLocationPrefs = {
   webFolderLabel: string | null;
   nativeDirectory: BackupNativeDirectory;
   nativeSubfolder: string;
+  /** Native APK: user-picked absolute folder path from Device location dialog (if available). */
+  nativeFolderPath: string | null;
 };
 
 const DEFAULT_PREFS: BackupSaveLocationPrefs = {
@@ -21,6 +23,7 @@ const DEFAULT_PREFS: BackupSaveLocationPrefs = {
   webFolderLabel: null,
   nativeDirectory: "DOCUMENTS",
   nativeSubfolder: "PocketLedgerBackups",
+  nativeFolderPath: null,
 };
 
 /** Device settings: load persisted backup location preferences with safe defaults. */
@@ -38,6 +41,10 @@ export function readBackupSaveLocationPrefs(): BackupSaveLocationPrefs {
         typeof parsed.nativeSubfolder === "string" && parsed.nativeSubfolder.trim()
           ? parsed.nativeSubfolder.trim()
           : DEFAULT_PREFS.nativeSubfolder,
+      nativeFolderPath:
+        typeof parsed.nativeFolderPath === "string" && parsed.nativeFolderPath.trim()
+          ? parsed.nativeFolderPath.trim()
+          : null,
     };
   } catch {
     return DEFAULT_PREFS;
@@ -63,6 +70,28 @@ export function isNativeRuntime(): boolean {
 /** Device settings: open folder picker support check for web/desktop static builds. */
 export function canPickWebBackupFolder(): boolean {
   return !isNativeRuntime() && isWebDirectoryPickerSupported();
+}
+
+/**
+ * Static/native backup writes: ask storage permission up-front when platform requires it.
+ * Returns true if permission is already granted or successfully granted.
+ */
+export async function ensureNativeBackupStoragePermission(): Promise<boolean> {
+  if (!isNativeRuntime()) return true;
+  try {
+    const { Filesystem } = await import("@capacitor/filesystem");
+    const checker = (Filesystem as unknown as { checkPermissions?: () => Promise<any> }).checkPermissions;
+    const requester = (Filesystem as unknown as { requestPermissions?: () => Promise<any> }).requestPermissions;
+    const checked = typeof checker === "function" ? await checker.call(Filesystem) : null;
+    const publicStorage = String(checked?.publicStorage || "").toLowerCase();
+    if (publicStorage === "granted") return true;
+    const requested = typeof requester === "function" ? await requester.call(Filesystem) : null;
+    const requestedState = String(requested?.publicStorage || "").toLowerCase();
+    return requestedState === "granted" || requestedState === "";
+  } catch {
+    // If plugin doesn't expose explicit permission APIs, allow flow to continue (write call will decide).
+    return true;
+  }
 }
 
 async function openBackupLocationDb(): Promise<IDBDatabase | null> {

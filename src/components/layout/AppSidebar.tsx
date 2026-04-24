@@ -29,9 +29,11 @@ import {
   Mail, // Added Mail icon
   Users,
   Table,
+  FolderOpen,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { doc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
@@ -87,6 +89,8 @@ const allMenuItems: MenuItem[] = [
   { id: 'items', href: "/items", label: "Items & Service", icon: BookText },
   { id: 'reports', href: "/reports", label: "Reports", icon: FilePieChart, permission: "export_data" },
   { id: 'gallery', href: "/gallery", label: "Gallery", icon: ImageIcon },
+  // Quick access: backup save folder settings near gallery.
+  { id: 'device-location', href: "/settings?view=devices&dialog=backup-location", label: "Device location", icon: FolderOpen },
   { id: 'production', href: "/production", label: "Production", icon: Factory },
   { id: 'sale-note', href: "/sale-note", label: "Sale Note", icon: FileText },
   { id: 'purchase-note', href: "/purchase-note", label: "Purchase Note", icon: FileText },
@@ -130,6 +134,7 @@ const ENTITY_IDS = ['party', 'bank-cash', 'staff', 'tax', 'items', 'incomes'] as
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const searchParams = useLocationSearchParams();
   const router = useRouter();
   const { user, customUser } = useAuth();
   const { can } = usePermissions();
@@ -169,6 +174,7 @@ export function AppSidebar() {
       items: true,
       reports: true,
       gallery: true,
+      "device-location": true,
       production: false,
       "sale-note": false,
       "purchase-note": false,
@@ -401,6 +407,16 @@ export function AppSidebar() {
   const showMessageBadgeInSidebar =
     (messageSettings?.on !== false && messageSettings?.onEntity !== false) || includeAlertsInSidebar;
   const messagesBadgeCount = showMessageBadgeInSidebar ? totalNotifications : 0;
+  const isMenuItemActive = useCallback(
+    (item: MenuItem) => {
+      // Query-based nav: keep Device location active only on Settings > devices view.
+      if (item.id === "device-location") {
+        return pathname.startsWith("/settings") && searchParams.get("view") === "devices";
+      }
+      return pathname.startsWith(item.href.replace(/\/$/, ""));
+    },
+    [pathname, searchParams]
+  );
 
   const visibleMenuItems = React.useMemo(() => {
     if (!featureConfig) return allMenuItems;
@@ -502,7 +518,7 @@ export function AppSidebar() {
             <SidebarMenuItem key={item.href}>
               <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
                   <SidebarMenuButton
-                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
+                    isActive={isMenuItemActive(item)}
                     tooltip={tooltipText}
                     data-theme-nav={item.id}
                   >
@@ -546,7 +562,7 @@ export function AppSidebar() {
                         <SidebarMenuItem key={item.href}>
                             <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
                                 <SidebarMenuButton
-                                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
+                                    isActive={isMenuItemActive(item)}
                                     tooltip={item.label}
                                     data-theme-nav={item.id}
                                 >
@@ -581,7 +597,7 @@ export function AppSidebar() {
                         <SidebarMenuItem key={item.href}>
                             <Link href={appNavHref(item.href)} onClick={(e) => onNavLinkClick(e, item.href)}>
                                 <SidebarMenuButton
-                                    isActive={pathname.startsWith(item.href.replace(/\/$/, ""))}
+                                    isActive={isMenuItemActive(item)}
                                     tooltip={item.label}
                                     data-theme-nav={item.id}
                                 >

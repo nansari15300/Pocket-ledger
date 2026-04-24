@@ -7,5 +7,13 @@
 export function appNavHref(path: string): string {
   if (process.env.NEXT_PUBLIC_STATIC_BUILD !== "1") return path;
   if (!path || path === "/") return "/";
-  return path.endsWith("/") ? path : `${path}/`;
+  // Static build: preserve query/hash while applying trailing slash only to pathname.
+  const hashIndex = path.indexOf("#");
+  const hashPart = hashIndex >= 0 ? path.slice(hashIndex) : "";
+  const withoutHash = hashIndex >= 0 ? path.slice(0, hashIndex) : path;
+  const queryIndex = withoutHash.indexOf("?");
+  const queryPart = queryIndex >= 0 ? withoutHash.slice(queryIndex) : "";
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const normalizedPath = pathname.endsWith("/") ? pathname : `${pathname}/`;
+  return `${normalizedPath}${queryPart}${hashPart}`;
 }

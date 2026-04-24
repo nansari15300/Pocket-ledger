@@ -241,9 +241,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     const docSlotsSnap = docSlots;
     const partyRefSnap = party;
 
-    setIsOpen(false);
-
     void (async () => {
+      setIsLoading(true);
       try {
         let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
         const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
@@ -343,6 +342,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
+          // Mobile master-detail: close dialog only after successful save to avoid accidental back/list jump.
+          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Saved — will sync" : "Updated", {
             duration: PARTY_TOAST_OK_MS,
             description: showSyncHint ? "Background sync" : values.name,
@@ -383,6 +384,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
+        // Keep dialog close tied to success so failed save doesn't pop user out of current detail view.
+        setIsOpen(false);
         sonnerToast.success("Updated", { duration: PARTY_TOAST_OK_MS, description: values.name });
       } catch (error) {
         console.error("Error updating party:", error);
@@ -390,6 +393,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           duration: 5000,
           description: error instanceof Error ? error.message : "Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -772,7 +777,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             </div>
               <DialogFooter className="mt-0 shrink-0 gap-2 border-t bg-background/95 py-3 grid grid-cols-2 sm:flex sm:justify-end">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <TooltipProvider>
                   <Tooltip>
@@ -795,7 +800,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1">
+                <Button type="submit" className="col-span-2 sm:col-span-1" disabled={isLoading}>
+                  {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Save Changes
                 </Button>
               </DialogFooter>

@@ -1489,15 +1489,15 @@ const getStatusDetailForPrint = (
   t: any,
   opts?: { billWiseOnly?: boolean; vouchers?: any[]; formatCurrency?: (n: number, o?: any) => string; decimalPlaces?: number }
 ): string | Array<{ text: string; color?: string; fontSize?: number }> => {
-  const useBillWise =
-    opts?.billWiseOnly &&
-    (t.linkedFromVoucherNosBillWise != null || t.linkedToVoucherNosBillWise != null);
-  const from = (useBillWise
-    ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
-    : (t.linkedFromVoucherNos as string[] | undefined)) || [];
-  const to = (useBillWise
-    ? (t.linkedToVoucherNosBillWise as string[] | undefined)
-    : (t.linkedToVoucherNos as string[] | undefined)) || [];
+  const billWiseOnly = opts?.billWiseOnly === true;
+  const from = (
+    billWiseOnly
+      ? (t.linkedFromVoucherNosBillWise as string[] | undefined)
+      : (t.linkedFromVoucherNos as string[] | undefined)
+  ) || [];
+  const to = (
+    billWiseOnly ? (t.linkedToVoucherNosBillWise as string[] | undefined) : (t.linkedToVoucherNos as string[] | undefined)
+  ) || [];
   if (from.length === 0 && to.length === 0) return "";
   const vouchers = opts?.vouchers ?? [];
   const decimalPlaces = opts?.decimalPlaces ?? 2;

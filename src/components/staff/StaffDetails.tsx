@@ -236,6 +236,10 @@ export function StaffDetails({
   // Books opening + (date par filter) view-start: table first opening row se align
   const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
   const masterStaffOpening = Number(staff.openingBalance) || 0;
+  const ledgerOpeningForRunning = useMemo(() => {
+    if (Math.abs(openingBalanceForPeriod) < 1e-6 && Math.abs(masterStaffOpening) > 1e-6) return masterStaffOpening;
+    return openingBalanceForPeriod;
+  }, [openingBalanceForPeriod, masterStaffOpening]);
 
   const clearFilters = () => {
     handleDateRangeChange(undefined);
@@ -387,9 +391,9 @@ export function StaffDetails({
     () =>
       recomputeRunningBalanceTopToBottom(
         sortTransactionsWithFiscalMergeForCompany(displayTransactions, sortBy, sortOrder, undefined, company),
-        openingBalanceForPeriod
+        ledgerOpeningForRunning
       ),
-    [displayTransactions, sortBy, sortOrder, openingBalanceForPeriod, company]
+    [displayTransactions, sortBy, sortOrder, ledgerOpeningForRunning, company]
   );
   
   // Desktop pagination: page 1 latest-side; opening row values should follow visible page.
@@ -404,10 +408,10 @@ export function StaffDetails({
         pageTransactions: list,
         beforeCount: 0,
         afterCount: 0,
-        openingForPage: openingBalanceForPeriod,
+        openingForPage: ledgerOpeningForRunning,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
-        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+        closingForPage: ledgerOpeningForRunning + pageDr - pageCr,
       };
     }
     const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
@@ -427,7 +431,7 @@ export function StaffDetails({
     const openingForPage =
       typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
         ? previousRunningBalance
-        : openingBalanceForPeriod;
+        : ledgerOpeningForRunning;
     const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
     return {
@@ -440,7 +444,7 @@ export function StaffDetails({
       periodCrForPage,
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,
     };
-  }, [sortedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  }, [sortedTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
   const totalPages = desktopPaginationMeta.totalPages;
   const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
@@ -607,10 +611,10 @@ export function StaffDetails({
       const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
       const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
       return {
-        openingForPage: openingBalanceForPeriod,
+        openingForPage: ledgerOpeningForRunning,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
-        closingForPage: openingBalanceForPeriod + pageDr - pageCr,
+        closingForPage: ledgerOpeningForRunning + pageDr - pageCr,
       };
     }
     const total = list.length;
@@ -631,7 +635,7 @@ export function StaffDetails({
     const openingForPage =
       typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
         ? previousRunningBalance
-        : openingBalanceForPeriod;
+        : ledgerOpeningForRunning;
     const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
     return {
@@ -640,7 +644,7 @@ export function StaffDetails({
       periodCrForPage,
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,
     };
-  }, [filteredMobileTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+  }, [filteredMobileTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
 
   useEffect(() => {
     const total = rowsPerPage > 0 ? Math.ceil(filteredMobileTransactions.length / rowsPerPage) : 1;
@@ -784,6 +788,7 @@ export function StaffDetails({
           context="staff"
           contextId={staff.id}
           openingBalance={mobilePaginationMeta.openingForPage}
+          booksOpeningBalance={masterStaffOpening}
           openingBalanceOutstanding={openingBalanceOutstanding}
           openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
           openingBalanceNarration={staff.openingBalanceNarration}
@@ -1120,6 +1125,7 @@ export function StaffDetails({
                   context="staff"
                   contextId={staff.id}
                   openingBalance={desktopPaginationMeta.openingForPage}
+                  booksOpeningBalance={masterStaffOpening}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={staff.openingBalanceNarration}

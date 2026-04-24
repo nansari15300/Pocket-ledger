@@ -80,6 +80,8 @@ interface TransactionsTableProps {
   context: Context;
   contextId?: string;
   openingBalance?: number;
+  /** Party/staff: master books opening (signed). Opening row Dr/Cr when period-brought balance is 0 but bill-wise row still shows OB links. */
+  booksOpeningBalance?: number;
   openingBalanceOutstanding?: number;
   openingBalanceLinkedVoucherNos?: string[];
   /** Party (etc.): opening row ke turant baad voucher-style narration line */
@@ -158,6 +160,7 @@ export function TransactionsTable({
   context,
   contextId,
   openingBalance = 0,
+  booksOpeningBalance,
   openingBalanceOutstanding,
   openingBalanceLinkedVoucherNos,
   openingBalanceNarration,
@@ -487,20 +490,55 @@ export function TransactionsTable({
   // Ensure openingBalance is a valid number (handle undefined, null, NaN)
   const safeOpeningBalance = (typeof openingBalance === 'number' && !isNaN(openingBalance)) ? openingBalance : 0;
   const displayOpeningBalance = safeOpeningBalance / conversionFactor;
+  const booksObScaled =
+    typeof booksOpeningBalance === "number" && !isNaN(booksOpeningBalance)
+      ? booksOpeningBalance / conversionFactor
+      : null;
+  const obOutstandingDisplay = openingBalanceOutstanding != null ? openingBalanceOutstanding / conversionFactor : null;
+  // View/period opening can be 0 (e.g. date filter) while books still have a master OB — use master for Dr/Cr.
+  // Statement + bill-wise: same fallback so first row is not empty when "View start" is 0 but books opening exists.
+  const useBooksObForRowDrCr =
+    (context === "party" || context === "staff") &&
+    booksObScaled != null &&
+    Math.abs(safeOpeningBalance) < 1e-7 &&
+    Math.abs(booksObScaled) > 1e-7;
+  // Bill-wise: Dr/Cr = full books opening; Balance = remaining on OB. Same linked PYMTs as print — avoids net period
+  // credit in the row + full gross links, which read as "double" or contradict the Balance column.
+  const useGrossBooksForBillWiseObRow =
+    isBillWiseMode &&
+    (context === "party" || context === "staff") &&
+    openingBalanceOutstanding != null &&
+    booksObScaled != null &&
+    Math.abs(booksObScaled) > 1e-7;
+  const displayOpeningForDrCr = useGrossBooksForBillWiseObRow
+    ? booksObScaled!
+    : useBooksObForRowDrCr
+      ? booksObScaled!
+      : displayOpeningBalance;
+  const obSignIsNonNegative =
+    isBillWiseMode && (context === "party" || context === "staff") && obOutstandingDisplay != null && booksObScaled != null
+      ? booksObScaled >= 0
+      : Math.abs(safeOpeningBalance) > 1e-7
+        ? safeOpeningBalance >= 0
+        : booksObScaled != null && Math.abs(booksObScaled) > 1e-7
+          ? booksObScaled >= 0
+          : safeOpeningBalance >= 0;
   // Bill-wise party/staff: opening row Balance = remaining on opening (unpaid on OB). Other ledgers
   // (tax, bank, expense, item, …) always use period ledger opening — never the bill-wise outstanding field.
-  const obOutstandingDisplay = openingBalanceOutstanding != null ? openingBalanceOutstanding / conversionFactor : null;
   const useOutstandingForOpeningRowBalance =
     isBillWiseMode && (context === "party" || context === "staff") && obOutstandingDisplay != null;
+  // Statement: when period opening is 0, Balance column = books opening (brought in via displayOpeningForDrCr).
   const displayOpeningBalanceForRow = useOutstandingForOpeningRowBalance
-    ? (safeOpeningBalance >= 0 ? obOutstandingDisplay! : -obOutstandingDisplay!)
-    : displayOpeningBalance;
-  const obAmount = Math.abs(displayOpeningBalance);
+    ? (obSignIsNonNegative ? obOutstandingDisplay! : -obOutstandingDisplay!)
+    : useBooksObForRowDrCr && !isBillWiseMode
+      ? displayOpeningForDrCr
+      : displayOpeningBalance;
+  const obAmount = Math.abs(displayOpeningForDrCr);
   const obStatusLabel = obOutstandingDisplay != null
     ? (obOutstandingDisplay <= 0 ? "Paid" : obOutstandingDisplay >= obAmount ? "Unpaid" : "Partial")
     : null;
-  const displayOpeningBalanceDr = displayOpeningBalance > 0 ? displayOpeningBalance : 0;
-  const displayOpeningBalanceCr = displayOpeningBalance < 0 ? Math.abs(displayOpeningBalance) : 0;
+  const displayOpeningBalanceDr = displayOpeningForDrCr > 0 ? displayOpeningForDrCr : 0;
+  const displayOpeningBalanceCr = displayOpeningForDrCr < 0 ? Math.abs(displayOpeningForDrCr) : 0;
   const displayPeriodDr = periodDr / conversionFactor;
   const displayPeriodCr = periodCr / conversionFactor;
   const displayClosingBalance = closingBalance / conversionFactor;
@@ -1074,12 +1112,12 @@ export function TransactionsTable({
                   <>
                     <span className={cn(
                       "text-sm font-bold px-2 py-0.5 rounded-md",
-                      displayOpeningBalance >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
+                      displayOpeningForDrCr >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
                     )}>
                       {/* In this bill-wise mobile branch, context can be narrowed; rely on qty+item check only. */}
                       {stockView === "qty" && item
-                        ? `${formatQuantity(Math.abs(displayOpeningBalance))} ${displayUnit || ""}`
-                        : `${formatCurrency(Math.abs(displayOpeningBalance), { noSuffix: true, context: "transaction", noAnimation: true })} ${displayOpeningBalance >= 0 ? "Dr" : "Cr"}`}
+                        ? `${formatQuantity(Math.abs(displayOpeningForDrCr))} ${displayUnit || ""}`
+                        : `${formatCurrency(Math.abs(displayOpeningForDrCr), { noSuffix: true, context: "transaction", noAnimation: true })} ${displayOpeningForDrCr >= 0 ? "Dr" : "Cr"}`}
                     </span>
                     {/* Same order as normal transaction: status and link above, running balance (Bal) below */}
                     <div className="flex flex-col items-end gap-0.5 mt-0.5">
@@ -1111,12 +1149,12 @@ export function TransactionsTable({
                   <>
                     <span className={cn(
                       "text-sm font-bold px-2 py-0.5 rounded-md",
-                      (isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningBalance) >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
+                      (isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningForDrCr) >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
                     )}>
                       {context === "item" && stockView === "qty" && item
-                        ? `${formatQuantity(Math.abs(displayOpeningBalance))} ${displayUnit || ""}`
+                        ? `${formatQuantity(Math.abs(displayOpeningForDrCr))} ${displayUnit || ""}`
                         : (() => {
-                            const ob = isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningBalance;
+                            const ob = isBillWiseCardContext ? displayOpeningBalanceForRow : displayOpeningForDrCr;
                             return `${formatCurrency(Math.abs(ob), { noSuffix: true, context: "transaction", noAnimation: true })} ${ob >= 0 ? "Dr" : "Cr"}`;
                           })()}
                     </span>
@@ -1182,8 +1220,9 @@ export function TransactionsTable({
       <Table
         className={cn(
           ensureMinGaps ? "table-auto w-full min-w-full" : "table-fixed w-full",
-          // Spend-wise on small screens: keep natural column widths and allow horizontal scroll instead of header overlap.
-          hasSpendWiseGroups && "border-separate border-spacing-0 w-max min-w-full",
+          // Spend-wise: fill viewport like statement view — w-max (max-content) was stretching rows/headers
+          // when linked groups + narration had wide intrinsic width. Colgroup + table-fixed keep columns aligned.
+          hasSpendWiseGroups && "border-separate border-spacing-0 w-full min-w-0 table-fixed",
           "border-b-2 border-border"
         )}
         scrollContainer={false}
@@ -1270,7 +1309,7 @@ export function TransactionsTable({
                                 openingBalanceOutstanding <= 0 ? "text-green-600 border-green-600/50" : "text-red-600 border-red-600/50"
                               )}
                             >
-                              {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
+                              {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= obAmount ? "Unpaid" : "Partial"}
                             </Badge>
                             {/* Opening balance: list all linked voucher nos in 2–3 lines (from voucher data). */}
                                     {showNarration && openingBalanceLinkedVoucherNos?.length ? (
@@ -1352,7 +1391,7 @@ export function TransactionsTable({
                                 openingBalanceOutstanding <= 0 ? "text-green-600 border-green-600/50" : "text-red-600 border-red-600/50"
                               )}
                             >
-                              {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= Math.abs(openingBalance ?? 0) ? "Unpaid" : "Partial"}
+                              {openingBalanceOutstanding <= 0 ? "Paid" : openingBalanceOutstanding >= obAmount ? "Unpaid" : "Partial"}
                             </Badge>
                             {showNarration && openingBalanceLinkedVoucherNos?.length ? (
                               <LinkedVouchersColored vouchers={openingBalanceLinkedVoucherNos} align="center" />
