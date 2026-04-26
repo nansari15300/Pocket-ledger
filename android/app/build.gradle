@@ -33,7 +33,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            // Unsigned / wrongly signed release APKs often fail on device: "App not installed" / invalid package.
+            // Unsigned release sideload fail: keystore.properties ho to release sign, warna debug (local install).
             def propsFile = rootProject.file("keystore.properties")
             if (propsFile.exists()) {
                 signingConfig signingConfigs.release
