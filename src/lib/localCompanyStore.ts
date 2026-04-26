@@ -37,6 +37,17 @@ function safeParseCompany(json: string): LocalCompanyDoc | null {
   }
 }
 
+/** SQLite/JSON mirror kabhi `1` / `"true"` bhej sakta hai — strict `=== true` filters / purge logic is se safe rahein. */
+export function localCompanyRowIsDeleted(row: { isDeleted?: unknown }): boolean {
+  const v = row.isDeleted;
+  if (v === true || v === 1) return true;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return s === "true" || s === "1";
+  }
+  return false;
+}
+
 export async function upsertLocalCompany(company: LocalCompanyDoc): Promise<void> {
   const db = await getBrowserDb();
   if (!db || !company?.id) return;

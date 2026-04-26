@@ -18,6 +18,7 @@ import { startOfDay, endOfDay, isSameDay } from "date-fns";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
+import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
 import { ShoppingBag, ShoppingCart, BookText, FileDigit, Landmark, TrendingUp, TrendingDown } from "lucide-react";
 
 // Helper function to safely convert date
@@ -348,6 +349,34 @@ export function FinancialSummaryCards({
         return { receivableSum, payableSum, net: receivableSum - payableSum };
     }, [financialSummary]);
 
+    /** "All" filter: parties + staff + tax ek hi list mein amount descending (har group alag sorted tha). */
+    type RpDlgRow = { party: string; balance: number; fileUrl?: string; kind: "party" | "staff" | "tax" };
+    const receivablesDialogRows = useMemo(() => {
+        const include = (t: "party" | "staff" | "tax") =>
+            receivablePayableFilter === "all" || receivablePayableFilter === t;
+        const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+        const { receivables } = financialSummary;
+        const rows: RpDlgRow[] = [];
+        if (include("party")) receivables.parties.filter(notOB).forEach((p) => rows.push({ ...p, kind: "party" }));
+        if (include("staff")) receivables.staff.filter(notOB).forEach((p) => rows.push({ ...p, kind: "staff" }));
+        if (include("tax")) receivables.taxes.filter(notOB).forEach((p) => rows.push({ ...p, kind: "tax" }));
+        rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+        return rows;
+    }, [financialSummary, receivablePayableFilter]);
+
+    const payablesDialogRows = useMemo(() => {
+        const include = (t: "party" | "staff" | "tax") =>
+            receivablePayableFilter === "all" || receivablePayableFilter === t;
+        const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+        const { payables } = financialSummary;
+        const rows: RpDlgRow[] = [];
+        if (include("party")) payables.parties.filter(notOB).forEach((p) => rows.push({ ...p, kind: "party" }));
+        if (include("staff")) payables.staff.filter(notOB).forEach((p) => rows.push({ ...p, kind: "staff" }));
+        if (include("tax")) payables.taxes.filter(notOB).forEach((p) => rows.push({ ...p, kind: "tax" }));
+        rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+        return rows;
+    }, [financialSummary, receivablePayableFilter]);
+
     // --- CASH FLOW CALCULATION ---
     const cashFlowDetails = useMemo(() => {
         let filteredVouchers = vouchers;
@@ -419,6 +448,13 @@ export function FinancialSummaryCards({
             return acc;
         }, {} as Record<string, FlowItem[]>);
 
+        Object.values(categorizedInflow).forEach((arr) =>
+            arr.sort((a, b) => Number(b.amount) - Number(a.amount))
+        );
+        Object.values(categorizedOutflow).forEach((arr) =>
+            arr.sort((a, b) => Number(b.amount) - Number(a.amount))
+        );
+
         return { categorizedInflow, categorizedOutflow, totalInflow, totalOutflow };
     }, [vouchers, cashFlowDateRange, processedParties, processedStaff, processedTaxes, expenseAccounts]);
 
@@ -427,17 +463,19 @@ export function FinancialSummaryCards({
         const totalInput = processedTaxes.reduce((sum, tax) => sum + tax.debit, 0);
         const totalOutput = processedTaxes.reduce((sum, tax) => sum + tax.credit, 0);
         const netBalance = totalInput - totalOutput;
+        const details = processedTaxes.map(tax => ({
+            id: tax.id,
+            name: tax.name,
+            input: tax.debit,
+            output: tax.credit,
+            balance: tax.debit - tax.credit,
+        }));
+        details.sort((a, b) => Number(b.input) + Number(b.output) - (Number(a.input) + Number(a.output)));
         return {
             totalInput,
             totalOutput,
             netBalance,
-            details: processedTaxes.map(tax => ({
-                id: tax.id,
-                name: tax.name,
-                input: tax.debit,
-                output: tax.credit,
-                balance: tax.debit - tax.credit,
-            }))
+            details,
         };
     }, [processedTaxes]);
 
@@ -796,6 +834,8 @@ export function FinancialSummaryCards({
             totalValue = filteredItems.reduce((sum, item) => sum + item.value, 0);
         }
 
+        filteredItems = [...filteredItems].sort((a, b) => Number(b.value) - Number(a.value));
+
         const topSaleItems = [...filteredItems].filter(i => i.salesQty > 0 || i.salesValue > 0).sort((a,b) => b.salesValue - a.salesValue).slice(0, 5);
         const topPurchaseItems = [...filteredItems].filter(i => i.purchaseQty > 0 || i.purchaseValue > 0).sort((a,b) => b.purchaseValue - a.purchaseValue).slice(0, 5);
 
@@ -869,10 +909,14 @@ export function FinancialSummaryCards({
             
             newAcc.balance += newAcc.inflow - newAcc.outflow;
             return newAcc;
-        }).sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-        
-        const cashAccounts = summaryAccounts.filter((acc) => acc.accountType === 'Cash');
-        const bankAccounts = summaryAccounts.filter((acc) => acc.accountType === 'Bank');
+        });
+
+        const cashAccounts = summaryAccounts
+            .filter((acc) => acc.accountType === 'Cash')
+            .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+        const bankAccounts = summaryAccounts
+            .filter((acc) => acc.accountType === 'Bank')
+            .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
         
         const totalBankBalance = bankAccounts.reduce((sum, acc) => sum + acc.balance, 0);
         const totalCashBalance = cashAccounts.reduce((sum, acc) => sum + acc.balance, 0);
@@ -912,27 +956,20 @@ export function FinancialSummaryCards({
         const printTotalReceivable = calculateFilteredTotal(financialSummary.receivables);
         const printTotalPayable = calculateFilteredTotal(financialSummary.payables);
         const excludeOpeningBalance = (arr: { party: string; balance: number }[]) => arr.filter(p => p.party !== "Opening Balance");
-        const buildTableBody = (list: typeof financialSummary.receivables, typeColor: string) => {
+        const buildTableBody = (list: typeof financialSummary.receivables) => {
             const body: any[] = [['Party/Staff/Tax', { text: 'Amount', alignment: 'right' }]];
-            const parties = excludeOpeningBalance(list.parties);
-            const staff = excludeOpeningBalance(list.staff);
-            const taxes = excludeOpeningBalance(list.taxes);
-            if (shouldInclude('party') && parties.length > 0) {
-                body.push([{ text: 'Parties', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-                parties.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-            }
-            if (shouldInclude('staff') && staff.length > 0) {
-                body.push([{ text: 'Staff', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-                staff.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-            }
-            if (shouldInclude('tax') && taxes.length > 0) {
-                body.push([{ text: 'Taxes', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-                taxes.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-            }
+            const rows: { party: string; balance: number }[] = [];
+            if (shouldInclude('party')) rows.push(...excludeOpeningBalance(list.parties));
+            if (shouldInclude('staff')) rows.push(...excludeOpeningBalance(list.staff));
+            if (shouldInclude('tax')) rows.push(...excludeOpeningBalance(list.taxes));
+            rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+            rows.forEach(item =>
+                body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }), alignment: 'right' }])
+            );
             return body;
         };
-        const receivablesBody = buildTableBody(financialSummary.receivables, '#059669');
-        const payablesBody = buildTableBody(financialSummary.payables, '#DC2626');
+        const receivablesBody = buildTableBody(financialSummary.receivables);
+        const payablesBody = buildTableBody(financialSummary.payables);
         receivablesBody.push([{ text: 'Total Receivable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(printTotalReceivable, {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#059669' }]);
         payablesBody.push([{ text: 'Total Payable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(Math.abs(printTotalPayable), {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#DC2626' }]);
         const printRecCount = (shouldInclude('party') ? financialSummary.receivables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.receivables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.receivables.taxes.length : 0);
@@ -1008,7 +1045,7 @@ export function FinancialSummaryCards({
         
         const inBody: any[] = [['Source', { text: 'Amount', alignment: 'right' }]];
         if(showIn) {
-            Object.entries(cashFlowDetails.categorizedInflow).forEach(([category, items]) => {
+            orderedCashFlowCategories(cashFlowDetails.categorizedInflow).forEach(([category, items]) => {
                 const catNormal = category.toLowerCase().replace(/\s+/g, '');
                 const filterNormal = cashFlowCategoryFilter.toLowerCase().replace(/\s+/g, '');
                 
@@ -1022,7 +1059,7 @@ export function FinancialSummaryCards({
         
         const outBody: any[] = [['Destination', { text: 'Amount', alignment: 'right' }]];
         if(showOut) {
-            Object.entries(cashFlowDetails.categorizedOutflow).forEach(([category, items]) => {
+            orderedCashFlowCategories(cashFlowDetails.categorizedOutflow).forEach(([category, items]) => {
                 const catNormal = category.toLowerCase().replace(/\s+/g, '');
                 const filterNormal = cashFlowCategoryFilter.toLowerCase().replace(/\s+/g, '');
                 
@@ -1607,11 +1644,10 @@ export function FinancialSummaryCards({
                                             </Button>
                                         </div>
                                     </DialogHeader>
-                                    <div className="flex-1 px-4 py-4 flex flex-col min-h-0">
-                                        <div className="border rounded-lg flex-1 flex flex-col min-h-0 overflow-hidden">
-                                            <div className="flex-1 flex flex-col min-h-0">
-                                                <ScrollArea className="flex-1">
-                                                    <table className="w-full border-collapse">
+                                    <div className="flex-1 px-4 py-4 flex flex-col min-h-0 min-w-0">
+                                        <div className="border rounded-lg flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+                                            <div className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-x-contain">
+                                                <table className="w-full min-w-max border-collapse">
                                                         <thead className="sticky top-0 bg-background z-10">
                                                             <tr>
                                                                 <th className="h-9 px-4 text-left align-middle font-bold text-black whitespace-nowrap border-b-2 border-r">Item Name</th>
@@ -1637,7 +1673,6 @@ export function FinancialSummaryCards({
                                                             </tr>
                                                         </tfoot>
                                                     </table>
-                                                </ScrollArea>
                                             </div>
                                         </div>
                                     </div>
@@ -1747,9 +1782,12 @@ export function FinancialSummaryCards({
                                                                         </TableRow>
                                                                     </TableHeader>
                                                                     <TableBody>
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {receivablesDialogRows.map((p, i) => (
+                                                                            <TableRow key={`${p.kind}-${p.party}-${i}`}>
+                                                                                <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
+                                                                                <TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, { noSuffix: true })}</TableCell>
+                                                                            </TableRow>
+                                                                        ))}
                                                                     </TableBody>
                                                                 </Table>
                                                             </ScrollArea>
@@ -1768,9 +1806,12 @@ export function FinancialSummaryCards({
                                                                         </TableRow>
                                                                     </TableHeader>
                                                                     <TableBody>
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                        {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                        {payablesDialogRows.map((p, i) => (
+                                                                            <TableRow key={`${p.kind}-${p.party}-${i}`}>
+                                                                                <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
+                                                                                <TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), { noSuffix: true })}</TableCell>
+                                                                            </TableRow>
+                                                                        ))}
                                                                     </TableBody>
                                                                 </Table>
                                                             </ScrollArea>
@@ -1812,9 +1853,12 @@ export function FinancialSummaryCards({
                                                                             </TableRow>
                                                                         </TableHeader>
                                                                         <TableBody>
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.receivables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.receivables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.receivables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {receivablesDialogRows.map((p, i) => (
+                                                                                <TableRow key={`${p.kind}-${p.party}-${i}`}>
+                                                                                    <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
+                                                                                    <TableCell className={rpDlgAmountTdRecClass}>{formatCurrency(p.balance, { noSuffix: true })}</TableCell>
+                                                                                </TableRow>
+                                                                            ))}
                                                                         </TableBody>
                                                                     </Table>
                                                                 </ScrollArea>
@@ -1835,9 +1879,12 @@ export function FinancialSummaryCards({
                                                                             </TableRow>
                                                                         </TableHeader>
                                                                         <TableBody>
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'party') && financialSummary.payables.parties.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'staff') && financialSummary.payables.staff.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
-                                                                            {(receivablePayableFilter === 'all' || receivablePayableFilter === 'tax') && financialSummary.payables.taxes.filter(p => p.party !== "Opening Balance").map(p => <TableRow key={p.party}><TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell><TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), {noSuffix: true})}</TableCell></TableRow>)}
+                                                                            {payablesDialogRows.map((p, i) => (
+                                                                                <TableRow key={`${p.kind}-${p.party}-${i}`}>
+                                                                                    <TableCell className={rpDlgAccountTdClass} title={isMobile ? p.party : undefined}>{p.party}</TableCell>
+                                                                                    <TableCell className={rpDlgAmountTdPayClass}>{formatCurrency(Math.abs(p.balance), { noSuffix: true })}</TableCell>
+                                                                                </TableRow>
+                                                                            ))}
                                                                         </TableBody>
                                                                     </Table>
                                                                 </ScrollArea>
@@ -2011,7 +2058,7 @@ export function FinancialSummaryCards({
                                                                 <div className="min-w-0 pr-2">
                                                                     <Table className="w-full table-fixed">
                                                                         <TableBody>
-                                                                            {Object.entries(cashFlowDetails.categorizedInflow).map(([category, items]) => {
+                                                                            {orderedCashFlowCategories(cashFlowDetails.categorizedInflow).map(([category, items]) => {
                                                                                 if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
                                                                                 return ( <React.Fragment key={`in-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i, rowIdx) => {
                                                                                     /* rowIdx: same i.id do lines me ho to bhi expand sahi row par */
@@ -2050,7 +2097,7 @@ export function FinancialSummaryCards({
                                                                 <div className="min-w-0 pr-2">
                                                                     <Table className="w-full table-fixed">
                                                                         <TableBody>
-                                                                            {Object.entries(cashFlowDetails.categorizedOutflow).map(([category, items]) => {
+                                                                            {orderedCashFlowCategories(cashFlowDetails.categorizedOutflow).map(([category, items]) => {
                                                                                 if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
                                                                                 return ( <React.Fragment key={`out-${category}`}><TableRow className="bg-muted/50"><TableCell colSpan={2} className="font-bold text-xs uppercase">{category.replace('_', ' / ')}</TableCell></TableRow>{items.map((i, rowIdx) => {
                                                                                     const cashFlowRowKey = `outflow:${category}:${i.id}:${rowIdx}`;

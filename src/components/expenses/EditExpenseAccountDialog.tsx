@@ -166,12 +166,12 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
-    setIsOpen(false);
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating expense account...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      setIsLoading(true);
       try {
         let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
         const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
@@ -256,11 +256,12 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           await upsertCompanyDocInBrowserDb(companyId, "expense_accounts", accountRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", accountRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          onAccountUpdated();
+          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
           });
-          onAccountUpdated();
           return;
         }
 
@@ -279,14 +280,17 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           await balanceOpeningBalanceWithCapital(companyId, "expense_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
-        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         onAccountUpdated();
+        setIsOpen(false);
+        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
         sonnerToast.error("Error Updating Account", {
           id: toastId,
           description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -542,7 +546,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
             </div>
               <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <TooltipProvider>
                   <Tooltip>

@@ -64,6 +64,7 @@ import {
   readCloudCompanyPasswordUnlockSession,
   saveCloudCompanyPasswordUnlockSession,
 } from "@/lib/cloudCompanyPasswordUnlockRemember";
+import { hasAnySelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -709,8 +710,8 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
   const activeCompany = companies.find(c => c.id === companyId) || companies[0];
 
   useEffect(() => {
-    // Keep persisted selection stable; only auto-pick first when nothing is saved at all.
-    if (!companyId && companies.length > 0 && !localStorage.getItem("companyId")) {
+    // Multi-tab: keep tab-specific selection stable; auto-pick first only when no saved company exists anywhere.
+    if (!companyId && companies.length > 0 && !hasAnySelectedCompanyId()) {
       setCompanyId(companies[0].id);
     }
   }, [companyId, companies, setCompanyId]);

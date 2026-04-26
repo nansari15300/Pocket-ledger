@@ -168,12 +168,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const taxRefSnap = tax;
-    setIsOpen(false);
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating tax...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      setIsLoading(true);
       try {
         let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
         const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
@@ -259,11 +259,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           await upsertCompanyDocInBrowserDb(companyId, "taxes", taxRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
+          onTaxUpdated();
+          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
           });
-          onTaxUpdated();
           return;
         }
 
@@ -282,14 +283,17 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           await balanceOpeningBalanceWithCapital(companyId, "taxes", taxRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
-        sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         onTaxUpdated();
+        setIsOpen(false);
+        sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating tax:", error);
         sonnerToast.error("Error Updating Tax", {
           id: toastId,
           description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -583,7 +587,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
             </div>
               <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <TooltipProvider>
                   <Tooltip>
@@ -606,7 +610,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1 sm:ml-auto">
+                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
               </DialogFooter>

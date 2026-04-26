@@ -687,7 +687,7 @@ function UserProfileButton() {
   const totalMaxStorMB = accountMaxStorGB * GB_TO_MB;
   const storFreeMB = Math.max(0, totalMaxStorMB - userStorUsedMB);
   const maxStorGB = accountMaxStorGB;
-  const onlineSlotMax = maxOnlineCompaniesForPlan(accountPlanId);
+  const onlineSlotMax = maxOnlineCompaniesForPlan(accountPlanId, getPlanFromPlans(livePlans, accountPlanId));
   const onlineSlotUsed =
     user?.uid != null && user.uid !== "" ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
   /** Pro Plus ke upar koi paid tier nahi — "Upgrade" mat dikhao */
@@ -703,7 +703,7 @@ function UserProfileButton() {
     1,
     numericEntitlement(ownedPlanLive.entitlements, "maxUsers", true) || 1
   );
-  const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId);
+  const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive);
   const ownedCanUpgrade = getNextPaidUpgrade(ownedOnlyPlanId) != null;
 
   const selectedCompanyPlanId: PlanId = (() => {

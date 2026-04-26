@@ -2,6 +2,7 @@
  * Payment allocation utilities for "Link Payment to Txns" feature.
  * Pure helpers: allocated amount per voucher, outstanding, validate, auto-link, payment status.
  */
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 /** Special voucherId used when allocating payment to party/staff opening balance. */
 export const OPENING_BALANCE_VOUCHER_ID = "opening_balance";
@@ -46,11 +47,8 @@ export type PaymentStatusResult = {
 };
 
 const safeToDate = (d: unknown): Date | null => {
-  if (!d) return null;
-  if (d instanceof Date) return d;
-  if (typeof (d as { toDate?: () => Date }).toDate === "function") return (d as { toDate: () => Date }).toDate();
-  const parsed = new Date(d as string | number);
-  return isNaN(parsed.getTime()) ? null : parsed;
+  // Overdue logic receives dueDate from Firestore, backup JSON, and SQLite mirror; use one parser for all shapes.
+  return parseFirestoreDateFieldToJsDate(d);
 };
 
 /**

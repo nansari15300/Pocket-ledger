@@ -37,6 +37,7 @@ import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { openPrintDirect } from "@/lib/printDirect";
 import { toast } from "sonner";
+import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 export type OverdueColumnKey = "date" | "type" | "voucherNo" | "party" | "user" | "debit" | "credit" | "status" | "netBalance";
 const OVERDUE_COLUMN_LABELS: Record<OverdueColumnKey, string> = {
@@ -80,14 +81,14 @@ export type OverdueTransactionRow = {
   userId?: string;
   userName?: string;
   narration?: string;
+  createdAt?: any;
+  lastEditedAt?: any;
+  updatedAt?: any;
 };
 
 const safeToDate = (date: any): Date | null => {
-  if (!date) return null;
-  if (date instanceof Date) return date;
-  if (typeof date?.toDate === "function") return date.toDate();
-  const parsed = new Date(date);
-  return isNaN(parsed.getTime()) ? null : parsed;
+  // Overdue restore/read path can receive Firestore Timestamp JSON; keep days/date display in sync with voucher parser.
+  return parseFirestoreDateFieldToJsDate(date);
 };
 
 function getOverdueDays(dueDate: any): number {
@@ -235,7 +236,7 @@ export function OverdueAccountView({
   );
 
   const OVERDUE_HEADER_MIN_PX = {
-    date: 95,
+    date: 112,
     type: 75,
     voucherNo: 105,
     party: 120,
@@ -381,6 +382,7 @@ export function OverdueAccountView({
               {paginatedRows.map((t) => {
                 const d = safeToDate(t.date);
                 const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : "—";
+                const entryClock = formatVoucherEntryTimeLocal(t as unknown as Record<string, unknown>);
                 const isCreditSide = t.type === "purchase";
                 const balanceVal = isCreditSide ? -t.outstanding : t.outstanding;
                 const displayUserName = resolveUserName(t, userNames);
@@ -404,7 +406,12 @@ export function OverdueAccountView({
                     )}
                     onClick={() => setSelectedId(t.id)}
                   >
-                    {visibleColumns.date && <TableCell className="whitespace-nowrap pl-3 pr-2">{dateStr}</TableCell>}
+                    {visibleColumns.date && (
+                      <TableCell className="whitespace-nowrap pl-3 pr-2">
+                        {dateStr}
+                        {entryClock ? <span className="ml-1 text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+                      </TableCell>
+                    )}
                     {visibleColumns.type && (
                       <TableCell>
                         <Badge variant="outline" className="capitalize">

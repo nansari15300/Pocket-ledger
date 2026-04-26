@@ -7,7 +7,18 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Loader2, Eye, EyeOff } from "lucide-react";
-import { doc, updateDoc, arrayUnion, getDoc, getDocs, query, collection, where, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  updateDoc,
+  arrayUnion,
+  getDoc,
+  getDocs,
+  query,
+  collection,
+  where,
+  serverTimestamp,
+  deleteField,
+} from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -26,6 +37,7 @@ import {
   mergeSharedWithIntoLocalCompanyUsers,
   parseLocalCompanyUserRows,
 } from "@/lib/localCompanyUsers";
+import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
 
 
 const inviteRoles = ["viewer", "data-entry", "accountant", "editor", "manager"] as const;
@@ -120,6 +132,31 @@ export function ShareCompanyDialog({
                 description: "This company hasn't synced to the server yet. Connect to the internet and wait for sync, then try again.",
             });
             return;
+        }
+
+        // Local / backup-restore company: ledgers SQLite me hain; invitee sirf Firestore subcollections padhta hai.
+        // Purana `authoritativeCompanyId` (doosri company id) ho to galat path + 0 vouchers — align + push.
+        if (String(company.storageOption || "").toLowerCase() === "local") {
+          try {
+            await updateDoc(companyRef, { authoritativeCompanyId: deleteField() });
+          } catch {
+            /* ignore */
+          }
+          const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(company.id);
+          if (pushed === 0) {
+            toast({
+              variant: "destructive",
+              title: "No data to share online",
+              description: "This company has no documents in this browser’s local cache to upload. Restore backup again or use “Upload to cloud” first.",
+            });
+            return;
+          }
+          if (errors.length) {
+            toast({
+              title: "Partial cloud upload",
+              description: `Uploaded ${pushed} document(s); some batches failed: ${errors.slice(0, 2).join(" · ")}. Sharing continues — invitee should re-open company after sync.`,
+            });
+          }
         }
 
         const currentData = companySnap.data();

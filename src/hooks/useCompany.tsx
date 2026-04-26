@@ -8,7 +8,13 @@ import { onSnapshot, collection, query, where, Timestamp, getDocs } from "fireba
 import { auth, firestore } from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { getLocalCompanyById, listLocalCompanies, removeLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import {
+  getLocalCompanyById,
+  listLocalCompanies,
+  localCompanyRowIsDeleted,
+  removeLocalCompanyById,
+  upsertLocalCompany,
+} from "@/lib/localCompanyStore";
 import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import type { PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -28,6 +34,7 @@ import {
 import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from "@/lib/localFiscalSplitStore";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
+import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 
 export type DisplaySettings = {
@@ -461,7 +468,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     try {
-      const storedCompanyId = localStorage.getItem("companyId");
+      // Multi-tab: prefer this tab's saved company so refresh does not jump to another tab's company.
+      const storedCompanyId = readSelectedCompanyId();
       if (storedCompanyId && storedCompanyId.trim()) {
         setCompanyIdState(storedCompanyId);
       } else {
@@ -473,14 +481,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, []);
   
   const clearCompanyId = useCallback(() => {
-    localStorage.removeItem("companyId");
+    // Clear both tab override and global fallback when user leaves/deletes the active company.
+    clearSelectedCompanyId();
     setCompanyIdState(null);
     setCompany(null);
     setAllCompanies([]);
   }, []);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
-    localStorage.setItem("companyId", newCompanyId);
+    // Save per-tab selection as well as last-login fallback for new app launches.
+    writeSelectedCompanyId(newCompanyId);
     setCompanyIdState(newCompanyId);
   }, []);
 
@@ -615,14 +625,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         try {
           const ownedSnap = await getDocs(query(collection(firestore, "companies"), where("ownerId", "==", user.uid)));
           const sharedSnap = await getDocs(query(collection(firestore, "companies"), where("sharedWithEmails", "array-contains", user.email)));
-          const cloudRows = [...ownedSnap.docs, ...sharedSnap.docs]
-            .map((d: any) => ({ id: d.id, ...(d.data() || {}) }))
-            .filter((c: any) => c?.isDeleted !== true);
-          cloudMirrorAllowedIds = new Set(cloudRows.map((r: { id?: string }) => String(r.id || "")).filter(Boolean));
-          for (const row of cloudRows) {
-            const raw = row as Record<string, unknown>;
+          const mergedDocs = [...ownedSnap.docs, ...sharedSnap.docs];
+          // Purge stale SQLite: doc jo Firestore pe hai (soft-deleted shamil) wo "allowed" — warna delete ke turant baad id active `cloudRows` me nahi aati thi aur row purge ho jati thi (recycle bin khali).
+          cloudMirrorAllowedIds = new Set(mergedDocs.map((d) => String(d.id || "")).filter(Boolean));
+          for (const d of mergedDocs) {
+            const raw = { id: d.id, ...(d.data() || {}) } as Record<string, unknown>;
             const rid = String(raw.id ?? "");
             if (!rid) continue;
+            const isCloudDeleted = raw.isDeleted === true;
             const existing = await getLocalCompanyById(rid, { includeDeleted: true });
             const localMs =
               typeof (existing as unknown as { updatedAt?: unknown })?.updatedAt === "number"
@@ -640,8 +650,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
               ? parseLocalCompanyUserRows((existing as { localCompanyUsers?: unknown }).localCompanyUsers)
               : [];
             const mergedLocalUsers = mergeSharedWithIntoLocalCompanyUsers(prevUsers, firestoreSharedWith as any);
+            if (isCloudDeleted) {
+              await upsertLocalCompany({
+                ...(raw as Record<string, unknown>),
+                id: rid,
+                isDeleted: true,
+                storageOption: "firebase",
+                syncPolicy: "online",
+                syncedFromCloud: true,
+                localCompanyUsers: mergedLocalUsers,
+              } as any);
+              continue;
+            }
             await upsertLocalCompany({
-              ...row,
+              ...(raw as Record<string, unknown>),
               storageOption: "firebase",
               syncPolicy: "online",
               syncedFromCloud: true,
@@ -657,7 +679,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         for (const row of locals) {
           const id = row.id;
           if (!id || cloudMirrorAllowedIds.has(id)) continue;
-          if (isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email })) continue;
+          const isOwner = isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email });
+          // Owner ki sirf-device-local company Firestore owned/shared query me aati hi nahi — isko "server se gayab" mat samjho.
+          const isPureLocalRow = String((row as { storageOption?: string }).storageOption || "").toLowerCase() === "local";
+          if (isOwner && isPureLocalRow) continue;
+          // Recycle bin: `cloudRows` deleted companies ko exclude karti hai — id `cloudMirrorAllowedIds` me nahi aati;
+          // yahan purge se row hataoge to local bin khali + multi-device delete flow toot jata hai.
+          if (localCompanyRowIsDeleted(row)) continue;
+          // Shared revoke pe pehle yahi path tha; owner ke cloud mirror par bhi lagao: delete/recycle-bin ke baad active list me id nahi → stale SQLite hatao.
           await removeLocalCompanyById(id, { firebaseUid: user.uid });
         }
       }
@@ -988,13 +1017,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
     if (!companyId && user) {
         try {
-            const storedCompanyId = localStorage.getItem("companyId");
+            // Refresh recovery must use per-tab company first, otherwise another tab's last selection wins.
+            const storedCompanyId = readSelectedCompanyId();
             const stored = storedCompanyId?.trim();
             if (!stored) {
                 // Static/Capacitor: IndexedDB + Firestore slow — localStorage/sync ke liye zyada grace
                 const REDIRECT_DELAY_MS = 1400;
                 const id = setTimeout(() => {
-                    const again = localStorage.getItem("companyId")?.trim();
+                    const again = readSelectedCompanyId();
                     if (again) {
                         setCompanyIdState(again);
                         return;

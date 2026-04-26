@@ -260,11 +260,16 @@ export function AccountDetails({
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    // APK/static: save ke baad `useSearchParams()` kabhi ek frame purana reh jata hai — `?selected=` drop → master-detail / route tutkar "home" feel.
+    const raw =
+      typeof window !== "undefined" && window.location.search
+        ? window.location.search.replace(/^\?/, "")
+        : searchParams.toString();
+    const params = new URLSearchParams(raw);
     params.delete("modal");
     params.delete("modalts");
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
@@ -290,9 +295,10 @@ export function AccountDetails({
       setSelectedVoucher(null);
       setIsNoteOpen(false);
       setIsEditAccountDialogOpen(false);
-      closeModalInUrl();
+      // `closeModalInUrl()` yahan mat chalao — Party/Staff jaisa: `onOpenChange(false)` pehle hi URL sync karta hai.
+      // Doosri baar replace + stale `useSearchParams` se `?selected=` drop ho sakta tha (bank edit save ke baad "home" jump).
     }
-  }, [isMobile, modalParam, anyMobilePopupOpen, closeModalInUrl]);
+  }, [isMobile, modalParam, anyMobilePopupOpen]);
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);

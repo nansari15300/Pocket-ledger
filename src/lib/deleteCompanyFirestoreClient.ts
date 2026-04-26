@@ -1,0 +1,93 @@
+"use client";
+
+/**
+ * Company permanent delete / restore — Firestore client (static export / APK / web sab).
+ * Pehle `deleteCompanyActionStub` sirf error return karta tha ("app mode").
+ */
+import {
+  collection,
+  deleteDoc,
+  deleteField,
+  doc,
+  getDocs,
+  limit,
+  query,
+  updateDoc,
+  writeBatch,
+} from "firebase/firestore";
+import { firestore } from "@/lib/firebase";
+
+/** `companies/{id}` ke neeche jo subcollections app me use hoti hain — root delete se pehle khali karo. */
+const COMPANY_SUBCOLLECTIONS = [
+  "parties",
+  "groups",
+  "bank_accounts",
+  "account_groups",
+  "staff",
+  "staff_groups",
+  "items",
+  "item_groups",
+  "taxes",
+  "tax_groups",
+  "vouchers",
+  "unassigned_documents",
+  "expense_accounts",
+  "expense_groups",
+  "alarms",
+  "payments",
+] as const;
+
+async function deleteAllDocumentsInCollection(collectionPath: string): Promise<void> {
+  const colRef = collection(firestore, collectionPath);
+  for (;;) {
+    const snap = await getDocs(query(colRef, limit(400)));
+    if (snap.empty) break;
+    const batch = writeBatch(firestore);
+    for (const d of snap.docs) {
+      batch.delete(d.ref);
+    }
+    await batch.commit();
+  }
+}
+
+export async function deleteCompanyComplete(
+  companyId: string,
+  _userId: string
+): Promise<{ success: boolean; error?: string }> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { success: false, error: "Invalid company id" };
+
+  try {
+    for (const sub of COMPANY_SUBCOLLECTIONS) {
+      await deleteAllDocumentsInCollection(`companies/${cid}/${sub}`);
+    }
+    await deleteDoc(doc(firestore, "companies", cid));
+    return { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Company delete failed",
+    };
+  }
+}
+
+export async function restoreCompany(
+  companyId: string
+): Promise<{ success: boolean; error?: string }> {
+  const cid = String(companyId || "").trim();
+  if (!cid) return { success: false, error: "Invalid company id" };
+
+  try {
+    await updateDoc(doc(firestore, "companies", cid), {
+      isDeleted: false,
+      deletedAt: null,
+      movedToAdminRecycleAt: deleteField(),
+    });
+    return { success: true };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : "Restore failed",
+    };
+  }
+}

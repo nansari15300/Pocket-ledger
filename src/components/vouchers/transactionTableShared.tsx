@@ -32,6 +32,7 @@ import { motion } from "framer-motion";
 import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 export type Context =
   | "party"
@@ -95,11 +96,8 @@ export function OpeningBalanceFileCellContent({
 }
 
 const safeToDate = (date: any): Date | null => {
-  if (!date) return null;
-  if (date instanceof Date) return date;
-  if (typeof date.toDate === "function") return date.toDate();
-  const parsed = new Date(date);
-  return isNaN(parsed.getTime()) ? null : parsed;
+  // Transaction rows may come from Firestore, local SQLite, or backup JSON; one parser keeps date/dueDate stable.
+  return parseFirestoreDateFieldToJsDate(date);
 };
 
 export const getConversionFactor = (
@@ -689,6 +687,8 @@ export const TransactionRow = React.memo(
     const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
 
     const d = safeToDate(transaction.date);
+    // Desktop table me bhi mobile card wali same entry-time priority dikhani hai: createdAt -> edited/updated -> voucher date.
+    const entryClock = formatVoucherEntryTimeLocal(transaction as Record<string, unknown>);
     let debit = transaction.debit;
     let credit = transaction.credit;
     let balance = transaction.balance;
@@ -781,10 +781,16 @@ export const TransactionRow = React.memo(
           (dateSystem === "Both" ? (
             <>
               <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? formatDateBS(d) : ""}</TableCell>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? formatDate(d) : ""}</TableCell>
+              <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
+                {d ? formatDate(d) : ""}
+                {entryClock ? <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+              </TableCell>
             </>
           ) : (
-            <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? (dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}</TableCell>
+            <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
+              {d ? (dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
+              {entryClock ? <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+            </TableCell>
           ))}
         {showCol("type") && (
           <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>

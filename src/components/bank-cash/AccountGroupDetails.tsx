@@ -583,11 +583,15 @@ export function AccountGroupDetails({
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    const raw =
+      typeof window !== "undefined" && window.location.search
+        ? window.location.search.replace(/^\?/, "")
+        : searchParams.toString();
+    const params = new URLSearchParams(raw);
     params.delete("modal");
     params.delete("modalts");
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");
@@ -613,9 +617,9 @@ export function AccountGroupDetails({
       setSelectedVoucher(null);
       setIsNoteOpen(false);
       setNoteEntityId(null);
-      closeModalInUrl();
+      // `closeModalInUrl()` yahan mat — AccountDetails jaisa: stale `searchParams` se `?selected=` / `?view=` drop avoid.
     }
-  }, [isMobile, modalParam, anyMobilePopupOpen, closeModalInUrl]);
+  }, [isMobile, modalParam, anyMobilePopupOpen]);
 
   const handleShowNarrationChange = (checked: boolean) => {
     setShowNarration(checked);

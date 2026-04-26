@@ -96,7 +96,7 @@ const formSchema = z
 
 type FormValues = z.infer<typeof formSchema>;
 
-const PARTY_TOAST_OK_MS = 1200;
+const PARTY_TOAST_OK_MS = 1000;
 
 type PartySaveFilesSnapshot = {
   avatar: { file: File; preview: string } | null;

@@ -91,6 +91,7 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
 import NepaliCalendar from "../ui/nepali-calendar";
@@ -567,7 +568,7 @@ export function PartyDetails({
     return sortedTransactions.filter((t) => {
       const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
       const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
-      const timeStr = d ? format(d, "h:mm a") : "";
+      const timeStr = formatVoucherEntryTimeLocal(t as Record<string, unknown>) || (d ? format(d, "h:mm a") : "");
       const amt = t.debit > 0 ? t.debit : t.credit;
       const bal = t.balance ?? t.runningBalance ?? 0;
       const userStr = (userNames && t.userId && userNames[t.userId]) || "";

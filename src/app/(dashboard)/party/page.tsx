@@ -134,8 +134,11 @@ function PartyPageContent() {
   // List farkina: replace (push jasto double history hoina) + hardware back ma pani (Capacitor) yahi logic
   const onBackToList = useCallback(() => {
     setSelected(null);
-    router.replace(masterDetailListHref("party"), { scroll: false });
-  }, [setSelected, router]);
+    const base = masterDetailListHref("party");
+    // Groups tab se detail se wapas aane par URL me `view=groups` rakho — warna bare `/party` pe memory/effect Parties pe kheench leta hai
+    const href = activeView === "groups" ? `${base}?view=groups` : base;
+    router.replace(href, { scroll: false });
+  }, [setSelected, router, activeView]);
   useRegisterMasterDetailHardwareBack(onBackToList, isMobile && !!selected);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -262,6 +265,9 @@ function PartyPageContent() {
         userId: row.userId,
         userName: row.userName,
         narration: row.narration,
+        createdAt: (row as any).createdAt ?? (v as any)?.createdAt,
+        lastEditedAt: (row as any).lastEditedAt ?? (v as any)?.lastEditedAt,
+        updatedAt: (row as any).updatedAt ?? (v as any)?.updatedAt,
         dueDate: row.dueDate,
         isApproved: v?.isApproved,
         partyName: row.partyName,
@@ -401,6 +407,42 @@ function PartyPageContent() {
       router.replace(canonical, { scroll: false });
     }
   }, [selectedIdFromUrl, viewFromUrl, pageDataLoading, processedParties, processedGroups, overdueVirtualParty, setSelected, setActiveView, router]);
+
+  // Sidebar / in-app link zyada tar `/party` (bina query) kholta hai; `usePageMemory` purana `activeView: groups` restore karke
+  // Party tab hata deta tha. `?selected=` / `?view=groups` explicit ho to URL hi boss hai.
+  // NOTE: `processedGroups` / `selected` yahan deps mein mat rakho — har voucher refresh par naya array ref se effect
+  // dubara chal kar Groups tab ko Parties pe kheench deta tha (tab click "kaam nahi" jaisa).
+  useEffect(() => {
+    if (pageDataLoading) return;
+    if (selectedIdFromUrl) return;
+    if (viewFromUrl === "groups") return;
+    setActiveView("parties");
+  }, [pageDataLoading, selectedIdFromUrl, viewFromUrl, setActiveView]);
+
+  /** Parties tab + selected id kisi group row se match ho (same id edge) to selection clear. */
+  useEffect(() => {
+    if (pageDataLoading) return;
+    if (activeView !== "parties") return;
+    const sid = selected?.id;
+    if (!sid) return;
+    if (!processedGroups.some((g) => g.id === sid)) return;
+    setSelected(null);
+  }, [pageDataLoading, activeView, selected?.id, processedGroups, setSelected]);
+
+  const handlePartyGroupsTabChange = useCallback(
+    (value: string) => {
+      setActiveView(value);
+      if (!useQueryNav) return;
+      const base = masterDetailListHref("party");
+      if (value === "groups") {
+        router.replace(`${base}?view=groups`, { scroll: false });
+      } else {
+        router.replace(base, { scroll: false });
+      }
+      setSelected(null);
+    },
+    [useQueryNav, router, setSelected]
+  );
 
   const fetchUserName = useCallback(async (userId: string): Promise<string> => {
     if (userNames[userId] && userNames[userId] !== "Unknown" && userNames[userId] !== "N/A") {
@@ -844,7 +886,7 @@ function PartyPageContent() {
           </span>
         }
         tabs={
-          <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
+          <Tabs value={activeView} onValueChange={handlePartyGroupsTabChange} className="w-full">
             <TabsList className="w-full">
               <TabsTrigger value="parties" className="flex-1">Parties</TabsTrigger>
               <TabsTrigger value="groups" className="flex-1">Groups</TabsTrigger>

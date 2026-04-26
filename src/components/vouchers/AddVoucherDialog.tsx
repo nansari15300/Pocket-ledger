@@ -37,6 +37,7 @@ import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
+import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -573,7 +574,7 @@ export function AddVoucherDialog(props: any) {
       await approveVoucherWithHistory(cid, effectiveVoucher.id, user.uid, approverName);
       // Static APK: async approve + outbox flush ke dauran companyId kabhi brief null → /company redirect; restore turant
       try {
-        if (typeof window !== "undefined") localStorage.setItem("companyId", cid);
+        if (typeof window !== "undefined") writeSelectedCompanyId(cid);
       } catch {
         /* ignore */
       }

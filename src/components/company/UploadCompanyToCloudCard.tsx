@@ -15,12 +15,15 @@ import Link from "next/link";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
+import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
+import { removeLocalCompanyMirrorFromFolder } from "@/lib/liveDataFolderMirror";
 
 /** Manual push of company root + local SQLite subcollections to Firestore (plan online slots). */
 export function UploadCompanyToCloudCard() {
   const { company, companyId, allCompanies, triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const { user } = useAuth();
   const { toast } = useToast();
+  const livePlans = useLivePlans();
   const [loading, setLoading] = useState(false);
 
   const isOwner =
@@ -33,11 +36,13 @@ export function UploadCompanyToCloudCard() {
     !!company && String(company.storageOption || "local").toLowerCase() === "local";
 
   const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
+  const accountPlanLive = getPlanFromPlans(livePlans, accountPlanId);
   const { ok, max, current } = canUploadOneMoreOnline(
     allCompanies,
     accountPlanId,
     companyId || "",
-    user?.uid ?? null
+    user?.uid ?? null,
+    accountPlanLive
   );
 
   const [repairLoading, setRepairLoading] = useState(false);
@@ -142,6 +147,7 @@ export function UploadCompanyToCloudCard() {
       // Static build: company list + cloud mirror; online: listener bump.
       reloadLocalCompanyRegistry();
       triggerSync();
+      void removeLocalCompanyMirrorFromFolder(companyId).catch(() => undefined);
       toast({
         title: "Uploaded",
         description:

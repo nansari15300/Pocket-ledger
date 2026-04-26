@@ -12,65 +12,80 @@ import { shouldUsePdfJsCanvasPreview } from "@/lib/shouldUseInAppPdfPreview";
 /** OOM bachna + render time */
 const MAX_PDF_PREVIEW_PAGES = 72;
 
-/**
- * Native APK: PDF.js le page haru canvas ma — WebView ma iframe PDF support hunna.
- * Worker: `public/pdf.worker.min.mjs` (node_modules bata copy; APK offline).
- */
-async function renderPdfBlobToScrollHost(
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 250;
+const ZOOM_STEP = 10;
+
+function clampZoom(n: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(n)));
+}
+
+/** PDF.js document ek baar load; zoom par pages dubara paint — bitmap stretch blur avoid. */
+async function loadPdfJsDocument(
   blob: Blob,
-  scrollHost: HTMLElement,
-  opts: { onFirstPageRendered?: () => void; isCancelled: () => boolean }
-): Promise<void> {
-  const pdfjsLib = await import("pdfjs-dist");
-  const pdfjs = pdfjsLib.default || pdfjsLib;
-  const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
-  const version =
-    (pdfjsLib as { version?: string }).version ??
-    (pdfjs as { version?: string }).version ??
-    PDFJS_WORKER_VERSION_FALLBACK;
-  setPdfJsWorkerSrc(pdfjs, version);
-
+  pdfjs: any,
+  opts: { isCancelled: () => boolean }
+): Promise<{ numPages: number; getPage: (i: number) => Promise<any> } | null> {
   const data = await blob.arrayBuffer();
-  if (opts.isCancelled()) return;
-
+  if (opts.isCancelled()) return null;
   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
   const pdf = await loadingTask.promise;
-  if (opts.isCancelled()) return;
+  if (opts.isCancelled()) return null;
+  return pdf;
+}
 
+/**
+ * Har zoom level par crisp preview: layout width = vw * (zoom%), PDF scale us hisaab,
+ * canvas backing store = logical * devicePixelRatio (cap) taaki APK zoom par blur na ho.
+ */
+async function renderPdfPagesToZoomInner(
+  pdf: { numPages: number; getPage: (i: number) => Promise<any> },
+  zoomInner: HTMLElement,
+  opts: { zoomPercent: number; onFirstPageRendered?: () => void; isCancelled: () => boolean }
+): Promise<void> {
+  zoomInner.replaceChildren();
   const total = pdf.numPages;
   const numPages = Math.min(total, MAX_PDF_PREVIEW_PAGES);
-  const vw = typeof window !== "undefined" ? Math.max(280, window.innerWidth - 32) : 400;
+  const vw =
+    typeof window !== "undefined" ? Math.max(280, window.innerWidth - 32) : 400;
+  const zoom = clampZoom(opts.zoomPercent) / 100;
+  const dprCap = typeof window !== "undefined" ? Math.min(2.5, window.devicePixelRatio || 1) : 1;
 
   for (let i = 1; i <= numPages; i++) {
     if (opts.isCancelled()) return;
     const page = await pdf.getPage(i);
     const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(2.25, Math.max(0.65, vw / base.width));
-    const viewport = page.getViewport({ scale });
+    const layoutCssWidth = vw * zoom;
+    const pdfScale = Math.min(8, Math.max(0.4, layoutCssWidth / base.width));
+    const viewport = page.getViewport({ scale: pdfScale });
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     if (!ctx) continue;
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    canvas.style.cssText =
-      "display:block;width:100%;max-width:100%;height:auto;background:#fff;margin:0 auto 12px;box-shadow:0 1px 4px rgba(0,0,0,0.2)";
+    const bw = Math.floor(viewport.width * dprCap);
+    const bh = Math.floor(viewport.height * dprCap);
+    canvas.width = bw;
+    canvas.height = bh;
+    canvas.style.cssText = `display:block;width:${Math.floor(viewport.width)}px;height:${Math.floor(viewport.height)}px;max-width:none;margin:0 auto 12px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.2)`;
+    ctx.setTransform(dprCap, 0, 0, dprCap, 0, 0);
     await page.render({ canvasContext: ctx, viewport } as any).promise;
-    scrollHost.appendChild(canvas);
+    zoomInner.appendChild(canvas);
     if (i === 1) opts.onFirstPageRendered?.();
   }
 
-  if (scrollHost.childElementCount === 0 && !opts.isCancelled()) {
+  if (zoomInner.childElementCount === 0 && !opts.isCancelled()) {
     const empty = document.createElement("p");
     empty.textContent = "Preview empty — use Share to open PDF";
-    empty.style.cssText = "color:#e5e5e5;text-align:center;padding:24px;font-size:14px;margin:0";
-    scrollHost.appendChild(empty);
+    empty.style.cssText =
+      "color:#e5e5e5;text-align:center;padding:24px;font-size:14px;margin:0";
+    zoomInner.appendChild(empty);
   }
 
   if (total > MAX_PDF_PREVIEW_PAGES) {
     const note = document.createElement("p");
     note.textContent = `+ ${total - MAX_PDF_PREVIEW_PAGES} more pages — full PDF: Share`;
-    note.style.cssText = "color:#d4d4d4;text-align:center;padding:12px;font-size:13px;margin:0";
-    scrollHost.appendChild(note);
+    note.style.cssText =
+      "color:#d4d4d4;text-align:center;padding:12px;font-size:13px;margin:0";
+    zoomInner.appendChild(note);
   }
 }
 
@@ -177,9 +192,15 @@ export function showInAppPdfPreview(
 
   /** PDF.js async render band garne (close jaldi dabda) */
   const previewCancelled = { v: false };
+  /** Zoom slider / pinch ke baad re-paint debounce — har frame par poora PDF na paint ho. */
+  let zoomRerenderTimer: ReturnType<typeof setTimeout> | null = null;
 
   const safeClose = () => {
     previewCancelled.v = true;
+    if (zoomRerenderTimer != null) {
+      clearTimeout(zoomRerenderTimer);
+      zoomRerenderTimer = null;
+    }
     try {
       onDispose();
     } catch {
@@ -193,8 +214,13 @@ export function showInAppPdfPreview(
     inset: "0",
     zIndex: "2147483646",
     background: "rgba(0,0,0,0.55)",
-    display: "flex",
-    flexDirection: "column",
+    // Grid: preview row `minmax(0,1fr)` stops PDF.js scroll layer from growing past viewport;
+    // flex column + overflow scroll pe kuch WebViews me canvas layer neeche wale toolbar par touch khaa jate hain.
+    display: "grid",
+    gridTemplateColumns: "minmax(0,1fr)",
+    gridTemplateRows: "minmax(0,1fr) auto",
+    isolation: "isolate",
+    pointerEvents: "auto",
     fontFamily: "system-ui,-apple-system,sans-serif",
   } as CSSStyleDeclaration);
 
@@ -205,7 +231,7 @@ export function showInAppPdfPreview(
   bar.setAttribute("data-in-app-pdf-preview-toolbar", "1");
   bar.setAttribute("role", "toolbar");
   bar.style.cssText =
-    "display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-start;padding:12px 14px;padding-bottom:max(12px,env(safe-area-inset-bottom,0px));background:#1a1a1a;color:#fff;flex-shrink:0;box-shadow:0 -2px 10px rgba(0,0,0,0.35);border-top:1px solid #333";
+    "grid-row:2;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-start;padding:12px 14px;padding-bottom:max(12px,env(safe-area-inset-bottom,0px));background:#1a1a1a;color:#fff;flex-shrink:0;box-shadow:0 -2px 10px rgba(0,0,0,0.35);border-top:1px solid #333;position:relative;z-index:20;pointer-events:auto;touch-action:manipulation;transform:translateZ(0)";
 
   const titleEl = document.createElement("span");
   titleEl.textContent = title;
@@ -224,6 +250,8 @@ export function showInAppPdfPreview(
       "font-size:14px",
       "font-weight:600",
       "cursor:pointer",
+      "touch-action:manipulation",
+      "-webkit-tap-highlight-color:transparent",
       primary ? "background:#ea580c;color:#fff" : "background:#333;color:#eee",
     ].join(";");
     return b;
@@ -232,13 +260,20 @@ export function showInAppPdfPreview(
   const iframe = document.createElement("iframe");
   iframe.setAttribute("title", "PDF preview");
   iframe.setAttribute("aria-label", "PDF preview");
-  iframe.style.cssText = "flex:1;width:100%;border:0;background:#525252;min-height:0";
+  iframe.style.cssText =
+    "flex:1;width:100%;border:0;background:#525252;min-height:0;min-width:0;z-index:0;position:relative";
 
   // Native: PDF.js scroll; desktop: iframe
   const scrollHost = document.createElement("div");
   scrollHost.setAttribute("data-pdf-js-scroll-preview", "1");
   scrollHost.style.cssText =
-    "flex:1;min-height:0;overflow:auto;background:#525252;padding:10px 8px;-webkit-overflow-scrolling:touch;display:none";
+    "flex:1;min-height:0;min-width:0;overflow:auto;background:#525252;padding:10px 8px;-webkit-overflow-scrolling:touch;display:none;touch-action:pan-x pan-y;position:relative;z-index:0;overscroll-behavior:contain";
+
+  /** PDF pages append here; CSS `zoom` scales preview + scroll area (mobile WebView). */
+  const zoomInner = document.createElement("div");
+  zoomInner.setAttribute("data-pdf-preview-zoom-inner", "1");
+  zoomInner.style.cssText = "min-height:100%;box-sizing:border-box";
+  scrollHost.appendChild(zoomInner);
 
   const loadingOverlay = document.createElement("div");
   loadingOverlay.textContent = "Loading preview…";
@@ -246,11 +281,14 @@ export function showInAppPdfPreview(
     "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#3f3f3f;color:#e5e5e5;font-size:15px;z-index:1";
 
   const previewWrap = document.createElement("div");
-  previewWrap.style.cssText = "flex:1;min-height:0;position:relative;display:flex;flex-direction:column";
+  previewWrap.style.cssText =
+    "grid-row:1;min-height:0;min-width:0;max-height:100%;overflow:hidden;position:relative;display:flex;flex-direction:column;contain:layout paint;z-index:0";
   previewWrap.append(loadingOverlay, iframe, scrollHost);
 
   const hideLoading = () => {
     loadingOverlay.style.display = "none";
+    loadingOverlay.style.pointerEvents = "none";
+    loadingOverlay.style.visibility = "hidden";
   };
 
   // Mobile WebView / static build: iframe+blob PDF weak — PDF.js canvas (worker public/pdf.worker.min.mjs)
@@ -259,6 +297,10 @@ export function showInAppPdfPreview(
     iframe.style.display = "none";
     scrollHost.style.display = "block";
   }
+
+  /** Zoom % — async paint se pehle init (TDZ / closure safe). */
+  let zoomPercent = 100;
+  let pdfPaintAtZoom: ((pct: number) => Promise<void>) | null = null;
 
   void (async () => {
     if (!usePdfJs) {
@@ -269,13 +311,34 @@ export function showInAppPdfPreview(
       return;
     }
     try {
+      const pdfjsLib = await import("pdfjs-dist");
+      const pdfjs = pdfjsLib.default || pdfjsLib;
+      const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
+      const version =
+        (pdfjsLib as { version?: string }).version ??
+        (pdfjs as { version?: string }).version ??
+        PDFJS_WORKER_VERSION_FALLBACK;
+      setPdfJsWorkerSrc(pdfjs, version);
+
       const blob = await fetch(blobUrl).then((r) => r.blob());
       if (previewCancelled.v) return;
-      await renderPdfBlobToScrollHost(blob, scrollHost, {
-        onFirstPageRendered: hideLoading,
+      const pdf = await loadPdfJsDocument(blob, pdfjs, {
         isCancelled: () => previewCancelled.v,
       });
-      if (!previewCancelled.v) hideLoading();
+      if (!pdf || previewCancelled.v) return;
+
+      const paintAtZoom = async (pct: number) => {
+        if (previewCancelled.v) return;
+        await renderPdfPagesToZoomInner(pdf, zoomInner, {
+          zoomPercent: pct,
+          onFirstPageRendered: hideLoading,
+          isCancelled: () => previewCancelled.v,
+        });
+        if (!previewCancelled.v) hideLoading();
+      };
+
+      await paintAtZoom(zoomPercent);
+      pdfPaintAtZoom = paintAtZoom;
     } catch (e) {
       console.warn("[inAppPdfPreview] PDF.js preview failed", e);
       loadingOverlay.textContent = "Preview failed — use Share for PDF";
@@ -285,11 +348,104 @@ export function showInAppPdfPreview(
     }
   })();
 
+  const zoomLabel = document.createElement("span");
+  zoomLabel.style.cssText = "min-width:3.25rem;text-align:center;font-size:13px;font-weight:600;color:#e5e5e5;padding:0 4px";
+
+  const updateZoomLabel = () => {
+    zoomLabel.textContent = `${clampZoom(zoomPercent)}%`;
+  };
+  updateZoomLabel();
+
+  const mkZoomBtn = (symbol: string, aria: string) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-label", aria);
+    b.textContent = symbol;
+    b.style.cssText =
+      "width:40px;height:40px;padding:0;border-radius:8px;border:none;font-size:20px;font-weight:700;line-height:1;cursor:pointer;background:#404040;color:#fff;flex-shrink:0;touch-action:manipulation;-webkit-tap-highlight-color:transparent";
+    return b;
+  };
+
+  const zoomOutBtn = mkZoomBtn("−", "Zoom out");
+  const zoomInBtn = mkZoomBtn("+", "Zoom in");
+  const zoomResetBtn = mkBtn("100%");
+  zoomResetBtn.style.padding = "8px 12px";
+  zoomResetBtn.style.fontSize = "13px";
+  zoomResetBtn.setAttribute("aria-label", "Reset zoom to 100 percent");
+
+  const scheduleZoomRepaint = (pct: number) => {
+    if (!pdfPaintAtZoom) return;
+    if (zoomRerenderTimer != null) clearTimeout(zoomRerenderTimer);
+    zoomRerenderTimer = setTimeout(() => {
+      zoomRerenderTimer = null;
+      void pdfPaintAtZoom?.(pct);
+    }, 200);
+  };
+
+  const setZoom = (next: number) => {
+    if (!usePdfJs) return;
+    zoomPercent = clampZoom(next);
+    updateZoomLabel();
+    scheduleZoomRepaint(zoomPercent);
+  };
+
+  zoomOutBtn.onclick = () => setZoom(zoomPercent - ZOOM_STEP);
+  zoomInBtn.onclick = () => setZoom(zoomPercent + ZOOM_STEP);
+  zoomResetBtn.onclick = () => setZoom(100);
+
+  // Pinch-to-zoom (two fingers) on preview area
+  let pinchStartDist = 0;
+  let pinchStartZoom = 100;
+  const touchDist = (t: TouchList) => {
+    if (t.length < 2) return 0;
+    const dx = t[0].clientX - t[1].clientX;
+    const dy = t[0].clientY - t[1].clientY;
+    return Math.hypot(dx, dy);
+  };
+  scrollHost.addEventListener(
+    "touchstart",
+    (ev) => {
+      if (!usePdfJs || ev.touches.length !== 2) return;
+      pinchStartDist = touchDist(ev.touches);
+      pinchStartZoom = zoomPercent;
+    },
+    { passive: true }
+  );
+  scrollHost.addEventListener(
+    "touchmove",
+    (ev) => {
+      if (!usePdfJs || ev.touches.length !== 2 || pinchStartDist <= 0) return;
+      const d = touchDist(ev.touches);
+      if (d <= 0) return;
+      const ratio = d / pinchStartDist;
+      setZoom(pinchStartZoom * ratio);
+    },
+    { passive: true }
+  );
+  scrollHost.addEventListener("touchend", () => {
+    pinchStartDist = 0;
+  });
+  scrollHost.addEventListener("touchcancel", () => {
+    pinchStartDist = 0;
+  });
+
+  // Ctrl + wheel zoom (desktop / trackpad)
+  scrollHost.addEventListener(
+    "wheel",
+    (ev) => {
+      if (!usePdfJs || !ev.ctrlKey) return;
+      ev.preventDefault();
+      const delta = ev.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      setZoom(zoomPercent + delta);
+    },
+    { passive: false }
+  );
+
   const printBtn = mkBtn("Print", true);
   printBtn.onclick = () => {
     try {
       if (usePdfJs) {
-        const canvases = scrollHost.querySelectorAll("canvas");
+        const canvases = zoomInner.querySelectorAll("canvas");
         if (canvases.length > 0) {
           const w = window.open("", "_blank");
           if (w) {
@@ -351,7 +507,14 @@ export function showInAppPdfPreview(
   const closeBtn = mkBtn("Close");
   closeBtn.onclick = () => safeClose();
 
-  bar.append(titleEl, printBtn, shareBtn, closeBtn);
+  if (usePdfJs) {
+    const zoomCluster = document.createElement("div");
+    zoomCluster.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex-shrink:0";
+    zoomCluster.append(zoomOutBtn, zoomLabel, zoomInBtn, zoomResetBtn);
+    bar.append(titleEl, zoomCluster, printBtn, shareBtn, closeBtn);
+  } else {
+    bar.append(titleEl, printBtn, shareBtn, closeBtn);
+  }
   // Pehle preview area, pachi footer — screen preview; print = iframe.contentWindow.print() → toolbar PDF ma jodainna
   root.append(previewWrap, bar);
 

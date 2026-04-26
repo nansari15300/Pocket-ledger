@@ -43,7 +43,7 @@ import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { doc, setDoc, serverTimestamp, Timestamp, collection, query, where, getDocs } from "firebase/firestore";
 import { initializeCompanyDataClient } from "@/lib/initializeCompanyDataClient";
 import { ensureSuperAdminInSharedEmails } from "@/lib/superAdminEmails";
-import { slugify } from "@/lib/slugify";
+import { generateCompanyId } from "@/lib/generateCompanyId";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { numericEntitlement, type PlanId } from "@/config/plans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -55,17 +55,6 @@ import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
 
 const MAX_FILE_SIZE_MB = 0.5;
-
-/** Company doc ID: name_shortId so path is readable in Firestore console. */
-function generateCompanyId(companyName: string): string {
-  const slug = slugify(companyName, 40);
-  const shortId =
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? crypto.randomUUID().slice(0, 8)
-      : `${Date.now().toString(36).slice(-6)}`;
-  return `${slug}_${shortId}`;
-}
-
 
 const formSchema = z
   .object({
@@ -134,7 +123,10 @@ export function CreateCompanyForm({
     return getPlanFromPlans(livePlans, accountPlanId).entitlements.canAddAvatar === true;
   }, [accountPlanId, livePlans]);
 
-  const maxOnlineSlots = useMemo(() => maxOnlineCompaniesForPlan(accountPlanId), [accountPlanId]);
+  const maxOnlineSlots = useMemo(
+    () => maxOnlineCompaniesForPlan(accountPlanId, getPlanFromPlans(livePlans, accountPlanId)),
+    [accountPlanId, livePlans]
+  );
   const usedOnlineSlots = useMemo(
     () => (user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0),
     [allCompanies, user?.uid]
@@ -231,7 +223,7 @@ export function CreateCompanyForm({
   async function onSubmit(values: FormValues) {
     // Submit waqt latest slot count — doosre tab me company banne par bhi sahi branch
     const planIdForSlots = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
-    const maxO = maxOnlineCompaniesForPlan(planIdForSlots);
+    const maxO = maxOnlineCompaniesForPlan(planIdForSlots, getPlanFromPlans(livePlans, planIdForSlots));
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
     const createAsLocalOnly =

@@ -1,1 +1,1 @@
-export * from "./deleteCompanyActionStub";
+export { deleteCompanyComplete, restoreCompany } from "../deleteCompanyFirestoreClient";

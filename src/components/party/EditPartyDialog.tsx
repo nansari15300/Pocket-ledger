@@ -7,7 +7,7 @@ import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, Timestamp } from "firebase/firestore";
 import {
   stageEntityAvatarAndDocuments,
   uploadEntityAvatarAndDocumentsRemote,
@@ -71,7 +71,7 @@ const formSchema = z.object({
 const MAX_FILE_SIZE_MB = 0.5;
 
 /** Save toast — lamba "Saving…" hata, chhota feedback (PC/mobile). */
-const PARTY_TOAST_OK_MS = 1200;
+const PARTY_TOAST_OK_MS = 1000;
 
 export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, children, hasTransactions }: {
   party: Party;
@@ -412,6 +412,34 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     
     setIsLoading(true);
     try {
+        if (isLocalOnlyMode()) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: party.id,
+            companyId,
+            ownerId: user?.uid ?? "local_guest_user",
+            balance: party.balance ?? 0,
+            debit: party.debit ?? 0,
+            credit: party.credit ?? 0,
+            name: party.name,
+            groupId: party.groupId ?? getUngroupedGroupId("party"),
+            isDeleted: false,
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: party.id,
+            companyId,
+            isDeleted: true,
+            deletedAt: Timestamp.now(),
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
+          toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.` });
+          onPartyDeleted(party.id);
+          setIsOpen(false);
+          setIsDeleteDialogOpen(false);
+          return;
+        }
         await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
             isDeleted: true,
             deletedAt: serverTimestamp()

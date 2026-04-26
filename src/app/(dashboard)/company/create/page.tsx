@@ -34,7 +34,14 @@ function CreateCompanyPageContent() {
   const [userHasCompanies, setUserHasCompanies] = useState(false);
   const skipCloseRedirectRef = useRef(false);
 
-  // Hydrate: /company/create par hamesha create flow dikhao — pehle yahan `replace("/company")` tha jis se button dead lagta tha.
+  // Sirf list length / dismissable — `allCompanies` par mat jodo warna create ke turant baad effect dubara chal kar dialog phir `open` kar deta tha.
+  useEffect(() => {
+    if (!isLocalOnlyMode() || authLoading || companyContextLoading) return;
+    const selectable = (allCompanies || []).filter((c) => !c.isDeleted);
+    setUserHasCompanies(selectable.length > 0);
+  }, [allCompanies, authLoading, companyContextLoading]);
+
+  // Hydrate: /company/create par pehli baar loading ke baad create dialog kholo — `allCompanies` yahan dependency me nahi (re-open bug).
   useEffect(() => {
     if (isLocalOnlyMode()) {
       registerCompanyPickerFirestoreDetach(null);
@@ -44,8 +51,6 @@ function CreateCompanyPageContent() {
         return;
       }
       setCheckingCompanies(false);
-      const selectable = (allCompanies || []).filter((c) => !c.isDeleted);
-      setUserHasCompanies(selectable.length > 0);
       setIsDialogOpen(true);
       return;
     }
@@ -109,17 +114,20 @@ function CreateCompanyPageContent() {
       registerCompanyPickerFirestoreDetach(null);
       cleanupListeners();
     };
-  }, [user, authLoading, router, allCompanies, companyContextLoading]);
+  }, [user, authLoading, router, companyContextLoading]);
 
-  const returnPath = searchParams.get("returnTo") || "/company";
+  const explicitReturnTo = searchParams.get("returnTo")?.trim();
 
   const handleCompanyCreated = (companyId: string) => {
     skipCloseRedirectRef.current = true;
     setCompanyId(companyId);
     setIsDialogOpen(false);
-    const base = returnPath === "/company" ? "/company" : returnPath;
-    const url = base === "/company" ? `/company?new=${encodeURIComponent(companyId)}` : returnPath;
-    router.replace(url);
+    if (explicitReturnTo) {
+      const path = explicitReturnTo.startsWith("/") ? explicitReturnTo : `/${explicitReturnTo}`;
+      router.replace(path);
+      return;
+    }
+    router.replace("/dashboard");
   };
 
   const handleDialogOpenChange = (open: boolean) => {
@@ -148,7 +156,7 @@ function CreateCompanyPageContent() {
         isOpen={isDialogOpen}
         onOpenChange={handleDialogOpenChange}
         onCompanyCreated={handleCompanyCreated}
-        redirectTo={returnPath === "/company" ? undefined : returnPath}
+        redirectTo={null}
         isDismissable={userHasCompanies}
       />
     </div>

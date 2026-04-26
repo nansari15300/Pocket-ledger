@@ -98,6 +98,7 @@ import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { FinancialSummaryCards } from '@/components/reports/FinancialSummaryCards';
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
 
 // Type definitions
 type Voucher = {
@@ -866,6 +867,12 @@ function DashboardPageContent() {
         return acc;
     }, {} as Record<string, FlowItem[]>);
 
+    Object.values(categorizedInflow).forEach((arr) =>
+      arr.sort((a, b) => Number(b.amount) - Number(a.amount))
+    );
+    Object.values(categorizedOutflow).forEach((arr) =>
+      arr.sort((a, b) => Number(b.amount) - Number(a.amount))
+    );
 
     return { categorizedInflow, categorizedOutflow, totalInflow, totalOutflow };
   }, [vouchers, cashFlowDateRange, processedParties, processedStaff, processedTaxes, expenseAccounts]);
@@ -875,17 +882,19 @@ function DashboardPageContent() {
     const totalInput = processedTaxes.reduce((sum, tax) => sum + tax.debit, 0);
     const totalOutput = processedTaxes.reduce((sum, tax) => sum + tax.credit, 0);
     const netBalance = totalInput - totalOutput;
+    const details = processedTaxes.map(tax => ({
+      id: tax.id,
+      name: tax.name,
+      input: tax.debit,
+      output: tax.credit,
+      balance: tax.debit - tax.credit,
+    }));
+    details.sort((a, b) => Number(b.input) + Number(b.output) - (Number(a.input) + Number(a.output)));
     return {
       totalInput,
       totalOutput,
       netBalance,
-      details: processedTaxes.map(tax => ({
-        id: tax.id,
-        name: tax.name,
-        input: tax.debit,
-        output: tax.credit,
-        balance: tax.debit - tax.credit,
-      }))
+      details,
     };
   }, [processedTaxes]);
 
@@ -980,6 +989,8 @@ function DashboardPageContent() {
         totalValue = filteredItems.reduce((sum, item) => sum + item.value, 0);
     }
 
+    filteredItems = [...filteredItems].sort((a, b) => Number(b.value) - Number(a.value));
+
     const topSaleItems = [...filteredItems].filter(i => i.salesQty > 0 || i.salesValue > 0).sort((a,b) => b.salesValue - a.salesValue).slice(0, 5);
     const topPurchaseItems = [...filteredItems].filter(i => i.purchaseQty > 0 || i.purchaseValue > 0).sort((a,b) => b.purchaseValue - a.purchaseValue).slice(0, 5);
 
@@ -1065,27 +1076,20 @@ function DashboardPageContent() {
     const printTotalReceivable = calculateFilteredTotal(financialSummary.receivables);
     const printTotalPayable = calculateFilteredTotal(financialSummary.payables);
     const excludeOpeningBalance = (arr: { party: string; balance: number }[]) => arr.filter(p => p.party !== "Opening Balance");
-    const buildTableBody = (list: typeof financialSummary.receivables, typeColor: string) => {
+    const buildTableBody = (list: typeof financialSummary.receivables) => {
         const body: any[] = [['Party/Staff/Tax', { text: 'Amount', alignment: 'right' }]];
-        const parties = excludeOpeningBalance(list.parties);
-        const staff = excludeOpeningBalance(list.staff);
-        const taxes = excludeOpeningBalance(list.taxes);
-        if (shouldInclude('party') && parties.length > 0) {
-            body.push([{ text: 'Parties', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-            parties.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-        }
-        if (shouldInclude('staff') && staff.length > 0) {
-            body.push([{ text: 'Staff', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-            staff.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-        }
-        if (shouldInclude('tax') && taxes.length > 0) {
-            body.push([{ text: 'Taxes', bold: true, fillColor: '#f3f4f6' }, { text: '', fillColor: '#f3f4f6' }]);
-            taxes.forEach(item => body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), {noSuffix: true, noAnimation: true}), alignment: 'right' }]));
-        }
+        const rows: { party: string; balance: number }[] = [];
+        if (shouldInclude('party')) rows.push(...excludeOpeningBalance(list.parties));
+        if (shouldInclude('staff')) rows.push(...excludeOpeningBalance(list.staff));
+        if (shouldInclude('tax')) rows.push(...excludeOpeningBalance(list.taxes));
+        rows.sort((a, b) => Math.abs(Number(b.balance) || 0) - Math.abs(Number(a.balance) || 0));
+        rows.forEach(item =>
+            body.push([item.party, { text: formatCurrencyForPrint(Math.abs(item.balance), { noSuffix: true, noAnimation: true }), alignment: 'right' }])
+        );
         return body;
     };
-    const receivablesBody = buildTableBody(financialSummary.receivables, '#059669');
-    const payablesBody = buildTableBody(financialSummary.payables, '#DC2626');
+    const receivablesBody = buildTableBody(financialSummary.receivables);
+    const payablesBody = buildTableBody(financialSummary.payables);
     receivablesBody.push([{ text: 'Total Receivable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(printTotalReceivable, {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#059669' }]);
     payablesBody.push([{ text: 'Total Payable', bold: true, alignment: 'right'}, { text: formatCurrencyForPrint(Math.abs(printTotalPayable), {noSuffix: true, noAnimation: true}), bold: true, alignment: 'right', color: '#DC2626' }]);
     const printRecCount = (shouldInclude('party') ? financialSummary.receivables.parties.length : 0) + (shouldInclude('staff') ? financialSummary.receivables.staff.length : 0) + (shouldInclude('tax') ? financialSummary.receivables.taxes.length : 0);
@@ -1162,7 +1166,7 @@ function DashboardPageContent() {
       
       const inBody: any[] = [['Source', { text: 'Amount', alignment: 'right' }]];
       if(showIn) {
-        Object.entries(cashFlowDetails.categorizedInflow).forEach(([category, items]) => {
+        orderedCashFlowCategories(cashFlowDetails.categorizedInflow).forEach(([category, items]) => {
           // Normalize categories for comparison: remove spaces, lowercase
           const catNormal = category.toLowerCase().replace(/\s+/g, '');
           const filterNormal = cashFlowCategoryFilter.toLowerCase().replace(/\s+/g, '');
@@ -1177,7 +1181,7 @@ function DashboardPageContent() {
       
       const outBody: any[] = [['Destination', { text: 'Amount', alignment: 'right' }]];
       if(showOut) {
-        Object.entries(cashFlowDetails.categorizedOutflow).forEach(([category, items]) => {
+        orderedCashFlowCategories(cashFlowDetails.categorizedOutflow).forEach(([category, items]) => {
             // Normalize categories for comparison
             const catNormal = category.toLowerCase().replace(/\s+/g, '');
             const filterNormal = cashFlowCategoryFilter.toLowerCase().replace(/\s+/g, '');

@@ -30,12 +30,13 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useSettingsList } from "@/contexts/SettingsListContext";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
-    // Device settings now includes synced devices + backup save location for static builds.
-    { id: "devices", title: "Device settings", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
+    // Device sync settings (synced devices management).
+    { id: "devices", title: "Device sync", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
     { id: "theme", title: "Theme Settings", icon: Palette, permission: "configure_company_settings" as const, href: null },
     { id: "animation", title: "Animation Settings", icon: Zap, permission: "configure_company_settings" as const, href: null },
@@ -259,7 +260,8 @@ function SettingsPageContent() {
     if (availableNavItems.length === 0) {
       let storedCompanyIdPending = false;
       try {
-        const s = typeof window !== "undefined" ? localStorage.getItem("companyId")?.trim() : "";
+        // Multi-tab refresh: settings loading guard should respect this tab's company override.
+        const s = typeof window !== "undefined" ? readSelectedCompanyId() : "";
         storedCompanyIdPending = Boolean(s && !companyId && user);
       } catch {
         /* ignore */

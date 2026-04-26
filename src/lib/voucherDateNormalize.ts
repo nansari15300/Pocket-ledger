@@ -1,5 +1,6 @@
 "use client";
 
+import { format } from "date-fns";
 import { Timestamp } from "firebase/firestore";
 
 /**
@@ -47,6 +48,30 @@ export function parseFirestoreDateFieldToJsDate(raw: unknown): Date | null {
     }
   }
   return null;
+}
+
+/**
+ * List / mobile card ke "• time" line ke liye: pehle `createdAt`, phir `lastEditedAt` / `updatedAt`, ant mein voucher `date`.
+ * `Date` + `date-fns/format` device ki **local** timezone mein dikhte hain.
+ */
+export function getVoucherEntryTimeSourceDate(transaction: Record<string, unknown> | null | undefined): Date | null {
+  if (transaction == null || typeof transaction !== "object") return null;
+  const fromCreated = parseFirestoreDateFieldToJsDate(transaction["createdAt"]);
+  if (fromCreated) return fromCreated;
+  const fromEdited = parseFirestoreDateFieldToJsDate(transaction["lastEditedAt"]);
+  if (fromEdited) return fromEdited;
+  const fromUpdated = parseFirestoreDateFieldToJsDate(transaction["updatedAt"]);
+  if (fromUpdated) return fromUpdated;
+  return parseFirestoreDateFieldToJsDate(transaction["date"]);
+}
+
+export function formatVoucherEntryTimeLocal(
+  transaction: Record<string, unknown> | null | undefined,
+  timePattern = "h:mm a"
+): string {
+  const dt = getVoucherEntryTimeSourceDate(transaction);
+  if (!dt) return "";
+  return format(dt, timePattern);
 }
 
 /**

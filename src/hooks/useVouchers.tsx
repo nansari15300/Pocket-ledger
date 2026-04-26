@@ -84,7 +84,7 @@ type VoucherContextType = {
   journalAccountNames: Record<string, string>;
   userNames: Record<string, string>;
   /** Overdue sale/purchase transactions across all parties (for "Overdue Vouchers" view). */
-  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }>;
+  overdueTransactions: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }>;
   hasOverdueTransactions: boolean;
 };
 
@@ -374,37 +374,61 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       String((company as CloudBackedCompanyShape)?.storageOption || "").toLowerCase() === "local" &&
       !isCloudBackedCompany(company as CloudBackedCompanyShape);
 
+    /** Company switch / unmount: SQLite callbacks must not write after teardown. */
+    let cancelled = false;
+
     if (isExplicitLocalRegistryRow) {
       setLoading(true);
-      Promise.all(
-        collectionsToPrefetch.map(({ path, setter, orderByField }) =>
-          // Web par bhi restore rows dikhen: `isLocalOnlyMode` false ho to bhi SQLite read (forBackupMerge)
-          listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-            .then((cached) => {
-              setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
-            })
-            .catch(() => {})
-        )
-      ).finally(() => setLoading(false));
-      return;
+      // Tier-1: dashboard + party list feel fast; tier-2 fills rest without blocking global `loading`.
+      const CRITICAL_SQLITE_PATHS = new Set(["vouchers", "parties", "bank_accounts"]);
+      const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+        Promise.all(
+          items.map(({ path, setter, orderByField }) =>
+            listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+              .then((cached) => {
+                if (cancelled) return;
+                setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+              })
+              .catch(() => {})
+          )
+        );
+      const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
+      const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
+      void loadSqliteChunk(critical).finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+      void loadSqliteChunk(secondary);
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Local APK: har online / ambiguous row ke liye pehle SQLite, phir server doc check — purane SQLite me syncedFromCloud missing ho to bhi cloud data milega
     if (shouldUseLocalCompanyData) {
       setLoading(true);
-      Promise.all(
-        collectionsToPrefetch.map(({ path, setter, orderByField }) =>
-          listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-            .then((cached) => {
-              setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
-            })
-            .catch(() => {})
-        )
-      );
+      // Fast app open: dashboard/party totals need these first; other masters can hydrate after first paint.
+      const CRITICAL_SQLITE_PATHS = new Set(["vouchers", "parties", "bank_accounts", "staff", "taxes"]);
+      const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
+        Promise.all(
+          items.map(({ path, setter, orderByField }) =>
+            listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+              .then((cached) => {
+                if (cancelled) return;
+                setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+              })
+              .catch(() => {})
+          )
+        );
+      const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
+      const secondary = collectionsToPrefetch.filter((c) => !CRITICAL_SQLITE_PATHS.has(c.path));
+      void loadSqliteChunk(critical).finally(() => {
+        // Stale-first: show local SQLite immediately; Firestore listeners refresh in background.
+        if (!cancelled) setLoading(false);
+      });
+      void loadSqliteChunk(secondary);
     }
 
     // ४. कम्पनी को Firestore doc अस्तित्वमा छ कि छैन जाँच गर्ने (नभए rules ले subcollection deny गर्छ — यहीले permission error रोक्छ)
-    let cancelled = false;
     const unsubRef = { current: [] as (() => void)[] };
 
     // `companyRef` naam React useRef se clash — TDZ / shadow; Firestore root doc alag naam
@@ -456,7 +480,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           }
         })();
       }
-      if (vouchers.length === 0) setLoading(true);
+      // Hybrid local-first: SQLite bootstrap already cleared `loading` — avoid stale `vouchers` closure forcing spinner again.
+      if (!shouldUseLocalCompanyData && vouchers.length === 0) setLoading(true);
 
       // Auth token लाई Firestore Listen request मा लग्न अलि ढिला (PERMISSION_DENIED कम गर्न)
       const attachListeners = () => {
@@ -579,7 +604,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           listCompanyDocsFromBrowserDb(companyId, p, { forBackupMerge: true })
             .then((cached) => {
               if (cancelled || !cached.length) return;
-              setCol(obf ? sortDocsByDateField(cached, obf) : cached);
+              // Stale SQLite prefetch puri list replace na kare: soft-deleted rows wapas na aayein (party delete UI fix).
+              const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
+              setCol((prev) => {
+                const merged = mergeEntityListsById(prev, obf ? sortDocsByDateField(alive, obf) : alive, obf);
+                return merged.filter((x: any) => x?.isDeleted !== true);
+              });
             })
             .catch(() => {});
         }
@@ -600,8 +630,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       );
       Promise.all(initialFetches).then(() => { if (!cancelled) setLoading(false); });
       };
-      // 600ms delay so auth token is attached to Listen request (reduces PERMISSION_DENIED on first load)
-      setTimeout(attachListeners, 600);
+      // Local-first: SQLite already on screen — attach listeners quickly. Web-only: delay reduces PERMISSION_DENIED on first load.
+      const firestoreListenDelayMs = shouldUseLocalCompanyData ? 0 : 600;
+      setTimeout(attachListeners, firestoreListenDelayMs);
     }).catch(() => { if (!cancelled) setLoading(false); });
 
     return () => {
@@ -1140,7 +1171,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     const allocatedToPurchaseFromSale = getAllocatedByVoucherIdFromSale(vouchersForDisplay);
     const allocatedFromJournal = getAllocatedByVoucherIdFromJournal(vouchersForDisplay);
     const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
-    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string }> = [];
+    const list: Array<{ id: string; type: string; date: any; voucherNumber: string; partyId: string; partyName: string; total: number; outstanding: number; debit: number; credit: number; dueDate?: any; isOverdue: boolean; paymentStatus: string; userId?: string; userName?: string; narration?: string; createdAt?: any; lastEditedAt?: any; updatedAt?: any }> = [];
     for (const v of vouchersForDisplay) {
       if ((v.type !== "sale" && v.type !== "purchase") || !v.partyId) continue;
       const total = Number(v.total ?? v.amount ?? ((v.subTotal ?? 0) - (v.discount ?? 0) + (v.tax ?? 0))) || 0;
@@ -1186,6 +1217,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         userId: fallbackUserId,
         userName: fallbackUserName,
         narration: (v as any).narration,
+        createdAt: (v as any).createdAt,
+        lastEditedAt: (v as any).lastEditedAt,
+        updatedAt: (v as any).updatedAt,
       });
     }
     return { overdueTransactions: list, hasOverdueTransactions: list.length > 0 };

@@ -255,12 +255,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
-    setIsOpen(false);
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating account...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      setIsLoading(true);
       try {
         let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
         const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
@@ -354,10 +354,6 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", accountRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", accountRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
-            id: toastId,
-            description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
-          });
           onAccountUpdated({
             id: accountRefSnap.id,
             ...values,
@@ -368,6 +364,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               in: values.useFor?.in || [],
               out: values.useFor?.out || [],
             } as { in: string[]; out: string[] },
+          });
+          setIsOpen(false);
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
+            id: toastId,
+            description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
           });
           return;
         }
@@ -388,7 +389,6 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           await balanceOpeningBalanceWithCapital(companyId, "bank_accounts", accountRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
-        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
         onAccountUpdated({
           id: accountRefSnap.id,
           ...values,
@@ -400,12 +400,16 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             out: values.useFor?.out || [],
           } as { in: string[]; out: string[] },
         });
+        setIsOpen(false);
+        sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
         sonnerToast.error("Error Updating Account", {
           id: toastId,
           description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -834,7 +838,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
               <DialogFooter className="mt-0 shrink-0 grid grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <TooltipProvider>
                   <Tooltip>
@@ -857,7 +861,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1">
+                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save Changes
                   </Button>
               </DialogFooter>

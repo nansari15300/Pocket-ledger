@@ -3,9 +3,11 @@
 
 import { RotateCcw, Trash2, ArrowRight, ArrowUpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { PermissionButton } from "@/components/permission";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 
 export type DeletedItem = {
     id: string;
@@ -40,6 +42,8 @@ export type DeletedItem = {
     deletedByUserName?: string;
     /** When set, item was sent to admin bin by user; admin may auto-delete after X days. */
     movedToAdminRecycleAt?: Date | null;
+    /** User recycle bin: deleted company row — local SQLite vs Firestore mirror. */
+    companyStorageSource?: "local" | "online";
 };
 
 interface RecycleBinItemProps {
@@ -54,11 +58,36 @@ interface RecycleBinItemProps {
     restoreDisabled?: boolean;
     /** When true, show only name, deleted date/time, and countdown (e.g. company admin recycle bin) */
     compactView?: boolean;
+    /**
+     * User recycle bin: **online** deleted company — apni company par header me shared company select ho to
+     * `PermissionButton` band na ho (Firestore role).
+     */
+    ownerScopedCompanyActions?: boolean;
+    /**
+     * **Local** deleted company: header company ke `usePermissions` se alag — is row ke local unlock / owner se.
+     * `undefined` = online row ya non-company (PermissionButton path).
+     */
+    localRecycleBinRestore?: boolean;
+    localRecycleBinPermanentDelete?: boolean;
 }
 
-export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDeleteText, disableActions, restoreDisabled, compactView }: RecycleBinItemProps) {
+export function RecycleBinItem({
+    item,
+    onRestore,
+    onDelete,
+    daysToPermanentDeleteText,
+    disableActions,
+    restoreDisabled,
+    compactView,
+    ownerScopedCompanyActions,
+    localRecycleBinRestore,
+    localRecycleBinPermanentDelete,
+}: RecycleBinItemProps) {
     const isConverted = !!item.convertedToType;
     const canRestoreCompany = !(item.isRootCollection && item.allowCompanyAdminRecycleBin === false);
+    const isCompanyCard = item.isRootCollection === true || item.collectionPath === "companies";
+    const useLocalRecycleBinButtons =
+        isCompanyCard && typeof localRecycleBinRestore === "boolean" && typeof localRecycleBinPermanentDelete === "boolean";
 
     return (
         <li
@@ -71,6 +100,14 @@ export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDelet
             <div className="flex-1 min-w-0 space-y-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-medium text-sm sm:text-base truncate">{item.name}</p>
+                    {isCompanyCard && item.companyStorageSource && (
+                        <Badge
+                            variant={item.companyStorageSource === "local" ? "secondary" : "outline"}
+                            className="text-[10px] sm:text-xs font-medium shrink-0"
+                        >
+                            {item.companyStorageSource === "local" ? "Local" : "Online"}
+                        </Badge>
+                    )}
                     {item.voucherNumber && (
                         <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded flex-shrink-0">
                             {item.voucherNumber}
@@ -129,7 +166,11 @@ export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDelet
                     </div>
                 )}
                 <p className="text-xs text-muted-foreground whitespace-nowrap">
-                    Deleted on: {item.deletedAt ? new Date(item.deletedAt).toLocaleString() : 'N/A'}
+                    Deleted on:{" "}
+                    {(() => {
+                        const d = coerceDeletedAtToDate(item.deletedAt);
+                        return d ? d.toLocaleString() : "N/A";
+                    })()}
                 </p>
                 {!compactView && (
                     <p className="text-xs text-muted-foreground whitespace-nowrap truncate">
@@ -160,17 +201,43 @@ export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDelet
                 {!isConverted && (
                     <>
                         {canRestoreCompany ? (
-                            <PermissionButton
-                                permission="delete_records"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onRestore(item)}
-                                className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
-                                disabled={disableActions || restoreDisabled}
-                            >
-                                <RotateCcw className="mr-0.5 h-2.5 w-2.5" />
-                                <span>Restore</span>
-                            </PermissionButton>
+                            useLocalRecycleBinButtons ? (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => onRestore(item)}
+                                    className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                                    disabled={disableActions || restoreDisabled || !localRecycleBinRestore}
+                                >
+                                    <RotateCcw className="mr-0.5 h-2.5 w-2.5" />
+                                    <span>Restore</span>
+                                </Button>
+                            ) : ownerScopedCompanyActions ? (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => onRestore(item)}
+                                    className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                                    disabled={disableActions || restoreDisabled}
+                                >
+                                    <RotateCcw className="mr-0.5 h-2.5 w-2.5" />
+                                    <span>Restore</span>
+                                </Button>
+                            ) : (
+                                <PermissionButton
+                                    permission="delete_records"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => onRestore(item)}
+                                    className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                                    disabled={disableActions || restoreDisabled}
+                                >
+                                    <RotateCcw className="mr-0.5 h-2.5 w-2.5" />
+                                    <span>Restore</span>
+                                </PermissionButton>
+                            )
                         ) : (
                             <Button
                                 variant="secondary"
@@ -189,17 +256,43 @@ export function RecycleBinItem({ item, onRestore, onDelete, daysToPermanentDelet
                         )}
                     </>
                 )}
-                <PermissionButton
-                    permission="permanently_delete_records"
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => onDelete(item)}
-                    className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
-                    disabled={disableActions}
-                >
-                    <Trash2 className="mr-0.5 h-2.5 w-2.5" />
-                    <span>Delete Permanently</span>
-                </PermissionButton>
+                {useLocalRecycleBinButtons ? (
+                    <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => onDelete(item)}
+                        className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                        disabled={disableActions || !localRecycleBinPermanentDelete}
+                    >
+                        <Trash2 className="mr-0.5 h-2.5 w-2.5" />
+                        <span>Delete Permanently</span>
+                    </Button>
+                ) : ownerScopedCompanyActions ? (
+                    <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => onDelete(item)}
+                        className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                        disabled={disableActions}
+                    >
+                        <Trash2 className="mr-0.5 h-2.5 w-2.5" />
+                        <span>Delete Permanently</span>
+                    </Button>
+                ) : (
+                    <PermissionButton
+                        permission="permanently_delete_records"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => onDelete(item)}
+                        className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                        disabled={disableActions}
+                    >
+                        <Trash2 className="mr-0.5 h-2.5 w-2.5" />
+                        <span>Delete Permanently</span>
+                    </PermissionButton>
+                )}
             </div>
         </li>
     );

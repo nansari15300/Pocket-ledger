@@ -239,10 +239,8 @@ function getInitialFormValues(voucher?: any): SaleFormValues {
   }
 
   const copiedVoucher = JSON.parse(JSON.stringify(voucher));
-  const dueDateRaw = voucher.dueDate;
-  const dueDate = dueDateRaw != null
-    ? (dueDateRaw?.toDate ? dueDateRaw.toDate() : new Date(dueDateRaw))
-    : undefined;
+  // Restore/cache dueDate may be `{ seconds, nanoseconds }`; parse it exactly like voucher date.
+  const dueDate = parseFirestoreDateFieldToJsDate(voucher.dueDate ?? voucher.due_date) ?? undefined;
   const lineItemsNorm = Array.isArray(copiedVoucher.lineItems)
     ? copiedVoucher.lineItems.map((li: any) => ({
         ...li,

@@ -197,7 +197,12 @@ export async function getBrowserDb(): Promise<BrowserDbWrapper | null> {
   const db = data ? new SQL.Database(new Uint8Array(data)) : new SQL.Database();
   initSchema(db);
 
-  const save = () => saveDbToIndexedDB(db.export());
+  const save = () =>
+    saveDbToIndexedDB(db.export()).then(() => {
+      void import("@/lib/liveDataFolderMirror")
+        .then((m) => m.scheduleLiveDataFolderMirrorAfterFlush())
+        .catch(() => undefined);
+    });
   const wrapper = wrapDb(db, save);
   if (!data) await save();
   cachedDb = { wrapper, db };

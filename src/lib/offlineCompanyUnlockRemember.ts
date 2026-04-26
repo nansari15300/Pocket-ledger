@@ -24,6 +24,29 @@ export type StoredOfflineUnlockSession = {
   user: { id: string; username: string; displayName?: string; role?: string };
 };
 
+/** Fast-start: remembered local company session ko uid ke bina bhi dhundo (APK cold boot me Firebase uid late aata hai). */
+export function readAnyStoredOfflineUnlockSessionForCompany(companyId: string): StoredOfflineUnlockSession | null {
+  if (typeof window === "undefined" || !companyId) return null;
+  try {
+    const suffix = `_${companyId}`;
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(`${STORAGE_PREFIX}_`) || !key.endsWith(suffix)) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const data = JSON.parse(raw) as StoredOfflineUnlockSession;
+      if (typeof data.until !== "number" || data.until <= Date.now()) {
+        localStorage.removeItem(key);
+        continue;
+      }
+      if (data.token && data.user?.id) return data;
+    }
+  } catch {
+    /* ignore malformed remembered sessions */
+  }
+  return null;
+}
+
 /** Abhi tak valid saved session hai ya nahi. */
 export function readStoredOfflineUnlockSession(
   firebaseUid: string | undefined,

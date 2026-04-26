@@ -404,6 +404,8 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
   const LOGO_SIZE = 60; // 48 * 1.25
   const LOGO_LEFT_INSET = 20;
   const LOGO_TOP_INSET = 20; // space from top of paper (20px)
+  /** Company logo na ho to header me site QR (print / PDF preview dono yahi definition). */
+  const POCKET_LEDGER_SITE_URL = "https://pocket-ledger.com";
 
   // Company lines print toggle: off par sirf period (date range) text — table neeche waisa hi
   const companyInfoStack: Content = {
@@ -424,27 +426,12 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
     margin: [0, LOGO_TOP_INSET, 0, 0],
   };
 
-  const noLogoPlaceholder: Content = {
-    table: {
-      widths: [LOGO_SIZE],
-      heights: [LOGO_SIZE],
-      body: [
-        [
-          {
-            text: "Pocket Ledger",
-            alignment: "center" as const,
-            fontSize: 8,
-            fillColor: "#f0f0f0",
-          },
-        ],
-      ],
-    },
-    layout: {
-      hLineWidth: () => 0.5,
-      vLineWidth: () => 0.5,
-    },
+  // pdfmake `qr` — company logo missing par app domain scan ho sake (types me `qr` kabhi missing ho).
+  const noLogoPlaceholder = {
+    qr: POCKET_LEDGER_SITE_URL,
+    fit: LOGO_SIZE,
     margin: [LOGO_LEFT_INSET, LOGO_TOP_INSET, 0, 0],
-  };
+  } as Content;
 
   const leftColumnContent: Content = includeLogo
     ? p.company.logoUrl

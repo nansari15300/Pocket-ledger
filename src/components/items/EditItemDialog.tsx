@@ -423,10 +423,10 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
     const filesSnap = files;
     const itemRefSnap = item;
-    setIsOpen(false);
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating item...");
+      setIsLoading(true);
       try {
         const existingFileUrls = filesSnap.filter((f): f is string => typeof f === "string");
         const newFilesToUpload = filesSnap.filter((f): f is File => f instanceof File);
@@ -538,12 +538,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
           const isLocalGuestUser = user?.uid === "local_guest_user";
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
-            id: toastId,
-            description: showSyncHint
-              ? `"${values.name}" saved locally.`
-              : `"${values.name}" has been successfully updated.`,
-          });
           setTimeout(() => {
             onItemUpdated({
               id: itemRefSnap.id,
@@ -552,13 +546,19 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
             });
           }, 100);
+          setIsOpen(false);
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
+            id: toastId,
+            description: showSyncHint
+              ? `"${values.name}" saved locally.`
+              : `"${values.name}" has been successfully updated.`,
+          });
           return;
         }
 
         const itemRef = doc(firestore, `companies/${companyId}/items`, itemRefSnap.id);
         await updateDoc(itemRef, updatePayload);
 
-        sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         setTimeout(() => {
           onItemUpdated({
             id: itemRefSnap.id,
@@ -567,12 +567,16 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
         }, 100);
+        setIsOpen(false);
+        sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating item:", error);
         sonnerToast.error("Error Updating Item", {
           id: toastId,
           description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -1223,7 +1227,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
               <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end pt-4 border-t">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <TooltipProvider>
                   <Tooltip>
@@ -1246,7 +1250,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                     )}
                   </Tooltip>
                 </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1">
+                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save Changes
                   </Button>
               </DialogFooter>

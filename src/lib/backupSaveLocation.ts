@@ -6,6 +6,19 @@ const BACKUP_SAVE_PREFS_KEY = "pl_backup_save_location_v1";
 const BACKUP_IDB_NAME = "pocket-ledger-device-settings";
 const BACKUP_IDB_STORE = "backup-location";
 const BACKUP_IDB_HANDLE_KEY = "web-directory-handle";
+/** Device-local company mirror files (Backup & Restore → Data save location) — backup handle se alag. */
+const LIVE_DATA_WEB_HANDLE_KEY = "web-live-data-directory-handle";
+/** Random passphrase for AES-GCM mirror files (same browser profile; not user-entered). */
+const LIVE_MIRROR_AUTO_PASSPHRASE_KEY = "web-live-mirror-auto-passphrase-v1";
+
+function randomMirrorPassphrase(): string {
+  const bytes = new Uint8Array(48);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+  const b64 = btoa(bin);
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
 
 export type BackupNativeDirectory = "DOCUMENTS" | "EXTERNAL";
 
@@ -140,6 +153,81 @@ export async function clearWebBackupDirectoryHandle(): Promise<void> {
   await new Promise<void>((resolve) => {
     const tx = db.transaction(BACKUP_IDB_STORE, "readwrite");
     tx.objectStore(BACKUP_IDB_STORE).delete(BACKUP_IDB_HANDLE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+/** Live data folder (local-company mirrors) — web File System Access handle. */
+export async function storeWebLiveDataDirectoryHandle(handle: unknown): Promise<boolean> {
+  const db = await openBackupLocationDb();
+  if (!db) return false;
+  return new Promise((resolve) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readwrite");
+    tx.objectStore(BACKUP_IDB_STORE).put(handle, LIVE_DATA_WEB_HANDLE_KEY);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+export async function readWebLiveDataDirectoryHandle(): Promise<unknown | null> {
+  const db = await openBackupLocationDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readonly");
+    const req = tx.objectStore(BACKUP_IDB_STORE).get(LIVE_DATA_WEB_HANDLE_KEY);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+export async function clearWebLiveDataDirectoryHandle(): Promise<void> {
+  const db = await openBackupLocationDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readwrite");
+    tx.objectStore(BACKUP_IDB_STORE).delete(LIVE_DATA_WEB_HANDLE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+/** Persisted mirror encryption secret (device IndexedDB). Files stay unreadable without this profile. */
+export async function readLiveMirrorAutoPassphrase(): Promise<string | null> {
+  const db = await openBackupLocationDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readonly");
+    const req = tx.objectStore(BACKUP_IDB_STORE).get(LIVE_MIRROR_AUTO_PASSPHRASE_KEY);
+    req.onsuccess = () => {
+      const v = req.result;
+      resolve(typeof v === "string" && v.trim().length >= 16 ? v.trim() : null);
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+export async function ensureLiveMirrorAutoPassphrase(): Promise<string> {
+  const existing = await readLiveMirrorAutoPassphrase();
+  if (existing) return existing;
+  const next = randomMirrorPassphrase();
+  const db = await openBackupLocationDb();
+  if (!db) return next;
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readwrite");
+    tx.objectStore(BACKUP_IDB_STORE).put(next, LIVE_MIRROR_AUTO_PASSPHRASE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("idb write"));
+  });
+  return next;
+}
+
+export async function clearLiveMirrorAutoPassphrase(): Promise<void> {
+  const db = await openBackupLocationDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    const tx = db.transaction(BACKUP_IDB_STORE, "readwrite");
+    tx.objectStore(BACKUP_IDB_STORE).delete(LIVE_MIRROR_AUTO_PASSPHRASE_KEY);
     tx.oncomplete = () => resolve();
     tx.onerror = () => resolve();
   });

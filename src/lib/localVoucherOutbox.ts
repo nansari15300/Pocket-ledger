@@ -209,9 +209,11 @@ export async function enqueueCompanyDocOutbox(
     `INSERT INTO sync_outbox (outbox_id, company_id, collection_name, doc_id, op, payload, created_at)
      VALUES (?,?,?,?,?,?,?)`
   ).run(outboxId, companyId, collectionName, docId, op, json, now);
-  // Turant flush: 45s interval ka wait na karo; `await` se approve/save return tab tak jab tak is row ka flush try ho chuka ho (online company server pe sync)
+  // Local save ko fast rakho: server flush background me try karo, Save button Firestore/network ka wait na kare.
   if (typeof navigator !== "undefined" && navigator.onLine) {
-    await flushVoucherOutbox();
+    void flushVoucherOutbox().catch((e) => {
+      console.warn("[localVoucherOutbox] background flush after enqueue failed", e);
+    });
   }
 }
 

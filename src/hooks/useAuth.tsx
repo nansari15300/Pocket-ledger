@@ -12,6 +12,9 @@ import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc, collection, query,
 import { logFirestorePermissionDenied } from "@/lib/firestoreRuleDebug";
 import type { Role } from "@/utils/rbac";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { getLocalAuthUser } from "@/lib/localApiClient";
+import { restoreRememberedLocalCompanyForFastBoot } from "@/lib/postAuthCompanyRoute";
+import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
 
 export type AppUser = {
@@ -57,6 +60,8 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
   const countryFetchedForRef = useRef<Set<string>>(new Set());
   /** Capacitor/static WebView: kabhi pehle `null` aata hai jabki IndexedDB session abhi restore ho raha ho — turant sign-out mat mano. */
   const pendingNullAuthTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** APK/EXE fast-start: local remembered unlock se temporary user banta hai; Firebase aaye to replace ho jayega. */
+  const fastLocalAuthRef = useRef(false);
 
   useEffect(() => {
     // Auth flow is strictly login-based now; local guest bootstrap path intentionally removed.
@@ -78,7 +83,48 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
       setLoading(false);
     };
 
+    const bootstrapFastLocalSession = () => {
+      if (!isLocalOnlyMode() || typeof window === "undefined") return false;
+      // Fast local auth must use this tab's company on browser refresh; localStorage is only new-tab fallback.
+      const selectedCompanyId = readSelectedCompanyId();
+      if (!selectedCompanyId || !restoreRememberedLocalCompanyForFastBoot()) return false;
+      const localUser = getLocalAuthUser(selectedCompanyId);
+      if (!localUser?.id) return false;
+      fastLocalAuthRef.current = true;
+      const displayName = localUser.displayName || localUser.username || "Local User";
+      const localEmail = `${localUser.username || localUser.id}@local.pocket-ledger`;
+      const syntheticUser = {
+        uid: `local:${localUser.id}`,
+        email: localEmail,
+        displayName,
+        isAnonymous: false,
+        providerId: "local",
+        // Company/plan sync may ask for a Firebase token; local fast-start has none, so fail softly in background.
+        getIdToken: async () => {
+          throw new Error("LOCAL_FAST_START_NO_FIREBASE_TOKEN");
+        },
+      } as unknown as User;
+      // Local fast-start user unlocks SQLite data immediately; real Firebase auth can still hydrate later for cloud sync.
+      setUser(syntheticUser);
+      setCustomUser({
+        id: syntheticUser.uid,
+        uid: syntheticUser.uid,
+        userDocId: syntheticUser.uid,
+        displayName,
+        email: localEmail,
+        role: (localUser.role || "User") as Role,
+        companyId: selectedCompanyId,
+        isActive: true,
+      });
+      setLoading(false);
+      return true;
+    };
+
+    // Do this before Firebase IndexedDB finishes hydrating so static APK opens last company without waiting on network/auth.
+    bootstrapFastLocalSession();
+
     const bootstrapUserSession = (firebaseUser: User) => {
+      fastLocalAuthRef.current = false;
       if (isLocalOnlyMode()) {
         // Local-first mode: avoid Firestore user-doc listeners to prevent permission-denied snapshot noise.
         const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
@@ -328,6 +374,9 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             if (cu) {
               setUser(cu);
               bootstrapUserSession(cu);
+              return;
+            }
+            if (fastLocalAuthRef.current && bootstrapFastLocalSession()) {
               return;
             }
             finalizeSignedOut();

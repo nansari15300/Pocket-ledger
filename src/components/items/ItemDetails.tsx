@@ -50,6 +50,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { format, startOfDay } from "date-fns";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { openPrintDirect } from "@/lib/printDirect";
 import { useCompany } from "@/hooks/useCompany";
@@ -607,10 +608,12 @@ export default function ItemDetails({
     return sortedTransactions.filter((t: any) => {
       const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       const debitCreditAmount = t.debit > 0 ? t.debit : t.credit;
+      const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>).toLowerCase();
       return (
         getTransactionQuickSearchHaystack(t, mobileSearchNames, currentItem ? "item" : undefined, currentItem?.id).includes(lowerCaseSearch) ||
         formatDate(d).toLowerCase().includes(lowerCaseSearch) ||
         formatDateBS(d).toLowerCase().includes(lowerCaseSearch) ||
+        entryClock.includes(lowerCaseSearch) ||
         String(t.total || t.amount || 0).toLowerCase().includes(lowerCaseSearch) ||
         String(t.debit).toLowerCase().includes(lowerCaseSearch) ||
         String(t.credit).toLowerCase().includes(lowerCaseSearch) ||
@@ -698,7 +701,9 @@ export default function ItemDetails({
                 <div className="min-w-0 flex-1 overflow-hidden">
                     <p className="font-bold text-sm truncate">{transaction.voucherNumber}{oppositeLabel ? ` - ${oppositeLabel}` : ''}</p>
                     <p className="text-xs text-muted-foreground truncate mt-0.5">{transaction.narration || "No narration"}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{displayDate()} • {format(d, 'p')}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
+                    </p>
                 </div>
                 <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
                     <p className={cn("font-bold text-sm", transaction.debit > 0 ? "text-red-600" : "text-green-600")}>{formatAmount()}</p>

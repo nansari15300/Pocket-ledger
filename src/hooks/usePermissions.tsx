@@ -133,6 +133,28 @@ const usePermissions = () => {
                 }
             }
             }
+        } else if (customUser && !company) {
+            // Header "No Company": company-scoped role nahi milta — viewer reh kar `delete_records` false ho jata tha
+            // aur sidebar / PermissionRouteGuard recycle bin chhupa dete. Bin me deleted companies tab bhi hoti hain.
+            if (customUser.role === "SuperAdmin") {
+                role = "owner";
+            } else {
+                const normalizedEmail = (customUser.email || "").toLowerCase().trim();
+                const uid = (customUser.uid || "").trim();
+                const ownsAnyInList = allCompanies.some((c) => {
+                    if (c.isOwned === true) return true;
+                    if (uid && String(c.ownerId || "").trim() === uid) return true;
+                    if (normalizedEmail) {
+                        const oe = String(c.ownerEmail || "").toLowerCase().trim();
+                        if (oe && oe === normalizedEmail) return true;
+                    }
+                    return false;
+                });
+                // List empty: sab active companies delete ho chuki (ya load) — owner phir bhi apna recycle bin khol sake
+                if (ownsAnyInList || (uid.length > 0 && allCompanies.length === 0)) {
+                    role = "owner";
+                }
+            }
         }
 
         // Local company: effective role = local unlock (username/password), NOT only Firebase owner email.
@@ -267,5 +289,65 @@ const usePermissions = () => {
 
     return permissions;
 };
+
+function normalizeStaffRoleString(raw: string | undefined): UserRole {
+    if (!raw) return "viewer";
+    const n = String(raw)
+        .toLowerCase()
+        .trim()
+        .replace(/_/g, "-")
+        .replace(/\s+/g, "-");
+    if (["viewer", "data-entry", "accountant", "editor", "manager", "owner"].includes(n)) {
+        return n as UserRole;
+    }
+    return "viewer";
+}
+
+type RecycleBinCompanyOwnerPick = { ownerId?: string; ownerEmail?: string };
+
+/**
+ * Recycle bin me deleted **local** company: header me jo company select hai uske `usePermissions` se alag —
+ * is company id ke local unlock session (ya Firebase owner) se role.
+ */
+export function getLocalSessionRoleForRecycleBinCompany(
+    companyId: string,
+    row: RecycleBinCompanyOwnerPick | undefined,
+    firebaseUid: string | undefined,
+    firebaseEmail: string | null | undefined
+): UserRole {
+    const cid = String(companyId || "").trim();
+    if (!cid) return "viewer";
+
+    if (getLocalAuthToken(cid)) {
+        const u = getLocalAuthUser(cid);
+        if (u?.id === "local_admin_fallback") return "owner";
+        return normalizeStaffRoleString(u?.role);
+    }
+
+    if (row && firebaseUid) {
+        const ue = String(firebaseEmail || "").toLowerCase().trim();
+        const oid = String(row.ownerId || "").trim();
+        const oe = String(row.ownerEmail || "").toLowerCase().trim();
+        if (oid && oid === firebaseUid) return "owner";
+        if (oe && ue && oe === ue) return "owner";
+    }
+    return "viewer";
+}
+
+/** Local company recycle bin row: `permanently_delete_records` / `delete_records` header company se alag evaluate. */
+export function canForRecycleBinLocalCompany(
+    companyId: string,
+    row: RecycleBinCompanyOwnerPick | undefined,
+    firebaseUid: string | undefined,
+    firebaseEmail: string | null | undefined,
+    permission: Permission
+): boolean {
+    const role = getLocalSessionRoleForRecycleBinCompany(companyId, row, firebaseUid, firebaseEmail);
+    if (role === "owner") return true;
+    const idx = flattenedPermissions.indexOf(permission);
+    if (idx === -1) return false;
+    const arr = initialPermissionConfig.roles[role] || [];
+    return !!arr[idx];
+}
 
 export default usePermissions;

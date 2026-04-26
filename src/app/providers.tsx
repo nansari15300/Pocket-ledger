@@ -14,6 +14,8 @@ import { usePresence } from "@/hooks/usePresence";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
+import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
+import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 
 function PresenceManager() {
     usePresence();
@@ -27,6 +29,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <FirebaseErrorListener />
             <CompanyProvider>
                 <CapacitorAndroidBackButton />
+                <StaticFastResumeSyncManager />
+                <LiveMirrorFolderMissingDialog />
                 <PresenceManager />
                 <PrintLogoPreloader />
                 <DateProvider>

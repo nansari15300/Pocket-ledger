@@ -1,10 +1,23 @@
 
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useCompany } from "@/hooks/useCompany";
 import { PermissionRouteGuard } from "@/components/permission/PermissionRouteGuard";
-import { collection, query, where, onSnapshot, updateDoc, doc, deleteDoc, writeBatch, getDoc, getDocs, serverTimestamp } from "firebase/firestore";
+import {
+    collection,
+    query,
+    where,
+    onSnapshot,
+    updateDoc,
+    doc,
+    deleteDoc,
+    writeBatch,
+    getDoc,
+    getDocs,
+    serverTimestamp,
+    type QueryDocumentSnapshot,
+} from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,7 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Search, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
-import usePermissions from "@/hooks/usePermissions";
+import usePermissions, { canForRecycleBinLocalCompany } from "@/hooks/usePermissions";
 import { assertCan, PermissionDeniedError } from "@/lib/permissions/enforcePermission";
 import { PermissionButton } from "@/components/permission";
 import { cn } from "@/lib/utils";
@@ -27,7 +40,147 @@ import { sendTransactionAlert } from "@/lib/transactionAlerts";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { numericEntitlement, type PlanId } from "@/config/plans";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { getLocalCompanyById, listLocalCompanies, removeLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import {
+    getLocalCompanyById,
+    listLocalCompanies,
+    localCompanyRowIsDeleted,
+    removeLocalCompanyById,
+    upsertLocalCompany,
+} from "@/lib/localCompanyStore";
+import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
+import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
+import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
+import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
+import type { User } from "firebase/auth";
+import type { Permission } from "@/lib/permissions";
+
+/** Recycle bin me company row — header me shared company select ho to bhi owner apni deleted company manage kar sake. */
+function isRecycleBinOwnerCompanyItem(
+    item: DeletedItem,
+    user: { uid: string; email?: string | null } | null | undefined,
+    customUser: { role?: string; email?: string | null } | null | undefined
+): boolean {
+    const isCompany = item.collectionPath === "companies" || item.isRootCollection === true;
+    if (!isCompany || !user?.uid) return false;
+    if (customUser?.role === "SuperAdmin") return true;
+    if (item.ownerId && String(item.ownerId) === user.uid) return true;
+    const ue = (user.email || "").toLowerCase().trim();
+    const oe = String(item.ownerEmail || "").toLowerCase().trim();
+    return Boolean(ue && oe && ue === oe);
+}
+
+function assertRecycleBinAction(
+    item: DeletedItem,
+    can: (p: Permission) => boolean,
+    permission: Permission,
+    user: { uid: string; email?: string | null } | null | undefined,
+    customUser: { role?: string; email?: string | null } | null | undefined
+): void {
+    const isCompanyRow = item.collectionPath === "companies" || item.isRootCollection === true;
+    if (isCompanyRow && item.companyStorageSource === "local") {
+        const ok = canForRecycleBinLocalCompany(
+            item.id,
+            { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
+            user?.uid,
+            user?.email ?? null,
+            permission
+        );
+        if (!ok) {
+            throw new PermissionDeniedError("No permission for this local company.");
+        }
+        return;
+    }
+    if (isRecycleBinOwnerCompanyItem(item, user, customUser)) return;
+    assertCan(can, permission);
+}
+
+function mergeDeletedCompanyFirestoreDocs(
+    ownerDocs: QueryDocumentSnapshot[],
+    emailDocs: QueryDocumentSnapshot[]
+): DeletedItem[] {
+    const byId = new Map<string, DeletedItem>();
+    const add = (docSnap: QueryDocumentSnapshot) => {
+        const data = docSnap.data();
+        if (data.movedToAdminRecycleAt) return;
+        const storage = String(data.storageOption ?? "firebase").toLowerCase();
+        byId.set(docSnap.id, {
+            id: docSnap.id,
+            name: data.name || "Unnamed Company",
+            type: "Company",
+            deletedAt: coerceDeletedAtToDate(data.deletedAt) ?? undefined,
+            collectionPath: "companies",
+            isRootCollection: true,
+            ownerId: typeof data.ownerId === "string" ? data.ownerId : undefined,
+            ownerEmail: typeof data.ownerEmail === "string" ? data.ownerEmail : undefined,
+            companyStorageSource: storage === "local" ? "local" : "online",
+        });
+    };
+    ownerDocs.forEach(add);
+    emailDocs.forEach(add);
+    return Array.from(byId.values());
+}
+
+/** SQLite row: device-local company — server doc optional; recycle bin delete sirf local DB. */
+async function deletedCompanyUsesLocalStorageOnly(item: DeletedItem): Promise<boolean> {
+    if (item.companyStorageSource === "local") return true;
+    if (item.companyStorageSource === "online") return false;
+    const row = await getLocalCompanyById(item.id, { includeDeleted: true });
+    if (!row) return false;
+    return String((row as { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
+}
+
+/** Empty bin loop: `cid` ke liye row list me na ho to bhi SQLite se local detect karo. */
+async function recycleBinCompanyIdIsLocalStorageOnly(companyId: string, items: DeletedItem[]): Promise<boolean> {
+    const hint = items.find(
+        (i) => i.id === companyId && (i.collectionPath === "companies" || i.isRootCollection === true)
+    );
+    if (hint) return deletedCompanyUsesLocalStorageOnly(hint);
+    const row = await getLocalCompanyById(companyId, { includeDeleted: true });
+    if (!row) return false;
+    return String((row as { storageOption?: string }).storageOption || "local").toLowerCase() === "local";
+}
+
+/** Firestore pe `storageOption` na ho to assert / buttons se pehle SQLite se source set karo. */
+async function ensureCompanyRecycleBinItemStorage(item: DeletedItem): Promise<DeletedItem> {
+    const isCo = item.collectionPath === "companies" || item.isRootCollection === true;
+    if (!isCo) return item;
+    if (item.companyStorageSource === "local" || item.companyStorageSource === "online") return item;
+    const row = await getLocalCompanyById(item.id, { includeDeleted: true });
+    if (!row) {
+        return { ...item, companyStorageSource: isLocalOnlyMode() ? "local" : "online" };
+    }
+    const src =
+        String((row as { storageOption?: string }).storageOption || "firebase").toLowerCase() === "local"
+            ? ("local" as const)
+            : ("online" as const);
+    return { ...item, companyStorageSource: src };
+}
+
+async function finalizeOwnerDeletedCompanyOnline(
+    companyId: string,
+    firebaseUser: User,
+    clientQuickDelete: boolean
+): Promise<{ success: boolean; error?: string }> {
+    const apiRes = await ownerFinalizeRecycleBinCompanyOnServer({
+        companyId,
+        getIdToken: () => firebaseUser.getIdToken(),
+    });
+    if (apiRes.ok) return { success: true };
+    if (apiRes.ok === false && apiRes.tryClientFallback) {
+        if (clientQuickDelete) {
+            return deleteCompanyComplete(companyId, firebaseUser.uid);
+        }
+        try {
+            await updateDoc(doc(firestore, "companies", companyId), {
+                movedToAdminRecycleAt: serverTimestamp(),
+            });
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e instanceof Error ? e.message : "update_failed" };
+        }
+    }
+    return { success: false, error: apiRes.ok === false ? apiRes.error : "finalize_failed" };
+}
 
 const COLLECTIONS_TO_CHECK = [
     { path: 'parties', nameField: 'name', type: 'Party' },
@@ -55,7 +208,7 @@ export default function RecycleBinPage() {
 function RecycleBinContent() {
     const { user, customUser } = useAuth();
     const { can } = usePermissions();
-    const { companyId, company, allCompanies } = useCompany();
+    const { companyId, company, allCompanies, localCompanyRegistryEpoch, reloadLocalCompanyRegistry } = useCompany();
     const livePlans = useLivePlans();
     const { journalAccountNames } = useVouchers();
     const [deletedItems, setDeletedItems] = useState<DeletedItem[]>([]);
@@ -69,6 +222,20 @@ function RecycleBinContent() {
     const [recycleBinConfig, setRecycleBinConfig] = useState<RecycleBinConfig | null>(null);
     const [, setCountdownTick] = useState(0);
     const [atMaxCompanies, setAtMaxCompanies] = useState(false);
+    /** Local company username/password change par recycle bin buttons dobara evaluate. */
+    const [localPermEpoch, setLocalPermEpoch] = useState(0);
+
+    useEffect(() => {
+        const onLocalAuth = () => setLocalPermEpoch((n) => n + 1);
+        window.addEventListener(LOCAL_AUTH_CHANGED_EVENT, onLocalAuth);
+        return () => window.removeEventListener(LOCAL_AUTH_CHANGED_EVENT, onLocalAuth);
+    }, []);
+
+    const removeDeletedItemFromState = useCallback((item: DeletedItem) => {
+        setDeletedItems((prev) =>
+            prev.filter((x) => !(x.id === item.id && x.collectionPath === item.collectionPath))
+        );
+    }, []);
 
     // Non-deleted company count vs plan limit (to disable company restore when at max)
     useEffect(() => {
@@ -129,15 +296,21 @@ function RecycleBinContent() {
                 listLocalCompanies({ includeDeleted: true })
                     .then((rows) => {
                         const companyItems: DeletedItem[] = rows
-                            .filter((c) => c.isDeleted === true)
-                            .map((c) => ({
-                                id: c.id,
-                                name: String(c.name || "Unnamed Company"),
-                                type: "Company",
-                                deletedAt: c.deletedAt ? new Date(c.deletedAt as any) : new Date(),
-                                collectionPath: "companies",
-                                isRootCollection: true,
-                            }));
+                            .filter((c) => localCompanyRowIsDeleted(c))
+                            .map((c) => {
+                                const storage = String((c as { storageOption?: string }).storageOption ?? "local").toLowerCase();
+                                return {
+                                    id: c.id,
+                                    name: String(c.name || "Unnamed Company"),
+                                    type: "Company",
+                                    deletedAt: coerceDeletedAtToDate(c.deletedAt) ?? undefined,
+                                    collectionPath: "companies",
+                                    isRootCollection: true,
+                                    ownerId: typeof c.ownerId === "string" ? c.ownerId : undefined,
+                                    ownerEmail: typeof c.ownerEmail === "string" ? c.ownerEmail : undefined,
+                                    companyStorageSource: storage === "local" ? ("local" as const) : ("online" as const),
+                                };
+                            });
                         setDeletedItems((prev) => {
                             const otherItems = prev.filter((item) => item.collectionPath !== "companies");
                             return [...otherItems, ...companyItems];
@@ -150,40 +323,99 @@ function RecycleBinContent() {
                 return;
             }
             setLoading(true);
+            const ownerDocsRef: { current: QueryDocumentSnapshot[] } = { current: [] };
+            const emailDocsRef: { current: QueryDocumentSnapshot[] } = { current: [] };
+
+            const flushDeletedCompanies = () => {
+                const emailDocs =
+                    customUser?.role === "SuperAdmin" && user.email ? emailDocsRef.current : [];
+                const companyItems = mergeDeletedCompanyFirestoreDocs(ownerDocsRef.current, emailDocs);
+                setDeletedItems((prev) => {
+                    const otherItems = prev.filter((item) => item.collectionPath !== "companies");
+                    return [...otherItems, ...companyItems];
+                });
+                setLoading(false);
+            };
+
             const qCompanies = query(
                 collection(firestore, "companies"),
                 where("ownerId", "==", user.uid),
                 where("isDeleted", "==", true)
             );
-            const unsubCompanies = onSnapshot(qCompanies, (snapshot) => {
-                const companyItems = snapshot.docs
-                    .filter(d => !d.data().movedToAdminRecycleAt)
-                    .map(docSnap => {
-                        const data = docSnap.data();
-                        return {
-                            id: docSnap.id,
-                            name: data.name || 'Unnamed Company',
-                            type: 'Company',
-                            deletedAt: data.deletedAt?.toDate ? data.deletedAt.toDate() : new Date(),
-                            collectionPath: 'companies',
-                            isRootCollection: true,
-                        };
-                    });
-                setDeletedItems(prev => {
-                    const otherItems = prev.filter(item => item.collectionPath !== 'companies');
-                    return [...otherItems, ...companyItems];
-                });
-                setLoading(false);
-            }, (error) => {
-                console.error("Error fetching deleted companies:", error);
-                setLoading(false);
-            });
+            const unsubCompanies = onSnapshot(
+                qCompanies,
+                (snapshot) => {
+                    ownerDocsRef.current = snapshot.docs;
+                    flushDeletedCompanies();
+                },
+                (error) => {
+                    console.error("Error fetching deleted companies:", error);
+                    setLoading(false);
+                }
+            );
+
+            let unsubEmail: (() => void) | undefined;
+            if (customUser?.role === "SuperAdmin" && user.email) {
+                const raw = user.email.trim();
+                const lower = raw.toLowerCase();
+                const variants = raw === lower ? [lower] : [raw, lower];
+                const qByEmail = query(
+                    collection(firestore, "companies"),
+                    where("ownerEmail", "in", variants),
+                    where("isDeleted", "==", true)
+                );
+                unsubEmail = onSnapshot(
+                    qByEmail,
+                    (snapshot) => {
+                        emailDocsRef.current = snapshot.docs;
+                        flushDeletedCompanies();
+                    },
+                    (error) => {
+                        console.error("Error fetching deleted companies (ownerEmail):", error);
+                    }
+                );
+            }
+
             const timeout = setTimeout(() => setLoading(false), 5000);
             return () => {
                 unsubCompanies();
+                unsubEmail?.();
                 clearTimeout(timeout);
             };
-        }, [user?.uid]);
+        }, [user?.uid, user?.email, customUser?.role, localCompanyRegistryEpoch]);
+
+    // Online app: Firestore `storageOption` miss ho to SQLite se Local/Online badge align karo.
+    useEffect(() => {
+        if (isLocalOnlyMode() || !user?.uid) return;
+        let cancelled = false;
+        (async () => {
+            const companyRows = deletedItems.filter(
+                (i) => i.collectionPath === "companies" || i.isRootCollection === true
+            );
+            if (companyRows.length === 0) return;
+            const patches = new Map<string, "local" | "online">();
+            for (const it of companyRows) {
+                const row = await getLocalCompanyById(it.id, { includeDeleted: true });
+                if (cancelled || !row) continue;
+                const src =
+                    String((row as { storageOption?: string }).storageOption || "firebase").toLowerCase() === "local"
+                        ? ("local" as const)
+                        : ("online" as const);
+                if (it.companyStorageSource !== src) patches.set(it.id, src);
+            }
+            if (cancelled || patches.size === 0) return;
+            setDeletedItems((prev) =>
+                prev.map((p) => {
+                    if (!(p.collectionPath === "companies" || p.isRootCollection === true)) return p;
+                    const s = patches.get(p.id);
+                    return s ? { ...p, companyStorageSource: s } : p;
+                })
+            );
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [deletedItems, user?.uid]);
 
         // Deleted items from subcollections (parties, vouchers, etc.): only when a company is selected
         useEffect(() => {
@@ -205,14 +437,11 @@ function RecycleBinContent() {
                     .filter(docSnap => !docSnap.data().movedToAdminRecycleAt)
                     .map(docSnap => {
                     const data = docSnap.data();
-                    const deletedAtValue = data.deletedAt;
-                    const deletedAtDate = deletedAtValue?.toDate ? deletedAtValue.toDate() : (deletedAtValue instanceof Date ? deletedAtValue : new Date());
-
                     const item: DeletedItem = {
                         id: docSnap.id,
                         name: data[coll.nameField] || data.title || `Voucher ${data.voucherNumber}` || 'Unnamed',
                         type: coll.type,
-                        deletedAt: deletedAtDate,
+                        deletedAt: coerceDeletedAtToDate(data.deletedAt) ?? undefined,
                         collectionPath: coll.path,
                         convertedToType: data.convertedToType,
                         convertedToVoucherNumber: data.convertedToVoucherNumber,
@@ -349,7 +578,8 @@ function RecycleBinContent() {
     const enrichedDeletedItems = useMemo(() => {
         return deletedItems.map(item => {
             const enriched = { ...item };
-            
+            // `companyStorageSource` Firestore merge / SQLite sync effect se aata hai — default "online" mat lagao (local row galat assert ho jata tha).
+
             // Add user name
             const userIdToUse = enriched.deletedBy || enriched.userId;
             if (userIdToUse && userNames[userIdToUse]) {
@@ -366,14 +596,15 @@ function RecycleBinContent() {
 
             return enriched;
         });
-    }, [deletedItems, userNames, journalAccountNames, accountNames]);
+    }, [deletedItems, userNames, journalAccountNames, accountNames, localPermEpoch]);
     
     const handleRestore = async (item: DeletedItem) => {
-        const isCompany = item.collectionPath === 'companies' || item.isRootCollection;
+        const resolvedItem = await ensureCompanyRecycleBinItemStorage(item);
+        const isCompany = resolvedItem.collectionPath === "companies" || resolvedItem.isRootCollection === true;
         if (!companyId && !isCompany) return;
 
         try {
-            assertCan(can, "delete_records");
+            assertRecycleBinAction(resolvedItem, can, "delete_records", user, customUser);
         } catch (error) {
             if (error instanceof PermissionDeniedError) {
                 toast({
@@ -455,24 +686,26 @@ function RecycleBinContent() {
         try {
             if (isCompany && isLocalOnlyMode()) {
                 // Local-only mode: recycle bin se company restore local table par karo.
-                const localCompany = await getLocalCompanyById(item.id, { includeDeleted: true });
+                const localCompany = await getLocalCompanyById(resolvedItem.id, { includeDeleted: true });
                 if (!localCompany) throw new Error("Local company not found");
                 await upsertLocalCompany({
                     ...localCompany,
-                    id: item.id,
+                    id: resolvedItem.id,
                     isDeleted: false,
                     deletedAt: null,
                 });
             } else {
                 const docRef = isCompany
-                    ? doc(firestore, 'companies', item.id)
-                    : doc(firestore, `companies/${companyId}/${item.collectionPath}`, item.id);
+                    ? doc(firestore, "companies", resolvedItem.id)
+                    : doc(firestore, `companies/${companyId}/${resolvedItem.collectionPath}`, resolvedItem.id);
                 await updateDoc(docRef, {
                     isDeleted: false,
                     deletedAt: null,
                 });
             }
-            toast({ title: "Restored!", description: `"${item.name}" has been restored.` });
+            removeDeletedItemFromState(resolvedItem);
+            if (isCompany) reloadLocalCompanyRegistry();
+            toast({ title: "Restored!", description: `"${resolvedItem.name}" has been restored.` });
         } catch (error) {
             console.error('Restore failed:', error);
             toast({ variant: 'destructive', title: "Error", description: "Failed to restore item." });
@@ -519,11 +752,12 @@ function RecycleBinContent() {
     };
 
     const handlePermanentDelete = async (item: DeletedItem) => {
-        const isCompany = item.collectionPath === 'companies';
+        const resolvedItem = await ensureCompanyRecycleBinItemStorage(item);
+        const isCompany = resolvedItem.collectionPath === "companies" || resolvedItem.isRootCollection === true;
         if (!companyId && !isCompany) return;
         
         try {
-            assertCan(can, "permanently_delete_records");
+            assertRecycleBinAction(resolvedItem, can, "permanently_delete_records", user, customUser);
         } catch (error) {
             if (error instanceof PermissionDeniedError) {
                 toast({
@@ -548,26 +782,46 @@ function RecycleBinContent() {
         setIsProcessing(true);
         try {
             if (isCompany) {
-                if (isLocalOnlyMode()) {
-                    // Local-only mode: permanent delete means local company registry se purge.
-                    await removeLocalCompanyById(item.id, { firebaseUid: user?.uid ?? null });
-                    toast({ title: "Deleted permanently", description: `"${item.name}" has been removed from your recycle bin.` });
+                if (!isLocalOnlyMode() && (await deletedCompanyUsesLocalStorageOnly(resolvedItem))) {
+                    try {
+                        await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
+                    } catch {
+                        /* optional cloud row / rules — SQLite hataana zaroori */
+                    }
+                    await removeLocalCompanyById(resolvedItem.id, { firebaseUid: user?.uid ?? null });
+                    removeDeletedItemFromState(resolvedItem);
+                    reloadLocalCompanyRegistry();
+                    toast({
+                        title: quickDelete ? "Success" : "Deleted permanently",
+                        description: quickDelete
+                            ? `"${resolvedItem.name}" deleted permanently.`
+                            : `"${resolvedItem.name}" has been removed from your recycle bin.`,
+                    });
                     return;
                 }
+                if (isLocalOnlyMode()) {
+                    // Pehle Firestore (cloud row ab bhi `isDeleted` ke saath ho sakta hai) — warna refresh par mirror SQLite me wapas bhar deta hai.
+                    const fin = await finalizeCompanyPermanentDeleteOnServer(resolvedItem.id, quickDelete, user?.uid || "");
+                    if (fin.ok === false) throw new Error(fin.error);
+                    await removeLocalCompanyById(resolvedItem.id, { firebaseUid: user?.uid ?? null });
+                    removeDeletedItemFromState(resolvedItem);
+                    reloadLocalCompanyRegistry();
+                    toast({ title: "Deleted permanently", description: `"${resolvedItem.name}" has been removed from your recycle bin.` });
+                    return;
+                }
+                if (!user) throw new Error("Please sign in to delete.");
+                const finOnline = await finalizeOwnerDeletedCompanyOnline(resolvedItem.id, user, quickDelete);
+                if (!finOnline.success) throw new Error(finOnline.error || "Permanent delete failed.");
+                removeDeletedItemFromState(resolvedItem);
                 if (quickDelete) {
-                    const result = await deleteCompanyComplete(item.id, user?.uid || "");
-                    if (!result.success) throw new Error(result.error);
-                    toast({ title: "Success", description: `"${item.name}" deleted permanently.` });
+                    toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
                 } else {
-                    await updateDoc(doc(firestore, "companies", item.id), {
-                        movedToAdminRecycleAt: serverTimestamp(),
-                    });
-                    toast({ title: "Deleted permanently", description: `"${item.name}" has been removed from your recycle bin.` });
+                    toast({ title: "Deleted permanently", description: `"${resolvedItem.name}" has been removed from your recycle bin.` });
                 }
                 return;
             }
 
-            const docPath = `companies/${companyId}/${item.collectionPath}/${item.id}`;
+            const docPath = `companies/${companyId}/${resolvedItem.collectionPath}/${resolvedItem.id}`;
             const docRef = doc(firestore, docPath);
 
             if (quickDelete) {
@@ -576,25 +830,31 @@ function RecycleBinContent() {
                     await deleteStorageFilesForDoc(docSnap.data() as Record<string, unknown>);
                 }
                 await deleteDoc(docRef);
-                if (item.collectionPath === "vouchers" && companyId && company) {
+                if (resolvedItem.collectionPath === "vouchers" && companyId && company) {
                   await sendTransactionAlert(companyId, company, {
                     kind: "deleted",
-                    voucherId: item.id,
-                    voucherNumber: (item as any).voucherNumber || item.name,
-                    voucherType: (item as any).type,
+                    voucherId: resolvedItem.id,
+                    voucherNumber: (resolvedItem as any).voucherNumber || resolvedItem.name,
+                    voucherType: (resolvedItem as any).type,
                     performedByUserId: user?.uid,
                     performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
                     performedByEmail: user?.email ?? undefined,
                   });
                 }
-                toast({ title: "Success", description: `"${item.name}" deleted permanently.` });
+                removeDeletedItemFromState(resolvedItem);
+                toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
             } else {
                 await updateDoc(docRef, { movedToAdminRecycleAt: serverTimestamp() });
+                removeDeletedItemFromState(resolvedItem);
                 toast({ title: "Deleted permanently", description: "Item has been removed from your recycle bin." });
             }
         } catch (error) {
             console.error("Delete Error:", error);
-            toast({ variant: 'destructive', title: "Error", description: "Permanent delete failed." });
+            toast({
+                variant: "destructive",
+                title: "Error",
+                description: error instanceof Error && error.message ? error.message : "Permanent delete failed.",
+            });
         } finally {
             setItemToConfirm(null);
             setIsProcessing(false);
@@ -603,25 +863,29 @@ function RecycleBinContent() {
 
     const handleEmptyBin = async () => {
         if (deletedItems.length === 0) return;
+
+        const resolvedBinItems = await Promise.all(deletedItems.map((it) => ensureCompanyRecycleBinItemStorage(it)));
         
-        try {
-            assertCan(can, "permanently_delete_records");
-        } catch (error) {
-            if (error instanceof PermissionDeniedError) {
-                toast({
-                    variant: "destructive",
-                    title: "Permission Denied",
-                    description: error.message,
-                });
-            } else {
-                toast({
-                    variant: "destructive",
-                    title: "Error",
-                    description: "Failed to check permissions.",
-                });
+        for (const item of resolvedBinItems) {
+            try {
+                assertRecycleBinAction(item, can, "permanently_delete_records", user, customUser);
+            } catch (error) {
+                if (error instanceof PermissionDeniedError) {
+                    toast({
+                        variant: "destructive",
+                        title: "Permission Denied",
+                        description: error.message,
+                    });
+                } else {
+                    toast({
+                        variant: "destructive",
+                        title: "Error",
+                        description: "Failed to check permissions.",
+                    });
+                }
+                setIsEmptyDialogOpen(false);
+                return;
             }
-            setIsEmptyDialogOpen(false);
-            return;
         }
         
         setIsProcessing(true);
@@ -632,18 +896,25 @@ function RecycleBinContent() {
         const quickDelete = recycleBinConfig?.quickDelete ?? false;
         const companyIds: string[] = [];
         const nonCompanyItems: DeletedItem[] = [];
-        for (const item of deletedItems) {
-            if (item.collectionPath === "companies") companyIds.push(item.id);
+        for (const item of resolvedBinItems) {
+            if (item.collectionPath === "companies" || item.isRootCollection === true) companyIds.push(item.id);
             else nonCompanyItems.push(item);
         }
 
         try {
             if (isLocalOnlyMode()) {
-                // Deleted companies: SQLite registry se purge. Vouchers/bank_accounts Firestore pe hain — neeche `nonCompanyItems` loop zaroor chale.
+                // Har company: pehle Firestore finalize, phir SQLite — taaki refresh par mirror dubara bin me na laaye.
                 for (const cid of companyIds) {
+                    const fin = await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
+                    if (fin.ok === false) {
+                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to delete company." });
+                        setIsProcessing(false);
+                        return;
+                    }
                     await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
                 }
                 if (companyIds.length > 0) {
+                    reloadLocalCompanyRegistry();
                     setDeletedItems((prev) => prev.filter((item) => item.collectionPath !== "companies"));
                 }
                 if (nonCompanyItems.length === 0) {
@@ -664,10 +935,24 @@ function RecycleBinContent() {
             const firestoreCompanyIds = isLocalOnlyMode() ? [] : companyIds;
 
             if (quickDelete) {
+                if (!user) {
+                    toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
+                    setIsProcessing(false);
+                    return;
+                }
                 for (const cid of firestoreCompanyIds) {
-                    const result = await deleteCompanyComplete(cid, user?.uid || "");
-                    if (!result.success) {
-                        toast({ variant: "destructive", title: "Error", description: result.error || "Failed to delete company." });
+                    if (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems)) {
+                        try {
+                            await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
+                        } catch {
+                            /* ignore */
+                        }
+                        await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
+                        continue;
+                    }
+                    const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, true);
+                    if (!fin.success) {
+                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to delete company." });
                         setIsProcessing(false);
                         return;
                     }
@@ -694,8 +979,27 @@ function RecycleBinContent() {
                 }
                 toast({ title: "Bin Emptied", description: "All items permanently deleted from server." });
             } else {
+                if (!user) {
+                    toast({ variant: "destructive", title: "Error", description: "Please sign in to empty the bin." });
+                    setIsProcessing(false);
+                    return;
+                }
                 for (const cid of firestoreCompanyIds) {
-                    await updateDoc(doc(firestore, "companies", cid), { movedToAdminRecycleAt: serverTimestamp() });
+                    if (await recycleBinCompanyIdIsLocalStorageOnly(cid, resolvedBinItems)) {
+                        try {
+                            await finalizeCompanyPermanentDeleteOnServer(cid, quickDelete, user?.uid || "");
+                        } catch {
+                            /* ignore */
+                        }
+                        await removeLocalCompanyById(cid, { firebaseUid: user?.uid ?? null });
+                        continue;
+                    }
+                    const fin = await finalizeOwnerDeletedCompanyOnline(cid, user, false);
+                    if (!fin.success) {
+                        toast({ variant: "destructive", title: "Error", description: fin.error || "Failed to update company." });
+                        setIsProcessing(false);
+                        return;
+                    }
                 }
                 const batch = writeBatch(firestore);
                 for (const item of nonCompanyItems) {
@@ -704,6 +1008,7 @@ function RecycleBinContent() {
                 await batch.commit();
                 toast({ title: "Deleted permanently", description: "All items have been removed from your recycle bin." });
             }
+            if (companyIds.length > 0) reloadLocalCompanyRegistry();
             setDeletedItems([]);
             setUserNames({});
         } catch (error) {
@@ -728,6 +1033,43 @@ function RecycleBinContent() {
                 return acc;
             }, {} as Record<string, DeletedItem[]>);
     }, [enrichedDeletedItems, searchTerm]);
+
+    /** Shared company select par bhi jab sirf apni deleted companies hon to Empty Bin chale. */
+    const canEmptyRecycleBin = useMemo(() => {
+        if (enrichedDeletedItems.length === 0) return false;
+        return enrichedDeletedItems.every((item) => {
+            const isCompanyRow = item.collectionPath === "companies" || item.isRootCollection === true;
+            if (isCompanyRow && item.companyStorageSource === "local") {
+                return canForRecycleBinLocalCompany(
+                    item.id,
+                    { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
+                    user?.uid,
+                    user?.email ?? null,
+                    "permanently_delete_records"
+                );
+            }
+            if (isCompanyRow && item.companyStorageSource === "online") {
+                if (isRecycleBinOwnerCompanyItem(item, user, customUser)) return true;
+                return can("permanently_delete_records");
+            }
+            if (isCompanyRow && item.companyStorageSource !== "local" && item.companyStorageSource !== "online") {
+                if (isRecycleBinOwnerCompanyItem(item, user, customUser)) return true;
+                if (
+                    canForRecycleBinLocalCompany(
+                        item.id,
+                        { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
+                        user?.uid,
+                        user?.email ?? null,
+                        "permanently_delete_records"
+                    )
+                ) {
+                    return true;
+                }
+                return can("permanently_delete_records");
+            }
+            return can("permanently_delete_records");
+        });
+    }, [enrichedDeletedItems, user, customUser, can, localPermEpoch]);
     
     if (loading) {
         return (
@@ -747,17 +1089,18 @@ function RecycleBinContent() {
                     <p className="text-sm sm:text-base text-muted-foreground mt-1">Deleted items are stored here. Converted vouchers are also shown for audit purposes.</p>
                 </div>
                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 w-full sm:w-auto">
-                     <PermissionButton 
-                        permission="permanently_delete_records"
-                        variant="destructive" 
-                        onClick={() => setIsEmptyDialogOpen(true)} 
-                        disabled={enrichedDeletedItems.length === 0 || isProcessing}
+                     <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={() => setIsEmptyDialogOpen(true)}
+                        disabled={enrichedDeletedItems.length === 0 || isProcessing || !canEmptyRecycleBin}
                         className="w-full sm:w-auto"
+                        title={!canEmptyRecycleBin && enrichedDeletedItems.length > 0 ? "Some items cannot be permanently deleted with your role in the selected company." : undefined}
                     >
                         {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Trash2 className="mr-2 h-4 w-4" />} 
                         <span className="hidden sm:inline">Empty Bin</span>
                         <span className="sm:hidden">Empty</span>
-                    </PermissionButton>
+                    </Button>
                     <div className="relative w-full sm:w-auto sm:max-w-sm">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
@@ -798,6 +1141,32 @@ function RecycleBinContent() {
                                                     item={item} 
                                                     onRestore={() => setItemToConfirm({item, action: 'restore'})} 
                                                     onDelete={() => setItemToConfirm({item, action: 'delete'})}
+                                                    ownerScopedCompanyActions={
+                                                        item.companyStorageSource === "online" &&
+                                                        isRecycleBinOwnerCompanyItem(item, user, customUser)
+                                                    }
+                                                    localRecycleBinRestore={
+                                                        item.companyStorageSource === "local"
+                                                            ? canForRecycleBinLocalCompany(
+                                                                  item.id,
+                                                                  { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
+                                                                  user?.uid,
+                                                                  user?.email ?? null,
+                                                                  "delete_records"
+                                                              )
+                                                            : undefined
+                                                    }
+                                                    localRecycleBinPermanentDelete={
+                                                        item.companyStorageSource === "local"
+                                                            ? canForRecycleBinLocalCompany(
+                                                                  item.id,
+                                                                  { ownerId: item.ownerId, ownerEmail: item.ownerEmail },
+                                                                  user?.uid,
+                                                                  user?.email ?? null,
+                                                                  "permanently_delete_records"
+                                                              )
+                                                            : undefined
+                                                    }
                                                     restoreDisabled={item.isRootCollection || item.collectionPath === 'companies' ? atMaxCompanies : false}
                                                     compactView
                                                     daysToPermanentDeleteText={recycleBinConfig && !recycleBinConfig.quickDelete ? (() => {

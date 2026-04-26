@@ -192,12 +192,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const staffRefSnap = staff;
-    setDialogOpen(false);
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating staff member...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+      setIsLoading(true);
       try {
         let fileUrl: string | null = typeof fileSnap === "string" ? fileSnap : null;
         const newDocFiles = docSlotsSnap.filter((x): x is File => x instanceof File);
@@ -290,16 +290,17 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           await upsertCompanyDocInBrowserDb(companyId, "staff", staffRefSnap.id, payload);
           await enqueueCompanyDocOutbox(companyId, "staff", "update", staffRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
-          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
-            id: toastId,
-            description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
-          });
           onStaffUpdated({
             id: staffRefSnap.id,
             ...values,
             fileUrl: fileUrl || "",
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
+          });
+          setDialogOpen(false);
+          sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
+            id: toastId,
+            description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
           });
           return;
         }
@@ -332,7 +333,6 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           await balanceOpeningBalanceWithCapital(companyId, "staff", staffRefSnap.id, oldOpeningBalance, newOpeningBalance);
         }
 
-        sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
         onStaffUpdated({
           id: staffRefSnap.id,
           ...values,
@@ -340,12 +340,16 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
+        setDialogOpen(false);
+        sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating staff:", error);
         sonnerToast.error("Error Updating Staff", {
           id: toastId,
           description: error instanceof Error ? error.message : "An error occurred. Please try again.",
         });
+      } finally {
+        setIsLoading(false);
       }
     })();
   }
@@ -683,7 +687,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
 
               <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
                 <DialogClose asChild>
-                  <Button variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost">Cancel</Button>
                 </DialogClose>
                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
                   <TooltipProvider>
@@ -719,7 +723,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                       </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button type="submit" className="col-span-2 sm:col-span-1 sm:ml-auto">
+                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
               </DialogFooter>

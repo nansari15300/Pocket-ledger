@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff } from "lucide-react";
+import { Download, Upload, Loader2, FileWarning, ShieldCheck, ShieldOff, Eye, EyeOff, Folder } from "lucide-react";
 import { useCompany } from "@/hooks/useCompany";
 import {
   collection,
@@ -22,6 +22,8 @@ import {
   limit,
   startAfter,
   documentId,
+  updateDoc,
+  deleteField,
 } from "firebase/firestore";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
@@ -30,7 +32,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
-import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { Label } from "../ui/label";
 import { PermissionButton } from "@/components/permission";
@@ -42,19 +44,39 @@ import { ToastAction } from "../ui/toast";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { flushBrowserDbToIndexedDB } from "@/lib/localSqlite";
 import {
-  deleteAllCompanyDocsForCompany,
   upsertCompanyDocInBrowserDb,
   notifyBrowserDbCollectionUpdated,
   listCompanyDocsFromBrowserDb,
 } from "@/lib/localCompanyDocMirror";
-import { clearSyncOutboxForCompany } from "@/lib/localVoucherOutbox";
+import { pushAllLocalCompanyDocsToFirestore } from "@/lib/migrateLocalCompanySubcollectionsToFirestore";
 import { Capacitor } from "@capacitor/core";
 import {
   readBackupSaveLocationPrefs,
   readWebBackupDirectoryHandle,
   isNativeRuntime,
   ensureNativeBackupStoragePermission,
+  canPickWebBackupFolder,
+  clearWebBackupDirectoryHandle,
+  saveBackupSaveLocationPrefs,
+  storeWebBackupDirectoryHandle,
+  storeWebLiveDataDirectoryHandle,
+  clearWebLiveDataDirectoryHandle,
+  readWebLiveDataDirectoryHandle,
+  ensureLiveMirrorAutoPassphrase,
 } from "@/lib/backupSaveLocation";
+import {
+  readLiveDataFolderPrefs,
+  saveLiveDataFolderPrefs,
+  syncAllLocalCompanyMirrorsToFolder,
+  clearLiveDataFolderPrefsAndSession,
+  ensureLiveDataMirrorSalt,
+  POCKET_LEDGER_MIRROR_DIR,
+  COMPANIES_DIR_SEGMENT,
+  getOrCreatePocketLedgerDir,
+} from "@/lib/liveDataFolderMirror";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { generateCompanyId } from "@/lib/generateCompanyId";
 
 /** Local/static restore: SQLite `companies` + `company_docs` — create-company-local jaisa; Firebase password zaroori nahi */
 function fiscalFieldToLocalIso(val: unknown): string | null {
@@ -98,11 +120,75 @@ async function blobToBase64DataUrl(blob: Blob): Promise<string> {
 /**
  * Backup file download/save:
  * - Web: File System Access "Save As" (location picker) if supported.
- * - Native APK: Documents me write + share sheet (user can choose destination/app).
+ * - Native APK: optional SAF tree (`content://...`) via BackupSaf plugin; else Documents + share sheet.
  * - Fallback: anchor download.
  */
 async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promise<{ where: string }> {
   const savePrefs = readBackupSaveLocationPrefs();
+  // Native APK must use native branch first; web picker on Android WebView can throw AbortError and fake "location not selected".
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const dataUrl = await blobToBase64DataUrl(blob);
+      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
+      const treeUri = String(savePrefs.nativeFolderPath || "").trim();
+
+      // Folder picker on Android returns a SAF tree URI — Capacitor Filesystem cannot write there; use native plugin.
+      if (treeUri.startsWith("content://")) {
+        try {
+          const { BackupSaf } = await import("@/lib/capacitorBackupSaf");
+          await BackupSaf.writeToTreeUri({ treeUri, fileName, data: base64 });
+          return { where: "Selected folder (device)" };
+        } catch {
+          /* fall through to Documents + Share */
+        }
+      }
+
+      const { Filesystem, Directory } = await import("@capacitor/filesystem");
+      const { Share } = await import("@capacitor/share");
+      // Static build/native: request storage permission before writing backup file (app Documents / external).
+      const granted = await ensureNativeBackupStoragePermission();
+      if (!granted) {
+        throw new Error(
+          "Storage permission denied. Choose a folder under Backup & Restore → Backup location, or save via Share."
+        );
+      }
+      const nativeDirectory =
+        savePrefs.nativeDirectory === "EXTERNAL"
+          ? ((Directory as unknown as Record<string, unknown>).ExternalStorage ?? Directory.Documents)
+          : Directory.Documents;
+      const rawSubfolder = String(savePrefs.nativeSubfolder || "").trim();
+      const safeSubfolder = rawSubfolder.replace(/^[\\/]+|[\\/]+$/g, "");
+      const finalPath = safeSubfolder ? `${safeSubfolder}/${fileName}` : fileName;
+      if (safeSubfolder) {
+        await Filesystem.mkdir({
+          path: safeSubfolder,
+          directory: nativeDirectory as any,
+          recursive: true,
+        }).catch(() => undefined);
+      }
+      await Filesystem.writeFile({
+        path: finalPath,
+        data: base64,
+        directory: nativeDirectory as any,
+      });
+      const savedUriResp = await Filesystem.getUri({ path: finalPath, directory: nativeDirectory as any });
+      const savedUri = String((savedUriResp as any)?.uri || "");
+      try {
+        await Share.share({
+          title: fileName,
+          url: savedUri,
+          dialogTitle: "Save backup file",
+        });
+      } catch {
+        /* share cancel shouldn't fail backup write */
+      }
+      const dirLabel = savePrefs.nativeDirectory === "EXTERNAL" ? "ExternalStorage" : "Documents";
+      const where = `${dirLabel}/${finalPath}`;
+      return { where };
+    } catch {
+      // Native write fail -> continue to browser/web fallback
+    }
+  }
   let webPreferredFolderFailed = false;
   if (typeof window !== "undefined") {
     try {
@@ -154,80 +240,6 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
     }
   }
 
-  try {
-    if (Capacitor.isNativePlatform()) {
-      const { Filesystem, Directory } = await import("@capacitor/filesystem");
-      const { Share } = await import("@capacitor/share");
-      // Static build/native: request storage permission before writing backup file.
-      const granted = await ensureNativeBackupStoragePermission();
-      if (!granted) {
-        throw new Error("Storage permission denied. Allow device storage permission from Device location settings.");
-      }
-      const dataUrl = await blobToBase64DataUrl(blob);
-      const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1]! : dataUrl;
-      // Device settings: prefer saved native directory + subfolder so backup destination stays consistent.
-      const nativeDirectory =
-        savePrefs.nativeDirectory === "EXTERNAL"
-          ? ((Directory as unknown as Record<string, unknown>).ExternalStorage ?? Directory.Documents)
-          : Directory.Documents;
-      const rawSubfolder = String(savePrefs.nativeSubfolder || "").trim();
-      const safeSubfolder = rawSubfolder.replace(/^[\\/]+|[\\/]+$/g, "");
-      const pickedNativeFolderPath = String((savePrefs as any).nativeFolderPath || "").trim();
-      const hasPickedNativeFolder = pickedNativeFolderPath.length > 0;
-      if (safeSubfolder) {
-        await Filesystem.mkdir({
-          path: safeSubfolder,
-          directory: nativeDirectory as any,
-          recursive: true,
-        }).catch(() => undefined);
-      }
-      // If user selected folder from Device location dialog, prefer absolute-path write there; fallback to configured directory/subfolder.
-      const finalPath = safeSubfolder ? `${safeSubfolder}/${fileName}` : fileName;
-      let savedUri = "";
-      let savedWhere = "";
-      if (hasPickedNativeFolder) {
-        const normalizedBase = pickedNativeFolderPath.replace(/[\\/]+$/g, "");
-        const absoluteFilePath = `${normalizedBase}/${fileName}`;
-        try {
-          await Filesystem.writeFile({
-            path: absoluteFilePath,
-            data: base64,
-            recursive: true,
-          } as any);
-          const absUri = await Filesystem.getUri({ path: absoluteFilePath } as any);
-          savedUri = String((absUri as any)?.uri || "");
-          savedWhere = absoluteFilePath;
-        } catch {
-          // Fallback: plugin/path format may vary by device; continue with standard Documents/External flow.
-        }
-      }
-      if (!savedUri) {
-        await Filesystem.writeFile({
-          path: finalPath,
-          data: base64,
-          directory: nativeDirectory as any,
-        });
-        const fallbackUri = await Filesystem.getUri({ path: finalPath, directory: nativeDirectory as any });
-        savedUri = String((fallbackUri as any)?.uri || "");
-        const dirLabel = savePrefs.nativeDirectory === "EXTERNAL" ? "ExternalStorage" : "Documents";
-        savedWhere = `${dirLabel}/${finalPath}`;
-      }
-      try {
-        // User yahan se target app/location choose kar sakta hai (Drive, Files, etc.)
-        await Share.share({
-          title: fileName,
-          url: savedUri,
-          dialogTitle: "Save backup file",
-        });
-      } catch {
-        /* share optional */
-      }
-      return { where: savedWhere };
-    }
-  } catch {
-    // native write fail -> browser fallback
-  }
-
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
@@ -238,6 +250,39 @@ async function saveBackupBlobWithBestEffort(blob: Blob, fileName: string): Promi
     URL.revokeObjectURL(url);
   }
   return { where: "Browser Downloads folder" };
+}
+
+/** Native picker se aayi base64 payload ko browser-compatible File me convert karo. */
+function fileFromBase64Payload(base64Data: string, fileName: string, mimeType?: string): File {
+  const normalized = String(base64Data || "").includes(",")
+    ? String(base64Data).split(",")[1] || ""
+    : String(base64Data || "");
+  const binary = typeof atob === "function" ? atob(normalized) : "";
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fileName || "backup.plbp", {
+    type: mimeType || "application/octet-stream",
+  });
+}
+
+/** SAF/content URI ko user-friendly storage path label me badlo (UI display only). */
+function formatNativeFolderDisplayPath(folderPath: string | null): string {
+  const raw = String(folderPath || "").trim();
+  if (!raw) return "Not set";
+  if (!raw.startsWith("content://")) return raw;
+  try {
+    // Android tree URI pattern: .../tree/primary%3ADocuments -> storage/Documents
+    const treeEncoded = raw.includes("/tree/") ? raw.split("/tree/")[1] ?? "" : "";
+    const treeDecoded = decodeURIComponent(treeEncoded);
+    const [volumeRaw, ...segments] = treeDecoded.split(":");
+    const volume = String(volumeRaw || "").trim().toLowerCase();
+    const root = volume === "primary" ? "storage" : `storage/${volume || "selected"}`;
+    const suffix = segments.join(":").replace(/^\/+/, "");
+    return suffix ? `${root}/${suffix}` : root;
+  } catch {
+    // Decode fail hone par raw URI hi fallback rakho.
+    return raw;
+  }
 }
 
 /** Firestore subcollections `companies/{id}/…` — cloud doc id kabhi `authoritativeCompanyId` hota hai, registry `companyId` se alag */
@@ -412,6 +457,9 @@ export function BackupRestore() {
   };
 
   const { company, companyId, setCompanyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const { user, customUser } = useAuth();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -426,6 +474,18 @@ export function BackupRestore() {
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [decryptionError, setDecryptionError] = useState<string | null>(null);
   const [backupDataToRestore, setBackupDataToRestore] = useState<any>(null);
+  const [backupLocationDialogOpen, setBackupLocationDialogOpen] = useState(false);
+  const [webUseSelectedFolder, setWebUseSelectedFolder] = useState(false);
+  const [webFolderLabel, setWebFolderLabel] = useState<string | null>(null);
+  const [nativeFolderPath, setNativeFolderPath] = useState<string | null>(null);
+  const [savingBackupLocation, setSavingBackupLocation] = useState(false);
+  const [liveDataLocationDialogOpen, setLiveDataLocationDialogOpen] = useState(false);
+  const [liveWebEnabled, setLiveWebEnabled] = useState(false);
+  const [liveWebLabel, setLiveWebLabel] = useState<string | null>(null);
+  const [liveNativeFolderPath, setLiveNativeFolderPath] = useState<string | null>(null);
+  const [savingLiveDataLocation, setSavingLiveDataLocation] = useState(false);
+  const supportsWebFolderPicker = canPickWebBackupFolder();
+  const nativeRuntime = isNativeRuntime();
   /** Cloud-linked company: user choose SQLite vs Firestore — pehle default Firestore tha, local UI blank ho jati thi */
   const [restoreToLocalSqlite, setRestoreToLocalSqlite] = useState(true);
   /** Restore ke baad `companies.name`: default = jis slot mein restore ho raha hai (target); alternate = backup file ka naam */
@@ -437,6 +497,252 @@ export function BackupRestore() {
       setRestoreCompanyNameChoice("target");
     }
   }, [isOverwriteConfirmOpen]);
+
+  useEffect(() => {
+    // Hydrate backup location prefs for this device.
+    const prefs = readBackupSaveLocationPrefs();
+    setWebUseSelectedFolder(prefs.webUseSelectedFolder);
+    setWebFolderLabel(prefs.webFolderLabel);
+    setNativeFolderPath(prefs.nativeFolderPath ?? null);
+    const live = readLiveDataFolderPrefs();
+    setLiveWebEnabled(live.webEnabled);
+    setLiveWebLabel(live.webFolderLabel);
+    setLiveNativeFolderPath(live.nativeFolderPath);
+  }, []);
+
+  useEffect(() => {
+    // Deep link `?dialog=backup-location` opens the same popup as Backup location button.
+    if (searchParams.get("dialog") === "backup-location") {
+      setBackupLocationDialogOpen(true);
+    }
+  }, [searchParams]);
+
+  const closeBackupLocationDialog = () => {
+    setBackupLocationDialogOpen(false);
+    if (searchParams.get("dialog") !== "backup-location") return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("dialog");
+    const q = next.toString();
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+  };
+
+  const handlePickWebFolder = async () => {
+    if (!supportsWebFolderPicker) return;
+    try {
+      const picker = (window as any).showDirectoryPicker;
+      const handle = await picker({ mode: "readwrite" });
+      const ok = await storeWebBackupDirectoryHandle(handle);
+      if (!ok) {
+        toast({ variant: "destructive", title: "Failed", description: "Could not store selected folder on this device." });
+        return;
+      }
+      const nextLabel = String(handle?.name || "Selected folder");
+      const prev = readBackupSaveLocationPrefs();
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        webUseSelectedFolder: true,
+        webFolderLabel: nextLabel,
+      });
+      setWebUseSelectedFolder(true);
+      setWebFolderLabel(nextLabel);
+      toast({ title: "Backup location saved", description: `Folder set to ${nextLabel}.` });
+    } catch (e: any) {
+      if (e?.name === "AbortError") return;
+      toast({ variant: "destructive", title: "Failed", description: "Could not select backup folder." });
+    }
+  };
+
+  const handleClearWebFolder = async () => {
+    await clearWebBackupDirectoryHandle();
+    const prev = readBackupSaveLocationPrefs();
+    saveBackupSaveLocationPrefs({
+      ...prev,
+      webUseSelectedFolder: false,
+      webFolderLabel: null,
+    });
+    setWebUseSelectedFolder(false);
+    setWebFolderLabel(null);
+    toast({ title: "Backup location cleared", description: "Backup will ask location again." });
+  };
+
+  const handleSaveWebLocation = async () => {
+    if (!webFolderLabel) {
+      toast({ variant: "destructive", title: "Location not set", description: "Use Browse folder first, then save location." });
+      return;
+    }
+    setSavingBackupLocation(true);
+    try {
+      const prev = readBackupSaveLocationPrefs();
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        webUseSelectedFolder: true,
+        webFolderLabel,
+      });
+      setWebUseSelectedFolder(true);
+      toast({ title: "Backup location saved", description: `Backups will save to ${webFolderLabel}.` });
+    } finally {
+      setSavingBackupLocation(false);
+    }
+  };
+
+  const handlePickNativeFolder = async () => {
+    try {
+      const { FilePicker } = await import("@capawesome/capacitor-file-picker");
+      const result = await FilePicker.pickDirectory();
+      const pickedPath = String((result as { path?: string })?.path || "").trim();
+      if (!pickedPath) {
+        toast({ variant: "destructive", title: "No folder selected", description: "Please select a folder." });
+        return;
+      }
+      setNativeFolderPath(pickedPath);
+      const prev = readBackupSaveLocationPrefs();
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        nativeFolderPath: pickedPath,
+        nativeSubfolder: "",
+      });
+      toast({ title: "Folder selected", description: "Browse-selected folder mode active." });
+    } catch (e: any) {
+      if (String(e?.message || "").toLowerCase().includes("canceled")) return;
+      toast({ variant: "destructive", title: "Browse failed", description: "Could not open native folder browser." });
+    }
+  };
+
+  const handleSaveNativeLocation = async () => {
+    if (!nativeFolderPath?.trim()) {
+      toast({ variant: "destructive", title: "Location not set", description: "Use Browse folder first, then save location." });
+      return;
+    }
+    setSavingBackupLocation(true);
+    try {
+      const prev = readBackupSaveLocationPrefs();
+      saveBackupSaveLocationPrefs({
+        ...prev,
+        nativeFolderPath: nativeFolderPath.trim(),
+        nativeSubfolder: "",
+      });
+      toast({
+        title: "Backup location saved",
+        description: `Folder set to ${formatNativeFolderDisplayPath(nativeFolderPath)}.`,
+      });
+    } finally {
+      setSavingBackupLocation(false);
+    }
+  };
+
+  const handleClearNativeFolder = async () => {
+    const prev = readBackupSaveLocationPrefs();
+    saveBackupSaveLocationPrefs({
+      ...prev,
+      nativeFolderPath: null,
+    });
+    setNativeFolderPath(null);
+    toast({ title: "Selected folder cleared", description: "Backup will use default directory mode." });
+  };
+
+  const handlePickLiveDataWebFolder = async () => {
+    if (!supportsWebFolderPicker) return;
+    try {
+      const picker = (window as unknown as { showDirectoryPicker?: (opts?: { mode: string }) => Promise<FileSystemDirectoryHandle> })
+        .showDirectoryPicker;
+      if (!picker) return;
+      const handle = await picker.call(window, { mode: "readwrite" });
+      const ok = await storeWebLiveDataDirectoryHandle(handle);
+      if (!ok) {
+        toast({ variant: "destructive", title: "Failed", description: "Could not store folder handle on this device." });
+        return;
+      }
+      const nextLabel = String((handle as { name?: string })?.name || "Selected folder");
+      setLiveWebLabel(nextLabel);
+      toast({
+        title: "Folder selected",
+        description: "Tap “Save data location” to start writing local company copies here.",
+      });
+    } catch (e: unknown) {
+      if ((e as { name?: string })?.name === "AbortError") return;
+      toast({ variant: "destructive", title: "Failed", description: "Could not select folder." });
+    }
+  };
+
+  const handleSaveLiveDataLocation = async () => {
+    if (!nativeRuntime) {
+      if (!liveWebLabel?.trim()) {
+        toast({ variant: "destructive", title: "Pick a folder first", description: "Use Select folder, then save." });
+        return;
+      }
+    } else if (!liveNativeFolderPath?.trim()) {
+      toast({ variant: "destructive", title: "Pick a folder first", description: "Browse to a folder on this device." });
+      return;
+    }
+    setSavingLiveDataLocation(true);
+    try {
+      const salt = ensureLiveDataMirrorSalt();
+      await ensureLiveMirrorAutoPassphrase();
+      saveLiveDataFolderPrefs({
+        webEnabled: !nativeRuntime,
+        webFolderLabel: nativeRuntime ? null : liveWebLabel,
+        nativeFolderPath: nativeRuntime ? (liveNativeFolderPath?.trim() ?? null) : null,
+        mirrorSaltBase64: salt,
+      });
+      setLiveWebEnabled(!nativeRuntime);
+      if (!nativeRuntime) {
+        const root = (await readWebLiveDataDirectoryHandle()) as FileSystemDirectoryHandle | null;
+        if (root) await getOrCreatePocketLedgerDir(root);
+      }
+      await syncAllLocalCompanyMirrorsToFolder();
+      toast({
+        title: "Data location saved",
+        description: `Encrypted copies are written under ${POCKET_LEDGER_MIRROR_DIR}/${COMPANIES_DIR_SEGMENT}/… (auto key on this device).`,
+      });
+      setLiveDataLocationDialogOpen(false);
+    } catch (e: unknown) {
+      toast({ variant: "destructive", title: "Save failed", description: e instanceof Error ? e.message : "Try again." });
+    } finally {
+      setSavingLiveDataLocation(false);
+    }
+  };
+
+  const handleClearLiveDataLocation = async () => {
+    await clearWebLiveDataDirectoryHandle();
+    await clearLiveDataFolderPrefsAndSession();
+    saveLiveDataFolderPrefs({
+      webEnabled: false,
+      webFolderLabel: null,
+      nativeFolderPath: null,
+      mirrorSaltBase64: null,
+    });
+    setLiveWebEnabled(false);
+    setLiveWebLabel(null);
+    setLiveNativeFolderPath(null);
+    toast({ title: "Data save location cleared", description: "Mirrors will no longer be written to a custom folder." });
+  };
+
+  const handlePickLiveDataNativeFolder = async () => {
+    try {
+      const { FilePicker } = await import("@capawesome/capacitor-file-picker");
+      const result = await FilePicker.pickDirectory();
+      const pickedPath = String((result as { path?: string })?.path || "").trim();
+      if (!pickedPath) {
+        toast({ variant: "destructive", title: "No folder selected" });
+        return;
+      }
+      setLiveNativeFolderPath(pickedPath);
+      toast({ title: "Folder selected", description: "Save data location to enable mirror writes." });
+    } catch (e: unknown) {
+      if (String((e as Error)?.message || "").toLowerCase().includes("canceled")) return;
+      toast({ variant: "destructive", title: "Browse failed" });
+    }
+  };
+
+  const handleSyncLiveDataNow = async () => {
+    try {
+      await syncAllLocalCompanyMirrorsToFolder();
+      toast({ title: "Synced", description: "Encrypted mirrors under pocket-ledger/ refreshed (if configured)." });
+    } catch (e: unknown) {
+      toast({ variant: "destructive", title: "Sync failed", description: e instanceof Error ? e.message : "" });
+    }
+  };
+
   const handleBackupClick = () => {
     if (company?.password) {
       setIsEncryptedBackupConfirmOpen(true);
@@ -580,6 +886,57 @@ export function BackupRestore() {
         setIsDecrypting(false);
     }
     else toast({ variant: "destructive", title: "Please select a valid file." });
+  };
+
+  const handlePickRestoreFileNative = async () => {
+    try {
+      const { FilePicker } = await import("@capawesome/capacitor-file-picker");
+      // Android WebView me HTML file input unreliable ho sakta hai; native picker se file read-data lo.
+      const picked = await FilePicker.pickFiles({
+        limit: 1,
+        readData: true,
+        types: [
+          "application/json",
+          "application/octet-stream",
+          ".json",
+          ".plbp",
+          ".webtally",
+        ],
+      } as Record<string, unknown>);
+      // Plugin result already typed (`PickFilesResult`) — unsafe record cast avoid to keep TS strict mode happy.
+      const first = picked.files?.[0];
+      if (!first) return;
+
+      const fileName = String(first.name || "backup.plbp");
+      const mimeType = String(first.mimeType || "application/octet-stream");
+      const data = first.data;
+      if (typeof data !== "string" || !data.trim()) {
+        toast({
+          variant: "destructive",
+          title: "Read failed",
+          description: "Could not read selected backup file. Please pick again.",
+        });
+        return;
+      }
+
+      const restoredFile = fileFromBase64Payload(data, fileName, mimeType);
+      setFileToRestore(restoredFile);
+      setDecryptionPassword("");
+      setShowDecryptionPassword(false);
+      setDecryptionError(null);
+      setBackupDataToRestore(null);
+      setIsOverwriteConfirmOpen(false);
+      setConfirmationText("");
+      setIsDecrypting(false);
+      toast({ title: "File selected", description: fileName });
+    } catch (e: any) {
+      if (String(e?.message || "").toLowerCase().includes("canceled")) return;
+      toast({
+        variant: "destructive",
+        title: "File select failed",
+        description: "Could not open backup file picker on this device.",
+      });
+    }
   };
 
   const processRestoreData = async () => {
@@ -788,42 +1145,22 @@ export function BackupRestore() {
       /* offline / no Firestore — local restore allow */
     }
 
-    try {
-      const liveCompanyRef = doc(firestore, "companies", companyId);
-      const liveCompanySnap = await getDoc(liveCompanyRef);
-      if (liveCompanySnap.exists()) {
-        const liveData = liveCompanySnap.data();
-        if (liveData.ownerId !== backupOwnerId) {
-          toast({
-            variant: "destructive",
-            title: "Restore Blocked",
-            description: `This company's ownership has changed. You cannot overwrite it.`,
-            duration: 10000,
-          });
-          setIsOverwriteConfirmOpen(false);
-          setFileToRestore(null);
-          return;
-        }
-      }
-    } catch {
-      /* offline */
-    }
+    // Naya `companyId` banate hain — currently open company ka Firestore owner mismatch ab block nahi (purana slot touch nahi hota).
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
     toast({ title: "Restore Initiated", description: "Writing to local database…" });
 
     try {
-      await deleteAllCompanyDocsForCompany(companyId);
-      await clearSyncOutboxForCompany(companyId);
+      // Har restore par naya doc id — same backup do baar restore par SQLite rows mix nahi honge.
+      const newCompanyId = generateCompanyId(
+        resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
+      );
 
       const safeTimestamp = (val: any): Timestamp | null => {
-        if (!val) return null;
-        if (val.seconds !== undefined && val.nanoseconds !== undefined) {
-          return new Timestamp(val.seconds, val.nanoseconds);
-        }
-        const date = new Date(val);
-        return isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+        // Restore dates can come from Firestore JSON, local SQLite JSON, or old ISO backups; normalize all before writing.
+        const date = parseFirestoreDateFieldToJsDate(val);
+        return date ? Timestamp.fromDate(date) : null;
       };
 
       const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
@@ -832,26 +1169,28 @@ export function BackupRestore() {
         const docsToRestore = backupData[colName] || [];
         for (const docData of docsToRestore) {
           const { id: originalId, ...data } = docData;
-          const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, companyId, data) as Record<string, unknown>;
-          const rw = rewritten as { isDeleted?: boolean; date?: unknown; openingBalanceDate?: unknown; createdAt?: unknown; amount?: unknown; total?: number };
-          const finalData = {
+          const rewritten = rewriteBackupCompanyIdsDeep(backupCompanyIdFromFile, newCompanyId, data) as Record<string, unknown>;
+          const rw = rewritten as { isDeleted?: boolean; date?: unknown; dueDate?: unknown; due_date?: unknown; openingBalanceDate?: unknown; createdAt?: unknown; amount?: unknown; total?: number };
+          const finalData: Record<string, unknown> = {
             ...rewritten,
-            companyId,
+            companyId: newCompanyId,
             isDeleted: rw.isDeleted ?? false,
             date: safeTimestamp(rw.date),
             openingBalanceDate: safeTimestamp(rw.openingBalanceDate),
             createdAt: safeTimestamp(rw.createdAt) || Timestamp.now(),
             amount: rw.amount === "" || rw.amount === null || rw.amount === undefined ? rw.total || 0 : Number(rw.amount),
           };
-          await upsertCompanyDocInBrowserDb(companyId, colName, originalId, finalData as Record<string, unknown>, {
+          // Sale/Purchase overdue depends on dueDate; keep restored voucher backups selectable and visible in overdue list.
+          if (colName === "vouchers") finalData.dueDate = safeTimestamp(rw.dueDate ?? rw.due_date);
+          await upsertCompanyDocInBrowserDb(newCompanyId, colName, originalId, finalData as Record<string, unknown>, {
             notify: false,
             force: true,
           });
         }
-        notifyBrowserDbCollectionUpdated(companyId, colName);
+        notifyBrowserDbCollectionUpdated(newCompanyId, colName);
       }
 
-      const existing = await getLocalCompanyById(companyId, { includeDeleted: true });
+      const existing = await getLocalCompanyById(newCompanyId, { includeDeleted: true });
       const { id: _bid, ownerId: _boid, ownerEmail: _boe, ...restDetails } = backupData.companyDetails[0];
       const rest = restDetails as Record<string, unknown>;
       const fyStart = fiscalFieldToLocalIso(rest.fiscalYearStart);
@@ -868,7 +1207,7 @@ export function BackupRestore() {
       const localCompanyRow: Record<string, unknown> = {
         ...(existing || {}),
         ...restNoFiscalLocalSafe,
-        id: companyId,
+        id: newCompanyId,
         ownerId: user.uid,
         ownerEmail: user.email ?? (existing as { ownerEmail?: string })?.ownerEmail,
         fiscalYearStart: fyStart ?? fiscalFieldToLocalIso((existing as { fiscalYearStart?: unknown })?.fiscalYearStart),
@@ -890,7 +1229,29 @@ export function BackupRestore() {
       reloadLocalCompanyRegistry();
       triggerSync();
 
-      toast({ title: "Restore Successful", description: "Local data updated. Reloading…" });
+      // Firestore root kabhi purane `authoritativeCompanyId` (backup wali company A) rakhta hai — shared user
+      // `companies/{galatId}/vouchers` padhta hai → 0 data. SQLite sahi `companyId` par hai; cloud align + push.
+      try {
+        const cref = doc(firestore, "companies", newCompanyId);
+        const cs = await getDoc(cref);
+        if (cs.exists()) {
+          await updateDoc(cref, { authoritativeCompanyId: deleteField() });
+        }
+        const { pushed, errors } = await pushAllLocalCompanyDocsToFirestore(newCompanyId);
+        if (errors.length) {
+          console.warn("[BackupRestore] post-local-restore cloud push:", errors.slice(0, 5));
+        } else if (pushed > 0) {
+          console.log("[BackupRestore] post-local-restore pushed docs:", pushed);
+        }
+      } catch (e) {
+        console.warn("[BackupRestore] post-local-restore Firestore align/push skipped:", e);
+      }
+
+      setCompanyId(newCompanyId);
+      toast({
+        title: "Restore Successful",
+        description: `Opened as a new company (${newCompanyId}). Reloading…`,
+      });
       window.location.reload();
     } catch (error: any) {
       console.error("Local restore failed:", error);
@@ -989,66 +1350,61 @@ export function BackupRestore() {
         }
     }
 
-    const liveCompanyRef = doc(firestore, "companies", companyId);
-    const liveCompanySnap = await getDoc(liveCompanyRef);
-    if (liveCompanySnap.exists()) {
-        const liveData = liveCompanySnap.data();
-        if (liveData.ownerId !== backupOwnerId) {
-             toast({
-                variant: "destructive",
-                title: "Restore Blocked",
-                description: `This company's ownership has changed. You cannot overwrite it.`,
-                duration: 10000,
-            });
-            setIsOverwriteConfirmOpen(false);
-            setFileToRestore(null);
-            return;
-        }
-    }
+    // Purani selected company delete nahi — naya Firestore `companies/{newId}` subtree banega.
 
     setIsRestoring(true);
     setIsOverwriteConfirmOpen(false);
     toast({ title: "Restore Initiated", description: "This may take a moment..." });
 
     try {
+        const newCompanyId = generateCompanyId(
+          resolvedCompanyName.trim() || String(backupCompanyDetails.name ?? "company")
+        );
+        const backupCompanyIdFromFile = String(backupData.companyDetails?.[0]?.id ?? "").trim();
+
         let batch = writeBatch(firestore);
         const safeTimestamp = (val: any): Timestamp | null => {
-            if (!val) return null;
-            if (val.seconds !== undefined && val.nanoseconds !== undefined) {
-                return new Timestamp(val.seconds, val.nanoseconds);
-            }
-            const date = new Date(val);
-            return isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+            // Cloud restore uses the same parser as voucher forms so dueDate survives JSON/plain timestamp backups.
+            const date = parseFirestoreDateFieldToJsDate(val);
+            return date ? Timestamp.fromDate(date) : null;
         };
         
         let count = 0;
         for (const colName of collectionsToBackup) {
-            const q = query(collection(firestore, `companies/${companyId}/${colName}`));
-            const snapshot = await getDocs(q);
-            snapshot.docs.forEach((doc) => {
-                batch.delete(doc.ref);
-                count++;
-                if(count >= 450) {
-                    batch.commit();
-                    batch = writeBatch(firestore);
-                    count = 0;
-                }
-            });
-
             const docsToRestore = backupData[colName] || [];
             for (const docData of docsToRestore) {
                 const { id: originalId, ...data } = docData;
-                const finalData = {
-                    ...data,
-                    companyId: companyId,
-                    isDeleted: data.isDeleted ?? false,
-                    date: safeTimestamp(data.date),
-                    openingBalanceDate: safeTimestamp(data.openingBalanceDate),
-                    createdAt: safeTimestamp(data.createdAt) || serverTimestamp(),
-                    amount: (data.amount === "" || data.amount === null || data.amount === undefined) ? (data.total || 0) : Number(data.amount),
+                const rewritten = rewriteBackupCompanyIdsDeep(
+                  backupCompanyIdFromFile,
+                  newCompanyId,
+                  data
+                ) as Record<string, unknown>;
+                const rw = rewritten as {
+                  isDeleted?: boolean;
+                  date?: unknown;
+                  dueDate?: unknown;
+                  due_date?: unknown;
+                  openingBalanceDate?: unknown;
+                  createdAt?: unknown;
+                  amount?: unknown;
+                  total?: number;
                 };
+                const finalData: Record<string, unknown> = {
+                    ...rewritten,
+                    companyId: newCompanyId,
+                    isDeleted: rw.isDeleted ?? false,
+                    date: safeTimestamp(rw.date),
+                    openingBalanceDate: safeTimestamp(rw.openingBalanceDate),
+                    createdAt: safeTimestamp(rw.createdAt) || serverTimestamp(),
+                    amount:
+                      rw.amount === "" || rw.amount === null || rw.amount === undefined
+                        ? rw.total || 0
+                        : Number(rw.amount),
+                };
+                // Overdue vouchers require dueDate after restore; old backups may have due_date instead.
+                if (colName === "vouchers") finalData.dueDate = safeTimestamp(rw.dueDate ?? rw.due_date);
 
-                const docRef = doc(firestore, `companies/${companyId}/${colName}`, originalId);
+                const docRef = doc(firestore, `companies/${newCompanyId}/${colName}`, originalId);
                 batch.set(docRef, finalData);
                 
                 count++;
@@ -1061,11 +1417,28 @@ export function BackupRestore() {
         }
 
         if (backupData.companyDetails?.[0]) {
-            const { id, ownerId, ownerEmail, ...details } = backupData.companyDetails[0];
+            const {
+              id: _bid,
+              ownerId: _oid,
+              ownerEmail: _oem,
+              authoritativeCompanyId: _oldAuth,
+              ...details
+            } = backupData.companyDetails[0];
             const finalName =
               resolvedCompanyName.trim() || String((details as { name?: string }).name ?? "");
-            // Firestore company root: user-chosen naam taaki selector / registry backup ke saath align ho
-            batch.update(doc(firestore, "companies", companyId), { ...details, name: finalName });
+            const detailsRewritten = rewriteBackupCompanyIdsDeep(
+              backupCompanyIdFromFile,
+              newCompanyId,
+              details
+            ) as Record<string, unknown>;
+            // Naya root doc — `set` taaki pehle se na ho to bhi likh sake; authoritative path = naya id.
+            batch.set(doc(firestore, "companies", newCompanyId), {
+              ...detailsRewritten,
+              name: finalName,
+              ownerId: user.uid,
+              ownerEmail: user.email ?? "",
+              authoritativeCompanyId: newCompanyId,
+            });
         }
 
         await batch.commit();
@@ -1074,7 +1447,11 @@ export function BackupRestore() {
         reloadLocalCompanyRegistry();
         triggerSync();
 
-        toast({ title: "Restore Successful", description: "Data overwritten successfully. Page will now reload." });
+        setCompanyId(newCompanyId);
+        toast({
+          title: "Restore Successful",
+          description: `New cloud company ${newCompanyId}. Page will now reload.`,
+        });
         window.location.reload();
     } catch (error: any) {
       console.error("Restore failed:", error);
@@ -1097,18 +1474,24 @@ export function BackupRestore() {
             </CardDescription>
           </CardHeader>
           <CardFooter>
-            <PermissionButton
-              permission="export_data"
-              onClick={handleBackupClick}
-              disabled={isBackingUp}
-            >
-              {isBackingUp ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
-              Create Backup
-            </PermissionButton>
+            <div className="flex flex-wrap items-center gap-2">
+              <PermissionButton
+                permission="export_data"
+                onClick={handleBackupClick}
+                disabled={isBackingUp}
+              >
+                {isBackingUp ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                Create Backup
+              </PermissionButton>
+              {/* Backup page par hi backup location control: synced-device page se hata diya. */}
+              <Button type="button" variant="outline" onClick={() => setBackupLocationDialogOpen(true)}>
+                Backup location
+              </Button>
+            </div>
           </CardFooter>
         </Card>
 
@@ -1116,11 +1499,24 @@ export function BackupRestore() {
           <CardHeader>
             <CardTitle>Restore Data</CardTitle>
             <CardDescription>
-              Restore company data from a JSON or encrypted .plbp file. Legacy .webtally files are also supported.
+              Restore from a JSON or encrypted .plbp file (legacy .webtally supported). Each restore creates a new company id so
+              nothing merges into an existing slot by mistake.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex items-center gap-4">
-            <Input type="file" accept=".json,.plbp,.webtally" onChange={handleFileSelect} />
+          <CardContent className="space-y-2">
+            {nativeRuntime ? (
+              <>
+                {/* Native APK: dedicated picker se restore file selection stable rahe. */}
+                <Button type="button" variant="outline" onClick={handlePickRestoreFileNative}>
+                  Choose backup file
+                </Button>
+                <p className="text-xs text-muted-foreground break-all">
+                  Selected file: <span className="font-medium text-foreground">{fileToRestore?.name || "Not selected"}</span>
+                </p>
+              </>
+            ) : (
+              <Input type="file" accept=".json,.plbp,.webtally" onChange={handleFileSelect} />
+            )}
           </CardContent>
           <CardFooter>
             <PermissionButton
@@ -1129,11 +1525,206 @@ export function BackupRestore() {
               disabled={!fileToRestore || isRestoring}
             >
               {isRestoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-              Restore & Overwrite
+              Restore as new company
             </PermissionButton>
           </CardFooter>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Folder className="h-5 w-5" />
+              Data save location
+            </CardTitle>
+            <CardDescription>
+              Files go under{" "}
+              <code className="text-xs">
+                {POCKET_LEDGER_MIRROR_DIR}/{COMPANIES_DIR_SEGMENT}/&lt;CompanyName&gt;__&lt;companyId&gt;/
+              </code>{" "}
+              inside the folder you pick — one <strong>AES-GCM encrypted</strong> mirror per device-local company (
+              <code className="text-xs">pl-local-company-*.json</code>, Firestore tree jaisa company scope). Old flat files
+              in <code className="text-xs">{POCKET_LEDGER_MIRROR_DIR}/</code> root are moved here on next sync. Encryption
+              uses an automatic key in this browser profile. The live database stays in SQLite (IndexedDB). If someone
+              deletes <code className="text-xs">{POCKET_LEDGER_MIRROR_DIR}/</code>, the app will ask to recreate it or
+              remove the company. Uploading a local company to the cloud removes its mirror on web.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground space-y-1">
+            <p>
+              Current:{" "}
+              <span className="font-medium text-foreground">
+                {nativeRuntime
+                  ? liveNativeFolderPath
+                    ? formatNativeFolderDisplayPath(liveNativeFolderPath)
+                    : "Not set"
+                  : liveWebEnabled && liveWebLabel
+                    ? liveWebLabel
+                    : "Not set"}
+              </span>
+            </p>
+            <p className="text-xs">Debounced sync also runs a few seconds after local saves when a location is active.</p>
+          </CardContent>
+          <CardFooter className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => setLiveDataLocationDialogOpen(true)}>
+              Select folder
+            </Button>
+            <Button type="button" variant="secondary" onClick={() => void handleSyncLiveDataNow()}>
+              Sync now
+            </Button>
+            {(liveWebEnabled || liveNativeFolderPath) && (
+              <Button type="button" variant="ghost" onClick={() => void handleClearLiveDataLocation()}>
+                Clear location
+              </Button>
+            )}
+          </CardFooter>
+        </Card>
       </div>
+
+      <Dialog
+        open={liveDataLocationDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setLiveDataLocationDialogOpen(false);
+            return;
+          }
+          setLiveDataLocationDialogOpen(true);
+        }}
+      >
+        <DialogContent className="w-[calc(100%-4px)] max-w-md rounded-xl mx-[2px]">
+          <DialogHeader>
+            <DialogTitle>Data save location</DialogTitle>
+            <DialogDescription>
+              Encrypted copies are saved under{" "}
+              <code className="text-[10px]">
+                {POCKET_LEDGER_MIRROR_DIR}/{COMPANIES_DIR_SEGMENT}/…
+              </code>{" "}
+              in the folder you choose. No password needed — this browser stores the encryption key on this device only.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {!nativeRuntime && supportsWebFolderPicker ? (
+              <>
+                <div className="text-sm text-muted-foreground">
+                  Selected folder: <span className="font-medium text-foreground">{liveWebLabel || "Not set"}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={() => void handlePickLiveDataWebFolder()}>
+                    Browse folder
+                  </Button>
+                  <Button type="button" onClick={() => void handleSaveLiveDataLocation()} disabled={savingLiveDataLocation || !liveWebLabel}>
+                    {savingLiveDataLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    <span className={savingLiveDataLocation ? "ml-2" : ""}>Save data location</span>
+                  </Button>
+                </div>
+              </>
+            ) : nativeRuntime ? (
+              <>
+                <Button type="button" variant="outline" onClick={() => void handlePickLiveDataNativeFolder()}>
+                  Browse folder
+                </Button>
+                <div className="text-xs text-muted-foreground break-words">
+                  Selected:{" "}
+                  <span className="font-medium text-foreground">
+                    {liveNativeFolderPath ? formatNativeFolderDisplayPath(liveNativeFolderPath) : "Not set"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  For SAF <code className="text-[10px]">content://</code> trees, mirror files are written via the same
+                  native backup writer. Removing a file when a company goes online may require manual delete on some
+                  devices.
+                </p>
+                <Button type="button" onClick={() => void handleSaveLiveDataLocation()} disabled={savingLiveDataLocation || !liveNativeFolderPath}>
+                  {savingLiveDataLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  <span className={savingLiveDataLocation ? "ml-2" : ""}>Save data location</span>
+                </Button>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This browser does not support folder selection. Use a Chromium-based desktop browser or the app APK.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setLiveDataLocationDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={backupLocationDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeBackupLocationDialog();
+            return;
+          }
+          setBackupLocationDialogOpen(true);
+        }}
+      >
+        <DialogContent className="w-[calc(100%-4px)] max-w-md rounded-xl mx-[2px]">
+          <DialogHeader>
+            <DialogTitle>Device backup location</DialogTitle>
+            <DialogDescription>
+              Choose where backup files should be saved on this device.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {!nativeRuntime && supportsWebFolderPicker ? (
+              <>
+                <div className="text-sm text-muted-foreground">
+                  Current folder: <span className="font-medium text-foreground">{webFolderLabel || "Not set"}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Auto save to selected folder: <span className="font-medium text-foreground">{webUseSelectedFolder ? "On" : "Off"}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={handlePickWebFolder}>
+                    Browse folder
+                  </Button>
+                  <Button type="button" onClick={handleSaveWebLocation} disabled={!webFolderLabel || savingBackupLocation}>
+                    {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
+                  </Button>
+                  <Button type="button" onClick={handleClearWebFolder} disabled={!webFolderLabel}>
+                    Clear
+                  </Button>
+                </div>
+              </>
+            ) : nativeRuntime ? (
+              <>
+                <Button type="button" variant="outline" onClick={handlePickNativeFolder}>
+                  Browse folder
+                </Button>
+                <div className="text-xs text-muted-foreground break-words">
+                  Selected folder:{" "}
+                  <span className="font-medium text-foreground">
+                    {nativeFolderPath ? formatNativeFolderDisplayPath(nativeFolderPath) : "Not set"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" onClick={handleSaveNativeLocation} disabled={savingBackupLocation || !nativeFolderPath}>
+                    {savingBackupLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    <span className={savingBackupLocation ? "ml-2" : ""}>Save location</span>
+                  </Button>
+                  <Button type="button" variant="ghost" onClick={handleClearNativeFolder} disabled={!nativeFolderPath}>
+                    Clear selected folder
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This browser does not support fixed folder permission. Backup will ask location each time.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeBackupLocationDialog}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
        <AlertDialog open={isEncryptedBackupConfirmOpen} onOpenChange={setIsEncryptedBackupConfirmOpen}>
         <AlertDialogContent>
@@ -1210,13 +1801,14 @@ export function BackupRestore() {
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
-                  This action cannot be undone. This will permanently overwrite all current data in the company{" "}
-                  <strong className="text-foreground">{company?.name}</strong>. Only the company owner can restore.
+                  Restore creates a <strong className="text-foreground">new company</strong> with a new id. Data in{" "}
+                  <strong className="text-foreground">{company?.name}</strong> and your other companies stays as-is — same
+                  backup restored twice will not mix rows. Only the company owner can restore.
                 </p>
                 <p>
                   Type the confirmation text below (backup decryption already verified the file). To confirm, type{" "}
                   <code className="bg-muted px-2 py-1 rounded-md font-mono text-foreground">{company?.name.trim().toLowerCase()}</code>{" "}
-                  in the box below.
+                  (the company you have open now — proves intent).
                 </p>
               </div>
             </AlertDialogDescription>
@@ -1253,7 +1845,8 @@ export function BackupRestore() {
                 Company name after restore
               </Label>
               <p className="text-xs text-muted-foreground">
-                Default: current company (the slot you are restoring into). You can use the name from the backup file instead.
+                This name is stored on the <strong className="text-foreground">new</strong> restored company only (id is always
+                new). Pick backup name if you want the label to match the file.
               </p>
               {/* Native select: Radix Select + AlertDialog focus trap issues avoid */}
               <select
@@ -1263,7 +1856,7 @@ export function BackupRestore() {
                 onChange={(e) => setRestoreCompanyNameChoice(e.target.value as "target" | "backup")}
               >
                 <option value="target">
-                  {String(company.name ?? "").trim() || "(current slot)"} — this company (default)
+                  {String(company.name ?? "").trim() || "(current slot)"} — use this name for the new copy (default)
                 </option>
                 <option value="backup">
                   {String(backupDataToRestore.companyDetails[0].name ?? "").trim() || "(backup)"} — from backup file

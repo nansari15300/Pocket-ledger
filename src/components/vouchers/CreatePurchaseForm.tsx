@@ -67,6 +67,7 @@ import { LinkAdvancesToVoucherDialog, applyAdvancesAllocationsToServer } from "@
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { useAdvancesLinkableCount } from "@/hooks/useAdvancesForVoucher";
 import { getLinkedAmountsToVoucher, getLinkedAmountRowsFromPending, getOutgoingLinkedAmountRows, mergeLinkedRows, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
+import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 
 import { firestore, storage } from "@/lib/firebase";
 import {
@@ -238,10 +239,8 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
   }
 
   const copiedVoucher = JSON.parse(JSON.stringify(voucher));
-  const dueDateRaw = voucher.dueDate;
-  const dueDate = dueDateRaw != null
-    ? (dueDateRaw?.toDate ? dueDateRaw.toDate() : new Date(dueDateRaw))
-    : undefined;
+  // Restore/cache dueDate may be plain Firestore JSON; parse it exactly like voucher date.
+  const dueDate = parseFirestoreDateFieldToJsDate(voucher.dueDate ?? voucher.due_date) ?? undefined;
   const lineItemsNorm = Array.isArray(copiedVoucher.lineItems)
     ? copiedVoucher.lineItems.map((li: any) => ({
         ...li,
@@ -251,7 +250,8 @@ function getInitialFormValues(voucher?: any): PurchaseFormValues {
   return {
     ...copiedVoucher,
     lineItems: lineItemsNorm,
-    date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date),
+    // Backup/local cache can store date as plain `{ seconds, nanoseconds }`, so avoid `new Date(object)`.
+    date: parseFirestoreDateFieldToJsDate(voucher.date) ?? startOfDay(new Date()),
     dueDate: dueDate ?? undefined,
     discount: voucher.discount || 0,
     tax: voucher.tax || 0,

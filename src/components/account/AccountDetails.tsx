@@ -33,6 +33,7 @@ import {
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay, endOfDay, isSameDay } from "date-fns";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import {
   Popover,
   PopoverContent,
@@ -386,7 +387,9 @@ export function AccountDetails({
                 </div>
             </div>
             <div className="flex justify-between items-center mt-1">
-                <p className="text-xs text-muted-foreground">{displayDate()} • {format(d, 'p')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
+                </p>
             </div>
         </Card>
     );

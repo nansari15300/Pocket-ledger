@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Card } from "@/components/ui/card";
 import { format } from "date-fns";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import { useCompany } from "@/hooks/useCompany";
 import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { useAuth } from "@/hooks/useAuth";
@@ -796,9 +797,9 @@ export function TransactionsTable({
     const w: number[] = [];
     if (showCol("date")) {
       if (dateSystem === "Both") {
-        w.push(95, 95);
+        w.push(95, 112);
       } else {
-        w.push(95);
+        w.push(112);
       }
     }
     if (showCol("type")) w.push(75);
@@ -940,6 +941,7 @@ export function TransactionsTable({
             ? "text-red-600"
             : "text-green-600";
       const d = t.date && (typeof t.date.toDate === "function" ? t.date.toDate() : new Date(t.date));
+      const entryClock = formatVoucherEntryTimeLocal(t as Record<string, unknown>);
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
       const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
@@ -1045,7 +1047,7 @@ export function TransactionsTable({
               {groupAccountName ? <p className="text-xs text-muted-foreground truncate font-medium">Account: {groupAccountName}</p> : null}
               <p className="text-xs text-muted-foreground">
                 {d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}
-                {d ? ` • ${format(d, "h:mm a")}` : ""}
+                {entryClock ? ` • ${entryClock}` : ""}
               </p>
             </div>
             <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
@@ -1239,10 +1241,10 @@ export function TransactionsTable({
           {showCol("date") && (dateSystem === "Both" ? (
             <>
               {renderHeaderWithFilter("date_bs", "Date (BS)", false, ensureMinGaps ? 95 : undefined)}
-              {renderHeaderWithFilter("date_ad", "Date (AD)", false, ensureMinGaps ? 95 : undefined)}
+              {renderHeaderWithFilter("date_ad", "Date (AD)", false, ensureMinGaps ? 112 : undefined)}
             </>
           ) : (
-            renderHeaderWithFilter("date", "Date", false, ensureMinGaps ? 95 : undefined)
+            renderHeaderWithFilter("date", "Date", false, ensureMinGaps ? 112 : undefined)
           ))}
           {showCol("type") && renderHeaderWithFilter("type", "Type", false, ensureMinGaps ? 75 : undefined)}
           {showCol("voucherNo") && renderHeaderWithFilter("voucherNumber", "Voucher No.", false, ensureMinGaps ? 105 : undefined)}

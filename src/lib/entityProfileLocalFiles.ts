@@ -50,7 +50,8 @@ export async function stageEntityAvatarAndDocuments(params: {
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
   const documentFileUrls: string[] = [];
   const basePath = `companies/${companyId}/${collectionSeg}/${entityId}`;
-  const prefix = `${collectionSeg.replace(/_/g, "-")}-files/${companyId}`;
+  // Firebase Storage rules: `companies/{companyId}/{folder}/**` — local pending upload bhi isi tree ke hisaab se.
+  const prefix = `companies/${companyId}/${collectionSeg.replace(/_/g, "-")}-files`;
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
@@ -98,7 +99,7 @@ export async function uploadEntityAvatarAndDocumentsRemote(params: {
   const { companyId, collectionSeg, avatarFile, documentFiles } = params;
   const maxDocuments = params.maxDocuments ?? DEFAULT_MAX_ENTITY_DOCS;
   const documentFileUrls: string[] = [];
-  const prefix = `${collectionSeg.replace(/_/g, "-")}-files/${companyId}`;
+  const prefix = `companies/${companyId}/${collectionSeg.replace(/_/g, "-")}-files`;
 
   let fileUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
@@ -129,7 +130,7 @@ export async function stageItemAvatarAndAttachments(params: {
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
   const { companyId, itemId, avatarFile, attachmentFiles } = params;
   const basePath = `companies/${companyId}/items/${itemId}`;
-  const prefix = `item-files/${companyId}`;
+  const prefix = `companies/${companyId}/item-files`;
 
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
@@ -174,7 +175,7 @@ export async function uploadItemAvatarAndAttachmentsRemote(params: {
   maxAttachments: number;
 }): Promise<{ avatarUrl: string | null; newAttachmentUrls: string[] }> {
   const { companyId, avatarFile, attachmentFiles, maxAttachments } = params;
-  const prefix = `item-files/${companyId}`;
+  const prefix = `companies/${companyId}/item-files`;
   let avatarUrl: string | null = null;
   if (avatarFile && isProfileAvatarImageFile(avatarFile)) {
     const storagePath = `${prefix}/avatar/${Date.now()}_${safeEntityFileName(avatarFile.name)}`;

@@ -65,6 +65,7 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 
 const DEFAULT_STATUS_FILTER = { paid: true, unpaid: true, partial: true, overdue: true };
 type StatusFilter = { paid: boolean; unpaid: boolean; partial: boolean; overdue: boolean };
@@ -342,7 +343,7 @@ export function TaxDetails({
     return sortedTransactions.filter((t) => {
       const d = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : null;
       const dateStr = d ? (dateSystem === "BS" ? formatDateBS(d) : format(d, "yyyy-MM-dd")) : "";
-      const timeStr = d ? format(d, "h:mm a") : "";
+      const timeStr = formatVoucherEntryTimeLocal(t as Record<string, unknown>) || (d ? format(d, "h:mm a") : "");
       const amt = t.debit > 0 ? t.debit : t.credit;
       const bal = t.balance ?? t.runningBalance ?? 0;
       return (

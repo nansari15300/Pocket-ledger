@@ -132,13 +132,26 @@ service cloud.firestore {
     }
 
     /**
-     * Super Admin by email only (no get()). Use for vouchers read so collectionGroup works.
-     * Add your Super Admin login email below (same as Firebase Auth); deploy with: firebase deploy --only firestore:rules
+     * SuperAdmin only (not CompanyAdmin) — kisi bhi user ki company / subcollections admin panel se manage karne ke liye.
+     * App rules URL nahi dekh sakti; yeh sirf role + email allowlist par based hai (CompanyAdmin ko cross-tenant delete nahi).
+     */
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email != null && request.auth.token.email == 'nansari15300@gmail.com')
+        || (request.auth.token.email != null && request.auth.token.email == 'nabiullah.ansari@gmail.com')
+        || (exists(/databases/$(database)/documents/app_settings/admin_config) &&
+            request.auth.token.email != null &&
+            request.auth.token.email in get(/databases/$(database)/documents/app_settings/admin_config).data.get('superAdminEmails', []))
+        || (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'SuperAdmin')
+      );
+    }
+
+    /**
+     * Super Admin — collectionGroup / jahan pehle sirf hardcoded email tha; ab admin_config + users role SuperAdmin bhi.
      */
     function isSuperAdminEmail() {
-      return isSignedIn() && request.auth.token.email != null &&
-        (request.auth.token.email == 'nansari15300@gmail.com'
-         || request.auth.token.email == 'nabiullah.ansari@gmail.com');
+      return isSuperAdmin();
     }
 
     // ---------------------------
@@ -243,7 +256,7 @@ service cloud.firestore {
       );
 
       allow update: if isCompanyOwner(companyId) || isAdmin();
-      allow delete: if isCompanyOwner(companyId);
+      allow delete: if isCompanyOwner(companyId) || isSuperAdmin();
 
       /**
        * @description Manages vouchers (transactions) for a company.
@@ -252,7 +265,7 @@ service cloud.firestore {
        */
       match /vouchers/{voucherId} {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
-        allow write: if isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -260,8 +273,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/parties/{partyId}
        */
       match /parties/{partyId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -269,8 +282,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/groups/{groupId}
        */
       match /groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -278,8 +291,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/staff/{staffId}
        */
       match /staff/{staffId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -287,8 +300,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/staff_groups/{groupId}
        */
       match /staff_groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -296,8 +309,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/taxes/{taxId}
        */
       match /taxes/{taxId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -305,8 +318,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/tax_groups/{groupId}
        */
       match /tax_groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -314,8 +327,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/expense_accounts/{accountId}
        */
       match /expense_accounts/{accountId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -323,8 +336,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/expense_groups/{groupId}
        */
       match /expense_groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -332,8 +345,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/bank_accounts/{accountId}
        */
       match /bank_accounts/{accountId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -341,8 +354,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/account_groups/{groupId}
        */
       match /account_groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -350,8 +363,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/items/{itemId}
        */
       match /items/{itemId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -359,8 +372,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/item_groups/{groupId}
        */
       match /item_groups/{groupId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -368,8 +381,8 @@ service cloud.firestore {
        * @path /companies/{companyId}/unassigned_documents/{docId}
        */
       match /unassigned_documents/{docId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -386,7 +399,7 @@ service cloud.firestore {
        * @path /companies/{companyId}/alarms/{alarmId}
        */
       match /alarms/{alarmId} {
-        allow read, create, update, delete: if isCompanyUser(companyId);
+        allow read, create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
       
       /**
@@ -396,7 +409,7 @@ service cloud.firestore {
        */
       match /payments/{paymentId} {
         allow read, list: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
-        allow create, update, delete: if isCompanyUser(companyId);
+        allow create, update, delete: if isCompanyUser(companyId) || isSuperAdmin();
       }
 
       /**
@@ -405,15 +418,15 @@ service cloud.firestore {
        * @path /companies/{companyId}/devices/{deviceId}
        */
       match /devices/{deviceId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create, update: if isCompanyUser(companyId) && request.resource.data.userId == request.auth.uid;
-        allow delete: if isCompanyOwner(companyId) || isAdmin()
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update: if (isCompanyUser(companyId) && request.resource.data.userId == request.auth.uid) || isSuperAdmin();
+        allow delete: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin()
           || (isCompanyUser(companyId) && resource != null && resource.data.userId == request.auth.uid);
       }
 
       match /device_commands/{deviceId} {
-        allow read, delete: if isCompanyUser(companyId);
-        allow create, update: if isCompanyOwner(companyId) || isAdmin()
+        allow read, delete: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create, update: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin()
           || (isCompanyUser(companyId) && exists(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId))
             && get(/databases/$(database)/documents/companies/$(companyId)/devices/$(deviceId)).data.userId == request.auth.uid);
       }
@@ -423,10 +436,10 @@ service cloud.firestore {
        * @path /companies/{companyId}/device_history/{entryId}
        */
       match /device_history/{entryId} {
-        allow read, list: if isCompanyUser(companyId);
-        allow create: if isCompanyUser(companyId);
+        allow read, list: if isCompanyUser(companyId) || isSuperAdmin();
+        allow create: if isCompanyUser(companyId) || isSuperAdmin();
         allow update: if false;
-        allow delete: if isCompanyOwner(companyId) || isAdmin();
+        allow delete: if isCompanyOwner(companyId) || isAdmin() || isSuperAdmin();
       }
     }
     

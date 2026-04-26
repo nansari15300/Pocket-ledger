@@ -11,6 +11,7 @@ import {
   grossPriceNpr,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
+import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
 
 type AdminKeysResult = {
   stored: GatewayKeys;
@@ -82,49 +83,6 @@ type Body = {
   billingIntent?: "donation" | "subscribe";
 };
 
-/** Normalize env-style base (may omit scheme) to absolute http(s) origin. */
-function normalizePaymentOrigin(raw: string): string {
-  let base = raw.replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(base)) {
-    const local =
-      /^localhost\b/i.test(base) ||
-      /^127\.\d+\.\d+\.\d+/.test(base) ||
-      /^\[::1\]/.test(base);
-    base = `${local ? "http" : "https"}://${base}`;
-  }
-  return base;
-}
-
-/**
- * Stripe/Khalti/eSewa return URLs must be absolute http(s).
- * Prefer the host the browser used for this POST (`nextUrl.origin`) so production checkouts are not sent to
- * localhost when NEXT_PUBLIC_BASE_URL is still a dev value. Env is fallback (e.g. cron, missing URL, or webhooks docs).
- */
-function getPublicAppOrigin(req: NextRequest): string {
-  const fromReq = req.nextUrl?.origin;
-  if (fromReq && /^https?:\/\//i.test(fromReq)) {
-    return fromReq.replace(/\/+$/, "");
-  }
-
-  const raw = process.env.NEXT_PUBLIC_BASE_URL?.trim();
-  if (raw) {
-    return normalizePaymentOrigin(raw);
-  }
-
-  const vercel = process.env.VERCEL_URL?.trim();
-  if (vercel) {
-    return `https://${vercel.replace(/\/+$/, "")}`;
-  }
-
-  if (process.env.NODE_ENV === "development") {
-    return "http://localhost:3000";
-  }
-
-  throw new Error(
-    "Set NEXT_PUBLIC_BASE_URL to a full URL with scheme (e.g. https://yourdomain.com or http://localhost:3000)."
-  );
-}
-
 const VALID_SUBSCRIPTION_TERM_KEYS = new Set(
   BILLING_TERM_OPTIONS.map((o) => o.value)
 );
@@ -177,7 +135,7 @@ export async function POST(req: NextRequest) {
       throw new Error("Invalid donation amount.");
     }
 
-    const appOrigin = getPublicAppOrigin(req);
+    const appOrigin = getPublicAppOriginForPaymentRedirects(req);
     const adminResult = await getGatewayKeysFromAdmin();
     const keys = mergeGatewayKeysWithEnv(adminResult.stored);
 

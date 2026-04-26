@@ -47,6 +47,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import AdCalendar from "../ui/ad-calendar";
 import {
   Select,
@@ -1036,7 +1037,7 @@ export function GroupDetails({
         </div>
         <div className="flex justify-between items-center mt-1">
           <p className="text-xs text-muted-foreground">
-            {displayDate()} • {format(d, "p")}
+            {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
           </p>
           <Badge
             variant="secondary"

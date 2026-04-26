@@ -42,6 +42,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
 import { startOfDay, endOfDay, format } from "date-fns";
+import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import AdCalendar from "../ui/ad-calendar";
 import {
   Select,
@@ -549,7 +550,9 @@ export function ItemGroupDetails({
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="font-bold text-sm truncate">{transaction.voucherNumber}{oppositeLabel ? ` - ${oppositeLabel}` : ''}</p>
             <p className="text-xs text-muted-foreground truncate mt-0.5">{transaction.narration || "No narration"}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{displayDate()} • {format(d, "p")}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {displayDate()} • {formatVoucherEntryTimeLocal(transaction as Record<string, unknown>)}
+            </p>
           </div>
           <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
             <p className={cn("font-bold text-sm", transaction.debit > 0 ? "text-red-600" : "text-green-600")}>

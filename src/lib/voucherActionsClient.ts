@@ -103,34 +103,24 @@ async function mergePlanEntitlementsForId(planId: PlanId): Promise<Entitlements>
   return getPlanFromPlans(rec, planId).entitlements;
 }
 
-/** Offline create: company row Firestore pe nahi ho sakti — planId/storage local `companies` table se. */
-async function resolvePlanIdAndStorageOption(companyId: string): Promise<{ planId: PlanId; storageOption?: string }> {
+/** APK/static save path: Firestore plan reads slow ho sakte hain, so local/cached plan se limit check karo. */
+async function resolveLocalPlanForImmediateVoucherSave(
+  companyId: string
+): Promise<{ planId: PlanId; storageOption?: string; entitlements: Entitlements }> {
   let planId: PlanId = "basic";
   let storageOption: string | undefined;
-  let gotFirestoreCompany = false;
   try {
-    const companySnap = await getDoc(doc(firestore, "companies", companyId));
-    const companyData = companySnap.data();
-    if (companyData) {
-      gotFirestoreCompany = true;
-      planId = (companyData.planId as PlanId) || "basic";
-      storageOption = companyData.storageOption as string | undefined;
+    const loc = await getLocalCompanyById(companyId);
+    if (loc) {
+      planId = ((loc as { planId?: string }).planId as PlanId) || planId;
+      storageOption = (loc as { storageOption?: string }).storageOption ?? storageOption;
     }
   } catch {
-    /* offline */
+    /* local registry optional; defaults below keep save path non-blocking */
   }
-  if (!gotFirestoreCompany) {
-    try {
-      const loc = await getLocalCompanyById(companyId);
-      if (loc) {
-        planId = ((loc as { planId?: string }).planId as PlanId) || planId;
-        storageOption = (loc as { storageOption?: string }).storageOption ?? storageOption;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  return { planId, storageOption };
+  const rec = readCachedPlansRecord() ?? defaultPlansRecordFallback();
+  const entitlements = getPlanFromPlans(rec, planId).entitlements;
+  return { planId, storageOption, entitlements };
 }
 
 /** SQLite mirror vouchers: `date` field ko day/month window me count karo (cloud query jaisa). */
@@ -311,8 +301,7 @@ async function saveVoucherOfflineLocalCreate(
   /** Forms ne pehle se `local:` file refs + IndexedDB ke liye id banai ho to wahi use karo */
   preGeneratedVoucherId?: string | null
 ): Promise<{ id: string }> {
-  const { planId, storageOption } = await resolvePlanIdAndStorageOption(companyId);
-  const mergedEnt = await mergePlanEntitlementsForId(planId);
+  const { storageOption, entitlements: mergedEnt } = await resolveLocalPlanForImmediateVoucherSave(companyId);
   const useLocalLim = companyStorageIsLocal(storageOption);
   const dailyLimitOff = numericEntitlement(mergedEnt, "dailyVoucherLimit", useLocalLim);
   const monthlyLimitOff = numericEntitlement(mergedEnt, "monthlyVoucherLimit", useLocalLim);

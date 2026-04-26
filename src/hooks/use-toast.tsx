@@ -11,7 +11,10 @@ import type {
 } from "@/components/ui/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 5000 // Default 5 seconds
+/** Default auto-dismiss for neutral / success-style toasts (matches Sonner). */
+const TOAST_DEFAULT_DURATION_MS = 1000
+/** Destructive errors stay longer so users can read them. */
+const TOAST_DESTRUCTIVE_DURATION_MS = 5000
 
 type ToasterToast = Omit<ToastProps, "title" | "description"> & {
   id: string
@@ -72,7 +75,7 @@ const addToRemoveQueue = (toastId: string, duration?: number) => {
       type: "REMOVE_TOAST",
       toastId: toastId,
     })
-  }, duration ?? TOAST_REMOVE_DELAY)
+  }, duration ?? TOAST_DEFAULT_DURATION_MS)
 
   toastTimeouts.set(toastId, timeout)
 }
@@ -166,7 +169,9 @@ function toast({ ...props }: Toast) {
   ) : props.title;
 
 
-  const toastDuration = props.duration ?? TOAST_REMOVE_DELAY
+  const toastDuration =
+    props.duration ??
+    (props.variant === "destructive" ? TOAST_DESTRUCTIVE_DURATION_MS : TOAST_DEFAULT_DURATION_MS)
   
   dispatch({
     type: "ADD_TOAST",

@@ -20,6 +20,7 @@ import {
   PENDING_PLAN_CHANGES_COLLECTION,
   PENDING_PLAN_CHANGE_TTL_MS,
 } from "@/lib/payments/planChangeApply";
+import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
 
 type AdminKeysResult = {
   stored: GatewayKeys;
@@ -63,31 +64,6 @@ function stripeConfigHelpMessage(adminResult: AdminKeysResult): string {
     return `Bank Settings: paste Stripe secret. ${envHint}`;
   }
   return `Stripe not configured. ${envHint}`;
-}
-
-function normalizePaymentOrigin(raw: string): string {
-  let base = raw.replace(/\/+$/, "");
-  if (!/^https?:\/\//i.test(base)) {
-    const local =
-      /^localhost\b/i.test(base) ||
-      /^127\.\d+\.\d+\.\d+/.test(base) ||
-      /^\[::1\]/.test(base);
-    base = `${local ? "http" : "https"}://${base}`;
-  }
-  return base;
-}
-
-function getPublicAppOrigin(req: NextRequest): string {
-  const fromReq = req.nextUrl?.origin;
-  if (fromReq && /^https?:\/\//i.test(fromReq)) {
-    return fromReq.replace(/\/+$/, "");
-  }
-  const raw = process.env.NEXT_PUBLIC_BASE_URL?.trim();
-  if (raw) return normalizePaymentOrigin(raw);
-  const vercel = process.env.VERCEL_URL?.trim();
-  if (vercel) return `https://${vercel.replace(/\/+$/, "")}`;
-  if (process.env.NODE_ENV === "development") return "http://localhost:3000";
-  throw new Error("Set NEXT_PUBLIC_BASE_URL for checkout return URLs.");
 }
 
 const VALID_TERMS = new Set(BILLING_TERM_OPTIONS.map((o) => o.value));
@@ -274,7 +250,7 @@ export async function POST(req: NextRequest) {
         expiresAt,
       });
 
-      const appOrigin = getPublicAppOrigin(req);
+      const appOrigin = getPublicAppOriginForPaymentRedirects(req);
 
       if (gateway === "khalti") {
         if (!keys.khaltiPublicKey) {
@@ -327,7 +303,7 @@ export async function POST(req: NextRequest) {
     }
 
     const stripe = new Stripe(keys.stripeSecretKey, { apiVersion: "2025-12-15.clover" as any });
-    const appOrigin = getPublicAppOrigin(req);
+    const appOrigin = getPublicAppOriginForPaymentRedirects(req);
     const currency = DEFAULT_PLANS[targetPlanId].currency.toLowerCase();
 
     const session = await stripe.checkout.sessions.create({
