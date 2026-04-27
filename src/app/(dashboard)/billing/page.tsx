@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import KhaltiCheckout from "khalti-checkout-web";
 import { Badge } from "@/components/ui/badge";
-import { Check, Loader2, X } from "lucide-react";
+import { Check, Download, Loader2, X } from "lucide-react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import { useDate } from "@/hooks/useDate";
+import { useIsMobile } from "@/hooks/use-mobile";
 import {
   Select,
   SelectContent,
@@ -69,6 +70,45 @@ function checkoutAmountNpr(plan: Plan, termKey: SubscriptionTermKey, donationAmo
   if (plan.isFree) return donationAmount;
   return grossPriceNpr(termKey, plan.price.monthly, plan.price.yearly);
 }
+
+/** Safe Date extractor for Firestore Timestamp / Date / millis / ISO values. */
+function toSafeDate(raw: unknown): Date | null {
+  if (!raw) return null;
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
+  if (typeof raw === "number") {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof raw === "string") {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof raw === "object" && raw != null && typeof (raw as { toDate?: () => Date }).toDate === "function") {
+    const d = (raw as { toDate: () => Date }).toDate();
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+/** Shared feature order for table, mobile cards, and PDF export. */
+const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
+  { key: "maxUsers", label: "Max Users (online)" },
+  { key: "maxUsersLocal", label: "Max Users (local)" },
+  { key: "maxCompanies", label: "Max Companies (online)" },
+  { key: "maxCompaniesLocal", label: "Max Companies (local)" },
+  { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
+  { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
+  { key: "monthlyVoucherLimit", label: "Monthly Vouchers (online)" },
+  { key: "monthlyVoucherLimitLocal", label: "Monthly Vouchers (local)" },
+  { key: "maxAttachmentsGB", label: "Attachments GB (online)" },
+  { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
+  { key: "maxStorageGB", label: "Storage GB (online)" },
+  { key: "maxStorageGBLocal", label: "Storage GB (local)" },
+  { key: "hasMultiDeviceSync", label: "Multi-device sync" },
+  { key: "hasRoleBasedAccess", label: "Role-based access" },
+  { key: "hasAuditLogs", label: "Audit logs" },
+  { key: "hasPrioritySupport", label: "Priority support" },
+];
 
 /** Khalti success_url may already include `?pendingId=` — append token/amount with `&` when needed. */
 function withKhaltiProrationReturnParams(returnUrl: string, token: string, amount: number): string {
@@ -281,6 +321,10 @@ export default function BillingPage() {
   });
   const [prorationLoading, setProrationLoading] = useState<string | null>(null);
   const [downgradeLoading, setDowngradeLoading] = useState<string | null>(null);
+  const isMobile = useIsMobile();
+  /** Mobile plan carousel: one visible plan column at a time. */
+  const [mobilePlanIndex, setMobilePlanIndex] = useState(0);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
   /** Gateway for paid-plan renew (proration): matches Basic checkout — admin/history get separate rows per gateway. */
   const [prorationGateway, setProrationGateway] = useState<"stripe" | "khalti" | "esewa">("stripe");
 
@@ -400,20 +444,133 @@ export default function BillingPage() {
   }, [plans, currentPlanId]);
 
   const joinedDate = useMemo(() => {
-    const raw = company?.planUpgradedAt;
-    if (raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
-      return (raw as { toDate: () => Date }).toDate();
-    }
-    return null;
-  }, [company?.planUpgradedAt]);
+    // Show a meaningful join date even when planUpgradedAt is absent on older/static rows.
+    return (
+      toSafeDate(company?.planUpgradedAt) ??
+      toSafeDate((company as Record<string, unknown> | undefined)?.planJoinedAt) ??
+      toSafeDate((company as Record<string, unknown> | undefined)?.createdAt) ??
+      toSafeDate((company as Record<string, unknown> | undefined)?.createdOn) ??
+      null
+    );
+  }, [company]);
 
   const expiryDate = useMemo(() => {
-    const raw = company?.planExpiry;
-    if (raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
-      return (raw as { toDate: () => Date }).toDate();
+    // Expiry fallback keeps display stable across web/static migrations.
+    return (
+      toSafeDate(company?.planExpiry) ??
+      toSafeDate((company as Record<string, unknown> | undefined)?.expiryDate) ??
+      toSafeDate((company as Record<string, unknown> | undefined)?.planExpiresAt) ??
+      null
+    );
+  }, [company]);
+
+  useEffect(() => {
+    if (mobilePlanIndex >= plans.length) {
+      setMobilePlanIndex(Math.max(0, plans.length - 1));
     }
-    return null;
-  }, [company?.planExpiry]);
+  }, [mobilePlanIndex, plans.length]);
+
+  const handleDownloadPlansPdf = useCallback(async () => {
+    try {
+      const jsPdfModule = await import("jspdf");
+      const doc = new jsPdfModule.jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+      // One-page PC-style matrix: feature rows + 4 plan columns with line borders.
+      const orderedPlanIds: PlanId[] = ["basic", "advance", "pro", "pro-plus"];
+      const exportPlans = orderedPlanIds
+        .map((id) => plans.find((p) => p.id === id))
+        .filter((p): p is Plan => p != null);
+      if (exportPlans.length === 0) {
+        throw new Error("No plan data available.");
+      }
+
+      const pageW = doc.internal.pageSize.getWidth();
+      const left = 26;
+      const right = pageW - 26;
+      const tableW = right - left;
+      const featureColW = 185;
+      const planColW = (tableW - featureColW) / exportPlans.length;
+      const top = 76;
+      const rowH = 20;
+      const headerH = 40;
+
+      doc.setFontSize(15);
+      doc.setFont("helvetica", "bold");
+      doc.text("Pocket Ledger - Billing Plans", left, 34);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Generated: ${new Date().toLocaleString()}`, left, 50);
+
+      // Outer border.
+      const totalRows = BILLING_FEATURES.length + 1; // + price row
+      const tableH = headerH + totalRows * rowH;
+      doc.setDrawColor(0, 0, 0);
+      doc.setLineWidth(0.8);
+      doc.rect(left, top, tableW, tableH);
+
+      // Vertical lines: feature + plan columns.
+      doc.line(left + featureColW, top, left + featureColW, top + tableH);
+      for (let i = 1; i < exportPlans.length; i++) {
+        const x = left + featureColW + i * planColW;
+        doc.line(x, top, x, top + tableH);
+      }
+
+      // Header separator.
+      doc.line(left, top + headerH, left + tableW, top + headerH);
+
+      // Column headers.
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("Features", left + 6, top + 24);
+      exportPlans.forEach((p, idx) => {
+        const x = left + featureColW + idx * planColW + 6;
+        doc.text(p.name, x, top + 16);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8.5);
+        const priceLine = p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id]);
+        const wrapped = doc.splitTextToSize(priceLine, planColW - 12) as string[];
+        doc.text(wrapped.slice(0, 2), x, top + 30);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+      });
+
+      // Row 1: Tagline
+      let y = top + headerH + rowH - 6;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.text("Tagline", left + 6, y);
+      exportPlans.forEach((p, idx) => {
+        const x = left + featureColW + idx * planColW + 6;
+        const wrapped = doc.splitTextToSize(String(p.tagline || "-"), planColW - 12) as string[];
+        doc.text(wrapped[0] || "-", x, y);
+      });
+      doc.line(left, top + headerH + rowH, left + tableW, top + headerH + rowH);
+
+      // Feature rows with horizontal grid lines.
+      BILLING_FEATURES.forEach((feature, featureIdx) => {
+        const rowTop = top + headerH + rowH + featureIdx * rowH;
+        const rowTextY = rowTop + rowH - 6;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text(feature.label, left + 6, rowTextY);
+        exportPlans.forEach((p, idx) => {
+          const { text } = getFeatureValue(p, feature.key);
+          const x = left + featureColW + idx * planColW + 6;
+          const wrapped = doc.splitTextToSize(String(text), planColW - 12) as string[];
+          doc.text(wrapped[0] || "-", x, rowTextY);
+        });
+        doc.line(left, rowTop + rowH, left + tableW, rowTop + rowH);
+      });
+
+      doc.save("pocket-ledger-plans.pdf");
+      toast({ title: "Downloaded", description: "Plan chart PDF downloaded." });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "PDF download failed",
+        description: e instanceof Error ? e.message : "Try again.",
+      });
+    }
+  }, [colTerms, plans]);
 
   const expiryMs = expiryDate != null && !Number.isNaN(expiryDate.getTime()) ? expiryDate.getTime() : null;
 
@@ -540,24 +697,7 @@ export default function BillingPage() {
     }
   }
 
-  const allFeaturesConfig: { key: EntitlementKey; label: string }[] = [
-    { key: "maxUsers", label: "Max Users (online)" },
-    { key: "maxUsersLocal", label: "Max Users (local)" },
-    { key: "maxCompanies", label: "Max Companies (online)" },
-    { key: "maxCompaniesLocal", label: "Max Companies (local)" },
-    { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
-    { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
-    { key: "monthlyVoucherLimit", label: "Monthly Vouchers (online)" },
-    { key: "monthlyVoucherLimitLocal", label: "Monthly Vouchers (local)" },
-    { key: "maxAttachmentsGB", label: "Attachments GB (online)" },
-    { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
-    { key: "maxStorageGB", label: "Storage GB (online)" },
-    { key: "maxStorageGBLocal", label: "Storage GB (local)" },
-    { key: "hasMultiDeviceSync", label: "Multi-device sync" },
-    { key: "hasRoleBasedAccess", label: "Role-based access" },
-    { key: "hasAuditLogs", label: "Audit logs" },
-    { key: "hasPrioritySupport", label: "Priority support" },
-  ];
+  const allFeaturesConfig = BILLING_FEATURES;
 
   const getFeatureValue = (plan: Plan, key: EntitlementKey): { text: string; enabled: boolean } => {
     const value = plan.entitlements[key];
@@ -584,11 +724,14 @@ export default function BillingPage() {
   /** Paid accounts: plan changes only via table (no donation / free checkout block below). */
   const showStandardCheckout =
     !isPaidCompany && (!selectedPlanDetails.isFree || selectedPlanId === "basic");
+  const selectedMobilePlan = plans[mobilePlanIndex] ?? selectedPlanDetails;
+  /** Mobile basic users: checkout card must follow selected tab so paid plans can subscribe from phone too. */
+  const showMobileCheckoutSection = isMobile && !isPaidCompany;
 
   if (loading || !selectedPlanDetails) {
     return (
-      // Billing page: near full-bleed — only 5px horizontal inset so the grid uses almost the whole viewport.
-      <div className="mx-[5px] w-[calc(100%-10px)] max-w-[calc(100vw-10px)] box-border py-4 sm:py-6">
+      // Billing page: mobile true full-width vs viewport (2px side gap), ignores parent content padding.
+      <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">
         <Card className="w-full max-w-none border shadow-sm">
           <CardHeader>
             <Skeleton className="h-9 w-48" />
@@ -611,12 +754,19 @@ export default function BillingPage() {
   }
 
   return (
-    <div className="mx-[5px] w-[calc(100%-10px)] max-w-[calc(100vw-10px)] box-border py-4 sm:py-6">
+    <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">
       <Card className="w-full max-w-none border shadow-sm">
         <CardHeader>
-          <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
             <CardTitle className="text-3xl font-bold">Billing & Plans</CardTitle>
             <CardDescription>Choose a plan that fits your needs.</CardDescription>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => void handleDownloadPlansPdf()}>
+              {/* User asked for downloadable plan PDF on web/static. */}
+              <Download className="mr-2 h-4 w-4" />
+              Download PDF
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -629,7 +779,9 @@ export default function BillingPage() {
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 sm:gap-6">
                 <div>
                   <span className="text-muted-foreground">Joined date: </span>
-                  <span className={dateSystem === "Both" ? "whitespace-nowrap" : ""}>{formatBillingDate(joinedDate)}</span>
+                  <strong className={cn("font-semibold", dateSystem === "Both" ? "whitespace-nowrap" : "")}>
+                    {formatBillingDate(joinedDate)}
+                  </strong>
                 </div>
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                   <span className="text-muted-foreground">Expiry date: </span>
@@ -652,7 +804,174 @@ export default function BillingPage() {
             </div>
           )}
 
-          {/* scrollContainer=false: single horizontal scroll on outer div — avoids clipped first column. table-fixed + break-words keeps text inside each cell. */}
+          {isMobile ? (
+            <div className="space-y-3">
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {plans.map((p, idx) => (
+                  <Button
+                    key={`mobile-tab-${p.id}`}
+                    type="button"
+                    size="sm"
+                    variant={idx === mobilePlanIndex ? "default" : "outline"}
+                    onClick={() => setMobilePlanIndex(idx)}
+                    className="shrink-0"
+                  >
+                    {p.name}
+                  </Button>
+                ))}
+              </div>
+              <div
+                className="border rounded-lg overflow-hidden"
+                onTouchStart={(e) => setTouchStartX(e.touches[0]?.clientX ?? null)}
+                onTouchEnd={(e) => {
+                  // Swipe navigation: one column per screen.
+                  const endX = e.changedTouches[0]?.clientX;
+                  if (touchStartX == null || endX == null) return;
+                  const delta = endX - touchStartX;
+                  if (Math.abs(delta) < 40) return;
+                  setMobilePlanIndex((prev) => {
+                    if (delta < 0) return Math.min(plans.length - 1, prev + 1);
+                    return Math.max(0, prev - 1);
+                  });
+                }}
+              >
+                {(() => {
+                  const p = plans[mobilePlanIndex] ?? plans[0];
+                  if (!p) return null;
+                  const isSelected = p.id === selectedPlanId;
+                  return (
+                    <div className={cn("p-3", isSelected && "bg-muted/30")}>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xl font-bold">{p.name}</h3>
+                        {p.highlight ? <Badge>Most Popular</Badge> : null}
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">{p.tagline}</p>
+                      <p className="text-lg font-semibold mt-2">{p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id])}</p>
+                      <div className="mt-3 space-y-2">
+                        {allFeaturesConfig.map((feature) => {
+                          const { text } = getFeatureValue(p, feature.key);
+                          return (
+                            <div key={`${p.id}-${feature.key}-mobile`} className="flex items-start justify-between gap-3 border-b pb-1 text-sm">
+                              <span className="text-muted-foreground">{feature.label}</span>
+                              <span className="font-medium text-right">{text}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="border rounded-lg p-3 space-y-2">
+                {/* Mobile action panel: parity with desktop "Term & action" row. */}
+                <p className="text-sm font-medium">Term &amp; action</p>
+                {(() => {
+                  const p = selectedMobilePlan;
+                  const change = classifyPlanChange(currentPlanId, p.id);
+                  const loadPay = prorationLoading === `pay:${p.id}`;
+                  const loadDown = downgradeLoading === `down:${p.id}`;
+
+                  if (p.id === currentPlanId) {
+                    if (!isPaidCompany) {
+                      return <p className="text-xs text-muted-foreground">Current plan. You can donate below if you want.</p>;
+                    }
+                    return (
+                      <div className="space-y-2">
+                        <Select
+                          value={colTerms[p.id]}
+                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Term" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {BILLING_TERM_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button type="button" className="w-full" disabled={loadPay || !companyId} onClick={() => handleProratedPay(p.id)}>
+                          {loadPay ? <Loader2 className="h-4 w-4 animate-spin" /> : `Continue — pay with ${prorationGateway}`}
+                        </Button>
+                      </div>
+                    );
+                  }
+
+                  if (change === "downgrade") {
+                    return (
+                      <Button type="button" variant="secondary" className="w-full" disabled={loadDown || !companyId} onClick={() => handleDowngrade(p.id)}>
+                        {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : p.isFree ? "Select this plan" : `Downgrade to ${p.name}`}
+                      </Button>
+                    );
+                  }
+
+                  if (!p.isFree && isPaidCompany) {
+                    return (
+                      <div className="space-y-2">
+                        <Select
+                          value={colTerms[p.id]}
+                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Term" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {BILLING_TERM_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button type="button" className="w-full" disabled={loadPay || !companyId} onClick={() => handleProratedPay(p.id)}>
+                          {loadPay ? <Loader2 className="h-4 w-4 animate-spin" /> : change === "upgrade" ? "Upgrade (prorated)" : "Renew (prorated)"}
+                        </Button>
+                      </div>
+                    );
+                  }
+
+                  if (!p.isFree && currentPlanId === "basic") {
+                    return (
+                      <div className="space-y-2">
+                        <Select
+                          value={colTerms[p.id]}
+                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Term" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {BILLING_TERM_OPTIONS.map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button type="button" className="w-full" onClick={() => setSelectedPlanId(p.id)}>
+                          Subscribe to {p.name} below
+                        </Button>
+                      </div>
+                    );
+                  }
+
+                  if (p.isFree && p.id !== currentPlanId) {
+                    return (
+                      <Button type="button" variant="secondary" className="w-full" disabled={loadDown || !companyId} onClick={() => handleDowngrade(p.id)}>
+                        {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : "Select this plan"}
+                      </Button>
+                    );
+                  }
+
+                  return <p className="text-xs text-muted-foreground">No action for this plan.</p>;
+                })()}
+              </div>
+              <p className="text-xs text-muted-foreground">Swipe left/right or use tabs to switch plan columns.</p>
+            </div>
+          ) : (
+          /* scrollContainer=false: single horizontal scroll on outer div — avoids clipped first column. table-fixed + break-words keeps text inside each cell. */
           <div className="border rounded-lg overflow-x-auto">
             <Table
               scrollContainer={false}
@@ -1049,8 +1368,9 @@ export default function BillingPage() {
               </TableFooter>
             </Table>
           </div>
+          )}
 
-          {showStandardCheckout ? (
+          {showStandardCheckout && !showMobileCheckoutSection ? (
             <CheckoutForm
               plan={selectedPlanDetails}
               termKey={colTerms[selectedPlanId]}
@@ -1058,11 +1378,22 @@ export default function BillingPage() {
               companyId={companyId ?? ""}
               billingIntent={selectedPlanDetails.isFree ? "donation" : "subscribe"}
             />
-          ) : (
+          ) : !showMobileCheckoutSection ? (
             <p className="mt-8 border-t pt-6 text-sm text-muted-foreground">
               You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
               (prorated), or downgrade.
             </p>
+          ) : null}
+
+          {showMobileCheckoutSection && (
+            <CheckoutForm
+              // Mobile UX: selected tab plan should be payable/subscribable directly below.
+              plan={selectedMobilePlan}
+              termKey={colTerms[selectedMobilePlan.id]}
+              userId={user?.uid ?? ""}
+              companyId={companyId ?? ""}
+              billingIntent={selectedMobilePlan.isFree ? "donation" : "subscribe"}
+            />
           )}
         </CardContent>
       </Card>

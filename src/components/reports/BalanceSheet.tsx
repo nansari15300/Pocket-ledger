@@ -1757,7 +1757,7 @@ export function BalanceSheetPage() {
                     ⚠️ Opening Balance Mismatch!
                   </h3>
                   <p className="text-sm text-orange-700 mt-2">
-                    तपाईंको ओपनिङ डेबिट र क्रेडिट बराबर छैन।
+                    Your opening debit and opening credit are not equal.
                     <br />
                     <strong>Total Opening Dr: {toNepaliCurrency(openingBalanceAudit.totalOpeningDr)}</strong>
                     <br />
@@ -1766,7 +1766,8 @@ export function BalanceSheetPage() {
                     <strong className="text-red-700">Difference: {toNepaliCurrency(openingBalanceAudit.diff)}</strong>
                   </p>
                   <p className="text-xs mt-2 italic text-orange-600">
-                    * यसलाई मिलाउन एउटा "Opening Balance Ledger" बनाएर बाँकी रकम त्यसमा राख्नुहोस्।
+                    {/* Keep guidance English-only for consistency across static/web builds. */}
+                    * To fix this, create an "Opening Balance Ledger" and post the remaining difference there.
                   </p>
                 </div>
               )}

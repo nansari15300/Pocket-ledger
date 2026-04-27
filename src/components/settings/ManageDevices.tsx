@@ -86,7 +86,10 @@ export function ManageDevices() {
   const [confirmDeleteAllHistory, setConfirmDeleteAllHistory] = useState(false);
 
   const { refreshDeviceCheck } = useDeviceLimitContext();
-  const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company?.ownerEmail === user.email));
+  // Local company: device list should not depend on Firestore listeners.
+  const isLocalCompany = String((company as { storageOption?: string } | null)?.storageOption || "local").toLowerCase() === "local";
+  // Local company behaves as owner-managed on this device (no cloud owner doc check required).
+  const isCompanyOwner = isLocalCompany || (!!company && (company.ownerId === user?.uid || (user?.email && company?.ownerEmail === user.email)));
   const userCanUseMultiDevice = company?.userCanUseMultiDevice !== false;
   const plan = getPlanFromPlans(livePlans, company?.planId as any);
   const maxDevices = Math.max(1, Number(plan?.entitlements?.maxDevices) || 1);
@@ -94,6 +97,20 @@ export function ManageDevices() {
   useEffect(() => {
     if (!companyId) {
       setDevices([]);
+      setLoading(false);
+      return;
+    }
+    if (isLocalCompany) {
+      // Local-only: show this selected company as using one current device slot instantly.
+      setDevices([
+        {
+          id: currentDeviceId || "local-device",
+          userId: user?.uid || "local-user",
+          lastActive: new Date(),
+          deviceType: isNativeRuntime() ? "mobile" : "desktop",
+          deviceLabel: isNativeRuntime() ? "This mobile device" : "This desktop device",
+        },
+      ]);
       setLoading(false);
       return;
     }
@@ -112,7 +129,7 @@ export function ManageDevices() {
       setLoading(false);
     });
     return () => unsub();
-  }, [companyId]);
+  }, [companyId, currentDeviceId, isLocalCompany, user?.uid]);
 
   const ownerId = company?.ownerId ?? "";
   const companyHistoryLimit = (company as { deviceHistoryLimit?: number } | null)?.deviceHistoryLimit ?? DEFAULT_HISTORY_LIMIT;
@@ -123,6 +140,11 @@ export function ManageDevices() {
 
   useEffect(() => {
     if (!companyId) {
+      setDeviceHistory([]);
+      return;
+    }
+    if (isLocalCompany) {
+      // Local-only: no Firestore device history stream, so avoid spinner/waits.
       setDeviceHistory([]);
       return;
     }
@@ -150,7 +172,7 @@ export function ManageDevices() {
       setDeviceHistory(rows);
     });
     return () => unsub();
-  }, [companyId]);
+  }, [companyId, isLocalCompany]);
 
   const sortedDevices = useMemo(() => {
     return [...devices].sort((a, b) => {
@@ -352,7 +374,8 @@ export function ManageDevices() {
             </CardTitle>
           </div>
           <CardDescription>
-            Devices that have signed in to this company. Limit: {devices.length} / {maxDevices}. Remove a device to free a slot (e.g. for another device to sign in).
+            {/* Always show selected company device count, including local single-device mode. */}
+            Devices for selected company. Count: {devices.length} / {maxDevices}. Remove a device to free a slot (e.g. for another device to sign in).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">

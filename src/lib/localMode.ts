@@ -3,13 +3,12 @@
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 /**
- * Jab naya company sirf SQLite pe banana ho (Firestore choice hi na dikhe).
- * `isLocalOnlyMode()` se alag: default `dataSourceMode`/local-first browse se yeh false rehta hai,
- * taaki web user "online company" create kar sake jab plan me slot ho.
+ * Jab naya company sirf SQLite pe banana ho (Firestore "Online / Local" chooser hi na dikhe).
+ * Sirf explicit `NEXT_PUBLIC_LOCAL_ONLY_MODE` — static/Capacitor build me bhi Pro+ user ko online slot ho to
+ * Create Company me cloud vs device pick dikhe (`CreateCompanyForm` hasFreeOnlineSlot branch).
  */
 export function isForceLocalCompanyCreationBuild(): boolean {
-  if (process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === "1") return true;
-  return isStaticAppBuild();
+  return process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === "1";
 }
 
 /** Local-only mode: static build ya env-flag web (login still required). */

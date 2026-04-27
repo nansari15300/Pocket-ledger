@@ -203,12 +203,22 @@ async function buildMirrorPayload(companyId: string): Promise<Record<string, unk
       collections[col] = [];
     }
   }
+  // Include pending offline queue so selected-location mirror carries unsynced operations too.
+  const outboxRows = db
+    .prepare(
+      `SELECT outbox_id, company_id, collection_name, doc_id, op, payload, created_at
+       FROM sync_outbox
+       WHERE company_id = ?
+       ORDER BY created_at ASC`
+    )
+    .all(companyId) as Array<Record<string, unknown>>;
   return {
     version: 2,
     companyId,
     exportedAt: Date.now(),
     company,
     collections,
+    syncOutbox: Array.isArray(outboxRows) ? outboxRows : [],
   };
 }
 
@@ -485,11 +495,24 @@ async function pruneStaleMirrorsWeb(plDir: FileSystemDirectoryHandle): Promise<v
 }
 
 async function writeMirrorNative(treeUri: string, row: LocalCompanyDoc, fileText: string): Promise<void> {
-  if (!treeUri.startsWith("content://")) return;
-  const { BackupSaf } = await import("@/lib/capacitorBackupSaf");
-  const base64 = await blobToBase64Raw(new Blob([fileText], { type: "application/json" }));
   const rel = liveMirrorRelativeFilePath(row);
-  await BackupSaf.writeToTreeUri({ treeUri, fileName: rel, data: base64 });
+  const base64 = await blobToBase64Raw(new Blob([fileText], { type: "application/json" }));
+  if (treeUri.startsWith("content://")) {
+    const { BackupSaf } = await import("@/lib/capacitorBackupSaf");
+    await BackupSaf.writeToTreeUri({ treeUri, fileName: rel, data: base64 });
+    return;
+  }
+
+  // Native absolute path fallback: FilePicker can return non-SAF paths on some devices/builds.
+  const { Filesystem } = await import("@capacitor/filesystem");
+  const basePath = String(treeUri || "").trim().replace(/[\\/]+$/, "");
+  if (!basePath) throw new Error("No native folder path selected.");
+  const fullPath = `${basePath}/${rel}`.replace(/\\/g, "/");
+  await Filesystem.writeFile({
+    path: fullPath,
+    data: base64,
+    recursive: true,
+  });
 }
 
 async function sealPayloadForMirror(plainJson: string): Promise<string> {
@@ -528,9 +551,8 @@ export async function syncLocalCompanyMirrorToFolder(companyId: string): Promise
   }
 
   const tree = String(prefs.nativeFolderPath || "").trim();
-  if (tree.startsWith("content://")) {
-    await writeMirrorNative(tree, row, fileText);
-  }
+  if (!tree) return;
+  await writeMirrorNative(tree, row, fileText);
 }
 
 export async function syncAllLocalCompanyMirrorsToFolder(): Promise<void> {
@@ -559,7 +581,7 @@ export async function syncAllLocalCompanyMirrorsToFolder(): Promise<void> {
   }
 
   const tree = String(prefs.nativeFolderPath || "").trim();
-  if (!tree.startsWith("content://")) return;
+  if (!tree) return;
   for (const c of localRows) {
     await syncLocalCompanyMirrorToFolder(c.id).catch(() => undefined);
   }

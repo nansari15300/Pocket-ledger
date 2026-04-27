@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowUpDown, Search, Loader2, ChevronDown, ChevronRight, Users, ChevronUp, Printer } from "lucide-react";
+import { ArrowUpDown, Search, Loader2, ChevronDown, ChevronRight, ChevronUp, Printer } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +40,7 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { startOfDay, endOfDay } from "date-fns";
 import { useTransactions } from "@/hooks/use-transactions";
+import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
 
 /**
  * TYPES
@@ -57,7 +58,28 @@ type ProfitLossRow = {
   subGroupName?: string;
   accountId?: string;
   transactions?: any[];
+  /** Column value: debit side amount for variant-wise table rendering. */
+  debit?: number;
+  /** Column value: credit side amount for variant-wise table rendering. */
+  credit?: number;
+  /** Column value: signed P&L amount (credit - debit) for row. */
+  plAmount?: number;
+  /** Detail dialog context for non-ledger variants (party-wise / bill-wise). */
+  detailContext?: "expense" | "party" | "daybook";
+  /** Detail dialog context id matching detailContext when available. */
+  detailContextId?: string;
+  /** Detail dialog rows for variant-based reports that don't use account ledger hook. */
+  detailTransactions?: any[];
 };
+
+type ReportVariant = "income-exp" | "party-wise" | "bill-wise";
+type ProfitLossMobileFilter =
+  | "default"
+  | "name"
+  | "date"
+  | "by_bill_no"
+  | "high_to_low"
+  | "low_to_high";
 
 /**
  * HELPERS
@@ -82,6 +104,7 @@ function GroupRow({
   onRowClick,
   parentGroupName,
   subGroupName,
+  reportVariant,
 }: {
   row: ProfitLossRow;
   level?: number;
@@ -90,10 +113,10 @@ function GroupRow({
   onRowClick: (row: ProfitLossRow) => void;
   parentGroupName?: string;
   subGroupName?: string;
+  reportVariant: ReportVariant;
 }) {
   const isExpanded = expandedGroups.has(row.id);
   const hasSubRows = row.subRows.length > 0;
-  const showAccountColumn = expandedGroups.size > 0;
 
   const handleToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -110,49 +133,61 @@ function GroupRow({
     }
   };
 
+  // One place for row-level amount semantics across income-exp / party / bill views.
+  const rowDebit = Number(row.debit ?? (row.category === "Expense" ? row.amount : 0)) || 0;
+  const rowCredit = Number(row.credit ?? (row.category === "Income" ? row.amount : 0)) || 0;
+  const rowPL =
+    Number(row.plAmount ?? (row.category === "Income" ? row.amount : -row.amount)) || 0;
+  const rowPLClass = rowPL >= 0 ? "text-green-600" : "text-red-600";
+  const hideGroupAmountsWhenExpanded =
+    reportVariant === "income-exp" && row.isGroup && isExpanded;
+
   return (
     <>
       <TableRow
-        className={`cursor-pointer hover:bg-muted/60 ${level > 0 ? 'bg-muted/30' : ''}`}
+        className={cn(
+          // Zebra-style light tint for all rows so report grid feels softer and easier to scan.
+          "cursor-pointer transition-colors odd:bg-slate-50/70 even:bg-blue-50/40 dark:odd:bg-slate-900/30 dark:even:bg-blue-950/20",
+          "hover:bg-muted/60",
+          level > 0 && "bg-muted/30"
+        )}
         onClick={handleRowClick}
       >
-        {showAccountColumn ? (
+        {reportVariant === "bill-wise" ? (
           <>
-            <TableCell className="font-medium">
-              <div className="flex items-center gap-2">
-                {row.isGroup && hasSubRows && (
-                  <button
-                    onClick={handleToggle}
-                    className="p-0.5 hover:bg-muted rounded"
-                  >
-                    {isExpanded ? (
-                      <ChevronDown className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4" />
-                    )}
-                  </button>
-                )}
-                {row.isGroup && !hasSubRows && <div className="w-5" />}
-                {!row.isGroup && <div className="w-5" />}
-                {row.isGroup ? (
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                ) : null}
-                <span>{row.isGroup ? row.name : ''}</span>
+            <TableCell className="font-medium w-[46%] max-w-0">
+              <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 20}px` }}>
+                {/* Full text accessibility: desktop hover + mobile long-press via native title tooltip. */}
+                <span className="truncate" title={row.name}>{row.name}</span>
               </div>
             </TableCell>
-            <TableCell className="font-medium">
-              {!row.isGroup ? row.name : '-'}
+            <TableCell className="text-right tabular-nums whitespace-nowrap text-[11px] sm:text-sm text-green-600">
+              {rowDebit > 0 ? toNepaliCurrency(rowDebit) : "-"}
             </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {row.isGroup && isExpanded ? '-' : (row.category === 'Income' ? toNepaliCurrency(row.amount) : '-')}
+            <TableCell className="text-right tabular-nums whitespace-nowrap text-[11px] sm:text-sm text-red-600">
+              {rowCredit > 0 ? toNepaliCurrency(rowCredit) : "-"}
             </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {row.isGroup && isExpanded ? '-' : (row.category === 'Expense' ? toNepaliCurrency(row.amount) : '-')}
+            <TableCell className={cn("text-right tabular-nums font-semibold whitespace-nowrap text-xs sm:text-sm", rowPLClass)}>
+              {toNepaliCurrency(Math.abs(rowPL))}
+            </TableCell>
+          </>
+        ) : reportVariant === "party-wise" ? (
+          <>
+            <TableCell className="font-medium w-[46%] max-w-0">
+              <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 20}px` }}>
+                {/* Full text accessibility: desktop hover + mobile long-press via native title tooltip. */}
+                <span className="truncate" title={row.name}>{row.name}</span>
+              </div>
+            </TableCell>
+            <TableCell className="text-right tabular-nums whitespace-nowrap text-[11px] sm:text-sm text-green-600">{rowDebit > 0 ? toNepaliCurrency(rowDebit) : "-"}</TableCell>
+            <TableCell className="text-right tabular-nums whitespace-nowrap text-[11px] sm:text-sm text-red-600">{rowCredit > 0 ? toNepaliCurrency(rowCredit) : "-"}</TableCell>
+            <TableCell className={cn("text-right tabular-nums font-semibold whitespace-nowrap text-[11px] sm:text-sm", rowPLClass)}>
+              {toNepaliCurrency(Math.abs(rowPL))}
             </TableCell>
           </>
         ) : (
           <>
-            <TableCell className="font-medium">
+            <TableCell className="font-medium w-[66%] max-w-0">
               <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 20}px` }}>
                 {row.isGroup && hasSubRows && (
                   <button
@@ -167,18 +202,25 @@ function GroupRow({
                   </button>
                 )}
                 {row.isGroup && !hasSubRows && <div className="w-5" />}
-                {!row.isGroup && <div className="w-5" />}
-                {row.isGroup ? (
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                ) : null}
-                <span>{row.name}</span>
+                {/* Expanded accounts render in same first column with small text + 10px indent. */}
+                <span
+                  className={cn(
+                    "block pr-[10px]",
+                    row.isGroup
+                      ? "text-sm font-medium text-foreground"
+                      : "pl-0 text-xs font-normal text-muted-foreground text-left truncate"
+                  )}
+                  title={row.name}
+                >
+                  {row.name}
+                </span>
               </div>
             </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {row.isGroup && isExpanded ? '-' : (row.category === 'Income' ? toNepaliCurrency(row.amount) : '-')}
-            </TableCell>
-            <TableCell className="text-right tabular-nums">
-              {row.isGroup && isExpanded ? '-' : (row.category === 'Expense' ? toNepaliCurrency(row.amount) : '-')}
+            {/* Expanded group rows: hide amount cells so only child account rows show amounts. */}
+            <TableCell className="text-right tabular-nums text-green-600 whitespace-nowrap text-[11px] sm:text-sm">{hideGroupAmountsWhenExpanded ? "-" : (rowDebit > 0 ? toNepaliCurrency(rowDebit) : "-")}</TableCell>
+            <TableCell className="text-right tabular-nums text-red-600 whitespace-nowrap text-[11px] sm:text-sm">{hideGroupAmountsWhenExpanded ? "-" : (rowCredit > 0 ? toNepaliCurrency(rowCredit) : "-")}</TableCell>
+            <TableCell className={cn("text-right tabular-nums font-semibold whitespace-nowrap text-[11px] sm:text-sm", rowPLClass)}>
+              {hideGroupAmountsWhenExpanded ? "-" : toNepaliCurrency(Math.abs(rowPL))}
             </TableCell>
           </>
         )}
@@ -195,6 +237,7 @@ function GroupRow({
               onRowClick={onRowClick}
               parentGroupName={parentGroupName}
               subGroupName={subGroupName}
+              reportVariant={reportVariant}
             />
           ))}
         </>
@@ -206,7 +249,13 @@ function GroupRow({
 /**
  * MAIN PROFIT & LOSS PAGE COMPONENT
  */
-export function ProfitAndLossPage() {
+export function ProfitAndLossPage({
+  reportLabel,
+  reportVariant = "income-exp",
+}: {
+  reportLabel?: string;
+  reportVariant?: ReportVariant;
+} = {}) {
   const isMobile = useIsMobile();
   const calendarMonths = useCalendarMonths();
   const {
@@ -214,6 +263,8 @@ export function ProfitAndLossPage() {
     loading,
     processedExpenseAccounts,
     processedExpenseGroups,
+    processedParties,
+    processedItems,
     userNames,
   } = useVouchers();
   const { companyId, company } = useCompany();
@@ -227,11 +278,170 @@ export function ProfitAndLossPage() {
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [mobileFilter, setMobileFilter] = useState<ProfitLossMobileFilter>("default");
+  const [isFooterCalendarOpen, setIsFooterCalendarOpen] = useState(false);
   
   const { dateSystem, formatDate, formatDateBS } = useDate();
+  const activeRangeLabel = useMemo(() => {
+    // Date label should follow selected system: AD / BS / Both.
+    if (!dateRange?.from || !dateRange?.to) return "Current FY";
+    if (dateSystem === "BS") return `${formatDateBS(dateRange.from)} - ${formatDateBS(dateRange.to)}`;
+    if (dateSystem === "Both") {
+      return `${formatDate(dateRange.from)} - ${formatDate(dateRange.to)} | ${formatDateBS(dateRange.from)} - ${formatDateBS(dateRange.to)}`;
+    }
+    return `${formatDate(dateRange.from)} - ${formatDate(dateRange.to)}`;
+  }, [dateRange, dateSystem, formatDate, formatDateBS]);
+  React.useEffect(() => {
+    // Bill-wise should default to bill-number ordering; others keep normal default mode.
+    setMobileFilter(reportVariant === "bill-wise" ? "by_bill_no" : "default");
+  }, [reportVariant]);
+  React.useEffect(() => {
+    // Default date range should be current FY for selected company country.
+    const { start, end } = getFiscalRangeForCountry(company?.country || "Nepal");
+    setDateRange({ from: startOfDay(start), to: endOfDay(end) });
+  }, [company?.country, reportVariant]);
 
-  // Build tree structure from groups and accounts
+  const filteredVouchers = useMemo(() => {
+    // Keep date filter behavior consistent across income-exp, party-wise, and bill-wise variants.
+    const inDateRange = (tx: any) => {
+      const txDateRaw = tx?.date;
+      const txDate =
+        txDateRaw && typeof txDateRaw.toDate === "function"
+          ? txDateRaw.toDate()
+          : txDateRaw
+            ? new Date(txDateRaw)
+            : null;
+      if (!txDate || Number.isNaN(txDate.getTime())) return false;
+      if (!dateRange?.from) return true;
+      const from = startOfDay(dateRange.from);
+      const to = endOfDay(dateRange.to || dateRange.from);
+      return txDate >= from && txDate <= to;
+    };
+    return vouchers.filter(inDateRange);
+  }, [vouchers, dateRange]);
+
+  // Build report rows by selected report variant while preserving the same table/dialog UI shell.
   const profitLossData = useMemo((): ProfitLossRow[] => {
+    if (reportVariant === "party-wise") {
+      const partyNameById = new Map(processedParties.map((p) => [p.id, p.name]));
+      const itemPurchaseRateById = new Map<string, number>(
+        processedItems.map((it: any) => [
+          String(it.id),
+          Number(it.purchasePrice ?? it.openingBalanceRate ?? 0) || 0,
+        ])
+      );
+      const map = new Map<
+        string,
+        { id: string; name: string; debit: number; credit: number; tx: any[] }
+      >();
+      filteredVouchers.forEach((v) => {
+        // Party-wise real P&L: only sale vouchers; exclude payment/opening flows.
+        if (String(v.type || "").toLowerCase() !== "sale") return;
+        const partyId = String(v.partyId || "unknown-party");
+        const upsertParty = (id: string, displayName?: string) =>
+          map.get(id) || {
+            id,
+            name: String(displayName || partyNameById.get(id) || "Unknown Party"),
+            debit: 0,
+            credit: 0,
+            tx: [],
+          };
+        if (!partyId || partyId === "unknown-party") return;
+        const current = upsertParty(partyId, v.partyName);
+        const saleAmount = Number(v.total ?? v.amount ?? 0) || 0;
+        const purchaseCost = Array.isArray(v.lineItems)
+          ? v.lineItems.reduce((sum: number, li: any) => {
+              const qty = Number(li?.quantity ?? 0) || 0;
+              const directAmount = Number(li?.purchaseAmount ?? li?.costAmount ?? 0) || 0;
+              if (directAmount > 0) return sum + directAmount;
+              const fallbackRate =
+                Number(li?.purchaseRate ?? li?.costPrice ?? 0) ||
+                itemPurchaseRateById.get(String(li?.itemId || "")) ||
+                0;
+              return sum + qty * fallbackRate;
+            }, 0)
+          : 0;
+        // Party-wise requested columns: Dr=sales, Cr=underlying purchase/production item cost.
+        current.debit += round2(saleAmount);
+        current.credit += round2(purchaseCost);
+        current.tx.push(v);
+        map.set(partyId, current);
+      });
+      return Array.from(map.values()).map((entry) => {
+        // Party-wise P&L convention: Dr (sale) - Cr (purchase/production cost).
+        const net = entry.debit - entry.credit;
+        return {
+          id: `party-${entry.id}`,
+          name: entry.name,
+          category: net >= 0 ? "Income" : "Expense",
+          amount: Math.abs(net),
+          // Party-wise columns: Dr = sales side, Cr = purchase/production cost, P&L = Dr - Cr.
+          debit: round2(entry.debit),
+          credit: round2(entry.credit),
+          plAmount: round2(net),
+          isGroup: false,
+          subRows: [],
+          detailContext: "party",
+          detailContextId: entry.id,
+          detailTransactions: entry.tx,
+        } as ProfitLossRow;
+      });
+    }
+    if (reportVariant === "bill-wise") {
+      const itemPurchaseRateById = new Map<string, number>(
+        processedItems.map((it: any) => [
+          String(it.id),
+          Number(it.purchasePrice ?? it.openingBalanceRate ?? 0) || 0,
+        ])
+      );
+      return filteredVouchers
+        // Bill-wise request: keep only sale-side bills; guard against purchase-like rows.
+        .filter((v) => {
+          const type = String(v.type || "").toLowerCase();
+          const voucherNo = String(v.voucherNumber || v.billNumber || "").toUpperCase();
+          const isSaleType = type === "sale" || type.includes("sale");
+          const looksPurchaseVoucher = voucherNo.startsWith("PUR");
+          return isSaleType && !type.includes("purchase") && !looksPurchaseVoucher;
+        })
+        .map((v) => {
+          const voucherNo = String(v.voucherNumber || v.billNumber || v.type || "Bill");
+          const saleAmount = Number(v.total ?? v.amount ?? 0) || 0;
+          // Cost side (Cr): line-item purchase/production cost used for bill P&L view.
+          const purchaseCost = Array.isArray(v.lineItems)
+            ? v.lineItems.reduce((sum: number, li: any) => {
+                const qty = Number(li?.quantity ?? 0) || 0;
+                const directAmount = Number(li?.purchaseAmount ?? li?.costAmount ?? 0) || 0;
+                if (directAmount > 0) return sum + directAmount;
+                const fallbackRate =
+                  Number(li?.purchaseRate ?? li?.costPrice ?? 0) ||
+                  itemPurchaseRateById.get(String(li?.itemId || "")) ||
+                  0;
+                return sum + qty * fallbackRate;
+              }, 0)
+            : 0;
+          const drAmount = round2(saleAmount);
+          const crAmount = round2(purchaseCost);
+          const net = drAmount - crAmount;
+          return {
+            id: `bill-${String(v.id || v.voucherNo || voucherNo)}`,
+            // Bill-wise first column should remain bill-centric.
+            name: voucherNo,
+            category: net >= 0 ? "Income" : "Expense",
+            amount: Math.abs(net),
+            // Bill-wise accounting columns requested: Dr=sale amount, Cr=item purchase/production cost.
+            debit: drAmount,
+            credit: crAmount,
+            plAmount: round2(net),
+            isGroup: false,
+            subRows: [],
+            detailContext: "daybook",
+            detailContextId: undefined,
+            detailTransactions: [v],
+          } as ProfitLossRow;
+        });
+    }
+
+    // Income-exp mode: original account/group hierarchy remains unchanged.
     // 1. Gather all individual accounts
     // Note: processedExpenseAccounts.balance already includes openingBalance: balance = openingBalance + debit - credit
     const allAccounts: ProfitLossRow[] = processedExpenseAccounts
@@ -259,6 +469,10 @@ export function ProfitAndLossPage() {
           name: acc.name,
           category: isIncomeAccount ? 'Income' : 'Expense',
           amount: amount,
+          // Income/expense columns: expense as Dr, income as Cr, and signed P&L.
+          debit: isIncomeAccount ? 0 : amount,
+          credit: isIncomeAccount ? amount : 0,
+          plAmount: isIncomeAccount ? amount : -amount,
           isGroup: false,
           parentId: acc.groupId,
           subRows: [],
@@ -273,6 +487,9 @@ export function ProfitAndLossPage() {
       name: g.name,
       category: (g as any).type === 'Income' ? 'Income' : 'Expense',
       amount: 0, // Will be calculated
+      debit: 0,
+      credit: 0,
+      plAmount: 0,
       isGroup: true,
       parentId: g.parentId,
       subRows: [],
@@ -296,16 +513,24 @@ export function ProfitAndLossPage() {
     // 4. Calculate group totals recursively
     const calculateTotals = (item: ProfitLossRow): number => {
       if (!item.isGroup) {
-        return item.amount;
+        return Number(item.plAmount ?? 0);
       }
 
-      let total = 0;
+      let totalPL = 0;
+      let totalDebit = 0;
+      let totalCredit = 0;
       item.subRows.forEach(subItem => {
-        total += calculateTotals(subItem);
+        totalPL += calculateTotals(subItem);
+        totalDebit += Number(subItem.debit ?? 0);
+        totalCredit += Number(subItem.credit ?? 0);
       });
 
-      item.amount = round2(total);
-      return total;
+      // Group row should show grouped amount even after expand (requested behavior).
+      item.debit = round2(totalDebit);
+      item.credit = round2(totalCredit);
+      item.plAmount = round2(totalPL);
+      item.amount = round2(Math.abs(totalPL));
+      return totalPL;
     };
     
     rootItems.forEach(calculateTotals);
@@ -332,7 +557,7 @@ export function ProfitAndLossPage() {
     sortRows(finalHierarchy);
     
     return finalHierarchy;
-  }, [processedExpenseAccounts, processedExpenseGroups]);
+  }, [reportVariant, filteredVouchers, processedExpenseAccounts, processedExpenseGroups, processedParties, processedItems]);
 
   // Filter and sort
   const filtered = useMemo(() => {
@@ -382,15 +607,31 @@ export function ProfitAndLossPage() {
       filteredData = searchInItems(filteredData);
     }
 
-    // Sort
+    const rowDateMs = (row: ProfitLossRow) => {
+      const tx = row.detailTransactions?.[0];
+      const d = tx?.date;
+      const jsDate = d && typeof d.toDate === "function" ? d.toDate() : d ? new Date(d) : null;
+      return jsDate && !Number.isNaN(jsDate.getTime()) ? jsDate.getTime() : 0;
+    };
+
+    // Sort (desktop + mobile footer filter aware)
     const sortItems = (items: ProfitLossRow[]): ProfitLossRow[] => {
       const sorted = [...items];
       sorted.sort((a, b) => {
-        if (sortDesc) {
-          return b.amount - a.amount;
-        } else {
-          return a.amount - b.amount;
+        if (isMobile) {
+          if (reportVariant === "bill-wise") {
+            if (mobileFilter === "by_bill_no") return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+            if (mobileFilter === "date") return rowDateMs(b) - rowDateMs(a);
+            if (mobileFilter === "high_to_low") return (Math.abs(b.plAmount ?? 0) - Math.abs(a.plAmount ?? 0));
+            if (mobileFilter === "low_to_high") return (Math.abs(a.plAmount ?? 0) - Math.abs(b.plAmount ?? 0));
+          } else {
+            if (mobileFilter === "name") return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+            if (mobileFilter === "date") return rowDateMs(b) - rowDateMs(a);
+            if (mobileFilter === "high_to_low") return (Math.abs(b.plAmount ?? 0) - Math.abs(a.plAmount ?? 0));
+            if (mobileFilter === "low_to_high") return (Math.abs(a.plAmount ?? 0) - Math.abs(b.plAmount ?? 0));
+          }
         }
+        return sortDesc ? b.amount - a.amount : a.amount - b.amount;
       });
       return sorted.map(item => {
         if (item.isGroup) {
@@ -401,20 +642,29 @@ export function ProfitAndLossPage() {
     };
     
     return sortItems(filteredData);
-  }, [profitLossData, query, sortDesc, entityFilter]);
+  }, [profitLossData, query, sortDesc, entityFilter, isMobile, mobileFilter, reportVariant]);
   
-  // Calculate totals from filtered data
+  // Calculate totals from filtered data (variant-aware for Dr/Cr/P&L summaries).
   const totals = useMemo(() => {
-    const calculateTotals = (items: ProfitLossRow[]): { income: number; expense: number } => {
+    const calculateTotals = (items: ProfitLossRow[]): { income: number; expense: number; debit: number; credit: number; pl: number } => {
       let income = 0;
       let expense = 0;
+      let debit = 0;
+      let credit = 0;
+      let pl = 0;
       
       items.forEach(item => {
         if (item.isGroup) {
           const subTotals = calculateTotals(item.subRows);
           income += subTotals.income;
           expense += subTotals.expense;
+          debit += subTotals.debit;
+          credit += subTotals.credit;
+          pl += subTotals.pl;
         } else {
+          debit += Number(item.debit ?? 0);
+          credit += Number(item.credit ?? 0);
+          pl += Number(item.plAmount ?? 0);
           if (item.category === 'Income') {
             income += item.amount;
           } else {
@@ -423,12 +673,19 @@ export function ProfitAndLossPage() {
         }
       });
       
-      return { income, expense };
+      return { income, expense, debit, credit, pl };
     };
     
-    const { income, expense } = calculateTotals(filtered);
+    const { income, expense, debit, credit, pl } = calculateTotals(filtered);
     const net = income - expense;
-    return { income: round2(income), expense: round2(expense), net: round2(net) };
+    return {
+      income: round2(income),
+      expense: round2(expense),
+      net: round2(net),
+      debit: round2(debit),
+      credit: round2(credit),
+      pl: round2(pl),
+    };
   }, [filtered]);
 
   const toggleGroup = useCallback((groupId: string) => {
@@ -478,6 +735,7 @@ export function ProfitAndLossPage() {
 
   // Get account entity for useTransactions
   const accountEntity = useMemo(() => {
+    if (reportVariant !== "income-exp") return null;
     if (!activeRow || activeRow.isGroup) return null;
     const account = processedExpenseAccounts.find(acc => acc.id === activeRow.accountId);
     if (!account) return null;
@@ -492,7 +750,7 @@ export function ProfitAndLossPage() {
       ...account,
       openingBalance: calculatedOpeningBalance,
     };
-  }, [activeRow, processedExpenseAccounts]);
+  }, [reportVariant, activeRow, processedExpenseAccounts]);
 
   // Use useTransactions hook to get processed transactions with debit, credit, and running balance
   const { processedTransactions, openingBalanceForPeriod: openingBalanceForAccount, periodDr, periodCr, closingBalance: calculatedClosingBalance } = useTransactions(
@@ -508,6 +766,13 @@ export function ProfitAndLossPage() {
     undefined, // journalAccountNames
     userNames
   );
+
+  const detailTransactions = useMemo(() => {
+    // Variant-aware details: account-ledger uses hook output, party/bill variants use row-bound transactions.
+    if (!activeRow) return [];
+    if (reportVariant === "income-exp") return processedTransactions || [];
+    return activeRow.detailTransactions || [];
+  }, [activeRow, reportVariant, processedTransactions]);
 
   const openDetail = (row: ProfitLossRow) => {
     if (row.isGroup) return;
@@ -531,6 +796,8 @@ export function ProfitAndLossPage() {
       else if (dateSystem === "BS") dateRangeText = `BS: ${fromBS} to ${toBS}`;
       else dateRangeText = `AD: ${fromAD} to ${toAD} (BS: ${fromBS} to ${toBS})`;
     }
+    const detailContext = reportVariant === "income-exp" ? "expense" : (activeRow.detailContext || "daybook");
+    const detailContextId = reportVariant === "income-exp" ? activeRow.accountId : activeRow.detailContextId;
     openPrintDirect({
       company: {
         name: company.name,
@@ -543,13 +810,13 @@ export function ProfitAndLossPage() {
         logoUrl: company.logoUrl,
       },
       title: `${activeRow.name}${activeRow.category ? ` · ${activeRow.category}` : ""}`,
-      context: "expense",
-      contextId: activeRow.accountId,
+      context: detailContext,
+      contextId: detailContextId,
       dateSystem: dateSystem,
       dateRangeText: dateRangeText,
-      vouchersCount: processedTransactions?.length ?? 0,
-      openingBalance: openingBalanceForAccount ?? 0,
-      transactions: processedTransactions ?? [],
+      vouchersCount: detailTransactions.length ?? 0,
+      openingBalance: reportVariant === "income-exp" ? (openingBalanceForAccount ?? 0) : 0,
+      transactions: detailTransactions,
       userNames: userNames,
     }, true);
   };
@@ -559,104 +826,173 @@ export function ProfitAndLossPage() {
   }
 
   return (
-    <div className="pb-[72px] p-0.5 w-full h-full overflow-y-auto">
-      <div className="p-0 space-y-3">
-        {/* Summary Cards at Top - responsive: 1 per row on mobile, 3 on desktop; no wrap */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-4">
-            <Card className="min-w-0">
-              <CardContent className="p-4 overflow-x-auto">
-                <div className="flex items-center justify-between gap-2 min-w-0">
-                  <CardTitle className="text-base font-medium whitespace-nowrap shrink-0">Total Income</CardTitle>
-                  <span className="text-2xl font-bold text-green-600 whitespace-nowrap tabular-nums">{toNepaliCurrency(totals.income)}</span>
+    <div className="pb-[72px] p-0.5 w-full h-full overflow-hidden flex flex-col">
+      <div className="p-0 min-h-0 flex-1 flex flex-col gap-[5px]">
+        {/* Keep report title at page top in a single, screen-fit row for mobile + desktop. */}
+        <div className="w-[98%] mx-auto pt-1">
+          {/* Ribbon-style title strip: keep heading + selected variant together in one highlighted band. */}
+          <div className="flex items-center gap-2 min-w-0 rounded-md border border-indigo-300/70 bg-gradient-to-r from-indigo-50 via-white to-violet-100/70 px-2 py-1 dark:from-indigo-950/30 dark:via-card dark:to-violet-900/20">
+            {/* Slightly reduce heading size (~2%) so full title fits on mobile. */}
+            <h1 className="text-[1.22rem] sm:text-[1.96rem] font-semibold truncate">Profit &amp; Loss Statement</h1>
+            {reportLabel ? (
+              // Keep report variant badge ribbon-like for consistency with summary card accents.
+              <span className="rounded-full border border-orange-400/70 bg-gradient-to-r from-orange-50 to-amber-100 px-2 py-0.5 text-[11px] sm:text-xs font-semibold text-orange-700 whitespace-nowrap shrink-0 dark:from-orange-950/30 dark:to-amber-900/30">
+                {reportLabel}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {/* Keep summary area almost full-width (98%) for mobile and desktop fit. */}
+        <div className="w-[98%] mx-auto space-y-[5px]">
+          <div className="grid grid-cols-2 gap-[5px]">
+            <Card className="min-w-0 border-2 border-emerald-300/70 bg-gradient-to-r from-emerald-50 via-white to-emerald-100/70 dark:from-emerald-950/30 dark:via-card dark:to-emerald-900/20">
+              <CardContent className="px-3 py-1 sm:px-4 sm:py-1.5">
+                <div className="flex flex-col items-start gap-0.5 min-w-0">
+                  {/* Requested copy update: show only "Income" label and put amount on next line. */}
+                  {/* Compact card density: reduce vertical footprint while keeping number readable. */}
+                  {/* Extra-tight line gap: keep about ~2px visual spacing around text block. */}
+                  <CardTitle className="text-[13px] sm:text-sm font-medium leading-none">
+                    {reportVariant === "party-wise" ? "Total Dr" : "Income"}
+                  </CardTitle>
+                  <span className="text-base sm:text-xl font-bold text-green-600 tabular-nums leading-none break-all">
+                    {toNepaliCurrency(reportVariant === "party-wise" ? totals.debit : totals.income)}
+                  </span>
                 </div>
               </CardContent>
             </Card>
-            <Card className="min-w-0">
-              <CardContent className="p-4 overflow-x-auto">
-                <div className="flex items-center justify-between gap-2 min-w-0">
-                  <CardTitle className="text-base font-medium whitespace-nowrap shrink-0">Total Expenses</CardTitle>
-                  <span className="text-2xl font-bold text-red-600 whitespace-nowrap tabular-nums">{toNepaliCurrency(totals.expense)}</span>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="min-w-0">
-              <CardContent className="p-4 overflow-x-auto">
-                <div className="flex items-center justify-between gap-2 min-w-0">
-                  <CardTitle className="text-base font-medium whitespace-nowrap shrink-0">Net Profit / Loss</CardTitle>
-                  <span className={`text-2xl font-bold whitespace-nowrap tabular-nums ${totals.net >= 0 ? "text-green-600" : "text-red-600"}`}>
-                    {totals.net >= 0 ? `${toNepaliCurrency(totals.net)} (Profit)` : `${toNepaliCurrency(Math.abs(totals.net))} (Loss)`}
+            <Card className="min-w-0 border-2 border-rose-300/70 bg-gradient-to-r from-rose-50 via-white to-orange-100/70 dark:from-rose-950/30 dark:via-card dark:to-orange-900/20">
+              <CardContent className="px-3 py-1 sm:px-4 sm:py-1.5">
+                <div className="flex flex-col items-start gap-0.5 min-w-0">
+                  {/* Requested copy update: show only "Expense" label and put amount on next line. */}
+                  {/* Compact card density: reduce vertical footprint while keeping number readable. */}
+                  {/* Extra-tight line gap: keep about ~2px visual spacing around text block. */}
+                  <CardTitle className="text-[13px] sm:text-sm font-medium leading-none">
+                    {reportVariant === "party-wise" ? "Total Cr" : "Expense"}
+                  </CardTitle>
+                  <span className="text-base sm:text-xl font-bold text-red-600 tabular-nums leading-none break-all">
+                    {toNepaliCurrency(reportVariant === "party-wise" ? totals.credit : totals.expense)}
                   </span>
                 </div>
               </CardContent>
             </Card>
           </div>
-
-        <Card className="border-2 border-foreground/20">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-2xl">Profit & Loss Statement</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 flex-1 flex flex-col min-h-0">
-            <div className={cn("flex items-center gap-2 py-3 px-4", isMobile && "overflow-x-auto min-w-0")}>
-              <div className={cn("flex items-center gap-2 shrink-0", isMobile && "min-w-[560px]")}>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={isAllExpanded ? collapseAll : expandAll}
-              >
-                {isAllExpanded ? (
-                  <>
-                    <ChevronUp className="mr-2 h-4 w-4" /> Collapse All
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="mr-2 h-4 w-4" /> Expand All
-                  </>
-                )}
-              </Button>
-              <Select value={entityFilter} onValueChange={(value: "all" | "Income" | "Expense") => setEntityFilter(value)}>
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="Filter by type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="Income">Income</SelectItem>
-                  <SelectItem value="Expense">Expense</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button variant="outline" size="sm" onClick={() => setSortDesc((s) => !s)}>
-                <ArrowUpDown className="mr-2 h-4 w-4" /> Sort {sortDesc ? "Desc" : "Asc"}
-              </Button>
-              <div className="relative w-full max-w-sm ml-auto">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 opacity-70" />
-                <Input
-                  placeholder="Search account or group…"
-                  className="pl-8"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                />
+          {/* Net summary also uses ribbon style so it visually matches income/expense cards. */}
+          <Card className={cn(
+            "min-w-0 border-2",
+            totals.net >= 0
+              ? "border-emerald-300/70 bg-gradient-to-r from-emerald-50 via-white to-teal-100/70 dark:from-emerald-950/30 dark:via-card dark:to-teal-900/20"
+              : "border-rose-300/70 bg-gradient-to-r from-rose-50 via-white to-orange-100/70 dark:from-rose-950/30 dark:via-card dark:to-orange-900/20"
+          )}>
+            <CardContent className="px-3 py-1 sm:px-4 sm:py-1.5">
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                {/* Net card also follows same compact-height style as top two cards. */}
+                {/* Extra-tight typography so label/value sit with minimal top/bottom breathing room. */}
+                <CardTitle className="text-[13px] sm:text-sm font-medium whitespace-nowrap shrink-0 leading-none">
+                  {reportVariant === "party-wise" ? "P&L (FY)" : "Net Profit / Loss"}
+                </CardTitle>
+                <span className={`text-base sm:text-xl font-bold whitespace-nowrap tabular-nums leading-none ${(reportVariant === "party-wise" ? totals.pl : totals.net) >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  {(reportVariant === "party-wise" ? totals.pl : totals.net) >= 0
+                    ? `${toNepaliCurrency(reportVariant === "party-wise" ? totals.pl : totals.net)} (Profit)`
+                    : `${toNepaliCurrency(Math.abs(reportVariant === "party-wise" ? totals.pl : totals.net))} (Loss)`}
+                </span>
               </div>
-              </div>
-            </div>
+            </CardContent>
+          </Card>
+          </div>
 
-            <div className={cn("rounded-lg border flex-1 flex flex-col min-h-0 mx-4", isMobile && "overflow-x-auto")}>
-              <div className={cn("flex-1 flex flex-col min-h-0", isMobile && "min-w-[600px]")}>
+        {/* Remove extra outer card shell; keep only inner content panel for wider list area. */}
+        <div className="flex-1 min-h-0 flex flex-col">
+            {reportVariant === "income-exp" ? (
+              // Party-wise / Bill-wise request: hide filter-toolbar; keep it only on income-exp view.
+              <div className={cn("flex items-center gap-2 py-3 px-4")}>
+                <div className={cn("flex items-center gap-2 w-full min-w-0")}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={isAllExpanded ? collapseAll : expandAll}
+                >
+                  {isAllExpanded ? (
+                    <>
+                      <ChevronUp className="mr-2 h-4 w-4" /> Collapse All
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="mr-2 h-4 w-4" /> Expand All
+                    </>
+                  )}
+                </Button>
+                {/* Requested: remove "All" and "Sort" boxes from income-exp toolbar. */}
+                <div className="relative w-full max-w-sm ml-auto">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 opacity-70" />
+                  <Input
+                    placeholder="Search account or group..."
+                    className="pl-8"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 py-2 px-4">
+                {/* Show active date range at left of search for party/bill views. */}
+                <div className="h-9 flex items-center text-[11px] sm:text-xs text-muted-foreground whitespace-nowrap rounded-md border px-2">
+                  {activeRangeLabel}
+                </div>
+                <div className="relative w-full max-w-sm ml-auto">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 opacity-70" />
+                  <Input
+                    placeholder={reportVariant === "party-wise" ? "Search party..." : "Search bill no..."}
+                    className="h-9 pl-8"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Wider inner panel: reduce side margins so table area uses more horizontal space. */}
+            <div className={cn("rounded-lg border flex-1 flex flex-col min-h-0 mx-2", isMobile && "overflow-x-hidden")}>
+              <div className={cn("flex-1 flex flex-col min-h-0")}>
               <div className="flex-1 overflow-y-auto min-h-0">
-                <Table className={cn(isMobile && "min-w-[600px]")}>
+                <Table
+                  className={cn(
+                    // Mobile fit: keep all variants table-fixed to avoid horizontal cut/scroll.
+                    isMobile && "w-full table-fixed"
+                  )}
+                >
                   <TableCaption>Click a row to view details.</TableCaption>
-                  <TableHeader className="sticky top-0 bg-background z-10">
+                  <TableHeader className="sticky top-0 z-30 bg-background [&_tr]:bg-background [&_th]:bg-background">
                     <TableRow>
-                      {expandedGroups.size > 0 ? (
+                      {reportVariant === "bill-wise" ? (
                         <>
-                          <TableHead>Group</TableHead>
-                          <TableHead>Account</TableHead>
-                          <TableHead className="text-right">Income</TableHead>
-                          <TableHead className="text-right">Expense</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background">Bill No</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Dr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Cr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">P&amp;L</TableHead>
+                        </>
+                      ) : reportVariant === "party-wise" ? (
+                        <>
+                          <TableHead className="sticky top-0 z-40 bg-background">Party Name</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Dr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Cr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">P&amp;L</TableHead>
+                        </>
+                      ) : expandedGroups.size > 0 ? (
+                        <>
+                          {/* Expanded header requested: show Group/Account without spaces around slash. */}
+                          <TableHead className="sticky top-0 z-40 bg-background">Group/Account</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Dr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Cr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">P&amp;L</TableHead>
                         </>
                       ) : (
                         <>
-                          <TableHead>Group / Account Name</TableHead>
-                          <TableHead className="text-right">Income</TableHead>
-                          <TableHead className="text-right">Expense</TableHead>
+                          {/* Collapsed view: header shows only Group side (requested). */}
+                          <TableHead className="sticky top-0 z-40 bg-background">Group</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Dr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">Cr</TableHead>
+                          <TableHead className="sticky top-0 z-40 bg-background text-right">P&amp;L</TableHead>
                         </>
                       )}
                     </TableRow>
@@ -670,11 +1006,23 @@ export function ProfitAndLossPage() {
                         expandedGroups={expandedGroups}
                         toggleGroup={toggleGroup}
                         onRowClick={openDetail}
+                        reportVariant={reportVariant}
                       />
                     ))}
                     {filtered.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={expandedGroups.size > 0 ? 4 : 3} className="text-center py-8 text-muted-foreground">
+                        <TableCell
+                          colSpan={
+                            reportVariant === "bill-wise"
+                              ? 4
+                              : reportVariant === "party-wise"
+                                ? 4
+                                : expandedGroups.size > 0
+                                  ? 4
+                                  : 4
+                          }
+                          className="text-center py-8 text-muted-foreground"
+                        >
                           No matching records found.
                         </TableCell>
                       </TableRow>
@@ -685,16 +1033,105 @@ export function ProfitAndLossPage() {
               </div>
             </div>
 
-            <p className="mt-2 text-sm opacity-80 px-4 pb-4">Note: Profit & Loss Statement = Income - Expenses = Net Profit or Loss</p>
-        </CardContent>
-      </Card>
+            <div className={cn("mt-auto", isMobile && "pb-12")}>
+              {isMobile ? (
+              <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur px-2 py-1.5">
+                {/* Mobile footer filters: align with account-list style across all 3 variants. */}
+                <div className="overflow-x-auto">
+                  <div className="flex w-max items-center gap-1">
+                    {(reportVariant === "bill-wise"
+                      ? [
+                          { key: "by_bill_no", label: "By Bill No" },
+                          { key: "date", label: "By Date" },
+                          { key: "high_to_low", label: "High to Low" },
+                          { key: "low_to_high", label: "Low to High" },
+                        ]
+                      : [
+                          { key: "name", label: "By Name" },
+                          { key: "date", label: "By Date" },
+                          { key: "low_to_high", label: "Low to High" },
+                          { key: "high_to_low", label: "High to Low" },
+                        ]).map((f) => (
+                      <Button
+                        key={f.key}
+                        type="button"
+                        size="sm"
+                        variant={mobileFilter === (f.key as ProfitLossMobileFilter) ? "default" : "outline"}
+                        className="h-7 whitespace-nowrap px-2 text-[11px]"
+                        onClick={() => setMobileFilter(f.key as ProfitLossMobileFilter)}
+                      >
+                        {f.label}
+                      </Button>
+                    ))}
+                    {/* Calendar moved to right of filter buttons (after High to Low). */}
+                    <Popover open={isFooterCalendarOpen} onOpenChange={setIsFooterCalendarOpen}>
+                      <PopoverTrigger asChild>
+                        <Button type="button" size="sm" variant="outline" className="h-7 w-7 p-0 shrink-0" aria-label="Select date range">
+                          <CalendarIcon className="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <AdCalendar
+                          rangePresetSlot={
+                            <DateRangePresetRow
+                              country={company?.country}
+                              onApply={(r) => {
+                                const normalizedRange: DateRange = {
+                                  from: startOfDay(r.from),
+                                  to: endOfDay(r.to),
+                                };
+                                setDateRange(normalizedRange);
+                                setIsFooterCalendarOpen(false);
+                              }}
+                            />
+                          }
+                          valueAD={dateRange}
+                          isRange
+                          numberOfMonths={calendarMonths}
+                          onSelect={(adDate) => {
+                            const range = dateRange;
+                            if (!range?.from || (range.from && range.to)) {
+                              setDateRange({ from: startOfDay(adDate), to: undefined });
+                            } else if (adDate < range.from) {
+                              setDateRange({ from: startOfDay(adDate), to: endOfDay(range.from) });
+                              setIsFooterCalendarOpen(false);
+                            } else {
+                              setDateRange({ from: range.from, to: endOfDay(adDate) });
+                              setIsFooterCalendarOpen(false);
+                            }
+                          }}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-[11px]"
+                      onClick={() => {
+                        const { start, end } = getFiscalRangeForCountry(company?.country || "Nepal");
+                        setDateRange({ from: startOfDay(start), to: endOfDay(end) });
+                      }}
+                    >
+                      FY
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            </div>
+        </div>
       </div>
 
       {/* DETAIL DIALOG - height 90% screen, width data anusar */}
       <Dialog open={!!activeRow} onOpenChange={(open) => !open && closeDrawer()}>
-        <DialogContent className={cn(
-          "h-[90vh] max-h-[90vh] w-max min-w-[320px] max-w-[95vw] flex flex-col gap-0 overflow-hidden"
-        )}>
+        <DialogContent
+          className={cn(
+            // Requested sizing: near full-width dialog on both desktop and mobile (98% container).
+            "h-[90vh] max-h-[90vh] flex flex-col gap-0 overflow-hidden p-2 sm:p-4",
+            "w-[98vw] max-w-[98vw] min-w-0 rounded-2xl"
+          )}
+        >
           <DialogHeader className="flex-shrink-0">
             <DialogTitle className="pr-8 truncate">
               {activeRow?.name} {activeRow?.category ? `· ${activeRow.category}` : ""}
@@ -830,33 +1267,37 @@ export function ProfitAndLossPage() {
             </div>
           </div>
           
-          <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto px-1">
+          <div className={cn("flex-1 min-h-0 overflow-y-auto", isMobile ? "overflow-x-hidden px-0.5" : "overflow-x-auto px-1")}>
             {activeRow && (() => {
-              const totalPages = rowsPerPage > 0 ? Math.ceil((processedTransactions?.length || 0) / rowsPerPage) : 1;
+              const totalPages = rowsPerPage > 0 ? Math.ceil((detailTransactions?.length || 0) / rowsPerPage) : 1;
               const paginatedTransactions = rowsPerPage > 0
-                ? (processedTransactions || []).slice(
+                ? (detailTransactions || []).slice(
                     (currentPage - 1) * rowsPerPage,
                     currentPage * rowsPerPage
                   )
-                : (processedTransactions || []);
+                : (detailTransactions || []);
+              const detailContext = reportVariant === "income-exp" ? "expense" : (activeRow.detailContext || "daybook");
+              const detailContextId = reportVariant === "income-exp" ? activeRow.accountId : activeRow.detailContextId;
               
               return (
                 <>
-                  <div className="min-w-0 w-max">
+                  {/* Mobile fit: avoid intrinsic table width expansion that pushed dialog beyond screen. */}
+                  <div className={cn("min-w-0 w-full overflow-x-hidden", isMobile ? "-mx-0.5" : "")}>
                     <TransactionsTable 
-                      context="expense"
-                      contextId={activeRow.accountId}
+                      context={detailContext}
+                      contextId={detailContextId}
                       transactions={paginatedTransactions}
                       userNames={userNames}
-                      openingBalance={openingBalanceForAccount}
-                      periodDr={periodDr}
-                      periodCr={periodCr}
-                      closingBalance={calculatedClosingBalance}
+                      // Mobile cards already render voucher + opposite account; desktop table stays unchanged.
+                      openingBalance={reportVariant === "income-exp" ? openingBalanceForAccount : 0}
+                      periodDr={reportVariant === "income-exp" ? periodDr : 0}
+                      periodCr={reportVariant === "income-exp" ? periodCr : 0}
+                      closingBalance={reportVariant === "income-exp" ? calculatedClosingBalance : 0}
                     />
                   </div>
                   <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30 flex-shrink-0">
                     <div className="text-sm text-muted-foreground">
-                      Showing {(currentPage - 1) * rowsPerPage + 1} to {Math.min(currentPage * rowsPerPage, processedTransactions?.length || 0)} of {processedTransactions?.length || 0} transactions
+                      Showing {(currentPage - 1) * rowsPerPage + 1} to {Math.min(currentPage * rowsPerPage, detailTransactions?.length || 0)} of {detailTransactions?.length || 0} transactions
                     </div>
                     {totalPages > 1 && (
                       <div className="flex items-center gap-2">
@@ -885,18 +1326,30 @@ export function ProfitAndLossPage() {
                 </>
               );
             })()}
-            {activeRow && (!processedTransactions || processedTransactions.length === 0) && (
+            {activeRow && (!detailTransactions || detailTransactions.length === 0) && (
               <div className="text-center py-8 text-muted-foreground">
-                No transactions found for this account{dateRange ? ' in the selected date range' : ''}.
+                No transactions found for this record{dateRange ? ' in the selected date range' : ''}.
               </div>
             )}
           </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={handlePrintDetail} className="gap-2" disabled={!activeRow}>
+          <DialogFooter className="flex-row items-center justify-end gap-2 [&>*]:mt-0">
+            {/* Footer actions: one row with blue close and green print for mobile clarity. */}
+            <Button
+              variant="outline"
+              onClick={closeDrawer}
+              className="rounded-full border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 hover:text-white"
+            >
+              Close
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handlePrintDetail}
+              className="gap-2 rounded-full border border-green-600 bg-green-600 text-white hover:bg-green-700 hover:text-white"
+              disabled={!activeRow}
+            >
               <Printer className="h-4 w-4" />
               Print
             </Button>
-            <Button variant="outline" onClick={closeDrawer}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

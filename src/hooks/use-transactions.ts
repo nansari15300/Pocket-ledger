@@ -685,7 +685,14 @@ export function useTransactions(
         let entityTransactions: any[] = [];
         
         if (transactionContext && entity.id === 'all') {
-            entityTransactions = transactionsToProcess.filter((v: any) => v.type === transactionContext);
+            // "All Vouchers" in Add Salary report must include current (journal+subType) and legacy add_salary rows.
+            if (transactionContext === 'add_salary') {
+                entityTransactions = transactionsToProcess.filter(
+                    (v: any) => v.type === 'add_salary' || (v.type === 'journal' && v.subType === 'add_salary')
+                );
+            } else {
+                entityTransactions = transactionsToProcess.filter((v: any) => v.type === transactionContext);
+            }
         } else if (context === 'group' && 'items' in entity) {
             // Check if this is "All Journal Vouchers" view
             const isJournalAllView = entity.id === 'all' && (entity as any).accountType === 'journal_view';
@@ -797,6 +804,10 @@ export function useTransactions(
             const contextType = transactionContext === 'payment-in' ? 'payment_in' : 
                               transactionContext === 'payment-out' ? 'payment_out' : transactionContext;
             entityTransactions = entityTransactions.filter((v: any) => {
+                // Add Salary context supports both legacy `type=add_salary` and current `journal + subType=add_salary`.
+                if (contextType === 'add_salary') {
+                    return v.type === 'add_salary' || (v.type === 'journal' && v.subType === 'add_salary');
+                }
                 if (contextType === 'payment_in' || contextType === 'payment_out') {
                     return v.type === contextType || (contextType === 'payment_in' && v.type === 'direct_income') || 
                            (contextType === 'payment_out' && v.type === 'direct_expense');

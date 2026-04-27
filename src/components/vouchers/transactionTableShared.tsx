@@ -196,6 +196,14 @@ export const getOppositeAccountLabel = (
   groupEntityType?: "party" | "account" | "staff" | "tax" | "expense" | "item"
 ): string => {
   const getName = (id: string | undefined) => (id ? (names[id] || "—") : "N/A");
+  // Keep voucher title clean: hide placeholder-only labels like "—, —".
+  const sanitizeOpposite = (raw: string): string => {
+    const text = String(raw || "").trim();
+    if (!text) return "";
+    const normalized = text.replace(/[,\s]/g, "");
+    if (!normalized) return "";
+    return /^[—-]+$/.test(normalized) ? "" : text;
+  };
   const labelFromJournalEntry = (e: any) => {
     const raw = String(e?.accountName ?? "").trim();
     if (raw) return raw;
@@ -229,9 +237,9 @@ export const getOppositeAccountLabel = (
         const partyEntry = t.entries.find((e: any) => e?.accountId === contextId);
         const oppositeSide = partyEntry ? ((Number(partyEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
         const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
-        if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
+        if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
         const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
-        if (anyOther?.accountId) return labelFromJournalEntry(anyOther);
+        if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
         return "Journal";
       }
       if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
@@ -263,7 +271,7 @@ export const getOppositeAccountLabel = (
     if (t.type === "contra") return getName(t.fromAccountId) || getName(t.toAccountId);
     if (t.type === "journal" && Array.isArray(t.entries)) {
       const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
-      return parts.join(", ") || "Journal";
+      return sanitizeOpposite(parts.join(", ")) || "Journal";
     }
   }
   // Account (bank) context: show opposite account - Sales/Purchase for sale/purchase, party for payments, etc.
@@ -284,9 +292,51 @@ export const getOppositeAccountLabel = (
       const accountEntry = t.entries.find((e: any) => e?.accountId === contextId);
       const oppositeSide = accountEntry ? ((Number(accountEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
       const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
-      if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
+      if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
       const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
-      if (anyOther?.accountId) return labelFromJournalEntry(anyOther);
+      if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
+      return "Journal";
+    }
+  }
+  // Expense ledger rows should also resolve an actual opposite account next to voucher number.
+  const expenseInTx =
+    context === "expense" &&
+    contextId &&
+    (t.expenseAccountId === contextId ||
+      t.incomeAccountId === contextId ||
+      t.toAccountId === contextId ||
+      t.accountId === contextId ||
+      (t.type === "journal" &&
+        Array.isArray(t.entries) &&
+        t.entries.some((e: any) => e?.accountId === contextId)));
+  if (expenseInTx) {
+    if (t.type === "direct_expense") return sanitizeOpposite(getName(t.fromAccountId || t.accountId));
+    if (t.type === "direct_income") return sanitizeOpposite(getName(t.accountId));
+    if (t.type === "payment_in") {
+      return sanitizeOpposite(
+        (t.partyId && getName(t.partyId)) ||
+        (t.staffId && getName(t.staffId)) ||
+        (t.taxAccountId && getName(t.taxAccountId)) ||
+        t.payeeName ||
+        getName(t.accountId)
+      );
+    }
+    if (t.type === "payment_out") {
+      return sanitizeOpposite(
+        (t.partyId && getName(t.partyId)) ||
+        (t.staffId && getName(t.staffId)) ||
+        (t.taxAccountId && getName(t.taxAccountId)) ||
+        t.payeeName ||
+        getName(t.fromAccountId || t.accountId)
+      );
+    }
+    if (t.type === "journal" && Array.isArray(t.entries)) {
+      const selectedEntry = t.entries.find((e: any) => e?.accountId === contextId);
+      const oppositeSide = selectedEntry ? ((Number(selectedEntry?.debit) || 0) > 0 ? "credit" : "debit") : "debit";
+      const oppositeEntry = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId && (Number(e?.[oppositeSide]) || 0) > 0);
+      if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
+      const anyOther = t.entries.find((e: any) => e?.accountId && e.accountId !== contextId);
+      if (anyOther?.accountId) return sanitizeOpposite(labelFromJournalEntry(anyOther));
       return "Journal";
     }
   }
@@ -328,7 +378,7 @@ export const getOppositeAccountLabel = (
         nonStaffEntries.find((e: any) => (Number(e?.debit) || 0) > 0) ||
         nonStaffEntries.find((e: any) => !isTaxLikeId(e.accountId)) ||
         nonStaffEntries[0];
-      if (expenseEntry?.accountId) return labelFromJournalEntry(expenseEntry);
+      if (expenseEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(expenseEntry));
       return "Add Salary";
     }
 
@@ -340,7 +390,7 @@ export const getOppositeAccountLabel = (
         nonStaffEntries.find((e: any) => (Number(e?.[preferredSide]) || 0) > 0 && !isTaxLikeId(e.accountId)) ||
         nonStaffEntries.find((e: any) => !isTaxLikeId(e.accountId)) ||
         nonStaffEntries[0];
-      if (oppositeEntry?.accountId) return labelFromJournalEntry(oppositeEntry);
+      if (oppositeEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(oppositeEntry));
     }
   }
 
@@ -350,7 +400,7 @@ export const getOppositeAccountLabel = (
   const isTaxContext = context === "tax" || context === "tax_group";
   if (isTaxContext && t.type === "journal" && t.subType === "add_salary" && Array.isArray(t.entries)) {
     const expenseEntry = t.entries.find((e: any) => (Number(e?.debit) || 0) > 0);
-    if (expenseEntry?.accountId) return labelFromJournalEntry(expenseEntry);
+    if (expenseEntry?.accountId) return sanitizeOpposite(labelFromJournalEntry(expenseEntry));
   }
   if (isTaxContext && (t.type === "payment_in" || t.type === "payment_out")) {
     // payment_in: Dr Bank (accountId), Cr Tax → opposite = bank received into
@@ -369,7 +419,7 @@ export const getOppositeAccountLabel = (
   if (t.type === "direct_expense") return getName(t.toAccountId || t.expenseAccountId);
   if (t.type === "journal" && Array.isArray(t.entries)) {
     const parts = t.entries.slice(0, 2).map((e: any) => labelFromJournalEntry(e));
-    return parts.join(", ") || "Journal";
+    return sanitizeOpposite(parts.join(", ")) || "Journal";
   }
   if (t.type === "note") return getNoteLinkedEntityLabel(t, names);
   return t.narration || "";

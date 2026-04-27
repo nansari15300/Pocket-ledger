@@ -394,7 +394,12 @@ useEffect(() => {
       }, [processedAccounts, vouchers, bankCashDateRange]);
 
     return (
-        <Card id="bank-cash-summary-area" className="flex-1 flex flex-col min-h-0 border-foreground/20">
+        <Card
+            id="bank-cash-summary-area"
+            // Dashboard top cards: give each card a different soft ribbon tone.
+            // Bold border requested for dashboard cards while preserving ribbon tint.
+            className="flex-1 flex flex-col min-h-0 border-2 border-sky-300/70 bg-gradient-to-r from-sky-50 via-white to-cyan-100/70 dark:from-sky-950/25 dark:via-card dark:to-cyan-900/20"
+        >
             <CardHeader className="py-3">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 min-w-0">
@@ -1425,7 +1430,12 @@ function DashboardPageContent() {
   
   const renderRecentTransactions = () => (
     <div className="w-full max-w-full">
-    <Card className={cn("border-2 border-foreground/20 w-full", isMobile && "px-0")}>
+    <Card
+      className={cn(
+        "border-2 w-full border-violet-300/70 bg-gradient-to-r from-violet-50 via-white to-fuchsia-100/70 dark:from-violet-950/25 dark:via-card dark:to-fuchsia-900/20",
+        isMobile && "px-0"
+      )}
+    >
       <CardHeader className={cn("px-2 sm:px-4", isMobile && "px-2")}>
         <div className="flex flex-col gap-2">
           <CardTitle className="text-center w-full">Recent Transactions</CardTitle>
@@ -1558,14 +1568,15 @@ function DashboardPageContent() {
     const shouldShow = (cardId: string) => visibleCard === 'all' || visibleCard === cardId;
 
     return (
-    <div className="space-y-3">
+    <div className="space-y-[5px]">
+      {/* Keep consistent 5px spacing between dashboard cards/sections. */}
       {shouldShow('financial-summaries') && renderFinancialSummaries(isReportsEnabled)}
       {shouldShow('bank-cash-summary') && can('view_bank_cash_summary') && <BankCashSummary />}
       {/* Dashboard cards (Daybook, Bank, Recent) are gated by role permissions. If shared user doesn't see a card, check Settings → role permissions (e.g. View Daybook). */}
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
       
-      <Card className="col-span-full bg-muted dark:bg-green-900/20 dark:border-green-600/20 p-2 overflow-hidden relative">
+      <Card className="col-span-full border-2 border-amber-300/70 bg-gradient-to-r from-amber-50 via-white to-orange-100/70 dark:from-amber-950/25 dark:via-card dark:to-orange-900/20 p-2 overflow-hidden relative">
         {newYearInfo && !newYearInfo.isNewYear && (
           <div className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold px-4 py-1 rounded-bl-lg animate-pulse">
             {newYearInfo.daysLeft} days to {newYearInfo.year}!

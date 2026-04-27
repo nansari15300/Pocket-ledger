@@ -47,6 +47,8 @@ type ComboboxProps = {
   popoverModal?: boolean;
   /** Khulte hi filter input par focus (Note form / lambe lists). */
   autoFocusSearchOnOpen?: boolean;
+  /** Optional: cap visible filtered options (useful for mobile dropdown performance/clarity). */
+  maxVisibleOptions?: number;
 };
 
 export function Combobox({
@@ -67,6 +69,7 @@ export function Combobox({
   contentWidthMode = "trigger",
   popoverModal = true,
   autoFocusSearchOnOpen = false,
+  maxVisibleOptions,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -132,6 +135,14 @@ export function Combobox({
   const addNewItems = addNewLabels || (addNewLabel ? [{value: "add-new", label: addNewLabel}] : []);
   const q = search.trim().toLowerCase();
   const filteredOptions = q.length === 0 ? options : options.filter((opt) => opt.label.toLowerCase().includes(q));
+  // Keep dropdown manageable on dense lists by capping rendered rows when requested.
+  const visibleOptions = React.useMemo(() => {
+    if (typeof maxVisibleOptions !== "number" || maxVisibleOptions <= 0) return filteredOptions;
+    const capped = filteredOptions.slice(0, maxVisibleOptions);
+    // Keep special action options visible at list bottom even when capped.
+    const specialTail = filteredOptions.filter((opt) => opt.isSpecial && !capped.some((c) => c.value === opt.value));
+    return [...capped, ...specialTail];
+  }, [filteredOptions, maxVisibleOptions]);
   const hasNoResults = filteredOptions.length === 0;
   const showAddNew = addNewItems.length > 0 && (search.trim().length > 0 || hasNoResults);
 
@@ -220,7 +231,7 @@ export function Combobox({
                     </span>
                   </CommandItem>
               )}
-              {filteredOptions.map((option) => (
+              {visibleOptions.map((option) => (
                 <CommandItem
                   key={option.value}
                   value={option.value}

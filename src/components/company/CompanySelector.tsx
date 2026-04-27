@@ -97,10 +97,16 @@ function RememberCompanyPasswordDurationSelect({
         <option value={OFFLINE_UNLOCK_REMEMBER_NEVER_DAYS}>Never ask again</option>
       </select>
       <p className="text-[11px] text-muted-foreground">
-        Is browser par itne din tak dubara password mat poochna (same device + login account).
+        Don't ask for the password again on this browser for the selected duration (same device + account).
       </p>
     </div>
   );
+}
+
+/** Static build + shared unlock: show username remember option whenever username-based unlock is used. */
+function canRememberCompanyUsername(company: CompanyData, userEmail?: string | null): boolean {
+  if (!showCompanyUserNameField(company, userEmail)) return false;
+  return isOnlineSharedCompany(company as CompanyData & { isOwned?: boolean }) || isLocalOnlyMode();
 }
 
 const GoogleDriveIcon = () => (
@@ -171,10 +177,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     if (shouldPromptCompanyUnlock(company, user?.email)) {
       setCompanyToUnlock(company);
       const row = company as CompanyData & { isOwned?: boolean };
-      const remembered =
-        isOnlineSharedCompany(row) && company.password
-          ? readRememberedSharedUnlockUsername(user?.uid, company.id)
-          : null;
+      const remembered = canRememberCompanyUsername(company, user?.email)
+        ? readRememberedSharedUnlockUsername(user?.uid, company.id)
+        : null;
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
       setPasswordInput("");
@@ -198,7 +203,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           toast({
             variant: "destructive",
             title: "Company access",
-            description: "Login username aur password dono daalein.",
+            description: "Enter both login username and password.",
           });
           return;
         }
@@ -220,7 +225,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         if (!isOfflineCompanyStorage(row)) {
           saveCloudCompanyPasswordUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays);
         }
-        if (isOnlineSharedCompany(row)) {
+        if (canRememberCompanyUsername(companyToUnlock, user?.email)) {
           if (rememberSharedUsername) {
             saveRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, usernameInput.trim());
           } else {
@@ -514,7 +519,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
           }
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="w-[calc(100%-8px)] max-w-md rounded-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
@@ -534,25 +539,23 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                     onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email) ? (
                       <>
                         {" "}
-                        <strong>Apke share</strong> ke liye: user name me <strong>account email</strong>,{" "}
-                        <strong>display name</strong>, ya email ka <strong>@ se pehle</strong> hissa — password wahi jo owner ne
-                        aapke user ke liye set kiya hai.
+                        <strong>Shared login:</strong> use your <strong>account email</strong>, <strong>display name</strong>,
+                        or your email <strong>prefix (before @)</strong>, then enter the password set for your shared user.
                         {(companyToUnlock as CompanyData & { password?: string }).password ? (
                           <>
                             {" "}
-                            Ya Company Profile wala <strong>Admin username</strong> + <strong>Protect company</strong> password.
+                            Or use <strong>Admin username</strong> + <strong>Protect company</strong> password from Company Profile.
                           </>
                         ) : null}
                       </>
                     ) : (
                       <>
                         {" "}
-                        Company Profile wala <strong>Admin username</strong> aur <strong>Protect company</strong> password
-                        daalein.
+                        Use <strong>Admin username</strong> + <strong>Protect company</strong> password from Company Profile.
                       </>
                     )
                   ) : (
-                    <> Neeche company password daalein.</>
+                    <>Enter your company password below.</>
                   )}
                 </>
               )}
@@ -612,7 +615,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                       placeholder={
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Email, display name, ya email ka pehla hissa"
+                          ? "Email, display name, or email prefix"
                           : "Company Profile → Admin username"
                       }
                       value={usernameInput}
@@ -620,7 +623,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmit()}
                     />
                     {companyToUnlock &&
-                      isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) && (
+                      canRememberCompanyUsername(companyToUnlock, user?.email) && (
                         <div className="flex items-center space-x-2 pt-1">
                           <Checkbox
                             id="cs-remember-shared-username"
@@ -639,7 +642,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                     {companyToUnlock &&
                     isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                     onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                      ? "Password (aapke share ke liye)"
+                      ? "Password (for your shared access)"
                       : "Company password"}
                   </Label>
                   <div className="relative">
@@ -651,7 +654,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
                         companyToUnlock &&
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Jo owner ne aapke user ke liye set kiya"
+                          ? "Enter the password set for your shared user"
                           : "Enter company password"
                       }
                       value={passwordInput}
@@ -677,9 +680,21 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
               </>
             )}
           </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isVerifying}>Cancel</AlertDialogCancel>
-            <Button type="button" disabled={isVerifying} onClick={() => void handlePasswordSubmit()}>
+          <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
+            {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
+            {/* Color cue: cancel = blue, primary action = green (requested). */}
+            <AlertDialogCancel
+              disabled={isVerifying}
+              className="mt-0 flex-1 rounded-full border border-blue-600 bg-blue-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-blue-700 hover:text-white hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              disabled={isVerifying}
+              onClick={() => void handlePasswordSubmit()}
+              className="flex-1 rounded-full border border-green-600 bg-green-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-green-700 hover:shadow-md focus-visible:ring-2 focus-visible:ring-green-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
+            >
               {isVerifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Unlock
             </Button>
@@ -732,10 +747,9 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
     if (shouldPromptCompanyUnlock(selectedCompany, user?.email)) {
       setCompanyToUnlock(selectedCompany);
       const row = selectedCompany as CompanyData & { isOwned?: boolean };
-      const remembered =
-        isOnlineSharedCompany(row) && selectedCompany.password
-          ? readRememberedSharedUnlockUsername(user?.uid, selectedCompany.id)
-          : null;
+      const remembered = canRememberCompanyUsername(selectedCompany, user?.email)
+        ? readRememberedSharedUnlockUsername(user?.uid, selectedCompany.id)
+        : null;
       setUsernameInput(remembered ?? "");
       setRememberSharedUsername(!!remembered);
       setPasswordInput("");
@@ -757,7 +771,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
           toast({
             variant: "destructive",
             title: "Company access",
-            description: "Login username aur password dono daalein.",
+            description: "Enter both login username and password.",
           });
           return;
         }
@@ -778,7 +792,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
         if (!isOfflineCompanyStorage(row)) {
           saveCloudCompanyPasswordUnlockSession(user?.uid, companyToUnlock.id, rememberUnlockDays);
         }
-        if (isOnlineSharedCompany(row)) {
+        if (canRememberCompanyUsername(companyToUnlock, user?.email)) {
           if (rememberSharedUsername) {
             saveRememberedSharedUnlockUsername(user?.uid, companyToUnlock.id, usernameInput.trim());
           } else {
@@ -1017,7 +1031,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
           }
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="w-[calc(100%-8px)] max-w-md rounded-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {companyToUnlock && isOfflineCompanyStorage(companyToUnlock)
@@ -1037,11 +1051,11 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                     onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email) ? (
                       <>
                         {" "}
-                        <strong>Share password:</strong> email / display name / email prefix + aapka set password.
+                        <strong>Shared login:</strong> email / display name / email prefix + your shared password.
                         {(companyToUnlock as CompanyData & { password?: string }).password ? (
                           <>
                             {" "}
-                            Ya <strong>Admin username</strong> + <strong>Protect company</strong> password.
+                            Or <strong>Admin username</strong> + <strong>Protect company</strong> password.
                           </>
                         ) : null}
                       </>
@@ -1052,7 +1066,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                       </>
                     )
                   ) : (
-                    <> Neeche company password daalein.</>
+                    <>Enter your company password below.</>
                   )}
                 </>
               )}
@@ -1112,7 +1126,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                       placeholder={
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Email, display name, ya email ka pehla hissa"
+                          ? "Email, display name, or email prefix"
                           : "Company Profile → Admin username"
                       }
                       value={usernameInput}
@@ -1120,7 +1134,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                       onKeyDown={(e) => e.key === "Enter" && void handlePasswordSubmitHeader()}
                     />
                     {companyToUnlock &&
-                      isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) && (
+                      canRememberCompanyUsername(companyToUnlock, user?.email) && (
                         <div className="flex items-center space-x-2 pt-1">
                           <Checkbox
                             id="ca-remember-shared-username"
@@ -1139,7 +1153,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                     {companyToUnlock &&
                     isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                     onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                      ? "Password (aapke share ke liye)"
+                      ? "Password (for your shared access)"
                       : "Company password"}
                   </Label>
                   <div className="relative">
@@ -1151,7 +1165,7 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
                         companyToUnlock &&
                         isOnlineSharedCompany(companyToUnlock as CompanyData & { isOwned?: boolean }) &&
                         onlineSharedHasPerUserPassword(companyToUnlock as CompanyData & { isOwned?: boolean }, user?.email)
-                          ? "Jo owner ne aapke user ke liye set kiya"
+                          ? "Enter the password set for your shared user"
                           : "Enter company password"
                       }
                       value={passwordInput}
@@ -1177,9 +1191,21 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
               </>
             )}
           </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isVerifying}>Cancel</AlertDialogCancel>
-            <Button type="button" disabled={isVerifying} onClick={() => void handlePasswordSubmitHeader()}>
+          <AlertDialogFooter className="flex-row items-center gap-2 sm:justify-end [&>*]:mt-0">
+            {/* Keep both actions on one row (mobile + desktop) with pill-style corners. */}
+            {/* Color cue: cancel = blue, primary action = green (requested). */}
+            <AlertDialogCancel
+              disabled={isVerifying}
+              className="mt-0 flex-1 rounded-full border border-blue-600 bg-blue-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-blue-700 hover:text-white hover:shadow-md focus-visible:ring-2 focus-visible:ring-blue-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              disabled={isVerifying}
+              onClick={() => void handlePasswordSubmitHeader()}
+              className="flex-1 rounded-full border border-green-600 bg-green-600 text-white shadow-sm transition-all duration-200 hover:-translate-y-[1px] hover:bg-green-700 hover:shadow-md focus-visible:ring-2 focus-visible:ring-green-400/70 focus-visible:ring-offset-1 active:translate-y-0 active:shadow-sm disabled:opacity-60 sm:flex-none"
+            >
               {isVerifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Switch
             </Button>

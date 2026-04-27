@@ -44,8 +44,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Card } from "@/components/ui/card";
-import { format } from "date-fns";
-import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
+import { differenceInDays, format } from "date-fns";
+import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { useCompany } from "@/hooks/useCompany";
 import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { useAuth } from "@/hooks/useAuth";
@@ -973,6 +973,18 @@ export function TransactionsTable({
       const statusLabel = showStatusInCard ? getStatusLabel(t, context) : "";
       const statusDetailVouchers = showStatusInCard ? getStatusDetailVouchers(t, { billWiseOnly: statusBillWiseOnly }) : [];
       const showStatusDetailInCard = showNarration && statusDetailVouchers.length > 0;
+      // Mobile parity with desktop: show overdue age below "Overdue" badge.
+      const overdueDaysInCard = (() => {
+        if (!(statusLabel === "Overdue" || (t as any).isOverdue || (t as any).paymentStatus === "overdue")) return 0;
+        const due = parseFirestoreDateFieldToJsDate((t as any).dueDate);
+        if (!due) return 0;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueOnly = new Date(due);
+        dueOnly.setHours(0, 0, 0, 0);
+        if (today <= dueOnly) return 0;
+        return differenceInDays(today, dueOnly);
+      })();
       // Mobile card narration: Note vouchers should surface note title (same intent as desktop narration row).
       const mobileNarrationLabel = t.type === "note" ? "Title" : "Narration";
       const mobileNarrationValue =
@@ -991,11 +1003,12 @@ export function TransactionsTable({
         <Card
           key={key}
           className={cn(
-            "p-2.5 min-w-0 w-full overflow-hidden border-[1.5px] border-border/80 shadow-sm cursor-pointer transition-colors",
+            // Mobile cards: keep a solid black border for stronger separation in all themes.
+            "p-2.5 min-w-0 w-full overflow-hidden border-[1.5px] border-black shadow-sm cursor-pointer transition-colors",
             context === "daybook" && "rounded-lg",
             swBorder,
             isPendingApproval
-              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-[1.5px] border-black/30 dark:border-white/30"
+              ? "bg-pink-100 dark:bg-pink-950/40 hover:bg-pink-200 dark:hover:bg-pink-950/50 border-[1.5px] border-black"
               : "bg-card hover:bg-muted/30"
           )}
           onClick={() => onRowClick?.(t)}
@@ -1028,6 +1041,11 @@ export function TransactionsTable({
                 ) : null}
                 {showStatusDetailInCard ? (
                   <LinkedVouchersColored vouchers={statusDetailVouchers} align="end" />
+                ) : null}
+                {overdueDaysInCard > 0 ? (
+                  <span className="text-[10px] font-medium text-red-600">
+                    {overdueDaysInCard} {overdueDaysInCard === 1 ? "day" : "days"}
+                  </span>
                 ) : null}
               </div>
             ) : !hideBalanceColumn ? (
@@ -1078,8 +1096,9 @@ export function TransactionsTable({
     };
 
     // Daybook/Recent: horizontal gap comes from parent (DaybookReport/dashboard); other contexts use px-0.5
-      return (
-      <div className={cn("w-full min-w-0 space-y-px pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
+    // Mobile transaction list: 4px vertical gap between cards for cleaner scanability.
+    return (
+      <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
         {showOpeningBalance && (
           <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
             <div className="flex justify-between items-start gap-2 min-w-0">
@@ -1188,7 +1207,7 @@ export function TransactionsTable({
                 layout
                 initial={false}
                 transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-                className={cn("space-y-px", groupContainerClass(block.colorIndex))}
+                className={cn("space-y-1", groupContainerClass(block.colorIndex))}
               >
                 {block.items.map((t: any, itemIdx: number) => (
                   <motion.div

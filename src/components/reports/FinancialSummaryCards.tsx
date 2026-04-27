@@ -1528,8 +1528,21 @@ export function FinancialSummaryCards({
     }, [vouchers]);
 
     const gridCols = compact ? "" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5";
-    const cardSpacing = compact ? "gap-0.5 px-0.5" : "gap-0.5 px-0.5";
-    const cardBorder = compact ? "border-foreground/20" : "border-foreground/20";
+    // Dashboard request: keep exact 5px card-to-card spacing across summary grids.
+    const cardSpacing = compact ? "gap-[5px] px-0.5" : "gap-[5px] px-0.5";
+    // Dashboard request: use bold card border thickness globally on summary cards.
+    const cardBorder = compact ? "border-2 border-foreground/30" : "border-2 border-foreground/30";
+    // Dashboard card palette: soft ribbon-style gradients with different tones per card.
+    const ribbonTones = [
+        "border-emerald-300/70 bg-gradient-to-r from-emerald-50 via-white to-emerald-100/70 dark:from-emerald-950/25 dark:via-card dark:to-emerald-900/20",
+        "border-sky-300/70 bg-gradient-to-r from-sky-50 via-white to-cyan-100/70 dark:from-sky-950/25 dark:via-card dark:to-cyan-900/20",
+        "border-violet-300/70 bg-gradient-to-r from-violet-50 via-white to-fuchsia-100/70 dark:from-violet-950/25 dark:via-card dark:to-fuchsia-900/20",
+        "border-amber-300/70 bg-gradient-to-r from-amber-50 via-white to-orange-100/70 dark:from-amber-950/25 dark:via-card dark:to-orange-900/20",
+        "border-rose-300/70 bg-gradient-to-r from-rose-50 via-white to-pink-100/70 dark:from-rose-950/25 dark:via-card dark:to-pink-900/20",
+        "border-teal-300/70 bg-gradient-to-r from-teal-50 via-white to-emerald-100/70 dark:from-teal-950/25 dark:via-card dark:to-emerald-900/20",
+        "border-indigo-300/70 bg-gradient-to-r from-indigo-50 via-white to-blue-100/70 dark:from-indigo-950/25 dark:via-card dark:to-blue-900/20",
+    ];
+    const ribbonTone = (index: number) => ribbonTones[index % ribbonTones.length];
     
     // Responsive classes only for compact mode (report page)
     // Use min-width to prevent content overflow, cards will auto-adjust columns
@@ -1541,7 +1554,7 @@ export function FinancialSummaryCards({
 
     return (
         <div className={`${compact ? 'financial-summary-grid' : `grid ${gridCols}`} ${cardSpacing} ${compact ? 'w-full' : ''}`}>
-            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${cardBorder} ${cardWrapperClass}`}>
+            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(0)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Stock Summary</CardTitle>
                     {compact ? (
@@ -1684,7 +1697,7 @@ export function FinancialSummaryCards({
             </Card>
 
             {can("view_receivable_payable_summary") && (
-                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass}`}>
+                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap text-card-foreground ${titleClass} min-w-0`}>
                             Outstanding
@@ -1938,7 +1951,7 @@ export function FinancialSummaryCards({
             )}
             
             {can("view_payment_in_out_summary") && (
-                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass}`}>
+                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(2)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Cash Flow</CardTitle>
                         {compact ? (
@@ -2137,7 +2150,7 @@ export function FinancialSummaryCards({
                 </Card>
             )}
 
-            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass}`}>
+            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(3)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Tax Summary</CardTitle>
                     {compact ? (
@@ -2732,7 +2745,7 @@ export function FinancialSummaryCards({
                 </CardContent>
             </Card>
 
-            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass}`}>
+            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(4)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Bank & Cash Summary</CardTitle>
                     {compact ? (
@@ -2884,8 +2897,8 @@ export function FinancialSummaryCards({
                 </CardContent>
             </Card>
 
-            {can("view_voucher_type_summaries") && !compact && stats.otherStats.map((stat) => (
-                <Card key={stat.type} className={`hover:bg-muted/50 transition-colors ${cardBorder}`}>
+            {can("view_voucher_type_summaries") && !compact && stats.otherStats.map((stat, idx) => (
+                <Card key={stat.type} className={`hover:bg-muted/50 transition-colors ${cardBorder} ${ribbonTone(idx + 5)}`}>
                     <CardHeader className="p-3 flex-row items-center justify-between">
                         <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
                         <stat.icon className="h-5 w-5 text-muted-foreground" />
@@ -2905,11 +2918,21 @@ export function FinancialSummaryCards({
 
             {can("view_entity_counts_summary") && !compact && (
                 <>
-                    <Card className={cardBorder}><CardHeader className="p-3"><CardTitle className="text-sm whitespace-nowrap">Total Parties</CardTitle></CardHeader><CardContent className="p-3 pt-0 text-2xl font-bold">{processedParties.length}</CardContent></Card>
-                    <Card className={cardBorder}><CardHeader className="p-3"><CardTitle className="text-sm whitespace-nowrap">Total Staff</CardTitle></CardHeader><CardContent className="p-3 pt-0 text-2xl font-bold">{processedStaff.length}</CardContent></Card>
-                    <Card className={cardBorder}><CardHeader className="p-3"><CardTitle className="text-sm whitespace-nowrap">Bank/Cash Acc</CardTitle></CardHeader><CardContent className="p-3 pt-0 text-2xl font-bold">{processedAccounts.length}</CardContent></Card>
-                    <Card className={cardBorder}><CardHeader className="p-3"><CardTitle className="text-sm whitespace-nowrap">Total Items</CardTitle></CardHeader><CardContent className="p-3 pt-0 text-2xl font-bold">{processedItems.length}</CardContent></Card>
-                    <Card className={cardBorder}><CardHeader className="p-3"><CardTitle className="text-sm whitespace-nowrap">Total Vouchers</CardTitle></CardHeader><CardContent className="p-3 pt-0 text-2xl font-bold">{vouchers.length}</CardContent></Card>
+                    {/* Entity count cards also use rotating ribbon tones for visual separation. */}
+                    {[
+                        { title: "Total Parties", value: processedParties.length },
+                        { title: "Total Staff", value: processedStaff.length },
+                        { title: "Bank/Cash Acc", value: processedAccounts.length },
+                        { title: "Total Items", value: processedItems.length },
+                        { title: "Total Vouchers", value: vouchers.length },
+                    ].map((item, idx) => (
+                        <Card key={item.title} className={`${cardBorder} ${ribbonTone(idx + 2)}`}>
+                            <CardHeader className="p-3">
+                                <CardTitle className="text-sm whitespace-nowrap">{item.title}</CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-3 pt-0 text-2xl font-bold">{item.value}</CardContent>
+                        </Card>
+                    ))}
                 </>
             )}
         </div>

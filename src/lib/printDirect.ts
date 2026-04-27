@@ -142,6 +142,8 @@ export type PrintPayload = {
   printIncludeLogo?: boolean;
   /** PDF header me company name, address, phone, PAN — false par sirf date range line. */
   printIncludeCompanyDetails?: boolean;
+  /** Mobile print option: report title + total vouchers line toggle. */
+  printIncludeTitle?: boolean;
 };
 
 // ------------ LOGO CACHE (preload for instant print) ------------
@@ -203,6 +205,24 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
       ...payload,
       printIncludeLogo: opts.printIncludeLogo,
       printIncludeCompanyDetails: opts.printIncludeCompanyDetails,
+      // Mobile print customization: allow dialog toggles to override print content safely.
+      showNarration:
+        typeof opts.printIncludeNarration === "boolean"
+          ? opts.printIncludeNarration
+          : payload.showNarration,
+      includeNotes:
+        typeof opts.printIncludeNotes === "boolean"
+          ? opts.printIncludeNotes
+          : payload.includeNotes,
+      printIncludeTitle:
+        typeof opts.printIncludeTitle === "boolean"
+          ? opts.printIncludeTitle
+          : payload.printIncludeTitle,
+      visibleColumns: {
+        ...(payload.visibleColumns ?? {}),
+        ...(typeof opts.printIncludeUserColumn === "boolean" ? { user: opts.printIncludeUserColumn } : {}),
+        ...(typeof opts.printIncludeFileColumn === "boolean" ? { file: opts.printIncludeFileColumn } : {}),
+      },
     };
   }
 
@@ -479,7 +499,7 @@ function buildDocDefinition(p: PrintPayload): TDocumentDefinitions {
     };
   };
 
- const reportTitleContent: Content = {
+const reportTitleContent: Content = {
     columns: [
         // Keep report labels compact as requested (about 50% smaller).
         { text: p.title, style: 'subheader', fontSize: 8, alignment: 'left', width: '*' },
@@ -580,7 +600,10 @@ const daybookSummaryContent = (summary: DaybookSummary): Content => {
      body.push(headerContent);
   }
   else {
-    body.push(reportTitleContent);
+    // Print option: optionally hide report title block while keeping table content intact.
+    if (p.printIncludeTitle !== false) {
+      body.push(reportTitleContent);
+    }
     if (p.context !== 'daybook' && p.context !== 'sale' && p.context !== 'overdue') {
         
         const factor = p.context === 'item' && p.stockView === 'qty' 

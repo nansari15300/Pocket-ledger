@@ -518,7 +518,17 @@ export function AppSidebar() {
                           </span>
                         )}
                       </span>
-                      {isOpen && <span className="flex-1 truncate">{item.label}</span>}
+                      {isOpen && (
+                        <span className="flex flex-1 items-center gap-1 min-w-0">
+                          <span className="truncate">{item.label}</span>
+                          {item.id === "reports" ? (
+                            // Sidebar request: mark Reports as Experimental.
+                            <Badge variant="secondary" className="h-4 px-1 text-[10px] leading-none shrink-0">
+                              Experimental
+                            </Badge>
+                          ) : null}
+                        </span>
+                      )}
                   </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>

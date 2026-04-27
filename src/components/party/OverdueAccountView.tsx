@@ -434,9 +434,21 @@ export function OverdueAccountView({
                     )}
                     {visibleColumns.status && (
                       <TableCell className="text-center align-middle">
-                        <Badge variant="outline" className="text-red-600 border-red-600/50 inline-flex h-[22px] font-semibold shrink-0">
-                          Overdue
-                        </Badge>
+                        {/* Overdue days hamesha yahi — pehle sirf "Show Narration" row me tha; static/APK par narration off ho to blank lagta tha */}
+                        <div className="flex flex-col items-center justify-center gap-0.5">
+                          <Badge variant="outline" className="text-red-600 border-red-600/50 inline-flex h-[22px] font-semibold shrink-0">
+                            Overdue
+                          </Badge>
+                          {(() => {
+                            const overdueDays = getOverdueDays(t.dueDate);
+                            if (overdueDays <= 0) return null;
+                            return (
+                              <span className="text-[10px] text-red-600 font-medium leading-tight">
+                                {overdueDays} {overdueDays === 1 ? "day" : "days"}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </TableCell>
                     )}
                     {visibleColumns.netBalance && (
@@ -487,8 +499,6 @@ export function OverdueAccountView({
                           (visibleColumns.debit ? 1 : 0) +
                           (visibleColumns.credit ? 1 : 0) +
                           (visibleColumns.status ? 0 : 1);
-                    const overdueDays = getOverdueDays(t.dueDate);
-                    const daysText = overdueDays > 0 ? `${overdueDays} ${overdueDays === 1 ? "day" : "days"}` : "";
                     return (
                     <tr
                       role="button"
@@ -508,9 +518,7 @@ export function OverdueAccountView({
                         <span className="font-semibold not-italic">Narration:</span> {t.narration || "No narration"}
                       </TableCell>
                       {visibleColumns.status && (
-                        <TableCell className="pt-0.5 pb-0.5 px-2 text-[10px] text-red-600 font-medium text-center leading-tight align-top whitespace-nowrap">
-                          {daysText}
-                        </TableCell>
+                        <TableCell className="pt-0.5 pb-0.5 px-2 text-center align-top" aria-hidden="true" />
                       )}
                       {visibleColumns.netBalance && <TableCell className="py-0 w-10 p-0" />}
                       <TableCell className="py-0 w-10 p-0" />

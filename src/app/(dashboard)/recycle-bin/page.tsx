@@ -49,6 +49,7 @@ import {
 } from "@/lib/localCompanyStore";
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
+import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
 import type { User } from "firebase/auth";
@@ -627,10 +628,8 @@ function RecycleBinContent() {
             if (isLocalOnlyMode()) {
                 const nonDeletedLocalCompanies = await listLocalCompanies();
                 const currentCount = nonDeletedLocalCompanies.length;
-                const planId: PlanId =
-                    currentCount === 0
-                        ? "basic"
-                        : ((nonDeletedLocalCompanies[0]?.planId as PlanId) || "basic");
+                // Create company jaisa: pehli local row ka planId account tier se match na ho to galat cap — highest owned SKU use karo.
+                const planId: PlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
                 const plan = getPlanFromPlans(livePlans, planId);
                 const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", true);
                 if (maxCompanies > 0 && currentCount >= maxCompanies) {
@@ -650,7 +649,7 @@ function RecycleBinContent() {
                     where("isDeleted", "!=", true)
                 ));
                 const currentCount = ownedSnap.size;
-                const planId: PlanId = currentCount === 0 ? "basic" : (ownedSnap.docs[0]?.data()?.planId as PlanId) || "basic";
+                const planId: PlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
                 const plan = getPlanFromPlans(livePlans, planId);
                 const maxCompanies = numericEntitlement(plan?.entitlements, "maxCompanies", false);
                 if (maxCompanies > 0 && currentCount >= maxCompanies) {

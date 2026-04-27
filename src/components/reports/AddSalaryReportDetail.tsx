@@ -28,6 +28,13 @@ export function AddSalaryReportDetail() {
   const [isVoucherOpen, setIsVoucherOpen] = useState(false);
   const hasAutoSelected = useRef(false);
 
+  useEffect(() => {
+    if (!isMobile) return;
+    // Mobile reports requirement: always land on staff list first when opening Add Salary report.
+    setSelectedStaff(null);
+    setShowAllCompanyVouchers(false);
+  }, [isMobile]);
+
   const addSalaryVouchers = useMemo(
     () => allVouchers.filter((v) => v.type === "journal" && v.subType === "add_salary"),
     [allVouchers]
@@ -115,15 +122,12 @@ export function AddSalaryReportDetail() {
       return (
         <>
           <div className="flex flex-col h-full min-h-0 overflow-hidden">
-            <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={() => { setSelectedStaff(null); setShowAllCompanyVouchers(false); }}>
-                <ArrowLeft className="h-5 w-5" />
-              </Button>
-              <span className="font-semibold truncate">{currentStaff.name}</span>
-            </div>
+            {/* Mobile parity: use the same StaffDetails top+bottom UI with in-view back handling. */}
             <div className="flex-1 min-h-0 overflow-hidden">
               <StaffDetails
                 staff={currentStaff}
+                // Keep dropdown data available so mobile header can show staff selector left of edit icon.
+                allStaff={staffWithSalary}
                 transactions={currentTransactions}
                 onStaffUpdated={() => {}}
                 onStaffDeleted={() => { setSelectedStaff(null); setShowAllCompanyVouchers(false); }}
@@ -133,6 +137,15 @@ export function AddSalaryReportDetail() {
                 isAllVouchersView={showAllCompanyVouchers}
                 userNames={userNames}
                 context="add_salary"
+                onBack={() => { setSelectedStaff(null); setShowAllCompanyVouchers(false); }}
+                onSelectStaff={(staffId) => {
+                  // Keep user on report page: switch selected staff in-place, no route redirect.
+                  const next = staffWithSalary.find((s) => s.id === staffId);
+                  if (next) {
+                    setShowAllCompanyVouchers(false);
+                    setSelectedStaff(next);
+                  }
+                }}
               />
             </div>
           </div>
@@ -203,6 +216,8 @@ export function AddSalaryReportDetail() {
             {currentStaff ? (
               <StaffDetails
                 staff={currentStaff}
+                // Keep dropdown data available so detail header can offer quick staff switching.
+                allStaff={staffWithSalary}
                 transactions={currentTransactions}
                 onStaffUpdated={() => {}}
                 onStaffDeleted={() => setSelectedStaff(null)}
@@ -212,6 +227,14 @@ export function AddSalaryReportDetail() {
                 isAllVouchersView={showAllCompanyVouchers}
                 userNames={userNames}
                 context="add_salary"
+                onSelectStaff={(staffId) => {
+                  // Keep user on report page: switch selected staff in-place, no route redirect.
+                  const next = staffWithSalary.find((s) => s.id === staffId);
+                  if (next) {
+                    setShowAllCompanyVouchers(false);
+                    setSelectedStaff(next);
+                  }
+                }}
               />
             ) : (
               <div className="flex flex-1 items-center justify-center p-8">

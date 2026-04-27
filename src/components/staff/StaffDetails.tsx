@@ -121,6 +121,7 @@ export function StaffDetails({
   isAllVouchersView,
   context,
   onBack,
+  onSelectStaff,
   transactions,
   userNames,
 }: {
@@ -136,6 +137,7 @@ export function StaffDetails({
   context?: string;
   userNames?: Record<string, string>;
   onBack?: () => void;
+  onSelectStaff?: (staffId: string) => void;
   transactions?: any[];
 }) {
   const { company, companyId } = useCompany();
@@ -721,44 +723,77 @@ export function StaffDetails({
           {allStaff && allStaff.length > 0 && (
             <div className="flex-1 min-w-0 h-9 [&_button]:h-9">
               <Combobox
-                options={allStaff.map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
-                value={staff?.id || ""}
+                options={[
+                  ...allStaff.map((s) => ({
+                    value: s.id,
+                    label: s.name,
+                  })),
+                  // Dropdown-only All Vouchers action: keep at list bottom instead of separate button.
+                  ...(onShowAll ? [{ value: "all-vouchers", label: "All Vouchers", isSpecial: true }] : []),
+                ]}
+                value={isAllVouchersView ? "all-vouchers" : (staff?.id || "")}
                 onChange={(value) => {
+                  // Dropdown quick actions: switch selected staff or jump to create-staff page from "Add New".
+                  if (value === "all-vouchers") {
+                    onShowAll?.();
+                    return;
+                  }
+                  if (value === "add-new") {
+                    router.push("/staff");
+                    return;
+                  }
                   if (value && value !== staff.id) {
-                    router.push(`/staff?selected=${value}`);
+                    // Report view compatibility: prefer local selection callback over route navigation.
+                    if (onSelectStaff) {
+                      onSelectStaff(value);
+                    } else {
+                      router.push(`/staff?selected=${value}`);
+                    }
                   }
                 }}
                 placeholder="Select staff"
+                addNewLabel="+ Add New Staff"
+                maxVisibleOptions={15}
               />
             </div>
           )}
-          <EditStaffDialog
-            staff={staff}
-            allGroups={allGroups}
-            onStaffUpdated={onStaffUpdated}
-            onStaffDeleted={() => onStaffDeleted(staff.id)}
-            isOpen={isEditStaffDialogOpen}
-            onOpenChange={(open: boolean) => {
-              setIsEditStaffDialogOpen(open);
-              if (open) {
-                openingModalRef.current = true;
-                openModalInUrl();
-              } else {
-                closeModalInUrl();
-              }
-            }}
-          >
+          {isAllVouchersView ? (
+            // All-vouchers mode safety: editing is disabled because no single staff is selected.
             <Button
               variant="outline"
               size="icon"
               className="h-9 w-8 flex-shrink-0"
+              disabled
+              aria-disabled="true"
             >
               <Edit className="h-4 w-4" />
             </Button>
-          </EditStaffDialog>
+          ) : (
+            <EditStaffDialog
+              staff={staff}
+              allGroups={allGroups}
+              onStaffUpdated={onStaffUpdated}
+              onStaffDeleted={() => onStaffDeleted(staff.id)}
+              isOpen={isEditStaffDialogOpen}
+              onOpenChange={(open: boolean) => {
+                setIsEditStaffDialogOpen(open);
+                if (open) {
+                  openingModalRef.current = true;
+                  openModalInUrl();
+                } else {
+                  closeModalInUrl();
+                }
+              }}
+            >
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-8 flex-shrink-0"
+              >
+                <Edit className="h-4 w-4" />
+              </Button>
+            </EditStaffDialog>
+          )}
           <div className="flex-1 min-w-0 h-9 relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
             <Input
@@ -782,7 +817,8 @@ export function StaffDetails({
         className="flex-1 min-h-0 overflow-auto scroll-touch"
         style={{ overflowY: "scroll", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
-        <div className="pb-24">
+        {/* Keep list clear from fixed pager + footer action bars. */}
+        <div className="pb-36">
         <TransactionsTable
           transactions={mobileTransactionsToShow}
           context="staff"
@@ -821,19 +857,31 @@ export function StaffDetails({
         />
         </div>
       </div>
-      <MobileTransactionsPager
-        className="flex-shrink-0 mb-12"
-        currentPage={currentPage}
-        totalItems={filteredMobileTransactions.length}
-        rowsPerPage={rowsPerPage}
-        onRowsPerPageChange={(nextRows) => {
-          setRowsPerPage(nextRows);
-          setCurrentPage(1);
-        }}
-        onPageChange={setCurrentPage}
-        edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
-      />
+      <div className="fixed bottom-9 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur px-2 py-1">
+        {/* Staff-page style: keep pager fixed just above bottom action buttons. */}
+        <MobileTransactionsPager
+          className="mb-0"
+          currentPage={currentPage}
+          totalItems={filteredMobileTransactions.length}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(nextRows) => {
+            setRowsPerPage(nextRows);
+            setCurrentPage(1);
+          }}
+          onPageChange={setCurrentPage}
+          edgeCounts={rowsPerPage > 0 ? mobilePagerEdgeCounts : undefined}
+        />
+      </div>
       <div className="fixed bottom-0 left-0 right-0 p-1.5 border-t bg-background/95 backdrop-blur z-50 flex items-center justify-around gap-1.5">
+        {/* Mobile footer left action: quick print for current staff view. */}
+        <Button
+          type="button"
+          className="flex-1 h-6 min-w-0 rounded-md bg-slate-700 hover:bg-slate-800 text-white text-xs font-medium"
+          onClick={balanceMode === "bill_wise" ? handlePrintBillWise : handlePrintStatement}
+        >
+          <Printer className="mr-1 h-3.5 w-3.5" />
+          Print
+        </Button>
         <Button
           type="button"
           className={cn("flex-1 h-6 min-w-0 rounded-md text-xs font-medium shrink-0", balanceMode === "bill_wise" ? "bg-orange-600 hover:bg-orange-700 text-white border-0" : "bg-violet-600 hover:bg-violet-700 text-white border-0")}
@@ -990,7 +1038,8 @@ export function StaffDetails({
                   onStaffUpdated={onStaffUpdated}
                   onStaffDeleted={() => onStaffDeleted(staff.id)}
                 >
-                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit">
+                  {/* All-vouchers mode safety: disable edit for aggregate view. */}
+                  <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" data-theme-detail="edit" disabled={Boolean(isAllVouchersView)}>
                     <Edit className="h-4 w-4" />
                   </Button>
                 </EditStaffDialog>

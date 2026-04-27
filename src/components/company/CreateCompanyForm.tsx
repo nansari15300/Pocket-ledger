@@ -291,7 +291,8 @@ export function CreateCompanyForm({
     if (createAsLocalOnly) {
       const rows = await listLocalCompanies({ includeDeleted: false });
       const localCount = rows.length;
-      const planId: PlanId = localCount === 0 ? "basic" : ((rows[0]?.planId as PlanId) || "basic");
+      // Pehli SQLite row ka planId mat use karo — wo "basic" reh sakta hai jab Pro+ kisi aur company par ho; account-level SKU `planIdForSlots` pehle hi resolve hai.
+      const planId: PlanId = planIdForSlots;
       const plan = getPlanFromPlans(livePlans, planId);
       const maxLocalCompanies = numericEntitlement(plan.entitlements, "maxCompanies", true);
       if (maxLocalCompanies > 0 && localCount >= maxLocalCompanies) {

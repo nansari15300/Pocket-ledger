@@ -25,6 +25,7 @@ import StockSummaryPage from "@/app/(dashboard)/reports/stock-summary/page";
 import PartyStatementPage from "@/app/(dashboard)/reports/party-statement/page";
 import ExpenseStatementPage from "@/app/(dashboard)/reports/expense-statement/page";
 import ItemStatementPage from "@/app/(dashboard)/reports/item-statement/page";
+import TaxStatementPage from "@/app/(dashboard)/reports/tax-statement/page";
 import { SaleReportDetail } from "./SaleReportDetail";
 import { PurchaseReportDetail } from "./PurchaseReportDetail";
 import { PaymentInReportDetail } from "./PaymentInReportDetail";
@@ -34,6 +35,9 @@ import { ContraReportDetail } from "./ContraReportDetail";
 import { JournalReportDetail } from "./JournalReportDetail";
 import { NotesReportDetail } from "./NotesReportDetail";
 import { Anusuchi13Report } from "./Anusuchi13Report";
+import { GSTR1Report } from "./GSTR1";
+import { GSTR2Report } from "./GSTR2";
+import { GSTR3BReport } from "./GSTR3B";
 
 export function ReportDetails({ report }: { report: Report }) {
     const { companyId } = useCompany();
@@ -106,7 +110,16 @@ export function ReportDetails({ report }: { report: Report }) {
   }
 
   if (report.id === 'profitandloss') {
-    return <ProfitAndLossPage />;
+    // Income & Expense entry: open shared P&L UI in income-exp mode.
+    return <ProfitAndLossPage reportLabel={report.name} reportVariant="income-exp" />;
+  }
+  if (report.id === 'profitandloss-party-wise') {
+    // Party Wise entry: open same P&L UI with party-wise data mode.
+    return <ProfitAndLossPage reportLabel={report.name} reportVariant="party-wise" />;
+  }
+  if (report.id === 'profitandloss-bill-wise') {
+    // Bill Wise entry: open same P&L UI with bill-wise data mode.
+    return <ProfitAndLossPage reportLabel={report.name} reportVariant="bill-wise" />;
   }
   
   if (report.id === 'cashflow') {
@@ -151,6 +164,23 @@ export function ReportDetails({ report }: { report: Report }) {
     return <StockSummaryPage />;
   }
   
+  // Tax Report entry should open tax statement page with responsive mobile/desktop behavior.
+  if (report.id === 'tax-statement' || report.id === 'tax-report') {
+    return <TaxStatementPage />;
+  }
+
+  if (report.id === 'gst-report-1') {
+    return <GSTR1Report />;
+  }
+
+  if (report.id === 'gst-report-2') {
+    return <GSTR2Report />;
+  }
+
+  if (report.id === 'gst-report-3b') {
+    return <GSTR3BReport />;
+  }
+
   if (report.id === 'party-statement') {
     return <PartyStatementPage />;
   }
