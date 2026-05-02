@@ -9,17 +9,51 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
 import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
 import { useIsMobile } from '@/hooks/use-mobile';
-import { Printer, RotateCw, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
-import { startOfDay, endOfDay, isSameDay } from "date-fns";
+import { Printer, RotateCw, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
+import {
+    startOfDay,
+    endOfDay,
+    isSameDay,
+    format,
+    addDays,
+    addMonths,
+    subMonths,
+    startOfMonth,
+    endOfMonth,
+    eachDayOfInterval,
+    parseISO,
+} from "date-fns";
+import { adToBs, bsToAd, getBSMonthDays, NEPALI_MONTHS, addBsMonths } from "@/lib/bs-date";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { MonthYearFilter } from "@/components/dashboard/MonthYearFilter";
 import { openPrintDirect } from "@/lib/printDirect";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
-import { ShoppingBag, ShoppingCart, BookText, FileDigit, Landmark, TrendingUp, TrendingDown } from "lucide-react";
+import {
+    voucherCountsAsDashboardPaySalary,
+    voucherCountsAsDashboardPaymentOutExcludingPaySalary,
+} from "@/lib/dashboardPaySalaryStat";
+import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
+import Link from "next/link";
+import {
+    ShoppingBag,
+    ShoppingCart,
+    BookText,
+    FileDigit,
+    Landmark,
+    TrendingUp,
+    TrendingDown,
+    ArrowDownCircle,
+    ArrowUpCircle,
+    StickyNote,
+    Factory,
+    HandCoins,
+} from "lucide-react";
 
 // Helper function to safely convert date
 const safeToDate = (date: any): Date | null => {
@@ -29,6 +63,350 @@ const safeToDate = (date: any): Date | null => {
     const parsed = new Date(date);
     return isNaN(parsed.getTime()) ? null : parsed;
 };
+
+/** Party/Staff/Tax/Item/Bank master: `createdAt` field se "kab add hua" chart. */
+function pickEntityCreatedAt(entity: any): Date | null {
+    if (!entity) return null;
+    return safeToDate(
+        entity.createdAt ??
+            entity.created_at ??
+            entity.dateCreated ??
+            entity.addedAt ??
+            (entity as any)._createdAt
+    );
+}
+
+const DASHBOARD_CHART_EXCLUDE_PARTY_IDS = new Set([
+    "sales_account",
+    "purchase_account",
+    "opening_balance_ledger",
+]);
+
+/** Popup range filter: poori series `yyyy-MM-dd` par (mini chart ab bhi slice se). */
+export type ChartDayPoint = { dayKey: string; amount: number };
+
+export type ChartRangePreset = "month" | "3m" | "6m" | "year" | "all";
+
+/** Full-screen: Month = calendar month me har din column; 3/6/12 = months; All = saare months. */
+export const CHART_FULL_RANGE_OPTIONS: { id: ChartRangePreset; label: string }[] = [
+    { id: "month", label: "Month" },
+    { id: "3m", label: "3 Mo" },
+    { id: "6m", label: "6 Mo" },
+    { id: "year", label: "Year" },
+    { id: "all", label: "All" },
+];
+
+/** Ek calendar month ke andar saare dinon ka amount jodna. */
+function sumAmountForCalendarMonth(dayMap: Map<string, number>, monthStart: Date): number {
+    const start = startOfMonth(monthStart);
+    const end = endOfMonth(monthStart);
+    const days = eachDayOfInterval({ start, end });
+    let s = 0;
+    for (const d of days) {
+        s += dayMap.get(format(d, "yyyy-MM-dd")) || 0;
+    }
+    return s;
+}
+
+/** BS ek mahine ke AD dinon par series jodna — Nepali month buckets. */
+function sumAmountForBsMonth(dayMap: Map<string, number>, bsYear: number, bsMonth: number): number {
+    const dims = getBSMonthDays(bsYear);
+    const daysInMonth = dims[bsMonth - 1];
+    if (!daysInMonth || daysInMonth < 1) return 0;
+    const start = bsToAd({ y: bsYear, m: bsMonth, d: 1 });
+    const end = bsToAd({ y: bsYear, m: bsMonth, d: daysInMonth });
+    let s = 0;
+    for (const d of eachDayOfInterval({ start, end })) {
+        s += dayMap.get(format(d, "yyyy-MM-dd")) || 0;
+    }
+    return s;
+}
+
+/** Full chart X-axis: Nepali naam + BS year (numeric date ki jagah). */
+function labelNepaliMonthChart(bsYear: number, bsMonth: number): string {
+    const label = NEPALI_MONTHS[bsMonth - 1] ?? "";
+    return `${label} ${bsYear}`;
+}
+
+/** Chevron clamping: ek hi seed par BS months compare karna. */
+function bsMonthIndexFromAnchorDate(d: Date): number {
+    const b = adToBs(d);
+    return b.y * 12 + b.m - 1;
+}
+
+/** BS mode: sabse chhota allowed anchor (window ka pehla month data ke baahar na jaye). */
+function minAnchorDateBs(dataMinMonthStart: Date, preset: ChartRangePreset): Date {
+    const bs = adToBs(dataMinMonthStart);
+    const extra =
+        preset === "month" ? 0 : preset === "3m" ? 2 : preset === "6m" ? 5 : preset === "year" ? 11 : 0;
+    const n = addBsMonths(bs.y, bs.m, extra);
+    return bsToAd({ y: n.y, m: n.m, d: 1 });
+}
+
+/** Rightmost month column — is month se 3M/6M/Year window end hota hai. */
+function minAnchorMonthForPreset(dataMinMonth: Date, preset: ChartRangePreset): Date {
+    const sm = startOfMonth(dataMinMonth);
+    switch (preset) {
+        case "month":
+            return sm;
+        case "3m":
+            return addMonths(sm, 2);
+        case "6m":
+            return addMonths(sm, 5);
+        case "year":
+            return addMonths(sm, 11);
+        default:
+            return sm;
+    }
+}
+
+/**
+ * Popup chart columns: Month = us mahine jitne din utne bars; 3/6/12 month name columns;
+ * All = har distinct month (20 mahene → 20 columns).
+ * BS mode: buckets Nepali mahine + labels Baisakh 2082; chevron bhi BS mahina slide.
+ */
+function buildFullViewChartData(
+    pointsByDay: ChartDayPoint[],
+    preset: ChartRangePreset,
+    anchorMonthStart: Date,
+    dateSystem: string,
+    formatDate: (d: Date) => string,
+    formatDateBS: (d: Date) => string
+): { name: string; amount: number }[] {
+    const sorted = [...pointsByDay].sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+    if (!sorted.length) return [];
+    const dayMap = new Map(sorted.map((p) => [p.dayKey, p.amount]));
+    const dataMin = parseISO(sorted[0].dayKey);
+    const dataMax = parseISO(sorted[sorted.length - 1].dayKey);
+
+    // -------- Bikram Sambat: har column = ek Nepali mahina (Gregorian month split nahi). --------
+    if (dateSystem === "BS") {
+        const minBs = adToBs(dataMin);
+        const maxBs = adToBs(dataMax);
+        if (preset === "all") {
+            const out: { name: string; amount: number }[] = [];
+            let cy = minBs.y;
+            let cm = minBs.m;
+            const endIdx = maxBs.y * 12 + maxBs.m - 1;
+            while (true) {
+                const idx = cy * 12 + cm - 1;
+                if (idx > endIdx) break;
+                out.push({
+                    name: labelNepaliMonthChart(cy, cm),
+                    amount: sumAmountForBsMonth(dayMap, cy, cm),
+                });
+                const n = addBsMonths(cy, cm, 1);
+                cy = n.y;
+                cm = n.m;
+            }
+            return out;
+        }
+
+        const anchorBs = adToBs(anchorMonthStart);
+        const ay = anchorBs.y;
+        const am = anchorBs.m;
+
+        if (preset === "month") {
+            const dim = getBSMonthDays(ay)[am - 1];
+            if (!dim) return [];
+            const bsMonthStart = bsToAd({ y: ay, m: am, d: 1 });
+            const bsMonthEnd = bsToAd({ y: ay, m: am, d: dim });
+            const clipStart = bsMonthStart < startOfDay(dataMin) ? startOfDay(dataMin) : bsMonthStart;
+            const clipEnd = bsMonthEnd > startOfDay(dataMax) ? startOfDay(dataMax) : bsMonthEnd;
+            if (clipStart > clipEnd) return [];
+            const days = eachDayOfInterval({ start: clipStart, end: clipEnd });
+            return days.map((d) => ({
+                name: formatDateBS(d),
+                amount: dayMap.get(format(d, "yyyy-MM-dd")) || 0,
+            }));
+        }
+
+        if (preset === "3m") {
+            const m0 = addBsMonths(ay, am, -2);
+            const m1 = addBsMonths(ay, am, -1);
+            return [
+                { y: m0.y, m: m0.m },
+                { y: m1.y, m: m1.m },
+                { y: ay, m: am },
+            ].map(({ y, m }) => ({
+                name: labelNepaliMonthChart(y, m),
+                amount: sumAmountForBsMonth(dayMap, y, m),
+            }));
+        }
+
+        if (preset === "6m") {
+            return Array.from({ length: 6 }, (_, i) => addBsMonths(ay, am, -(5 - i))).map(({ y, m }) => ({
+                name: labelNepaliMonthChart(y, m),
+                amount: sumAmountForBsMonth(dayMap, y, m),
+            }));
+        }
+
+        if (preset === "year") {
+            return Array.from({ length: 12 }, (_, i) => addBsMonths(ay, am, -(11 - i))).map(({ y, m }) => ({
+                name: labelNepaliMonthChart(y, m),
+                amount: sumAmountForBsMonth(dayMap, y, m),
+            }));
+        }
+
+        return [];
+    }
+
+    // -------- AD calendar (Gregorian months). --------
+    const labelDay = (d: Date) => formatDate(d);
+    const labelMonth = (d: Date) => format(startOfMonth(d), "MMM yyyy");
+
+    if (preset === "all") {
+        const out: { name: string; amount: number }[] = [];
+        let cur = startOfMonth(dataMin);
+        const endM = startOfMonth(dataMax);
+        while (cur <= endM) {
+            out.push({ name: labelMonth(cur), amount: sumAmountForCalendarMonth(dayMap, cur) });
+            cur = addMonths(cur, 1);
+        }
+        return out;
+    }
+
+    const anchor = startOfMonth(anchorMonthStart);
+
+    if (preset === "month") {
+        const mStart = startOfMonth(anchor);
+        const mEnd = endOfMonth(anchor);
+        if (mStart > endOfMonth(dataMax) || mEnd < startOfMonth(dataMin)) return [];
+        const clipStart = mStart < startOfMonth(dataMin) ? startOfMonth(dataMin) : mStart;
+        const clipEnd = mEnd > endOfMonth(dataMax) ? endOfMonth(dataMax) : mEnd;
+        const days = eachDayOfInterval({ start: clipStart, end: clipEnd });
+        return days.map((d) => ({
+            name: labelDay(d),
+            amount: dayMap.get(format(d, "yyyy-MM-dd")) || 0,
+        }));
+    }
+
+    if (preset === "3m") {
+        const m0 = subMonths(anchor, 2);
+        const m1 = subMonths(anchor, 1);
+        const m2 = anchor;
+        return [m0, m1, m2].map((ms) => ({
+            name: labelMonth(ms),
+            amount: sumAmountForCalendarMonth(dayMap, ms),
+        }));
+    }
+
+    if (preset === "6m") {
+        return Array.from({ length: 6 }, (_, i) => subMonths(anchor, 5 - i)).map((ms) => ({
+            name: labelMonth(ms),
+            amount: sumAmountForCalendarMonth(dayMap, ms),
+        }));
+    }
+
+    if (preset === "year") {
+        return Array.from({ length: 12 }, (_, i) => subMonths(anchor, 11 - i)).map((ms) => ({
+            name: labelMonth(ms),
+            amount: sumAmountForCalendarMonth(dayMap, ms),
+        }));
+    }
+
+    return [];
+}
+
+/** Din ke hisaab se count — poori list (popup filter); mini chart ke liye `slice(-cap)`. */
+function buildDailyCountPointsByDay(dates: (Date | null)[]): ChartDayPoint[] {
+    const dayMap = new Map<string, number>();
+    for (const d of dates) {
+        if (!d || isNaN(d.getTime())) continue;
+        const dayKey = format(startOfDay(d), "yyyy-MM-dd");
+        dayMap.set(dayKey, (dayMap.get(dayKey) || 0) + 1);
+    }
+    return Array.from(dayMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([dayKey, amount]) => ({ dayKey, amount }));
+}
+
+/** Din ke hisaab se count series (nayi entities kitni add hui). */
+function buildDailyCountChart(
+    dates: (Date | null)[],
+    dateSystem: string,
+    formatDate: (d: Date) => string,
+    formatDateBS: (d: Date) => string,
+    cap = 40
+): { name: string; amount: number }[] {
+    const full = buildDailyCountPointsByDay(dates);
+    const capped = full.slice(-cap);
+    return capped.map(({ dayKey, amount }) => {
+        const ad = new Date(`${dayKey}T12:00:00`);
+        return { name: dateSystem === "BS" ? formatDateBS(ad) : formatDate(ad), amount };
+    });
+}
+
+/** `financialSummary` / Outstanding card jaisa — ek voucher list par party+staff+tax balances → To Receive & To Pay (Opening Balance row skip). */
+function computeOutstandingSnapshot(
+    filteredVouchers: any[],
+    processedParties: any[],
+    processedStaff: any[],
+    processedTaxes: any[]
+): { receivableSum: number; payableSum: number } {
+    const receivables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
+    const payables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
+
+    const processEntity = (entity: any, type: "party" | "staff" | "tax") => {
+        let balance = Number(entity.openingBalance) || 0;
+
+        filteredVouchers.forEach((v) => {
+            const amount = Number(v.total || v.amount || 0);
+
+            if (v.type === "journal") {
+                const entry = v.entries?.find((e: any) => e.accountId === entity.id);
+                if (entry) {
+                    balance += (Number(entry.debit) || 0) - (Number(entry.credit) || 0);
+                }
+            } else {
+                if (v.partyId === entity.id && type === "party") {
+                    if (["sale", "payment_out", "direct_income"].includes(v.type)) balance += amount;
+                    else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) balance -= amount;
+                } else if (v.staffId === entity.id && type === "staff") {
+                    if (v.type === "payment_out") balance += amount;
+                    else if (v.type === "payment_in") balance -= amount;
+                } else if (v.taxAccountId === entity.id && type === "tax") {
+                    if (v.type === "payment_out") balance += amount;
+                    else if (v.type === "payment_in") balance -= amount;
+                } else if (v.lineItems?.some((li: any) => li.taxAccountId === entity.id) && type === "tax") {
+                    const taxAmount = v.lineItems.reduce(
+                        (sum: number, li: any) => (li.taxAccountId === entity.id ? sum + Number(li.taxAmount || 0) : sum),
+                        0
+                    );
+                    if (v.type === "purchase") balance += taxAmount;
+                    else if (v.type === "sale") balance -= taxAmount;
+                }
+            }
+        });
+
+        const entityData = { party: entity.name, balance, fileUrl: (entity as any).fileUrl };
+        if (balance > 0.01) {
+            if (type === "party") receivables.parties.push(entityData);
+            if (type === "staff") receivables.staff.push(entityData);
+            if (type === "tax") receivables.taxes.push(entityData);
+        } else if (balance < -0.01) {
+            if (type === "party") payables.parties.push(entityData);
+            if (type === "staff") payables.staff.push(entityData);
+            if (type === "tax") payables.taxes.push(entityData);
+        }
+    };
+
+    processedParties.forEach((p) => processEntity(p, "party"));
+    processedStaff.forEach((s) => processEntity(s, "staff"));
+    processedTaxes.forEach((t) => processEntity(t, "tax"));
+
+    const notOB = (p: { party: string }) => p.party !== "Opening Balance";
+    const receivableSum =
+        receivables.parties.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
+        receivables.staff.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0) +
+        receivables.taxes.filter(notOB).reduce((s, p) => s + (Number(p.balance) || 0), 0);
+    const payableSum =
+        payables.parties.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
+        payables.staff.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0) +
+        payables.taxes.filter(notOB).reduce((s, p) => s + Math.abs(Number(p.balance) || 0), 0);
+
+    return { receivableSum, payableSum };
+}
 
 type FinancialSummaryCardsProps = {
     vouchers: any[];
@@ -41,6 +419,8 @@ type FinancialSummaryCardsProps = {
     loading?: boolean;
     showDetails?: boolean; // Show "View Details" buttons
     compact?: boolean; // Compact layout for report page
+    /** Dashboard "Chart" tab: har voucher summary card ke niche din ke hisaab se amount sparkline/bar. */
+    showVoucherDateCharts?: boolean;
 };
 
 // Custom MonthYearFilter wrapper for report page with overflow handling
@@ -65,6 +445,7 @@ export function FinancialSummaryCards({
     loading = false,
     showDetails = true,
     compact = false,
+    showVoucherDateCharts = false,
 }: FinancialSummaryCardsProps) {
     const { formatCurrency, formatCurrencyForPrint, dateSystem, formatDate, formatDateBS } = useDate();
     const { can } = usePermissions();
@@ -93,6 +474,16 @@ export function FinancialSummaryCards({
     const [stockSummaryOpen, setStockSummaryOpen] = useState(false);
     const [bankCashSummaryOpen, setBankCashSummaryOpen] = useState(false);
     const [bankCashRotated, setBankCashRotated] = useState(false);
+    /** "View full" — `pointsByDay` se range (Day/Month/…) filter; ~90% screen. */
+    const [dashboardChartFullView, setDashboardChartFullView] = useState<{
+        subtitle: string;
+        barColor: string;
+        tooltipIsCount: boolean;
+        pointsByDay: ChartDayPoint[];
+    } | null>(null);
+    const [chartFullRangePreset, setChartFullRangePreset] = useState<ChartRangePreset>("all");
+    /** Full-view monthly anchor (rightmost month in 3M/6M/Year; Month view = yahi month ke din). */
+    const [chartFullAnchorMonth, setChartFullAnchorMonth] = useState<Date>(() => startOfMonth(new Date()));
 
     // Filter states
     const [receivablePayableFilter, setReceivablePayableFilter] = useState<'all' | 'party' | 'staff' | 'tax'>('all');
@@ -142,6 +533,19 @@ export function FinancialSummaryCards({
             expandAllTaxAccounts();
         }
     };
+
+    // Chart full-screen: anchor = data ka latest month — BS me Nepali mahine ka pehla din (chevron ±1 BS month).
+    useEffect(() => {
+        if (!dashboardChartFullView?.pointsByDay?.length) return;
+        const sorted = [...dashboardChartFullView.pointsByDay].sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+        const maxD = parseISO(sorted[sorted.length - 1].dayKey);
+        if (dateSystem === "BS") {
+            const b = adToBs(maxD);
+            setChartFullAnchorMonth(bsToAd({ y: b.y, m: b.m, d: 1 }));
+        } else {
+            setChartFullAnchorMonth(startOfMonth(maxD));
+        }
+    }, [dashboardChartFullView?.subtitle, dashboardChartFullView?.pointsByDay, chartFullRangePreset, dateSystem]);
 
     // Handle browser back button for dialogs on mobile
     useEffect(() => {
@@ -326,8 +730,8 @@ export function FinancialSummaryCards({
         return { amount: 0, side: "equal" as const };
     }, [receivablesPayablesDialogListTotals]);
 
-    /** R/P "View Details" dialog: mobile par lambi account line … truncate, Amount poora + nowrap. */
-    const rpDlgTableClass = cn(isMobile && "w-full table-fixed");
+    /** R/P "View Details" dialog: mobile par lambi account line … truncate, Amount poora + patla row line. */
+    const rpDlgTableClass = cn(DASHBOARD_VIEW_DETAILS_TABLE_CN, isMobile && "w-full table-fixed");
     const rpDlgAccountThClass = cn(isMobile && "min-w-0 w-[58%] max-w-[58%]");
     const rpDlgAmountThClass = cn("text-right", isMobile && "w-[42%] min-w-0 whitespace-nowrap");
     const rpDlgAccountTdClass = cn(isMobile && "min-w-0 max-w-0 truncate");
@@ -1460,6 +1864,7 @@ export function FinancialSummaryCards({
     };
 
     // Stats calculation for voucher type summaries
+    // `payment_out_excl_pay_salary` = Payment Out minus staff / pay_salary payouts (unhi ka `Pay Salary` card)
     const statCardData = [
         { title: 'Sales', icon: ShoppingBag, type: 'sale', link: '/sale', isCredit: true },
         { title: 'Purchases', icon: ShoppingCart, type: 'purchase', link: '/purchase', isCredit: false },
@@ -1468,6 +1873,11 @@ export function FinancialSummaryCards({
         { title: 'Contra', icon: Landmark, type: 'contra', link: '/contra', isCredit: false },
         { title: 'Direct Income', icon: TrendingUp, type: 'direct_income', link: '/incomes', isCredit: true },
         { title: 'Direct Expense', icon: TrendingDown, type: 'direct_expense', link: '/incomes', isCredit: false },
+        { title: 'Payment In', icon: ArrowDownCircle, type: 'payment_in', link: '/payment-in', isCredit: true },
+        { title: 'Payment Out', icon: ArrowUpCircle, type: 'payment_out_excl_pay_salary', link: '/payment-out', isCredit: false },
+        { title: 'Pay Salary', icon: HandCoins, type: 'pay_salary', link: '/add-salary', isCredit: false },
+        { title: 'Notes', icon: StickyNote, type: 'note', link: '/notes', isCredit: true },
+        { title: 'Production', icon: Factory, type: 'production', link: '/production', isCredit: true },
     ];
 
     const getTransactionAmounts = (transaction: any) => {
@@ -1502,18 +1912,17 @@ export function FinancialSummaryCards({
     };
 
     const stats = useMemo(() => {
-        if (!vouchers) return { paymentInTotal: 0, paymentOutTotal: 0, otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
-
-        const paymentInTotal = vouchers.filter(v => v.type === 'payment_in').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
-        const paymentOutTotal = vouchers.filter(v => v.type === 'payment_out').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
+        if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
         const otherStats = statCardData.map((card) => {
             const filteredVouchers = vouchers.filter((v) => {
                 if (card.type === 'journal') return v.type === 'journal' && !v.subType;
                 if (card.type === 'add_salary') return v.type === 'journal' && v.subType === 'add_salary';
+                if (card.type === 'pay_salary') return voucherCountsAsDashboardPaySalary(v);
+                if (card.type === 'payment_out_excl_pay_salary') return voucherCountsAsDashboardPaymentOutExcludingPaySalary(v);
                 return v.type === card.type;
             });
-            
+
             let total = 0;
             if (card.type === 'journal' || card.type === 'add_salary' || card.type === 'contra') {
                 total = filteredVouchers.reduce((sum, v) => sum + Number(getTransactionAmounts(v).debit), 0);
@@ -1524,23 +1933,419 @@ export function FinancialSummaryCards({
             return { ...card, total, count: filteredVouchers.length };
         });
 
-        return { paymentInTotal, paymentOutTotal, otherStats };
+        return { otherStats };
     }, [vouchers]);
+
+    // Chart tab: har voucher-type card ke liye din (AD calendar day) par total amount — dashboard totals se same filter/amount rules.
+    const voucherStatDateChartData = useMemo(() => {
+        if (!showVoucherDateCharts || !vouchers?.length) return {} as Record<string, { name: string; amount: number }[]>;
+        const matchCard = (v: any, cardType: string) => {
+            if (cardType === "journal") return v.type === "journal" && !v.subType;
+            if (cardType === "add_salary") return v.type === "journal" && v.subType === "add_salary";
+            if (cardType === "pay_salary") return voucherCountsAsDashboardPaySalary(v);
+            if (cardType === "payment_out_excl_pay_salary") return voucherCountsAsDashboardPaymentOutExcludingPaySalary(v);
+            return v.type === cardType;
+        };
+        const rowAmount = (v: any, cardType: string) => {
+            if (cardType === "journal" || cardType === "add_salary" || cardType === "contra") {
+                return Number(getTransactionAmounts(v).debit) || 0;
+            }
+            return Number(v.total || v.amount || 0) || 0;
+        };
+        const out: Record<string, { name: string; amount: number }[]> = {};
+        for (const card of statCardData) {
+            const filtered = vouchers.filter((v) => matchCard(v, card.type));
+            const dayMap = new Map<string, number>();
+            for (const v of filtered) {
+                const d = safeToDate(v.date);
+                if (!d) continue;
+                const dayKey = format(d, "yyyy-MM-dd");
+                dayMap.set(dayKey, (dayMap.get(dayKey) || 0) + rowAmount(v, card.type));
+            }
+            const sorted = Array.from(dayMap.entries()).sort(([a], [b]) => a.localeCompare(b));
+            const capped = sorted.slice(-40);
+            out[card.type] = capped.map(([dayKey, amount]) => {
+                const ad = new Date(`${dayKey}T12:00:00`);
+                const name = dateSystem === "BS" ? formatDateBS(ad) : formatDate(ad);
+                return { name, amount };
+            });
+        }
+        return out;
+    }, [showVoucherDateCharts, vouchers, dateSystem, formatDate, formatDateBS]);
+
+    // Chart tab: Cash Flow card — voucher date + card wala month filter; 3 mini bars (in / out / net).
+    const dashboardCashFlowDailyTri = useMemo(() => {
+        const empty = {
+            inflow: [] as { name: string; amount: number }[],
+            outflow: [] as { name: string; amount: number }[],
+            net: [] as { name: string; amount: number }[],
+            inflowPointsByDay: [] as ChartDayPoint[],
+            outflowPointsByDay: [] as ChartDayPoint[],
+            netPointsByDay: [] as ChartDayPoint[],
+        };
+        if (!showVoucherDateCharts) return empty;
+        let filtered = vouchers || [];
+        if (cashFlowDateRange?.from) {
+            const fromDate = startOfDay(cashFlowDateRange.from);
+            const toDate = cashFlowDateRange.to ? endOfDay(cashFlowDateRange.to) : endOfDay(fromDate);
+            filtered = filtered.filter((v) => {
+                const txDate = safeToDate(v.date);
+                return txDate && txDate >= fromDate && txDate <= toDate;
+            });
+        }
+        const inMap = new Map<string, number>();
+        const outMap = new Map<string, number>();
+        filtered.forEach((v: any) => {
+            const d = safeToDate(v.date);
+            if (!d) return;
+            const k = format(startOfDay(d), "yyyy-MM-dd");
+            const amt = Number(v.amount || v.total || 0);
+            if (v.type === "payment_in" || v.type === "direct_income") inMap.set(k, (inMap.get(k) || 0) + amt);
+            if (v.type === "payment_out" || v.type === "direct_expense") outMap.set(k, (outMap.get(k) || 0) + amt);
+        });
+        const allK = [...new Set([...inMap.keys(), ...outMap.keys()])].sort();
+        const capKeys = allK.slice(-40);
+        const labelFor = (dayKey: string) => {
+            const ad = new Date(`${dayKey}T12:00:00`);
+            return dateSystem === "BS" ? formatDateBS(ad) : formatDate(ad);
+        };
+        const inflowPointsByDay: ChartDayPoint[] = allK.map((k) => ({ dayKey: k, amount: inMap.get(k) || 0 }));
+        const outflowPointsByDay: ChartDayPoint[] = allK.map((k) => ({ dayKey: k, amount: outMap.get(k) || 0 }));
+        const netPointsByDay: ChartDayPoint[] = allK.map((k) => ({
+            dayKey: k,
+            amount: (inMap.get(k) || 0) - (outMap.get(k) || 0),
+        }));
+        const inflow = capKeys.map((k) => ({ name: labelFor(k), amount: inMap.get(k) || 0 }));
+        const outflow = capKeys.map((k) => ({ name: labelFor(k), amount: outMap.get(k) || 0 }));
+        const net = capKeys.map((k) => ({ name: labelFor(k), amount: (inMap.get(k) || 0) - (outMap.get(k) || 0) }));
+        return { inflow, outflow, net, inflowPointsByDay, outflowPointsByDay, netPointsByDay };
+    }, [showVoucherDateCharts, vouchers, cashFlowDateRange, dateSystem, formatDate, formatDateBS]);
+
+    // Chart tab: Tax Summary — `taxBreakdownTransactions` jaisa logic, saari taxes; card ka `taxDateRange`.
+    const dashboardTaxDailyTri = useMemo(() => {
+        const empty = {
+            input: [] as { name: string; amount: number }[],
+            output: [] as { name: string; amount: number }[],
+            net: [] as { name: string; amount: number }[],
+            inputPointsByDay: [] as ChartDayPoint[],
+            outputPointsByDay: [] as ChartDayPoint[],
+            netPointsByDay: [] as ChartDayPoint[],
+        };
+        if (!showVoucherDateCharts) return empty;
+        let filteredVouchers = vouchers || [];
+        if (taxDateRange?.from) {
+            const fromDate = startOfDay(taxDateRange.from);
+            const toDate = taxDateRange.to ? endOfDay(taxDateRange.to) : endOfDay(fromDate);
+            filteredVouchers = filteredVouchers.filter((v) => {
+                const txDate = safeToDate(v.date);
+                if (!txDate) return false;
+                return startOfDay(txDate) >= fromDate && startOfDay(txDate) <= toDate;
+            });
+        }
+        const inputMap = new Map<string, number>();
+        const outputMap = new Map<string, number>();
+        const addIn = (date: any, val: number) => {
+            const d = safeToDate(date);
+            if (!d || !val) return;
+            const k = format(startOfDay(d), "yyyy-MM-dd");
+            inputMap.set(k, (inputMap.get(k) || 0) + val);
+        };
+        const addOut = (date: any, val: number) => {
+            const d = safeToDate(date);
+            if (!d || !val) return;
+            const k = format(startOfDay(d), "yyyy-MM-dd");
+            outputMap.set(k, (outputMap.get(k) || 0) + val);
+        };
+        filteredVouchers.forEach((v: any) => {
+            if (v.type === "payment_out" && v.taxAccountId) {
+                addIn(v.date, Number(v.amount || 0));
+            } else if (v.type === "payment_in" && v.taxAccountId) {
+                addOut(v.date, Number(v.amount || 0));
+            } else if (v.lineItems && Array.isArray(v.lineItems)) {
+                v.lineItems.forEach((line: any) => {
+                    if (!line.taxAccountId) return;
+                    const taxAmt = Number(line.taxAmount || 0);
+                    if (taxAmt <= 0) return;
+                    if (v.type === "sale") addOut(v.date, taxAmt);
+                    else if (v.type === "purchase") addIn(v.date, taxAmt);
+                });
+            } else if (v.type === "journal" && v.subType === "add_salary" && Array.isArray(v.entries)) {
+                v.entries.forEach((entry: any) => {
+                    if (!processedTaxes?.some((t: any) => t.id === entry.accountId) || !(Number(entry.credit) > 0))
+                        return;
+                    addOut(v.date, Number(entry.credit || 0));
+                });
+            }
+        });
+        const allK = [...new Set([...inputMap.keys(), ...outputMap.keys()])].sort();
+        const capKeys = allK.slice(-40);
+        const labelFor = (dayKey: string) => {
+            const ad = new Date(`${dayKey}T12:00:00`);
+            return dateSystem === "BS" ? formatDateBS(ad) : formatDate(ad);
+        };
+        const inputPointsByDay: ChartDayPoint[] = allK.map((k) => ({ dayKey: k, amount: inputMap.get(k) || 0 }));
+        const outputPointsByDay: ChartDayPoint[] = allK.map((k) => ({ dayKey: k, amount: outputMap.get(k) || 0 }));
+        const netPointsByDay: ChartDayPoint[] = allK.map((k) => ({
+            dayKey: k,
+            amount: (inputMap.get(k) || 0) - (outputMap.get(k) || 0),
+        }));
+        const input = capKeys.map((k) => ({ name: labelFor(k), amount: inputMap.get(k) || 0 }));
+        const output = capKeys.map((k) => ({ name: labelFor(k), amount: outputMap.get(k) || 0 }));
+        const net = capKeys.map((k) => ({ name: labelFor(k), amount: (inputMap.get(k) || 0) - (outputMap.get(k) || 0) }));
+        return { input, output, net, inputPointsByDay, outputPointsByDay, netPointsByDay };
+    }, [showVoucherDateCharts, vouchers, taxDateRange, processedTaxes, dateSystem, formatDate, formatDateBS]);
+
+    // Chart tab: Outstanding — din ke end tak cumulative To Receive / To Pay / Net (card logic + `receivablesDateRange`).
+    const dashboardOutstandingBalanceTri = useMemo(() => {
+        const empty = {
+            toReceive: [] as { name: string; amount: number }[],
+            toPay: [] as { name: string; amount: number }[],
+            net: [] as { name: string; amount: number }[],
+            toReceivePointsByDay: [] as ChartDayPoint[],
+            toPayPointsByDay: [] as ChartDayPoint[],
+            netPointsByDay: [] as ChartDayPoint[],
+        };
+        if (!showVoucherDateCharts || loading) return empty;
+
+        const labelForDay = (day: Date) => (dateSystem === "BS" ? formatDateBS(day) : formatDate(day));
+
+        let dayBoundaries: Date[] = [];
+
+        if (receivablesDateRange?.from) {
+            const fromDate = startOfDay(receivablesDateRange.from);
+            const toDate = receivablesDateRange.to ? endOfDay(receivablesDateRange.to) : endOfDay(fromDate);
+            for (let d = new Date(fromDate); d <= toDate; d = addDays(d, 1)) {
+                dayBoundaries.push(new Date(d));
+            }
+            if (dayBoundaries.length > 60) dayBoundaries = dayBoundaries.slice(-60);
+        } else {
+            const dates = vouchers.map((v) => safeToDate(v.date)).filter(Boolean) as Date[];
+            if (dates.length === 0) {
+                const now = new Date();
+                const { receivableSum, payableSum } = computeOutstandingSnapshot(
+                    [],
+                    processedParties,
+                    processedStaff,
+                    processedTaxes
+                );
+                const label = labelForDay(now);
+                const dk = format(startOfDay(now), "yyyy-MM-dd");
+                return {
+                    toReceive: [{ name: label, amount: receivableSum }],
+                    toPay: [{ name: label, amount: payableSum }],
+                    net: [{ name: label, amount: receivableSum - payableSum }],
+                    toReceivePointsByDay: [{ dayKey: dk, amount: receivableSum }],
+                    toPayPointsByDay: [{ dayKey: dk, amount: payableSum }],
+                    netPointsByDay: [{ dayKey: dk, amount: receivableSum - payableSum }],
+                };
+            }
+            const maxT = Math.max(...dates.map((x) => x.getTime()));
+            const minT = Math.min(...dates.map((x) => x.getTime()));
+            const maxD = startOfDay(new Date(maxT));
+            let startWindow = startOfDay(new Date(minT));
+            const spanDays =
+                Math.ceil((maxD.getTime() - startWindow.getTime()) / (86400000)) + 1;
+            if (spanDays > 60) startWindow = startOfDay(addDays(maxD, -59));
+            for (let d = new Date(startWindow); d <= maxD; d = addDays(d, 1)) {
+                dayBoundaries.push(new Date(d));
+            }
+        }
+
+        const toReceive: { name: string; amount: number }[] = [];
+        const toPay: { name: string; amount: number }[] = [];
+        const net: { name: string; amount: number }[] = [];
+        const toReceivePointsByDay: ChartDayPoint[] = [];
+        const toPayPointsByDay: ChartDayPoint[] = [];
+        const netPointsByDay: ChartDayPoint[] = [];
+
+        for (const day of dayBoundaries) {
+            const endD = endOfDay(day);
+            const dk = format(startOfDay(day), "yyyy-MM-dd");
+            let slice: any[];
+            if (receivablesDateRange?.from) {
+                const fromDate = startOfDay(receivablesDateRange.from);
+                slice = vouchers.filter((v) => {
+                    const tx = safeToDate(v.date);
+                    return tx && tx >= fromDate && tx <= endD;
+                });
+            } else {
+                slice = vouchers.filter((v) => {
+                    const tx = safeToDate(v.date);
+                    return tx && tx <= endD;
+                });
+            }
+            const { receivableSum, payableSum } = computeOutstandingSnapshot(
+                slice,
+                processedParties,
+                processedStaff,
+                processedTaxes
+            );
+            const label = labelForDay(day);
+            toReceive.push({ name: label, amount: receivableSum });
+            toPay.push({ name: label, amount: payableSum });
+            net.push({ name: label, amount: receivableSum - payableSum });
+            toReceivePointsByDay.push({ dayKey: dk, amount: receivableSum });
+            toPayPointsByDay.push({ dayKey: dk, amount: payableSum });
+            netPointsByDay.push({ dayKey: dk, amount: receivableSum - payableSum });
+        }
+
+        return { toReceive, toPay, net, toReceivePointsByDay, toPayPointsByDay, netPointsByDay };
+    }, [
+        showVoucherDateCharts,
+        loading,
+        vouchers,
+        receivablesDateRange,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        dateSystem,
+        formatDate,
+        formatDateBS,
+    ]);
+
+    // Chart tab: entity count cards — master `createdAt` se din-wise adds (Parties / Staff / Bank+Cash / Items).
+    const entityChartPartiesDaily = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        const partyDates = processedParties
+            .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
+            .map((p: any) => pickEntityCreatedAt(p));
+        return buildDailyCountChart(partyDates, dateSystem, formatDate, formatDateBS);
+    }, [showVoucherDateCharts, processedParties, dateSystem, formatDate, formatDateBS]);
+
+    const entityChartStaffDaily = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        return buildDailyCountChart(
+            processedStaff.map((s: any) => pickEntityCreatedAt(s)),
+            dateSystem,
+            formatDate,
+            formatDateBS
+        );
+    }, [showVoucherDateCharts, processedStaff, dateSystem, formatDate, formatDateBS]);
+
+    const entityChartBankCashDaily = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        const dates = processedAccounts
+            .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
+            .map((a: any) => pickEntityCreatedAt(a));
+        return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
+    }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
+
+    const entityChartItemsDaily = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        return buildDailyCountChart(
+            processedItems.map((i: any) => pickEntityCreatedAt(i)),
+            dateSystem,
+            formatDate,
+            formatDateBS
+        );
+    }, [showVoucherDateCharts, processedItems, dateSystem, formatDate, formatDateBS]);
+
+    const entityChartPartiesPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        const partyDates = processedParties
+            .filter((p: any) => !DASHBOARD_CHART_EXCLUDE_PARTY_IDS.has(p.id) && !p.isSystemAccount)
+            .map((p: any) => pickEntityCreatedAt(p));
+        return buildDailyCountPointsByDay(partyDates);
+    }, [showVoucherDateCharts, processedParties]);
+
+    const entityChartStaffPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        return buildDailyCountPointsByDay(processedStaff.map((s: any) => pickEntityCreatedAt(s)));
+    }, [showVoucherDateCharts, processedStaff]);
+
+    const entityChartBankCashPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        const dates = processedAccounts
+            .filter((a: any) => a.accountType === "Bank" || a.accountType === "Cash")
+            .map((a: any) => pickEntityCreatedAt(a));
+        return buildDailyCountPointsByDay(dates);
+    }, [showVoucherDateCharts, processedAccounts]);
+
+    const entityChartItemsPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        return buildDailyCountPointsByDay(processedItems.map((i: any) => pickEntityCreatedAt(i)));
+    }, [showVoucherDateCharts, processedItems]);
+
+    /** Total Vouchers card: voucher `date` par din-wise count (mini chart). */
+    const entityChartVouchersDaily = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        const dates = (vouchers || []).map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
+    }, [showVoucherDateCharts, vouchers, dateSystem, formatDate, formatDateBS]);
+
+    const entityChartVouchersCountPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        const dates = (vouchers || []).map((v: any) => safeToDate(v.date)).filter(Boolean) as Date[];
+        return buildDailyCountPointsByDay(dates);
+    }, [showVoucherDateCharts, vouchers]);
+
+    /** View full popup: us din sab vouchers ka total amount (`total`/`amount`). */
+    const voucherAmountPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        const dayMap = new Map<string, number>();
+        for (const v of vouchers || []) {
+            const d = safeToDate(v.date);
+            if (!d) continue;
+            const k = format(startOfDay(d), "yyyy-MM-dd");
+            const amt = Number(v.total ?? v.amount ?? 0);
+            dayMap.set(k, (dayMap.get(k) || 0) + amt);
+        }
+        return Array.from(dayMap.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([dayKey, amount]) => ({ dayKey, amount }));
+    }, [showVoucherDateCharts, vouchers]);
+
+    // Chart tab: Stock — item master create date se daily add count.
+    const dashboardStockItemAdds = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as { name: string; amount: number }[];
+        const dates = processedItems.map((i: any) => pickEntityCreatedAt(i));
+        return buildDailyCountChart(dates, dateSystem, formatDate, formatDateBS);
+    }, [showVoucherDateCharts, processedItems, dateSystem, formatDate, formatDateBS]);
+
+    const dashboardStockItemAddsPointsByDay = useMemo(() => {
+        if (!showVoucherDateCharts) return [] as ChartDayPoint[];
+        return buildDailyCountPointsByDay(processedItems.map((i: any) => pickEntityCreatedAt(i)));
+    }, [showVoucherDateCharts, processedItems]);
+
+    // Chart tab: Bank & Cash — Bank vs Cash account master ke `createdAt` se daily add count.
+    const dashboardBankCashDual = useMemo(() => {
+        const empty = {
+            bank: [] as { name: string; amount: number }[],
+            cash: [] as { name: string; amount: number }[],
+            bankPointsByDay: [] as ChartDayPoint[],
+            cashPointsByDay: [] as ChartDayPoint[],
+        };
+        if (!showVoucherDateCharts) return empty;
+        const bankDates = processedAccounts
+            .filter((a: any) => a.accountType === "Bank")
+            .map((a: any) => pickEntityCreatedAt(a));
+        const cashDates = processedAccounts
+            .filter((a: any) => a.accountType === "Cash")
+            .map((a: any) => pickEntityCreatedAt(a));
+        return {
+            bank: buildDailyCountChart(bankDates, dateSystem, formatDate, formatDateBS),
+            cash: buildDailyCountChart(cashDates, dateSystem, formatDate, formatDateBS),
+            bankPointsByDay: buildDailyCountPointsByDay(bankDates),
+            cashPointsByDay: buildDailyCountPointsByDay(cashDates),
+        };
+    }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
 
     const gridCols = compact ? "" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5";
     // Dashboard request: keep exact 5px card-to-card spacing across summary grids.
     const cardSpacing = compact ? "gap-[5px] px-0.5" : "gap-[5px] px-0.5";
     // Dashboard request: use bold card border thickness globally on summary cards.
     const cardBorder = compact ? "border-2 border-foreground/30" : "border-2 border-foreground/30";
-    // Dashboard card palette: soft ribbon-style gradients with different tones per card.
+    // APK WebView compatibility: apply shared top ribbon strip class directly on every dashboard summary card.
+    const dashboardCardRibbonClass = "app-chrome-top-ribbon";
+    // Dashboard card palette: Tailwind gradient + `pl-dashboard-ribbon-*` — WebView par CSS rgba fallback paint hota hai
     const ribbonTones = [
-        "border-emerald-300/70 bg-gradient-to-r from-emerald-50 via-white to-emerald-100/70 dark:from-emerald-950/25 dark:via-card dark:to-emerald-900/20",
-        "border-sky-300/70 bg-gradient-to-r from-sky-50 via-white to-cyan-100/70 dark:from-sky-950/25 dark:via-card dark:to-cyan-900/20",
-        "border-violet-300/70 bg-gradient-to-r from-violet-50 via-white to-fuchsia-100/70 dark:from-violet-950/25 dark:via-card dark:to-fuchsia-900/20",
-        "border-amber-300/70 bg-gradient-to-r from-amber-50 via-white to-orange-100/70 dark:from-amber-950/25 dark:via-card dark:to-orange-900/20",
-        "border-rose-300/70 bg-gradient-to-r from-rose-50 via-white to-pink-100/70 dark:from-rose-950/25 dark:via-card dark:to-pink-900/20",
-        "border-teal-300/70 bg-gradient-to-r from-teal-50 via-white to-emerald-100/70 dark:from-teal-950/25 dark:via-card dark:to-emerald-900/20",
-        "border-indigo-300/70 bg-gradient-to-r from-indigo-50 via-white to-blue-100/70 dark:from-indigo-950/25 dark:via-card dark:to-blue-900/20",
+        "border-emerald-300/70 pl-dashboard-ribbon-emerald",
+        "border-sky-300/70 pl-dashboard-ribbon-sky",
+        "border-violet-300/70 pl-dashboard-ribbon-violet",
+        "border-amber-300/70 pl-dashboard-ribbon-amber",
+        "border-rose-300/70 pl-dashboard-ribbon-rose",
+        "border-teal-300/70 pl-dashboard-ribbon-teal",
+        "border-indigo-300/70 pl-dashboard-ribbon-indigo",
     ];
     const ribbonTone = (index: number) => ribbonTones[index % ribbonTones.length];
     
@@ -1552,9 +2357,265 @@ export function FinancialSummaryCards({
     const filterWrapperClass = compact ? "flex-shrink-0" : "";
     const contentClass = compact ? "flex-1 flex flex-col" : "";
 
+    /** Mini vs full popup: same series, alag margins / tick size. */
+    const renderBarChartInner = (
+        data: { name: string; amount: number }[],
+        barColor: string,
+        tooltipIsCount: boolean,
+        variant: "mini" | "full"
+    ) => {
+        if (!data.length) {
+            return <p className="text-[10px] text-muted-foreground text-center pt-6">—</p>;
+        }
+        const xTick = variant === "mini" ? 8 : 12;
+        const yTick = variant === "mini" ? 8 : 12;
+        const yWidth = variant === "mini" ? 26 : 48;
+        const margin =
+            variant === "mini"
+                ? { top: 2, right: 2, left: 0, bottom: 0 }
+                : { top: 16, right: 24, left: 8, bottom: 48 };
+        return (
+            <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data} margin={margin}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-35" />
+                    <XAxis
+                        dataKey="name"
+                        tick={{ fontSize: xTick }}
+                        interval="preserveStartEnd"
+                        angle={variant === "full" ? -32 : 0}
+                        textAnchor={variant === "full" ? "end" : "middle"}
+                        height={variant === "full" ? 72 : undefined}
+                    />
+                    <YAxis tick={{ fontSize: yTick }} width={yWidth} />
+                    <Tooltip
+                        formatter={(v: number) =>
+                            tooltipIsCount
+                                ? [String(v), "Added"]
+                                : [formatCurrency(v, { noSuffix: true, duration: 2 }), "Amount"]
+                        }
+                        labelFormatter={(l) => `Date: ${l}`}
+                    />
+                    <Bar dataKey="amount" fill={barColor} radius={[2, 2, 0, 0]} />
+                </BarChart>
+            </ResponsiveContainer>
+        );
+    };
+
+    /** Chart tab: mini chart + View full; optional `fullViewOverride` = popup me alag series (e.g. vouchers count mini → amount full). */
+    const renderDashboardMiniBar = (
+        data: { name: string; amount: number }[],
+        subtitle: string,
+        barColor: string,
+        tooltipIsCount: boolean,
+        pointsByDay: ChartDayPoint[],
+        fullViewOverride?: {
+            pointsByDay: ChartDayPoint[];
+            tooltipIsCount: boolean;
+            subtitle?: string;
+        }
+    ) => {
+        const popupPts = fullViewOverride?.pointsByDay ?? pointsByDay;
+        return (
+            <div className="min-w-0 flex flex-col rounded-md border border-border/50 bg-background/30 p-1.5">
+                <div className="flex items-start justify-between gap-1.5">
+                    <p className="text-[10px] text-muted-foreground leading-tight line-clamp-2 min-w-0 flex-1">{subtitle}</p>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 shrink-0 px-2 text-[10px] font-medium text-primary hover:text-primary"
+                        disabled={!popupPts.length}
+                        onClick={() =>
+                            setDashboardChartFullView({
+                                subtitle: fullViewOverride?.subtitle ?? subtitle,
+                                barColor,
+                                tooltipIsCount: fullViewOverride?.tooltipIsCount ?? tooltipIsCount,
+                                pointsByDay: popupPts,
+                            })
+                        }
+                    >
+                        View full
+                    </Button>
+                </div>
+                <div className="mt-1 h-[88px] w-full min-h-[72px]">
+                    {renderBarChartInner(data, barColor, tooltipIsCount, "mini")}
+                </div>
+            </div>
+        );
+    };
+
+    const chartFullViewDataBounds = useMemo(() => {
+        if (!dashboardChartFullView?.pointsByDay?.length) return null;
+        const sorted = [...dashboardChartFullView.pointsByDay].sort((a, b) => a.dayKey.localeCompare(b.dayKey));
+        const first = parseISO(sorted[0].dayKey);
+        const last = parseISO(sorted[sorted.length - 1].dayKey);
+        if (dateSystem === "BS") {
+            const minB = adToBs(first);
+            const maxB = adToBs(last);
+            return {
+                mode: "bs" as const,
+                dataMinAnchor: bsToAd({ y: minB.y, m: minB.m, d: 1 }),
+                dataMaxAnchor: bsToAd({ y: maxB.y, m: maxB.m, d: 1 }),
+            };
+        }
+        return {
+            mode: "ad" as const,
+            dataMinAnchor: startOfMonth(first),
+            dataMaxAnchor: startOfMonth(last),
+        };
+    }, [dashboardChartFullView?.pointsByDay, dateSystem]);
+
+    const canShiftChartBack = useMemo(() => {
+        if (!chartFullViewDataBounds || chartFullRangePreset === "all") return false;
+        if (chartFullViewDataBounds.mode === "bs") {
+            const minA = minAnchorDateBs(chartFullViewDataBounds.dataMinAnchor, chartFullRangePreset);
+            return bsMonthIndexFromAnchorDate(chartFullAnchorMonth) > bsMonthIndexFromAnchorDate(minA);
+        }
+        const minA = minAnchorMonthForPreset(chartFullViewDataBounds.dataMinAnchor, chartFullRangePreset);
+        return chartFullAnchorMonth.getTime() > minA.getTime();
+    }, [chartFullViewDataBounds, chartFullRangePreset, chartFullAnchorMonth]);
+
+    const canShiftChartForward = useMemo(() => {
+        if (!chartFullViewDataBounds || chartFullRangePreset === "all") return false;
+        if (chartFullViewDataBounds.mode === "bs") {
+            return (
+                bsMonthIndexFromAnchorDate(chartFullAnchorMonth) <
+                bsMonthIndexFromAnchorDate(chartFullViewDataBounds.dataMaxAnchor)
+            );
+        }
+        return chartFullAnchorMonth.getTime() < chartFullViewDataBounds.dataMaxAnchor.getTime();
+    }, [chartFullViewDataBounds, chartFullRangePreset, chartFullAnchorMonth]);
+
+    const shiftChartAnchor = (delta: -1 | 1) => {
+        if (!chartFullViewDataBounds || chartFullRangePreset === "all") return;
+        if (chartFullViewDataBounds.mode === "bs") {
+            const bs = adToBs(chartFullAnchorMonth);
+            const shifted = addBsMonths(bs.y, bs.m, delta);
+            let idxNext = shifted.y * 12 + shifted.m - 1;
+            const minA = minAnchorDateBs(chartFullViewDataBounds.dataMinAnchor, chartFullRangePreset);
+            const idxMin = bsMonthIndexFromAnchorDate(minA);
+            const idxMax = bsMonthIndexFromAnchorDate(chartFullViewDataBounds.dataMaxAnchor);
+            const clamped = Math.min(Math.max(idxNext, idxMin), idxMax);
+            const yy = Math.floor(clamped / 12);
+            const mm = (clamped % 12) + 1;
+            setChartFullAnchorMonth(bsToAd({ y: yy, m: mm, d: 1 }));
+            return;
+        }
+        const minA = minAnchorMonthForPreset(chartFullViewDataBounds.dataMinAnchor, chartFullRangePreset);
+        let next = startOfMonth(addMonths(chartFullAnchorMonth, delta));
+        if (next.getTime() < minA.getTime()) next = minA;
+        if (next.getTime() > chartFullViewDataBounds.dataMaxAnchor.getTime()) {
+            next = chartFullViewDataBounds.dataMaxAnchor;
+        }
+        setChartFullAnchorMonth(next);
+    };
+
+    /** Popup: Month=daily columns in month; 3/6/12=month buckets; All=har month column. */
+    const fullViewFilteredChart = useMemo(() => {
+        if (!dashboardChartFullView?.pointsByDay?.length) return [] as { name: string; amount: number }[];
+        return buildFullViewChartData(
+            dashboardChartFullView.pointsByDay,
+            chartFullRangePreset,
+            chartFullAnchorMonth,
+            dateSystem,
+            formatDate,
+            formatDateBS
+        );
+    }, [
+        dashboardChartFullView,
+        chartFullRangePreset,
+        chartFullAnchorMonth,
+        dateSystem,
+        formatDate,
+        formatDateBS,
+    ]);
+
     return (
         <div className={`${compact ? 'financial-summary-grid' : `grid ${gridCols}`} ${cardSpacing} ${compact ? 'w-full' : ''}`}>
-            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(0)}`}>
+            <Dialog
+                open={!!dashboardChartFullView}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setDashboardChartFullView(null);
+                        setChartFullRangePreset("all");
+                    }
+                }}
+            >
+                <DialogContent
+                    className={cn(
+                        "flex w-full max-w-[100vw] flex-col gap-0 overflow-hidden rounded-lg border p-0",
+                        "h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] sm:max-w-[90vw]",
+                        "pt-[env(safe-area-inset-top)]"
+                    )}
+                >
+                    <DialogHeader className="shrink-0 space-y-2 border-b px-3 py-3 text-left sm:space-y-1 sm:px-4">
+                        <DialogTitle className="pr-10 text-sm font-semibold leading-snug sm:text-base">
+                            {dashboardChartFullView?.subtitle ?? "Chart"}
+                        </DialogTitle>
+                        {/* Month=din-wise columns; 3/6/Year=month columns; All=sare months; All par sirf forward chipka hua nahi. */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 pr-10 sm:pr-8">
+                            {CHART_FULL_RANGE_OPTIONS.map((opt) => (
+                                <Button
+                                    key={opt.id}
+                                    type="button"
+                                    size="sm"
+                                    variant={chartFullRangePreset === opt.id ? "default" : "outline"}
+                                    className="h-8 min-w-0 shrink px-2 text-[10px] sm:text-xs"
+                                    onClick={() => setChartFullRangePreset(opt.id)}
+                                >
+                                    {opt.label}
+                                </Button>
+                            ))}
+                            {/* All preset: forward hidden only; rewind dikhao (All par shift band — disabled). */}
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 shrink-0"
+                                disabled={!canShiftChartBack}
+                                onClick={() => shiftChartAnchor(-1)}
+                                aria-label="Previous period"
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            {chartFullRangePreset !== "all" && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-8 w-8 shrink-0"
+                                    disabled={!canShiftChartForward}
+                                    onClick={() => shiftChartAnchor(1)}
+                                    aria-label="Next period"
+                                >
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                            )}
+                        </div>
+                    </DialogHeader>
+                    <div className="min-h-0 flex-1 overflow-hidden p-2 sm:p-4">
+                        {dashboardChartFullView && fullViewFilteredChart.length > 0 ? (
+                            <div
+                                className={cn(
+                                    "h-[min(calc(100dvh-11rem),85vh)] w-full min-h-[200px] sm:h-[min(calc(90vh-10rem),80vh)] sm:min-h-[280px]"
+                                )}
+                            >
+                                {renderBarChartInner(
+                                    fullViewFilteredChart,
+                                    dashboardChartFullView.barColor,
+                                    dashboardChartFullView.tooltipIsCount,
+                                    "full"
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-muted-foreground flex h-48 items-center justify-center text-sm">
+                                No data for this chart.
+                            </p>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
+            <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(0)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Stock Summary</CardTitle>
                     {compact ? (
@@ -1606,6 +2667,18 @@ export function FinancialSummaryCards({
                             </div>
                         </div>
                     </ScrollArea>
+                    {showVoucherDateCharts && !compact && (
+                        <div className="mt-3 pt-2 border-t border-border/60">
+                            {/* Item master `createdAt`: din ke hisaab se kitne naye items (Chart tab only). */}
+                            {renderDashboardMiniBar(
+                                dashboardStockItemAdds,
+                                "New items by date (count)",
+                                "#0d9488",
+                                true,
+                                dashboardStockItemAddsPointsByDay
+                            )}
+                        </div>
+                    )}
                     {showDetails && (
                         <div className="text-right pt-2">
                             <Dialog open={stockSummaryOpen} onOpenChange={setStockSummaryOpen}>
@@ -1660,22 +2733,23 @@ export function FinancialSummaryCards({
                                     <div className="flex-1 px-4 py-4 flex flex-col min-h-0 min-w-0">
                                         <div className="border rounded-lg flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
                                             <div className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-x-contain">
+                                                {/* border-b-2 hata: View Details me row line patli (shadcn Table jaisa) */}
                                                 <table className="w-full min-w-max border-collapse">
                                                         <thead className="sticky top-0 bg-background z-10">
                                                             <tr>
-                                                                <th className="h-9 px-4 text-left align-middle font-bold text-black whitespace-nowrap border-b-2 border-r">Item Name</th>
-                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b-2 border-r">Quantity</th>
-                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b-2 border-r">Rate</th>
-                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b-2">Value</th>
+                                                                <th className="h-9 px-4 text-left align-middle font-bold text-black whitespace-nowrap border-b border-border/75 border-r border-border/40">Item Name</th>
+                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b border-border/75 border-r border-border/40">Quantity</th>
+                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b border-border/75 border-r border-border/40">Rate</th>
+                                                                <th className="h-9 px-4 text-right align-middle font-bold text-black whitespace-nowrap border-b border-border/75">Value</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody>
                                                             {overallStockSummary.items.map((item, i) => (
                                                                 <tr key={i}>
-                                                                    <td className="px-4 py-2 align-middle font-medium whitespace-nowrap border-b-2 border-r">{item.name}</td>
-                                                                    <td className="px-4 py-2 text-right align-middle whitespace-nowrap border-b-2 border-r">{item.qty.toFixed(2)} {item.unit}</td>
-                                                                    <td className="px-4 py-2 text-right align-middle whitespace-nowrap border-b-2 border-r">{formatCurrency(item.rate, {noSuffix: true})}</td>
-                                                                    <td className="px-4 py-2 text-right align-middle font-bold whitespace-nowrap border-b-2">{formatCurrency(item.value, {noSuffix: true})}</td>
+                                                                    <td className="px-4 py-2 align-middle font-medium whitespace-nowrap border-b border-border/65 border-r border-border/40">{item.name}</td>
+                                                                    <td className="px-4 py-2 text-right align-middle whitespace-nowrap border-b border-border/65 border-r border-border/40">{item.qty.toFixed(2)} {item.unit}</td>
+                                                                    <td className="px-4 py-2 text-right align-middle whitespace-nowrap border-b border-border/65 border-r border-border/40">{formatCurrency(item.rate, {noSuffix: true})}</td>
+                                                                    <td className="px-4 py-2 text-right align-middle font-bold whitespace-nowrap border-b border-border/65">{formatCurrency(item.value, {noSuffix: true})}</td>
                                                                 </tr>
                                                             ))}
                                                         </tbody>
@@ -1697,7 +2771,7 @@ export function FinancialSummaryCards({
             </Card>
 
             {can("view_receivable_payable_summary") && (
-                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>
+                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap text-card-foreground ${titleClass} min-w-0`}>
                             Outstanding
@@ -1727,6 +2801,32 @@ export function FinancialSummaryCards({
                                 {formatCurrency(receivablesPayablesCardTotals.net, { showDrCr: true })}
                             </span>
                         </div>
+                        {showVoucherDateCharts && !compact && (
+                            <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2">
+                                {/* Din ke end tak cumulative To Receive / To Pay / Net — card totals se same balance rules. */}
+                                {renderDashboardMiniBar(
+                                    dashboardOutstandingBalanceTri.toReceive,
+                                    "To Receive (Dr) / day",
+                                    "#16a34a",
+                                    false,
+                                    dashboardOutstandingBalanceTri.toReceivePointsByDay
+                                )}
+                                {renderDashboardMiniBar(
+                                    dashboardOutstandingBalanceTri.toPay,
+                                    "To Pay (Cr) / day",
+                                    "#dc2626",
+                                    false,
+                                    dashboardOutstandingBalanceTri.toPayPointsByDay
+                                )}
+                                {renderDashboardMiniBar(
+                                    dashboardOutstandingBalanceTri.net,
+                                    "Net balance / day",
+                                    "#2563eb",
+                                    false,
+                                    dashboardOutstandingBalanceTri.netPointsByDay
+                                )}
+                            </div>
+                        )}
                         {showDetails && (
                             <div className="text-right pt-2">
                                 <Dialog open={receivablesPayablesOpen} onOpenChange={(open) => {
@@ -1951,7 +3051,7 @@ export function FinancialSummaryCards({
             )}
             
             {can("view_payment_in_out_summary") && (
-                <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(2)}`}>
+                <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(2)}`}>
                     <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                         <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Cash Flow</CardTitle>
                         {compact ? (
@@ -1979,6 +3079,32 @@ export function FinancialSummaryCards({
                                 {formatCurrency(Math.abs(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow), { noSuffix: true, duration: 2 })} <span className="text-xs">{(cashFlowDetails.totalInflow - cashFlowDetails.totalOutflow) >= 0 ? 'Dr' : 'Cr'}</span>
                             </span>
                         </div>
+                        {showVoucherDateCharts && !compact && (
+                            <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2">
+                                {/* Cash Flow: 3 rows — in / out / net; har chart full-screen popup. */}
+                                {renderDashboardMiniBar(
+                                    dashboardCashFlowDailyTri.inflow,
+                                    "Payment in / day",
+                                    "#16a34a",
+                                    false,
+                                    dashboardCashFlowDailyTri.inflowPointsByDay
+                                )}
+                                {renderDashboardMiniBar(
+                                    dashboardCashFlowDailyTri.outflow,
+                                    "Payment out / day",
+                                    "#dc2626",
+                                    false,
+                                    dashboardCashFlowDailyTri.outflowPointsByDay
+                                )}
+                                {renderDashboardMiniBar(
+                                    dashboardCashFlowDailyTri.net,
+                                    "Net / day",
+                                    "#2563eb",
+                                    false,
+                                    dashboardCashFlowDailyTri.netPointsByDay
+                                )}
+                            </div>
+                        )}
                         {showDetails && (
                             <div className="text-right pt-2">
                                 <Dialog open={cashFlowOpen} onOpenChange={(open) => {
@@ -2069,7 +3195,7 @@ export function FinancialSummaryCards({
                                                             {/* pr-2 + table-fixed: mobile par scrollbar / tight width se amount ka digit cut na ho */}
                                                             <ScrollArea className="flex-1 min-h-0 min-w-0">
                                                                 <div className="min-w-0 pr-2">
-                                                                    <Table className="w-full table-fixed">
+                                                                    <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                                         <TableBody>
                                                                             {orderedCashFlowCategories(cashFlowDetails.categorizedInflow).map(([category, items]) => {
                                                                                 if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
@@ -2108,7 +3234,7 @@ export function FinancialSummaryCards({
                                                         <div className="flex-1 border rounded-lg flex flex-col min-h-0 min-w-0 overflow-hidden">
                                                             <ScrollArea className="flex-1 min-h-0 min-w-0">
                                                                 <div className="min-w-0 pr-2">
-                                                                    <Table className="w-full table-fixed">
+                                                                    <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                                         <TableBody>
                                                                             {orderedCashFlowCategories(cashFlowDetails.categorizedOutflow).map(([category, items]) => {
                                                                                 if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null;
@@ -2150,7 +3276,7 @@ export function FinancialSummaryCards({
                 </Card>
             )}
 
-            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(3)}`}>
+            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(3)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Tax Summary</CardTitle>
                     {compact ? (
@@ -2178,6 +3304,32 @@ export function FinancialSummaryCards({
                             {formatCurrency(taxSummary.netBalance, {showDrCr: true})}
                         </span>
                     </div>
+                    {showVoucherDateCharts && !compact && (
+                        <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2">
+                            {/* Tax: 3 stacked rows; voucher-level aggregate + `taxDateRange`. */}
+                            {renderDashboardMiniBar(
+                                dashboardTaxDailyTri.input,
+                                "Paid tax (Dr) / day",
+                                "#16a34a",
+                                false,
+                                dashboardTaxDailyTri.inputPointsByDay
+                            )}
+                            {renderDashboardMiniBar(
+                                dashboardTaxDailyTri.output,
+                                "Received tax (Cr) / day",
+                                "#dc2626",
+                                false,
+                                dashboardTaxDailyTri.outputPointsByDay
+                            )}
+                            {renderDashboardMiniBar(
+                                dashboardTaxDailyTri.net,
+                                "Net tax / day",
+                                "#7c3aed",
+                                false,
+                                dashboardTaxDailyTri.netPointsByDay
+                            )}
+                        </div>
+                    )}
                     {showDetails && (
                         <div className="text-right pt-2">
                             <Dialog open={taxSummaryOpen} onOpenChange={(open) => {
@@ -2321,7 +3473,7 @@ export function FinancialSummaryCards({
                                                     <div className="border border-black rounded-lg flex flex-col min-h-0 overflow-hidden">
                                                         <ScrollArea className="flex-1 w-full">
                                                             <div className="w-full">
-                                                                <Table className="w-full table-fixed">
+                                                                <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                                 {/* 4 column: Account date ke neeche — Cash Flow jaisa text-sm */}
                                                                 <TableHeader>
                                                                     <TableRow className="border-b-[0.5px] border-gray-400">
@@ -2474,7 +3626,7 @@ export function FinancialSummaryCards({
                                                                                                     </TableRow>
                                                                                                 </>
                                                                                             ) : taxFilter === 'input' ? (
-                                                                                                <TableRow className="bg-muted/30 border-t border-black">
+                                                                                                <TableRow className="bg-muted/30 border-t border-border/75">
                                                                                                     <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {taxGroup.taxName} - Total Paid
                                                                                                     </TableCell>
@@ -2484,7 +3636,7 @@ export function FinancialSummaryCards({
                                                                                                     <TableCell className={cn("text-right text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>-</TableCell>
                                                                                                 </TableRow>
                                                                                             ) : (
-                                                                                                <TableRow className="bg-muted/30 border-t border-black">
+                                                                                                <TableRow className="bg-muted/30 border-t border-border/75">
                                                                                                     <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                         {taxGroup.taxName} - Total Received
                                                                                                     </TableCell>
@@ -2512,7 +3664,7 @@ export function FinancialSummaryCards({
                                                     <div className="flex flex-col min-h-0">
                                                         <div className="flex-1 border border-black rounded-lg flex flex-col min-h-0">
                                                             <ScrollArea className="flex-1">
-                                                                <Table>
+                                                                <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                                                                     {/* 4 column + account under date — pehle branch jaisa */}
                                                                     <TableHeader>
                                                                         <TableRow className="border-b-[0.5px] border-gray-400">
@@ -2661,7 +3813,7 @@ export function FinancialSummaryCards({
                                                                                                     </TableRow>
                                                                                                 </>
                                                                                             ) : taxFilter === 'input' ? (
-                                                                                                <TableRow className="bg-muted/30 border-t border-black">
+                                                                                                <TableRow className="bg-muted/30 border-t border-border/75">
                                                                                                     <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                         {taxGroup.taxName} - Total Paid
                                                                                                     </TableCell>
@@ -2671,7 +3823,7 @@ export function FinancialSummaryCards({
                                                                                                     <TableCell className="text-right text-sm py-1">-</TableCell>
                                                                                                 </TableRow>
                                                                                             ) : (
-                                                                                                <TableRow className="bg-muted/30 border-t border-black">
+                                                                                                <TableRow className="bg-muted/30 border-t border-border/75">
                                                                                                     <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                         {taxGroup.taxName} - Total Received
                                                                                                     </TableCell>
@@ -2725,7 +3877,7 @@ export function FinancialSummaryCards({
                                         
                                         return overallTotalDisplay ? (
                                             <div className={cn(
-                                                "bg-background border-t border-black flex items-center justify-between flex-shrink-0",
+                                                "bg-background border-t border-border/75 flex items-center justify-between flex-shrink-0",
                                                 isMobile ? "px-0.5 py-2 text-xs" : "px-0.5 py-3 text-sm"
                                             )}>
                                                 <span className="font-bold">Totals Net Balance</span>
@@ -2745,7 +3897,7 @@ export function FinancialSummaryCards({
                 </CardContent>
             </Card>
 
-            <Card className={`col-span-1 transition-colors ${cardBorder} ${cardWrapperClass} ${ribbonTone(4)}`}>
+            <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(4)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Bank & Cash Summary</CardTitle>
                     {compact ? (
@@ -2773,6 +3925,25 @@ export function FinancialSummaryCards({
                             {formatCurrency(bankCashSummary.grandTotalBalance, {showDrCr: true})}
                         </span>
                     </div>
+                    {showVoucherDateCharts && !compact && (
+                        <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2">
+                            {/* Bank & Cash: 2 rows (Bank phir Cash); same "View full" behaviour. */}
+                            {renderDashboardMiniBar(
+                                dashboardBankCashDual.bank,
+                                "Bank a/c added/day",
+                                "#1d4ed8",
+                                true,
+                                dashboardBankCashDual.bankPointsByDay
+                            )}
+                            {renderDashboardMiniBar(
+                                dashboardBankCashDual.cash,
+                                "Cash a/c added/day",
+                                "#ca8a04",
+                                true,
+                                dashboardBankCashDual.cashPointsByDay
+                            )}
+                        </div>
+                    )}
                     {showDetails && (
                         <div className="text-right pt-2">
                             <Dialog open={bankCashSummaryOpen} onOpenChange={(open) => {
@@ -2836,7 +4007,7 @@ export function FinancialSummaryCards({
                                     <div className={cn("flex-1 flex flex-col min-h-0", isMobile ? "p-2" : "p-4")}>
                                         <div className="border rounded-lg flex-1 flex flex-col min-h-0 overflow-hidden">
                                             <div className="flex-1 overflow-x-auto overflow-y-auto">
-                                                <Table className="w-full min-w-[600px]">
+                                                <Table className={cn("w-full min-w-[600px]", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                     <TableHeader>
                                                         <TableRow>
                                                             <TableHead className={cn(isMobile && "text-xs whitespace-nowrap")}>Account</TableHead>
@@ -2858,7 +4029,7 @@ export function FinancialSummaryCards({
                                                                 </TableCell>
                                                             </TableRow>
                                                         ))}
-                                                        <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
+                                                        <TableRow className="font-bold bg-muted/50 border-b border-border/75">
                                                             <TableCell colSpan={2} className={cn(isMobile && "text-xs whitespace-nowrap")}>Bank Total</TableCell>
                                                             <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalBankInflow, {noSuffix: true})}</TableCell>
                                                             <TableCell className={cn("text-right text-red-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalBankOutflow, {noSuffix: true})}</TableCell>
@@ -2877,7 +4048,7 @@ export function FinancialSummaryCards({
                                                                 </TableCell>
                                                             </TableRow>
                                                         ))}
-                                                        <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
+                                                        <TableRow className="font-bold bg-muted/50 border-b border-border/75">
                                                             <TableCell colSpan={2} className={cn(isMobile && "text-xs whitespace-nowrap")}>Cash Total</TableCell>
                                                             <TableCell className={cn("text-right text-green-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalCashInflow, {noSuffix: true})}</TableCell>
                                                             <TableCell className={cn("text-right text-red-600", isMobile && "text-xs whitespace-nowrap")}>{formatCurrency(bankCashSummary.totalCashOutflow, {noSuffix: true})}</TableCell>
@@ -2897,13 +4068,18 @@ export function FinancialSummaryCards({
                 </CardContent>
             </Card>
 
-            {can("view_voucher_type_summaries") && !compact && stats.otherStats.map((stat, idx) => (
-                <Card key={stat.type} className={`hover:bg-muted/50 transition-colors ${cardBorder} ${ribbonTone(idx + 5)}`}>
+            {can("view_voucher_type_summaries") && !compact && stats.otherStats.map((stat, idx) => {
+                const deepHref = dashboardStatCardReportHref(stat.type);
+                const canClickTxns =
+                    !!deepHref && (deepHref.startsWith("/reports") ? can("export_data") : true);
+                return (
+                <Card key={stat.type} className={`hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 5)}`}>
                     <CardHeader className="p-3 flex-row items-center justify-between">
                         <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
                         <stat.icon className="h-5 w-5 text-muted-foreground" />
                     </CardHeader>
                     <CardContent className="p-3 pt-0">
+                        {/* Journal / Add Salary / Contra: entries se debit total; baaki cards amount field */}
                         {stat.type === 'journal' || stat.type === 'add_salary' || stat.type === 'contra' ? (
                             <div className='text-xl font-bold text-blue-600'>{formatCurrency(stat.total, { noSuffix: true, duration: 2 })}</div>
                         ) : (
@@ -2911,26 +4087,113 @@ export function FinancialSummaryCards({
                                 {formatCurrency(stat.total, { noSuffix: true, duration: 2 })}
                             </div>
                         )}
-                        <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
+                        {/* Click → Reports me usi type ka "All Vouchers" view (`allVouchers=1`); Payment Out + voucherScope dashboard ke hisaab se */}
+                        {canClickTxns ? (
+                            <Link
+                                href={deepHref}
+                                // Voucher count link is intentionally blue to make dashboard/report drill-down obvious.
+                                className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5"
+                            >
+                                {stat.count} transaction(s)
+                            </Link>
+                        ) : (
+                            <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
+                        )}
+                        {showVoucherDateCharts && (
+                            <div className="mt-2 h-[104px] w-full min-w-0">
+                                {voucherStatDateChartData[stat.type]?.length ? (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={voucherStatDateChartData[stat.type]} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                                            <CartesianGrid strokeDasharray="3 3" className="opacity-40" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                                            <YAxis tick={{ fontSize: 9 }} width={32} />
+                                            <Tooltip
+                                                formatter={(value: number) => [formatCurrency(value, { noSuffix: true, duration: 2 }), "Amount"]}
+                                                labelFormatter={(l) => `Date: ${l}`}
+                                            />
+                                            <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <p className="text-[10px] text-muted-foreground pt-2">No dated rows for chart</p>
+                                )}
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
-            ))}
+            );})}
 
             {can("view_entity_counts_summary") && !compact && (
                 <>
-                    {/* Entity count cards also use rotating ribbon tones for visual separation. */}
+                    {/* Entity cards: count + Chart tab par master add-by-day (Vouchers card sirf number). */}
                     {[
-                        { title: "Total Parties", value: processedParties.length },
-                        { title: "Total Staff", value: processedStaff.length },
-                        { title: "Bank/Cash Acc", value: processedAccounts.length },
-                        { title: "Total Items", value: processedItems.length },
-                        { title: "Total Vouchers", value: vouchers.length },
+                        {
+                            title: "Total Parties",
+                            value: processedParties.length,
+                            chart: showVoucherDateCharts ? entityChartPartiesDaily : null,
+                            chartLabel: "Parties added/day",
+                            chartColor: "#2563eb",
+                            chartPointsByDay: showVoucherDateCharts ? entityChartPartiesPointsByDay : [],
+                        },
+                        {
+                            title: "Total Staff",
+                            value: processedStaff.length,
+                            chart: showVoucherDateCharts ? entityChartStaffDaily : null,
+                            chartLabel: "Staff added/day",
+                            chartColor: "#059669",
+                            chartPointsByDay: showVoucherDateCharts ? entityChartStaffPointsByDay : [],
+                        },
+                        {
+                            title: "Bank/Cash Acc",
+                            value: processedAccounts.length,
+                            chart: showVoucherDateCharts ? entityChartBankCashDaily : null,
+                            chartLabel: "Bank & Cash a/c added/day",
+                            chartColor: "#1d4ed8",
+                            chartPointsByDay: showVoucherDateCharts ? entityChartBankCashPointsByDay : [],
+                        },
+                        {
+                            title: "Total Items",
+                            value: processedItems.length,
+                            chart: showVoucherDateCharts ? entityChartItemsDaily : null,
+                            chartLabel: "Items added/day",
+                            chartColor: "#0d9488",
+                            chartPointsByDay: showVoucherDateCharts ? entityChartItemsPointsByDay : [],
+                        },
+                        {
+                            title: "Total Vouchers",
+                            value: vouchers.length,
+                            chart: showVoucherDateCharts ? entityChartVouchersDaily : null,
+                            chartLabel: "Vouchers added/day (count)",
+                            chartColor: "#6366f1",
+                            chartPointsByDay: showVoucherDateCharts ? entityChartVouchersCountPointsByDay : [],
+                            fullViewOverride: showVoucherDateCharts
+                                ? {
+                                      pointsByDay: voucherAmountPointsByDay,
+                                      tooltipIsCount: false,
+                                      subtitle: "Voucher amount / day",
+                                  }
+                                : undefined,
+                        },
                     ].map((item, idx) => (
-                        <Card key={item.title} className={`${cardBorder} ${ribbonTone(idx + 2)}`}>
+                        <Card key={item.title} className={`${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 2)}`}>
                             <CardHeader className="p-3">
                                 <CardTitle className="text-sm whitespace-nowrap">{item.title}</CardTitle>
                             </CardHeader>
-                            <CardContent className="p-3 pt-0 text-2xl font-bold">{item.value}</CardContent>
+                            <CardContent className="p-3 pt-0">
+                                <div className="text-2xl font-bold">{item.value}</div>
+                                {item.chart && (
+                                    <div className="mt-2 border-t border-border/50 pt-2">
+                                        {renderDashboardMiniBar(
+                                            item.chart,
+                                            item.chartLabel,
+                                            item.chartColor,
+                                            true,
+                                            item.chartPointsByDay,
+                                            "fullViewOverride" in item ? item.fullViewOverride : undefined
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
                         </Card>
                     ))}
                 </>

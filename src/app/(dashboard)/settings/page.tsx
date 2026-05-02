@@ -23,7 +23,6 @@ import { IdSettings } from "@/components/settings/IdSettings";
 import { NotificationSettings } from "@/components/settings/NotificationSettings";
 import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
 import { ManageDevices } from "@/components/settings/ManageDevices";
-import { usePageMemory } from "@/hooks/usePageMemory";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -48,7 +47,44 @@ const settingsNavItems = [
     { id: "danger-zone", title: "Danger Zone", icon: ShieldAlert, permission: "configure_company_settings" as const, href: null, isDanger: true },
 ];
 
-const SETTINGS_STORAGE_KEY = "settingsPageState";
+const SETTINGS_TAB_SESSION_KEY = "pl_settings_active_tab";
+
+/** Purana LS key — usePageMemory hata kar hataya; NAVIGATION_MEMORY_KEYS me abhi naam reh sakta hai */
+const LEGACY_SETTINGS_LS_KEY = "settingsPageState";
+
+/** Tab memory company-scoped taake switch par galat voucher/sharing restore na ho; key company ke bina sirf transient */
+function settingsTabSessionStorageKey(companyIdForTab: string | null): string {
+    return companyIdForTab ? `${SETTINGS_TAB_SESSION_KEY}::${companyIdForTab}` : `${SETTINGS_TAB_SESSION_KEY}::pending`;
+}
+
+/** Session se tab: pehle nayi key, phir purani global (migrate) — stale sharing overwrite kam */
+function readPersistedSettingsTab(companyIdForTab: string | null): string | null {
+    try {
+        if (typeof sessionStorage === "undefined") return null;
+        const k = settingsTabSessionStorageKey(companyIdForTab);
+        let v = sessionStorage.getItem(k);
+        // Purani single-key entries (pre company-scope) ek daf’a fallback — phir migrate write se nayi key par shift
+        if (!v) v = sessionStorage.getItem(SETTINGS_TAB_SESSION_KEY);
+        return v;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * APK/static: Next router.replace kabhi turant browser address bar sync nahi karta; refresh par ?view gum ho sakta hai.
+ * replaceState se current pathname + query lock karo (trailing slash wala path preserve).
+ */
+function syncSettingsViewQueryToBrowser(viewId: string) {
+    if (process.env.NEXT_PUBLIC_STATIC_BUILD !== "1" || typeof window === "undefined") return;
+    try {
+        const u = new URL(window.location.href);
+        u.searchParams.set("view", viewId);
+        window.history.replaceState(window.history.state ?? null, "", u.pathname + u.search + u.hash);
+    } catch {
+        /* ignore */
+    }
+}
 
 /** Narrow viewport — must match SSR (false) on first client paint or hydration breaks (grid+aside vs mobile chrome). */
 function useLayoutNarrow767(): boolean {
@@ -72,13 +108,11 @@ function SettingsPageContent() {
     const pathname = usePathname();
     const isMobile = useIsMobile();
     const layoutNarrow = useLayoutNarrow767();
-    /** Mobile-style settings: sidebar Sheet + list pehle — forced mobile ya chhoti width */
+    /** Mobile-style settings: `use-mobile` + narrow (APK ab bhi width se isMobile — Chrome jaisa) */
     const mobileSettingsUx = isMobile || layoutNarrow;
     const { settingsListOpen, setSettingsListOpen } = useSettingsList();
 
-    const viewFromUrl = searchParams.get("view");
-
-    const [activeView, setActiveView] = useState<string>("company");
+    const [activeView, setActiveView] = useState<string>("");
 
     const canConfigureCompany = can("configure_company_settings");
     /** Owner ne company settings band kiya ho — shared user ko theme/animation phir bhi (local-only). */
@@ -96,41 +130,102 @@ function SettingsPageContent() {
     }, [can, sharedLocalAppearanceOnly]);
     const canOpenThemeOrAnimation = canConfigureCompany || sharedLocalAppearanceOnly;
 
-    // URL ↔ state: paint se pehle sync — mobile par bina ?view= list-only (company detail flash na ho)
-    // `searchParams` pehle tick par khali ho sakta hai; refresh pe `?view=sharing` ke liye window.location fallback
+    /** Ek daf'a purani `settingsPageState` LS hata — usePageMemory ab settings me nahi — stale "sharing" override band */
+    useEffect(() => {
+        try {
+            localStorage.removeItem(LEGACY_SETTINGS_LS_KEY);
+        } catch {
+            /* ignore */
+        }
+    }, []);
+
+    /** Valid tab ko company-scoped sessionStorage me rakho — company load se pehle galat nav list se overwrite na ho */
+    useEffect(() => {
+        if (!activeView || !availableNavItems.some((i) => i.id === activeView)) return;
+        try {
+            const k = settingsTabSessionStorageKey(companyId);
+            sessionStorage.setItem(k, activeView);
+            // Purani global key hata do taake fallback sharing purane session se na aaye (company-scoped source of truth)
+            if (k !== SETTINGS_TAB_SESSION_KEY) sessionStorage.removeItem(SETTINGS_TAB_SESSION_KEY);
+        } catch {
+            /* ignore */
+        }
+    }, [activeView, availableNavItems, companyId]);
+
+    // Paint se pehle: ?view= (React + window) → valid tab; phir session fallback; invalidate URL mat rakho Manage Sharing tak
     useLayoutEffect(() => {
+        if (availableNavItems.length === 0) return;
+        /** company hydrate se pehle `usePermissions` me role galat ho sakta hai → nav sirf sharing; voucher session wipe + refresh par Sharing sticky — isliye stall */
+        if (companyId && !company) return;
+
         const fromReact = searchParams.get("view");
         const fromWindow =
             typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null;
-        const view = fromReact ?? fromWindow;
+        const rawView = fromReact ?? fromWindow;
+        const viewOk =
+            rawView != null && rawView !== "" && availableNavItems.some((item) => item.id === rawView)
+                ? rawView
+                : null;
 
-        if (view && availableNavItems.some((item) => item.id === view)) {
-            setActiveView(view);
+        if (viewOk) {
+            setActiveView(viewOk);
+            syncSettingsViewQueryToBrowser(viewOk);
             if (!fromReact && fromWindow && !mobileSettingsUx) {
                 router.replace(`${pathname}?view=${encodeURIComponent(fromWindow)}`, { scroll: false });
             }
             return;
         }
-        if (mobileSettingsUx && !view) {
+
+        /* Mobile narrow: khali rawView ⇒ list-first; ghair-valid ?view ⇒ bhi list */
+        if (mobileSettingsUx && !rawView) {
             setActiveView("");
             return;
         }
-        if (!mobileSettingsUx && !view) {
+        if (mobileSettingsUx && rawView && !viewOk) {
+            setActiveView("");
+            router.replace(pathname, { scroll: false });
+            return;
+        }
+
+        if (!mobileSettingsUx) {
+            const persisted = readPersistedSettingsTab(companyId);
+            if (persisted && availableNavItems.some((i) => i.id === persisted)) {
+                setActiveView(persisted);
+                router.replace(`${pathname}?view=${encodeURIComponent(persisted)}`, { scroll: false });
+                syncSettingsViewQueryToBrowser(persisted);
+                return;
+            }
+
+            /* Ghair-valid ?view= hata kar pehla allowed tab — sharing pe sticky na rah jaye */
+            if (rawView && !viewOk) {
+                const firstId = availableNavItems[0]?.id ?? "company";
+                setActiveView(firstId);
+                router.replace(`${pathname}?view=${encodeURIComponent(firstId)}`, { scroll: false });
+                syncSettingsViewQueryToBrowser(firstId);
+                return;
+            }
+
             const first = availableNavItems[0]?.id ?? "company";
             setActiveView((prev) => (prev === "" ? first : prev));
         }
-    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router]);
+    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router, companyId, company]);
 
     // Shared user: URL / memory me `company` ho sakta hai jab wo ab nav me nahi — pehli allowed tab par le aao.
     useEffect(() => {
+        if (companyId && !company) return;
         if (availableNavItems.length === 0) return;
+        /** Mobile list-first: khali activeView valid — yahan first tab mat thopo */
+        if (mobileSettingsUx && activeView === "") return;
+        /** Layout init abhi nahi hua / wait */
+        if (!activeView) return;
         if (availableNavItems.some((i) => i.id === activeView)) return;
         const next = availableNavItems[0].id;
         setActiveView(next);
         if (!mobileSettingsUx) {
             router.replace(`${pathname}?view=${encodeURIComponent(next)}`, { scroll: false });
+            syncSettingsViewQueryToBrowser(next);
         }
-    }, [availableNavItems, activeView, mobileSettingsUx, pathname, router]);
+    }, [company, companyId, availableNavItems, activeView, mobileSettingsUx, pathname, router]);
 
     const setActiveViewWithUrl = useCallback(
         (id: string) => {
@@ -139,6 +234,8 @@ function SettingsPageContent() {
             if (searchParams.get("view") !== id) {
                 router.replace(next, { scroll: false });
             }
+            // Static/APK me address bar turant pakka karo — warna voucher par bhi F5 baad Sharing restore ho sakti thi
+            syncSettingsViewQueryToBrowser(id);
         },
         [pathname, router, searchParams]
     );
@@ -151,30 +248,18 @@ function SettingsPageContent() {
 
     // Desktop: URL me default ?view= taaki share/refresh — mobile par mat inject karo (sirf list)
     useEffect(() => {
+        if (companyId && !company) return;
         if (mobileSettingsUx) return;
         const viewParam = searchParams.get("view");
         if (!viewParam && activeView && availableNavItems.some((item) => item.id === activeView)) {
             router.replace(`${pathname}?view=${encodeURIComponent(activeView)}`, { scroll: false });
+            syncSettingsViewQueryToBrowser(activeView);
         }
-    }, [mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems]);
+    }, [company, companyId, mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems]);
 
     const selectedSetting = useMemo(() => {
         return availableNavItems.find(item => item.id === activeView) || null;
     }, [activeView, availableNavItems]);
-
-    usePageMemory(
-        SETTINGS_STORAGE_KEY,
-        activeView,
-        setActiveView,
-        selectedSetting,
-        (item) => {
-            if (item) setActiveViewWithUrl(item.id);
-        },
-        availableNavItems,
-        false,
-        mobileSettingsUx,
-        viewFromUrl
-    );
 
     const openSettingsListSheet = useCallback(() => setSettingsListOpen(true), [setSettingsListOpen]);
     // Daen kinara se swipe LEFT → sirf settings list (baen kinara + swipe RIGHT sirf app sidebar — dono alag)

@@ -44,6 +44,14 @@ import {
   Edit
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  patchMasterDetailUrlAfterModalClose,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import type { Item } from "./types";
 import { useDate } from "@/hooks/useDate";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -251,6 +259,10 @@ export default function ItemDetails({
     return initialItem;
   }, [processedItems, initialItem]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [currentItem?.id]);
+
   const mobileSearchNames = useMemo(
     () => ({
       ...journalAccountNames,
@@ -390,18 +402,24 @@ export default function ItemDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     router.push(`${pathname}?${params.toString()}`);
   }, [isMobile, pathname, searchParams, router]);
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
+    const params = new URLSearchParams(raw);
     params.delete("modal");
+    params.delete("modalts");
+    patchMasterDetailUrlAfterModalClose(params, { entityId: currentItem?.id ?? "" });
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
+  }, [pathname, searchParams, router, currentItem?.id]);
 
   const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;

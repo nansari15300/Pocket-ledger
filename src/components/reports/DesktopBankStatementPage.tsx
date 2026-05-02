@@ -13,6 +13,13 @@ import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
 import { openPrintDirect } from "@/lib/printDirect";
@@ -139,17 +146,22 @@ export default function DesktopBankStatementPage() {
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     router.push(`${pathname}?${params.toString()}`);
   }, [isMobile, pathname, searchParams, router]);
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
+    const params = new URLSearchParams(raw);
     params.delete("modal");
+    params.delete("modalts");
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
   }, [pathname, searchParams, router]);
 
   const modalParam = searchParams.get("modal");

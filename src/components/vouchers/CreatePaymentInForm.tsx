@@ -63,7 +63,9 @@ import {
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
@@ -154,10 +156,13 @@ const getPayeeTypeFromVoucher = (v: any) => {
 
 const getInitialFormValues = (voucher?: any): PaymentInFormValues => {
     if (voucher) {
+        const rawDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date as string | number | Date);
+        const safeDate = Number.isFinite(rawDate.getTime()) ? rawDate : startOfDay(new Date());
+        const { id: _dropVoucherId, ...voucherRest } = voucher as Record<string, unknown>;
         return {
-            ...voucher,
+            ...voucherRest,
             payeeType: getPayeeTypeFromVoucher(voucher),
-            date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date),
+            date: safeDate,
             amount: typeof (voucher.total || voucher.amount) === 'string' 
               ? parseFloat(String(voucher.total || voucher.amount).replace(/,/g, '')) || 0
               : Number(voucher.total || voucher.amount || 0),
@@ -202,6 +207,13 @@ export function CreatePaymentInForm({
   onApprove,
   isApproving = false,
   onEffectiveLinksChange,
+  /** Copy-to-company draft: target company dropdown change pe bill/spend sections reset. */
+  copySaveTargetCompanyId,
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  isCopyingMissingMasters = false,
+  copyMasterDraftRequest,
+  onRefreshCopyMismatch,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -215,6 +227,12 @@ export function CreatePaymentInForm({
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  onCopyMissingCategory?: (category: string) => void;
+  isCopyingMissingMasters?: boolean;
+  copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
+  onRefreshCopyMismatch?: () => void | Promise<void>;
   /** Report effective has-links (bill-wise or spend-wise) so dialog locks fields as soon as user links in this session. */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
 }) {
@@ -241,9 +259,13 @@ export function CreatePaymentInForm({
   const attachFileInputId = useId();
 
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  /** Naye party save ke turant baad parties sync se pehle stale-master effect `partyId` na wipe kare (Copy-to-voucher / Create Party). */
+  const pendingPartyIdUntilInPartiesListRef = useRef<string | null>(null);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
+  /** Copy-draft: create dialog ke turant pehle hint text (Payment Out jaisa UX). */
+  const [copyAccountCreateHint, setCopyAccountCreateHint] = useState<string>("");
   const [files, setFiles] = useState<(File|string)[]>([]);
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
@@ -297,11 +319,24 @@ export function CreatePaymentInForm({
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false);
   /** Open Link Pay dialog (spend wise: select which Payment Out / Contra / DE link to this Payment In). */
   const [isLinkPaymentOutDialogOpen, setIsLinkPaymentOutDialogOpen] = useState(false);
+  // Keep link sections collapsed by default on add/non-linked edit; auto-open if this voucher already has links.
+  const [showLinkSections, setShowLinkSections] = useState(false);
   const [isLinkToSalaryOpen, setIsLinkToSalaryOpen] = useState(false);
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   /** Pending link selection from dialog (applied to server only on Save, not on Done). */
   const [pendingLinkedPaymentOut, setPendingLinkedPaymentOut] = useState<{ ids: string[]; amountsByVoucherId: Record<string, number> } | null>(null);
 
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setAllocations([]);
+    initialAllocationsRef.current = [];
+    setPendingLinkedPaymentOut(null);
+    setShowLinkSections(false);
+    setIsLinkDialogOpen(false);
+    setIsLinkPaymentOutDialogOpen(false);
+    setIsLinkToSalaryOpen(false);
+    onEffectiveLinksChange?.(false);
+  }, [onEffectiveLinksChange]);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
 
     useEffect(() => {
         setLoading(vouchersLoading);
@@ -331,7 +366,218 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const accountOpeningBalance = Number(processedAccounts.find((a: any) => a.id === accountId)?.openingBalance ?? 0) || 0;
   const { displayBalance: accountBalance } = useAccountBalance(accountId);
   const incomeAccountId = form.watch("incomeAccountId");
-  
+
+  /** Save & Copy To: red helpers + Prefilled dialogs — Payment Out (`CreatePaymentOutForm`) ke samaan. */
+  const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  const copyPayeeMasterCategoryArg = (): "party" | "staff" | "tax" | "account_expense" => {
+    if (payeeType === "party") return "party";
+    if (payeeType === "staff") return "staff";
+    if (payeeType === "tax") return "tax";
+    return "account_expense";
+  };
+  const copyPayeeMasterButtonLabel = () => {
+    if (payeeType === "party") return "Copy party";
+    if (payeeType === "staff") return "Copy staff";
+    if (payeeType === "tax") return "Copy tax";
+    return "Copy income ledger";
+  };
+
+  useEffect(() => {
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest as CopyMasterDraftRequestPayload;
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+    const hint = (kind: string) =>
+      setCopyAccountCreateHint(`Prefilled ${kind} — review & save into "${targetLabel}".`);
+
+    if (payload && sc === "parties") {
+      hint("party");
+      setIsCreatePartyOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-party-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      return;
+    }
+    if (payload && sc === "bank_accounts") {
+      hint("bank/cash account");
+      setIsCreateAccountOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-bank-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      return;
+    }
+    if (payload && sc === "expense_accounts") {
+      hint("income ledger");
+      setIsCreateExpenseAccountOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-expense-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      return;
+    }
+    // Staff: naam-only fallback ke bajay poori row + avatar / documentFileUrls (party-full jaisa).
+    if (payload && sc === "staff") {
+      hint("staff");
+      setIsCreateStaffOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-staff-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      return;
+    }
+    // Tax: scalars + fileUrl / documentFileUrls — CreateTaxForm `prefill-create-tax-from-row` me fetch ho kar staging.
+    if (payload && sc === "taxes") {
+      hint("tax");
+      setIsCreateTaxOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-tax-from-row", { detail: { rowPayload: payload } }));
+      }, 90);
+      return;
+    }
+
+    if (!nm) return;
+    switch (req.category) {
+      case "account":
+        if (sc === "expense_accounts") {
+          hint("income ledger");
+          setIsCreateExpenseAccountOpen(true);
+          setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+          return;
+        }
+        hint("bank/cash account");
+        setIsCreateAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-bank-account-name", { detail: nm })), 80);
+        return;
+      case "account_bank":
+        hint("bank/cash account");
+        setIsCreateAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-bank-account-name", { detail: nm })), 80);
+        return;
+      case "account_expense":
+        hint("income ledger");
+        setIsCreateExpenseAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+        return;
+      case "party":
+        hint("party");
+        setIsCreatePartyOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-party-name", { detail: nm })), 80);
+        return;
+      case "staff":
+        hint("staff");
+        setIsCreateStaffOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-staff-name", { detail: nm })), 80);
+        return;
+      case "tax":
+        hint("tax");
+        setIsCreateTaxOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: nm })), 80);
+        return;
+      default:
+        break;
+    }
+  }, [copyMasterDraftRequest]);
+
+  /** Dusri tab/me master delete hone par stale ID toast + clear (ghost label avoid); naya party listeners ke aaane tak ref se clear mat karo. */
+  useEffect(() => {
+    if (loading || !companyId) return;
+    const missing: string[] = [];
+    const pid = String(partyId || "").trim();
+    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+      if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
+        missing.push("party");
+        form.setValue("partyId", "");
+      }
+    }
+    const sid = String(staffId || "").trim();
+    if (sid && !processedStaff.some((s: any) => s.id === sid)) {
+      missing.push("staff");
+      form.setValue("staffId", "");
+    }
+    const tid = String(taxAccountId || "").trim();
+    if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
+      missing.push("tax");
+      form.setValue("taxAccountId", "");
+    }
+    const aid = String(accountId || "").trim();
+    if (aid && !processedAccounts.some((a: any) => a.id === aid)) {
+      missing.push("bank/cash account");
+      form.setValue("accountId", "");
+    }
+    const iid = String(incomeAccountId || "").trim();
+    if (payeeType === "income" && iid && !expenseAccounts.some((e: any) => e.id === iid)) {
+      missing.push("income ledger");
+      form.setValue("incomeAccountId", "");
+    }
+    if (missing.length > 0) {
+      toast({
+        variant: "destructive",
+        title: "Master no longer exists",
+        description: `Removed: ${[...new Set(missing)].join(", ")}. Select again.`,
+      });
+    }
+  }, [
+    loading,
+    companyId,
+    partyId,
+    staffId,
+    taxAccountId,
+    accountId,
+    incomeAccountId,
+    payeeType,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    processedAccounts,
+    expenseAccounts,
+    form,
+    toast,
+  ]);
+
+  /** Pending party ab list me aa gaya — ref clear. */
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    if (!pend) return;
+    if (processedParties.some((p: any) => p.id === pend)) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [processedParties]);
+
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    const pid = String(partyId || "").trim();
+    if (pend && pid && pid !== pend) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [partyId]);
+
+  const showCopyBankFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    // mismatch list me `account_bank` rehne se pehle chip hamesha `true` ho jata tha; account select ke baad bhi. Sirf khali/missing par dikhao.
+    return !String(accountId || "").trim();
+  }, [copyDraftMasterHelpersEnabled, accountId]);
+
+  const showCopyPayeeMasterFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    // Copy chip = received-from row khali; label red bhi `showCopyPayeeMasterFromSource` se hi (mismatch list alag header me).
+    if (payeeType === "party") return !String(partyId || "").trim();
+    if (payeeType === "staff") return !String(staffId || "").trim();
+    if (payeeType === "tax") return !String(taxAccountId || "").trim();
+    if (payeeType === "income") return !String(incomeAccountId || "").trim();
+    return false;
+  }, [
+    copyDraftMasterHelpersEnabled,
+    payeeType,
+    partyId,
+    staffId,
+    taxAccountId,
+    incomeAccountId,
+  ]);
+
+  /** Received From / To Bank label red — Copy chip jis row par ho wahi rang (party/bank/account). */
+  const highlightBankLabelCopyMismatch = showCopyBankFromSource;
+  const highlightReceivedFromLabelCopyMismatch = showCopyPayeeMasterFromSource;
+
   const voucherType = defaultTab === 'direct_income' ? 'direct_income' : 'payment_in';
 
   /** Allocation-based link changed (party bill-wise or staff salary link) — so Save & Approve should show. */
@@ -479,18 +725,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** Show Link for bill wise card when party selected; when Link for Bill Wise is OFF, linking is optional (message hidden). */
   const showLinkedSection = voucherType === "payment_in" && payeeType === "party" && !!partyId;
   const showSalaryLinkSection = voucherType === "payment_in" && payeeType === "staff" && !!staffId;
-  /** Role matrix: Require Payment In link (payment_out) — company Spend wise ke saath milakar save gate karte hain. */
-  const requirePaymentLinkForSpendWise = (() => {
-    const byRole = (company as { requirePaymentLinkByRole?: Record<string, boolean | { payment_out?: boolean }> } | null)?.requirePaymentLinkByRole?.[role];
-    if (byRole === undefined) return false;
-    if (typeof byRole === "boolean") return byRole;
-    return (byRole as { payment_out?: boolean }).payment_out === true;
-  })();
   const spendWiseCompanyOn = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
-  const spendWiseLinkRequired = spendWiseCompanyOn || requirePaymentLinkForSpendWise;
+  const spendWiseOppositeEditable =
+    (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
+  /** Role matrix tabhi enforce jab opposite-voucher master ON — matrix save rehti, master OFF pe link force band */
+  const requirePaymentLinkForSpendWise =
+    spendWiseOppositeEditable &&
+    (() => {
+      const byRole = (company as { requirePaymentLinkByRole?: Record<string, boolean | { payment_out?: boolean }> } | null)?.requirePaymentLinkByRole?.[role];
+      if (byRole === undefined) return false;
+      if (typeof byRole === "boolean") return byRole;
+      return (byRole as { payment_out?: boolean }).payment_out === true;
+    })();
+  /** Same as PO: opposite master OFF ⇒ company spendWise + role dono voucher par force nahi kar sakte save pe. */
+  const spendWiseLinkRequired = spendWiseOppositeEditable && (spendWiseCompanyOn || requirePaymentLinkForSpendWise);
 
   const currentVoucherId = voucher?.id ?? savedVoucherId;
-  const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   /** Show Link for spend wise (From/To cards) in both add new and edit — so user sees and can link even before saving. */
   const showSpendWiseOppositeSection = !!accountId && (voucherType === "payment_in" || voucherType === "direct_income");
   const openingBalanceLinkedByOthers = useMemo(() => {
@@ -622,9 +872,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   /** When Link for Bill Wise is ON: cannot save without bill-wise link if vouchers available (party only). */
   const saveDisabledByBillWise = !!company?.enableLinkPaymentToTxns && showLinkedSection && billWiseLinkableCount > 0 && linkedToRows.length === 0;
-  /** Company Spend wise ON ya role rule: linkable vouchers hon to bina link save band (Payment Out jaisa). */
-  const saveDisabledBySpendWise = spendWiseLinkRequired && spendWiseLinkableCount > 0;
-  const linkPayOthersDisabled = saveDisabledByBillWise || saveDisabledBySpendWise;
 
   /** Card display: when Done is clicked (pending set), show pending links live; otherwise server data. */
   const displayLinkedToMeRows = useMemo(() => {
@@ -669,6 +916,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     return typed.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
   }, [pendingLinkedPaymentOut, spendWiseLinkedToMeRows, allVouchers, accountId, processedParties, processedStaff, processedAccounts, expenseAccounts, accountOpeningBalance]);
 
+  /** RCPT spend-wise gate: jitna PI amount hai utna opposite (PO/contra) se link ho — sirf tab Save roko jab linkable vouchers hon aur ye match pending ho; sirf count>0 se busy bank par Save permanently band na ho (copy/other company baad jaise Payment Out bug). */
+  const linkedSpendWiseTotalForRcptGate = displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0);
+  const spendWiseAmountMatchedForRcpt = amountReceived > 0 && linkedSpendWiseTotalForRcptGate >= amountReceived;
+  const showSpendWiseRcptGateMode = showSpendWiseOppositeSection && amountReceived > 0;
+  const saveDisabledBySpendWise =
+    spendWiseLinkRequired && spendWiseLinkableCount > 0 && showSpendWiseRcptGateMode && !spendWiseAmountMatchedForRcpt;
+  const linkPayOthersDisabled = saveDisabledByBillWise || saveDisabledBySpendWise;
+
   /** Current Payment In as it appears on the opposite voucher (Payment Out / Contra / Direct Expense) — one row for the two-card "From Voucher" layout. */
   const formDate = form.watch("date");
   const formVoucherNumber = form.watch("voucherNumber") || voucher?.voucherNumber || "—";
@@ -689,6 +944,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       },
     ];
   }, [showSpendWiseOppositeSection, accountId, formDate, formVoucherNumber, voucher?.voucherNumber, amountReceived, displayLinkedToMeRows, processedAccounts]);
+
+  const isEditMode = !!voucher?.id;
+  const hasBillWiseLinks = linkedToRows.length > 0;
+  const hasSpendWiseLinks = currentVoucherAsOnOppositeRows.length > 0 || displayLinkedToMeRows.length > 0;
+  const shouldShowBillWiseSection = showLinkedSection && (showLinkSections || (isEditMode && hasBillWiseLinks));
+  const shouldShowSalarySection = showSalaryLinkSection && (showLinkSections || (isEditMode && linkedToRows.length > 0));
+  const shouldShowSpendWiseSection = showSpendWiseOppositeSection && (showLinkSections || (isEditMode && hasSpendWiseLinks));
+  const shouldShowAnyLinkSection = shouldShowBillWiseSection || shouldShowSalarySection || shouldShowSpendWiseSection;
+  const shouldShowLinkButton = (showLinkedSection || showSalaryLinkSection || showSpendWiseOppositeSection) && !shouldShowAnyLinkSection;
+
+  useEffect(() => {
+    if (isEditMode && (hasBillWiseLinks || hasSpendWiseLinks)) setShowLinkSections(true);
+  }, [isEditMode, hasBillWiseLinks, hasSpendWiseLinks]);
 
   /** For Link Pay dialog: outflow voucher ids that currently link to this Payment In. */
   const linkedPaymentOutSelectedIds = useMemo(() => spendWiseLinkedToMeRows.map((r) => r.id), [spendWiseLinkedToMeRows]);
@@ -803,7 +1071,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     e?.preventDefault?.();
     void form.handleSubmit(
       async (data) => {
-        onVoucherAction?.("saved", options.saveAndNew);
         await processAndSave(data, options.saveAndNew, options.print, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave);
       },
       (errors) => {
@@ -1163,6 +1430,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         if (approveAfterSave && voucher?.id) onSuccess?.();
         else if (!approveAfterSave) onSuccess?.();
+
+        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
   
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
@@ -1374,13 +1643,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   return (
     <>
       <Form {...form}>
-        <form onSubmit={(e) => handleFormSubmit(e)} className="h-full flex flex-col min-w-0 w-full max-w-full">
+        <form
+          data-suppress-global-copy-red
+          onSubmit={(e) => handleFormSubmit(e)}
+          className="h-full flex flex-col min-w-0 w-full max-w-full"
+        >
           <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
             <div className={cn(
               "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               isMobile ? "" : "px-[2px]"
             )}>
-              {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
+              {/* Section 1 (Date + Voucher No.): unified ribbon tone for payment-in forms. */}
+              <div className="rounded-lg border border-sky-400 bg-sky-100 p-2 md:p-3">
               {isMobile ? (
                 <>
                   {/* Mobile: Prefix + Voucher No. + Date — `date` को `voucherNumber` के अंदर nest नहीं (RHF date submit तक bind रहे) */}
@@ -1550,44 +1824,73 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </>
               )}
+              </div>
 
-               <FormField
-                control={form.control}
-                name="payeeType"
-                render={({ field }: any) => (
-                    <FormItem className="space-y-3">
-                        <FormLabel>Received From</FormLabel>
-                        <FormControl>
-                            <RadioGroup
-                            onValueChange={(value) => {
-                                if (deleteDisabledWhenLinked) return;
-                                field.onChange(value);
-                                form.setValue('partyId', '');
-                                form.setValue('staffId', '');
-                                form.setValue('taxAccountId', '');
-                                form.setValue('incomeAccountId', '');
-                                form.setValue('payeeName', '');
-                            }}
-                            value={field.value}
-                            className="flex space-x-4"
-                            >
-                            {currentPayeeTypes.map(type => (
-                              <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
-                                <FormControl><RadioGroupItem value={type.value} disabled={deleteDisabledWhenLinked} /></FormControl>
-                                <FormLabel className="font-normal">{type.label}</FormLabel>
-                              </FormItem>
-                            ))}
-                            </RadioGroup>
-                        </FormControl>
-                        <FormMessage />
-                    </FormItem>
-                )}
-                />
-
+              {/* Section 2 (Account + Amount): keep payee/account controls and amount in one section. */}
+              <div className="rounded-lg border border-emerald-300/80 bg-emerald-50/70 p-2 md:p-3">
+              {copyAccountCreateHint && (
+                <p className="mb-2 text-[10px] md:text-xs font-semibold text-emerald-700">{copyAccountCreateHint}</p>
+              )}
+              {/* Pay Out jaise split: LEFT = Received From + Copy master (party/staff/tax/ledger) — RIGHT = bank + Copy account (khali/mismatch). Pehle full-width tha isliye Copy tax bank column ke upar dikhta tha. */}
               {isMobile ? (
                 <>
-                  {/* Mobile: From and To accounts - grid-cols-2 so fields fit inside dialog */}
-                  <div className="grid grid-cols-2 gap-2 w-full">
+                  <div className="grid grid-cols-2 gap-2 w-full items-stretch">
+                    <div className="flex h-full min-h-0 min-w-0 flex-col space-y-2 rounded-lg border bg-muted/20 p-2">
+                      <FormField
+                        control={form.control}
+                        name="payeeType"
+                        render={({ field }: any) => (
+                          <FormItem className="space-y-2">
+                            <div className="flex items-center justify-between gap-1 min-w-0">
+                              <FormLabel
+                                className={cn(
+                                  "text-xs shrink-0",
+                                  highlightReceivedFromLabelCopyMismatch && "font-semibold text-red-600"
+                                )}
+                              >
+                                Received From
+                              </FormLabel>
+                              {showCopyPayeeMasterFromSource && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-5 shrink-0 border-rose-300 px-1.5 text-[9px] text-rose-700"
+                                  onClick={() => onCopyMissingCategory?.(copyPayeeMasterCategoryArg())}
+                                  disabled={isCopyingMissingMasters}
+                                >
+                                  {isCopyingMissingMasters ? "…" : copyPayeeMasterButtonLabel()}
+                                </Button>
+                              )}
+                            </div>
+                            <FormControl>
+                              <RadioGroup
+                                onValueChange={(value) => {
+                                  if (deleteDisabledWhenLinked) return;
+                                  field.onChange(value);
+                                  form.setValue("partyId", "");
+                                  form.setValue("staffId", "");
+                                  form.setValue("taxAccountId", "");
+                                  form.setValue("incomeAccountId", "");
+                                  form.setValue("payeeName", "");
+                                }}
+                                value={field.value}
+                                className="flex flex-wrap gap-x-2 gap-y-1"
+                              >
+                                {currentPayeeTypes.map((type) => (
+                                  <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
+                                    <FormControl>
+                                      <RadioGroupItem value={type.value} disabled={deleteDisabledWhenLinked} />
+                                    </FormControl>
+                                    <FormLabel className="font-normal text-xs">{type.label}</FormLabel>
+                                  </FormItem>
+                                ))}
+                              </RadioGroup>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     {payeeType === 'party' && (
                       <FormField
                         control={form.control}
@@ -1726,14 +2029,37 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                       />
                     )}
+                    </div>
+                    <div className="min-w-0 space-y-2">
                     <FormField
                       control={form.control}
                       name="accountId"
                       render={({ field }: any) => (
                         <FormItem className="min-w-0">
-                          <div className="flex justify-between items-baseline mb-1 min-w-0">
-                            <FormLabel className="text-xs truncate">To Bank/Cash</FormLabel>
-                            {accountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrency(accountBalance, {noAnimation: true, noSuffix: true})}</FormLabel>}
+                          <div className="flex justify-between items-baseline mb-1 min-w-0 gap-1">
+                            <FormLabel
+                              className={cn(
+                                "text-xs truncate",
+                                highlightBankLabelCopyMismatch ? "font-semibold text-red-600" : "text-muted-foreground"
+                              )}
+                            >
+                              To Bank/Cash
+                            </FormLabel>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {showCopyBankFromSource && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-5 px-1.5 text-[9px] border-rose-300 text-rose-700"
+                                  onClick={() => onCopyMissingCategory?.("account_bank")}
+                                  disabled={isCopyingMissingMasters}
+                                >
+                                  {isCopyingMissingMasters ? "…" : "Copy account"}
+                                </Button>
+                              )}
+                              {accountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrency(accountBalance, {noAnimation: true, noSuffix: true})}</FormLabel>}
+                            </div>
                           </div>
                           <div className="min-w-0 w-full overflow-hidden">
                             <Combobox
@@ -1759,10 +2085,68 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </FormItem>
                       )}
                     />
+                    </div>
                   </div>
                 </>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid min-w-0 grid-cols-2 gap-6 items-stretch">
+                  <div className="flex h-full min-h-0 min-w-0 flex-col space-y-3 rounded-lg border bg-muted/20 p-3">
+                    <FormField
+                      control={form.control}
+                      name="payeeType"
+                      render={({ field }: any) => (
+                        <FormItem className="space-y-3">
+                          <div className="flex items-center justify-between gap-2 min-w-0">
+                            <FormLabel
+                              className={cn(
+                                "shrink-0",
+                                highlightReceivedFromLabelCopyMismatch && "font-semibold text-red-600"
+                              )}
+                            >
+                              Received From
+                            </FormLabel>
+                            {showCopyPayeeMasterFromSource && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 shrink-0 border-rose-300 px-2 text-[10px] text-rose-700"
+                                onClick={() => onCopyMissingCategory?.(copyPayeeMasterCategoryArg())}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : copyPayeeMasterButtonLabel()}
+                              </Button>
+                            )}
+                          </div>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={(value) => {
+                                if (deleteDisabledWhenLinked) return;
+                                field.onChange(value);
+                                form.setValue("partyId", "");
+                                form.setValue("staffId", "");
+                                form.setValue("taxAccountId", "");
+                                form.setValue("incomeAccountId", "");
+                                form.setValue("payeeName", "");
+                              }}
+                              value={field.value}
+                              className="flex flex-wrap gap-x-4 gap-y-1"
+                              disabled={deleteDisabledWhenLinked}
+                            >
+                              {currentPayeeTypes.map((type) => (
+                                <FormItem key={type.value} className="flex items-center space-x-2 space-y-0">
+                                  <FormControl>
+                                    <RadioGroupItem value={type.value} disabled={deleteDisabledWhenLinked} />
+                                  </FormControl>
+                                  <FormLabel className="font-normal">{type.label}</FormLabel>
+                                </FormItem>
+                              ))}
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                   {payeeType === 'party' && (
                     <FormField
                       control={form.control}
@@ -1901,14 +2285,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                     />
                  )}
+                  </div>
+                  <div className="min-w-0 space-y-3">
                 <FormField
                   control={form.control}
                   name="accountId"
                   render={({ field }: any) => (
                     <FormItem>
-                       <div className="flex justify-between items-baseline">
-                        <FormLabel>To Bank/Cash Account</FormLabel>
-                        {accountBalance !== null && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance, {noAnimation: true})}</FormLabel>}
+                       <div className="flex justify-between items-baseline gap-2 min-w-0">
+                        <FormLabel className={cn(highlightBankLabelCopyMismatch && "font-semibold text-red-600")}>
+                          To Bank/Cash Account
+                        </FormLabel>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {showCopyBankFromSource && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 px-2 text-[10px] border-rose-300 text-rose-700"
+                              onClick={() => onCopyMissingCategory?.("account_bank")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy account"}
+                            </Button>
+                          )}
+                          {accountBalance !== null && <FormLabel className="text-xs text-muted-foreground">Balance: {formatCurrency(accountBalance, {noAnimation: true})}</FormLabel>}
+                        </div>
                       </div>
                        <Combobox
                             options={availableAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))}
@@ -1931,7 +2333,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </FormItem>
                   )}
                 />
-              </div>
+                  </div>
+                </div>
               )}
 
               <FormField
@@ -1967,6 +2370,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   );
                 }}
               />
+              </div>
+              {/* Section 3 (Attachment + Narration): single grouped container for file + narration. */}
+              <div className="rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
+              {/* Desktop par narration ko attachment ke right me lane ke liye dono fields ek responsive 2-col grid me. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start min-w-0">
               {/* File pehle — link cards ke upar; warna link ke baad attach band ho jata hai */}
               <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
@@ -2035,11 +2443,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 </RestrictedFileUploader>
               </FormItem>
-              {/* Payment In: Link for bill wise first (full width, like Payment Out); then Link for spend wise (To Voucher left, From Voucher right) */}
+              {/* Mobile me narration neeche, desktop me right column me show hota hai. */}
+              <div className="grid grid-cols-1 gap-4 min-w-0">
+                <FormField
+                  control={form.control}
+                  name="narration"
+                  render={({ field }: any) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Narration</FormLabel>
+                      <FormControl>
+                        {/* Lambi narration PC static me resize + scroll */}
+                        <Textarea placeholder="Additional details..." {...field} className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              </div>
+              </div>
+              {/* Section 4 (Links): bill-wise and spend-wise remain separate cards in independent link section. */}
               <div className={cn("grid gap-4 grid-cols-1 min-w-0 max-w-full")}>
+                {shouldShowLinkButton && (
+                  <div className="pb-1">
+                    {/* One-click reveal for link panels in add/new and non-linked edit. */}
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                  </div>
+                )}
                 {/* 1. Link for bill wise — full width, above spend wise (same order as Payment Out) */}
-                {showLinkedSection && (
-                  <div className="space-y-2 rounded-lg border-2 border-border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                {/* Bill-wise link card gets its own pink tone to visually separate from spend-wise card. */}
+                {shouldShowBillWiseSection && (
+                  <div
+                    className="space-y-2 rounded-lg border-2 border-rose-300/80 bg-rose-50 p-3 min-w-0 w-full max-w-full overflow-hidden"
+                    // Fail-safe: keep bill-wise panel pink even if utility class cache/build misses.
+                    style={{ backgroundColor: "#fff1f2", borderColor: "#fda4af" }}
+                  >
                     <div className="flex items-center gap-2 font-semibold min-w-0 border-b border-border/60 pb-2">
                       <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">Link for bill wise</span>
@@ -2115,8 +2553,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     )}
                   </div>
                 )}
-                {showSalaryLinkSection && (
-                  <div className="space-y-2 rounded-lg border-2 border-border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                {/* Salary link card uses violet tone so it does not clash with bill/spend link colors. */}
+                {shouldShowSalarySection && (
+                  <div className="space-y-2 rounded-lg border-2 border-violet-300/80 bg-violet-50 p-3 min-w-0 w-full max-w-full overflow-hidden">
                     <div className="flex items-center gap-2 font-semibold min-w-0 border-b border-border/60 pb-2">
                       <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">Link for salary</span>
@@ -2174,16 +2613,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   </div>
                 )}
                 {/* 2. Link for spend wise — two columns: left = From Voucher, right = To Voucher (swapped back) */}
-                {showSpendWiseOppositeSection && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0 w-full">
+                {shouldShowSpendWiseSection && (
+                  <div className="grid grid-cols-1 gap-4 min-w-0 w-full">
                     {/* Left: From Voucher (this voucher as on opposite) — message inside card when Link for Bill Wise is ON */}
-                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
+                    {/* Spend-wise link card uses amber tone so each link section color stays distinct. */}
+                    <div
+                      className="space-y-2 rounded-lg border-2 border-amber-300/80 bg-amber-50 p-3 min-w-0 w-full max-w-full overflow-hidden"
+                      // Fail-safe: keep spend-wise panel amber even if utility class cache/build misses.
+                      style={{ backgroundColor: "#fffbeb", borderColor: "#fcd34d" }}
+                    >
                       <div className="flex items-center justify-between gap-2 min-w-0">
                         <div className="flex items-center gap-2 font-medium min-w-0">
                           <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                           <span className="truncate">Link for spend wise</span>
                         </div>
-                        <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher ( current voucher )</span>
+                        {/* Keep only From Voucher wording per requested spend-wise layout. */}
+                        <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">From Voucher</span>
                       </div>
                       {spendWiseLinkRequired && (
                         <p className="text-sm text-blue-600">
@@ -2262,7 +2707,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       )}
                       {/* Left card: Link Pay Out — on Payment In we link Payment Out (and Contra/DE) to this receipt */}
-                      {showSpendWiseOppositeSection && (
+                      {shouldShowSpendWiseSection && (
                         <div className="pt-2 border-t flex flex-wrap gap-2 items-center">
                           <Button type="button" className={cn("w-fit", BTN_SAVE_CLASS)} onClick={() => setIsLinkPaymentOutDialogOpen(true)}>
                             <Link2 className="h-4 w-4 mr-2" />
@@ -2275,107 +2720,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       )}
                     </div>
-                    {/* Right: To Voucher (Payment Out / Contra / DE that linked to this) */}
-                    <div className="space-y-2 rounded-lg border p-3 bg-muted/30 min-w-0 w-full max-w-full overflow-hidden">
-                      <div className="flex items-center justify-between gap-2 min-w-0">
-                        <div className="flex items-center gap-2 font-medium min-w-0">
-                          <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">Link for spend wise</span>
-                        </div>
-                        <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">To Voucher</span>
-                      </div>
-                      {displayLinkedToMeRows.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No outflow vouchers have linked to this voucher yet.</p>
-                      ) : (
-                        <div className="overflow-x-auto -mx-1 min-w-0">
-                          <table className="w-full text-sm border-collapse min-w-[400px]">
-                            <thead>
-                              <tr className="border-b bg-muted/50">
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                                <th className="text-left p-2 font-medium whitespace-nowrap">To</th>
-                                {/* To Voucher: keep compact view (Amount is redundant vs Linked + bottom balance) */}
-                                <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {displayLinkedToMeRows.map((row) => (
-                                <tr key={row.id} className="border-b last:border-b-0">
-                                  <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? (dateSystem === "BS" ? formatDateBS(row.date) : formatDate(row.date)) : "—"}</td>
-                                  <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                  <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                  <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                      {/* To Voucher summary: Total linked then Balance in 4 separate boxes, right-aligned */}
-                      <div className="pt-2 border-t flex justify-end min-w-0">
-                        <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
-                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
-                            <span className="text-muted-foreground truncate leading-tight">Total linked</span>
-                          </div>
-                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                            <span className="truncate text-right whitespace-nowrap leading-tight">
-                              {formatCurrency(displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0), { noSuffix: true, noAnimation: true })} Dr
-                            </span>
-                          </div>
-                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
-                            <span className="truncate leading-tight">Balance</span>
-                          </div>
-                          <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                            <span className={cn(
-                              "truncate text-right whitespace-nowrap leading-tight",
-                              amountReceived - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0) <= 0 && displayLinkedToMeRows.length > 0
-                                ? "text-green-600 font-semibold"
-                                : (amountReceived - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0)) >= 0
-                                  ? "text-green-600"
-                                  : "text-muted-foreground"
-                            )}>
-                              {(() => {
-                                const bal = amountReceived - displayLinkedToMeRows.reduce((s, r) => s + r.linked, 0);
-                                return bal <= 0 && displayLinkedToMeRows.length > 0
-                                  ? "Settled"
-                                  : `${formatCurrency(Math.max(0, bal), { noSuffix: true, noAnimation: true })} Dr`;
-                              })()}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      {/* Right card: same — Link Pay Out (link Payment Out to this receipt); show when section visible */}
-                      {showSpendWiseOppositeSection && (
-                        <div className="pt-2 border-t flex flex-wrap gap-2 items-center">
-                          <Button type="button" className={cn("w-fit", BTN_SAVE_CLASS)} onClick={() => setIsLinkPaymentOutDialogOpen(true)}>
-                            <Link2 className="h-4 w-4 mr-2" />
-                            Link Pay Out
-                          </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
-                            <Info className="h-4 w-4 shrink-0" />
-                            Read me
-                          </Button>
-                        </div>
-                      )}
-                    </div>
+                    {/* Requested consistency: keep only From Voucher card in spend-wise; hide second card. */}
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-1 gap-4">
-                <FormField
-                  control={form.control}
-                  name="narration"
-                  render={({ field }: any) => (
-                    <FormItem>
-                      <FormLabel>Narration</FormLabel>
-                      <FormControl>
-                        <Textarea placeholder="Additional details..." {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+
             </div>
           </ScrollArea>
 
@@ -2490,24 +2839,43 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           </div>
         </form>
       </Form>
-      <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); form.setValue("partyId", id); }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
-      <CreateStaffDialog onStaffCreated={(id) => {setIsCreateStaffOpen(false); form.setValue("staffId", id)}} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]}>
+      <CreatePartyDialog
+        onPartyCreated={(id) => {
+          pendingPartyIdUntilInPartiesListRef.current = id;
+          setIsCreatePartyOpen(false);
+          form.setValue("partyId", id);
+          void onRefreshCopyMismatch?.();
+        }}
+        isOpen={isCreatePartyOpen}
+        onOpenChange={setIsCreatePartyOpen}
+      />
+      <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); form.setValue("staffId", id); void onRefreshCopyMismatch?.(); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]}>
         <div/>
       </CreateStaffDialog>
        <CreateBankAccountDialog 
         onAccountCreated={(id) => {
             setIsCreateAccountOpen(false);
             form.setValue("accountId", id);
+            setCopyAccountCreateHint("");
+            void onRefreshCopyMismatch?.();
         }} 
         isOpen={isCreateAccountOpen} 
-        onOpenChange={setIsCreateAccountOpen} 
+        onOpenChange={(open) => {
+          setIsCreateAccountOpen(open);
+          if (!open) setCopyAccountCreateHint("");
+        }}
       />
        <CreateExpenseAccountDialog 
           isOpen={isCreateExpenseAccountOpen} 
-          onOpenChange={setIsCreateExpenseAccountOpen}
+          onOpenChange={(open) => {
+            setIsCreateExpenseAccountOpen(open);
+            if (!open) setCopyAccountCreateHint("");
+          }}
           onExpenseAccountCreated={(id) => {
             setIsCreateExpenseAccountOpen(false);
             form.setValue("incomeAccountId", id);
+            setCopyAccountCreateHint("");
+            void onRefreshCopyMismatch?.();
         }} >
           <div/>
         </CreateExpenseAccountDialog>
@@ -2515,6 +2883,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         onTaxCreated={(id) => {
             setIsCreateTaxOpen(false);
             form.setValue("taxAccountId", id);
+            void onRefreshCopyMismatch?.();
         }} 
         isOpen={isCreateTaxOpen} 
         onOpenChange={setIsCreateTaxOpen}

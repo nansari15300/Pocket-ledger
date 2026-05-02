@@ -45,6 +45,14 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { addDays, format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  patchMasterDetailUrlAfterModalClose,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -244,6 +252,10 @@ export function PartyDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  // Party badlein ya "All Vouchers" toggle karein to page index reset — warna purane page par galat rows.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [party.id, isAllVouchersView]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [showNarration, setShowNarration] = useState(true);
   const [visibleColumns, setVisibleColumns] = useState<VisibleColumns>(() => {
@@ -309,18 +321,26 @@ export function PartyDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    // APK: modal khulte waqt merged query session me — approve ke baad hook/location empty ho to bhi `selected` restore
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     router.push(`${pathname}?${params.toString()}`);
   }, [isMobile, pathname, searchParams, router]);
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    // APK: approve ke baad stale `searchParams` + backup se `?selected=` mat hatao
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
+    const params = new URLSearchParams(raw);
     params.delete("modal");
+    // Party ledger: merge fail hone par bhi isi party pe rehe — `/party` bare list pe jump na ho
+    patchMasterDetailUrlAfterModalClose(params, { entityId: party.id });
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
+  }, [pathname, searchParams, router, party.id]);
 
   const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;

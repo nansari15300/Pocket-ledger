@@ -52,7 +52,7 @@ import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/at
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
 const rawMaterialSchema = z.object({
   itemId: z.string().min(1, "Item is required."),
@@ -717,7 +717,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col h-full min-w-0 w-full max-w-full">
         <ScrollArea className="flex-1 min-h-0 overflow-x-hidden min-w-0 w-full px-6 py-4">
           <div className="space-y-4 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full">
-            <div className="grid grid-cols-2 gap-4">
+            {/* Section 1: Date + Production Number in one ribbon block. */}
+            <div className="grid grid-cols-2 gap-4 rounded-lg border border-sky-300/80 bg-sky-50 p-3">
               <FormField
                 control={form.control}
                 name="date"
@@ -788,7 +789,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               />
             </div>
 
-            <div>
+            {/* Section 2: Raw materials in one ribbon block. */}
+            <div className="rounded-lg border border-emerald-300/80 bg-emerald-50 p-3">
               <div className="flex justify-between items-center mb-2">
                 <FormLabel>Raw Materials (Input)</FormLabel>
                 <Button type="button" variant="outline" size="sm" onClick={() => appendRawMaterial({ itemId: "", quantity: 1, unit: "", rate: 0, amount: 0, hsCode: "" })}>
@@ -986,7 +988,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
             </div>
 
-            <div>
+            {/* Section 3: Finished goods in one ribbon block. */}
+            <div className="rounded-lg border border-violet-300/80 bg-violet-50 p-3">
               <div className="flex justify-between items-center mb-2">
                 <FormLabel>Finished Goods (Output)</FormLabel>
               </div>
@@ -1158,7 +1161,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Section 4: Totals summary in one ribbon block. */}
+            <div className="grid grid-cols-2 gap-4 rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
               <div>
                 <p className="text-sm font-medium">Total Cost (Input)</p>
                 <p className="text-lg font-bold text-red-600">{form.watch("totalCost").toLocaleString('en-NP', { style: 'currency', currency: 'NPR', minimumFractionDigits: 2 })}</p>
@@ -1169,74 +1173,79 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               </div>
             </div>
 
-            <FormField
-              control={form.control}
-              name="narration"
-              render={({ field }: any) => (
+            {/* Section 5: Attach + narration together; mobile stack, desktop narration on right. */}
+            <div className="rounded-lg border border-amber-300/80 bg-amber-50 p-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
                 <FormItem>
-                  <FormLabel>Narration</FormLabel>
-                  <FormControl>
-                    <Textarea {...field} placeholder="Add notes or description..." />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormItem>
-              <FormLabel>Attach Files (Optional)</FormLabel>
-              {showPdfAsImageToggle && (
-                <VoucherPdfAsImageToggle
-                  id="voucher-save-pdf-as-image-production"
-                  checked={savePdfAsImage}
-                  onCheckedChange={setSavePdfAsImage}
-                  disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                  className="mb-2"
-                />
-              )}
-              <RestrictedFileUploader>
-                <div className="flex flex-wrap gap-4">
-                  {files.map((file, index) => (
-                    <FilePreview 
-                      key={index} 
-                      file={file} 
-                      attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
-                      onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                      className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                  <FormLabel>Attach Files (Optional)</FormLabel>
+                  {showPdfAsImageToggle && (
+                    <VoucherPdfAsImageToggle
+                      id="voucher-save-pdf-as-image-production"
+                      checked={savePdfAsImage}
+                      onCheckedChange={setSavePdfAsImage}
+                      disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                      className="mb-2"
                     />
-                  ))}
-                  {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                    <>
-                      <label
-                        htmlFor={attachFileInputId}
-                        className={cn(
-                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                            ? "text-muted-foreground hover:border-primary cursor-pointer"
-                            : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                        )}
-                      >
-                        <Upload className="h-6 w-6" />
-                        <span className="text-xs mt-1">Add File</span>
-                      </label>
-                      <Input
-                        id={attachFileInputId}
-                        type="file"
-                        className="sr-only"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept={[
-                          fileAttachmentLimits.allowImage ? "image/*" : "",
-                          fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                        ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                        multiple={fileAttachmentLimits.maxFileCount > 1}
-                        disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                      />
-                    </>
                   )}
-                </div>
-              </RestrictedFileUploader>
-            </FormItem>
+                  <RestrictedFileUploader>
+                    <div className="flex flex-wrap gap-4">
+                      {files.map((file, index) => (
+                        <FilePreview
+                          key={index}
+                          file={file}
+                          attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                          onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                          className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                        />
+                      ))}
+                      {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                        <>
+                          <label
+                            htmlFor={attachFileInputId}
+                            className={cn(
+                              "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                              allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                            )}
+                          >
+                            <Upload className="h-6 w-6" />
+                            <span className="text-xs mt-1">Add File</span>
+                          </label>
+                          <Input
+                            id={attachFileInputId}
+                            type="file"
+                            className="sr-only"
+                            ref={fileInputRef}
+                            onChange={handleFileChange}
+                            accept={[
+                              fileAttachmentLimits.allowImage ? "image/*" : "",
+                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                            multiple={fileAttachmentLimits.maxFileCount > 1}
+                            disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                          />
+                        </>
+                      )}
+                    </div>
+                  </RestrictedFileUploader>
+                </FormItem>
+                <FormField
+                  control={form.control}
+                  name="narration"
+                  render={({ field }: any) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Narration</FormLabel>
+                      <FormControl>
+                        {/* Production voucher narration — same resize/scroll as baaki forms */}
+                        <Textarea {...field} placeholder="Add notes or description..." className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </div>
           </div>
         </ScrollArea>
 

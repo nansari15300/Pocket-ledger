@@ -52,6 +52,14 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  patchMasterDetailUrlAfterModalClose,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -194,6 +202,10 @@ export function ExpenseAccountDetails({
     return allAccounts.find(a => a.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [account.id, isAllVouchersView]);
+
   // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
   // It should show all transaction types for this account, not all transactions for all accounts
   const { processedTransactions, openingBalanceForPeriod, periodDr, periodCr, closingBalance } = useTransactions(
@@ -241,18 +253,24 @@ export function ExpenseAccountDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     router.push(`${pathname}?${params.toString()}`);
   }, [isMobile, pathname, searchParams, router]);
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
+    const params = new URLSearchParams(raw);
     params.delete("modal");
+    params.delete("modalts");
+    patchMasterDetailUrlAfterModalClose(params, { entityId: account.id });
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname);
-  }, [pathname, searchParams, router]);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
+  }, [pathname, searchParams, router, account.id]);
 
   const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;

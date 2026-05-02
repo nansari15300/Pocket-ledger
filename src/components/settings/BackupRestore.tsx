@@ -75,6 +75,7 @@ import {
   getOrCreatePocketLedgerDir,
 } from "@/lib/liveDataFolderMirror";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
 import { parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { generateCompanyId } from "@/lib/generateCompanyId";
 
@@ -523,7 +524,8 @@ export function BackupRestore() {
     const next = new URLSearchParams(searchParams.toString());
     next.delete("dialog");
     const q = next.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+    const basePath = pathnameForModalRouterReplace(pathname || "");
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
   };
 
   const handlePickWebFolder = async () => {

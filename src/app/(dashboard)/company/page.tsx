@@ -8,7 +8,7 @@ import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, query, where, onSnapshot, getDoc, doc, DocumentData } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { auth, firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
@@ -22,8 +22,15 @@ export type Company = {
   /** Shared-company ownership check (align with useCompany Company) */
   ownerEmail?: string;
   isDeleted?: boolean;
+  /** Admin recycle-bin hidden tab marker: normal company picker list se hide. */
+  movedToAdminRecycleAt?: unknown;
   storageOption?: 'firebase' | 'drive';
 };
+
+/** /company page list guard: deleted + admin-hidden rows ko normal app picker se hatao. */
+function isCompanyVisibleInCompanyPage(c: Company): boolean {
+  return c.isDeleted !== true && c.movedToAdminRecycleAt == null;
+}
 
 function SelectCompanyPageContent() {
   const router = useRouter();
@@ -52,6 +59,11 @@ function SelectCompanyPageContent() {
       return;
     }
     if (!user || !user.email) {
+      /** Pehle currentUser check: warna `setLoading(false)` ke baad blank flash + galat route */
+      if (auth.currentUser) {
+        registerCompanyPickerFirestoreDetach(null);
+        return;
+      }
       registerCompanyPickerFirestoreDetach(null);
       setOwnedCompanies([]);
       setSharedCompanies([]);
@@ -83,7 +95,7 @@ function SelectCompanyPageContent() {
     const unsubOwned = onSnapshot(ownedQuery, (snapshot) => {
         const companies = snapshot.docs
             .map((doc: DocumentData) => ({ id: doc.id, ...doc.data(), isOwned: true } as Company))
-            .filter(c => !c.isDeleted);
+            .filter(isCompanyVisibleInCompanyPage);
         setOwnedCompanies(companies);
         ownedDone = true;
         maybeDone();
@@ -95,7 +107,7 @@ function SelectCompanyPageContent() {
     const unsubShared = onSnapshot(sharedQuery, (snapshot) => {
         const companies = snapshot.docs
             .map((doc: DocumentData) => ({ id: doc.id, ...doc.data(), isOwned: false } as Company))
-            .filter(c => !c.isDeleted);
+            .filter(isCompanyVisibleInCompanyPage);
         setSharedCompanies(companies);
         sharedDone = true;
         maybeDone();
@@ -164,7 +176,8 @@ function SelectCompanyPageContent() {
         (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
       const companyMap = new Map<string, Company>();
       (contextCompanies || []).forEach((c) => {
-        if (c.isDeleted) return;
+        // Context list me hidden-tab rows bhi skip rakho taaki admin email normal app me na dekhe.
+        if (!isCompanyVisibleInCompanyPage(c as Company)) return;
         companyMap.set(c.id, { ...(c as Company), isOwned: isOwnedByUser(c as Company) });
       });
       if (newlyCreatedCompany && !companyMap.has(newlyCreatedCompany.id)) {

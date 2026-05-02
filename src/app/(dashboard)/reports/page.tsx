@@ -20,6 +20,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
+import { pathnameForModalRouterReplace } from "@/lib/modalUrlSync";
 
 export default function ReportsPage() {
   return (
@@ -86,7 +87,8 @@ function ReportsPageContent() {
         params.delete("report");
       }
       const q = params.toString();
-      router.replace(q ? `${pathname}?${q}` : pathname);
+      const basePath = pathnameForModalRouterReplace(pathname || "");
+      router.replace(q ? `${basePath}?${q}` : basePath);
     },
     [pathname, searchParams, router]
   );

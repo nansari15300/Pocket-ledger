@@ -4,6 +4,7 @@
  * Poora PDF (max N pages) ek lambe JPEG me — voucher attach ke liye "PDF ko image me save".
  * Browser canvas height limit (~16k px) — zarurat par scale down.
  */
+import { importPdfJsDist } from "@/lib/importPdfJsDist";
 import { PDFJS_WORKER_VERSION_FALLBACK, setPdfJsWorkerSrc } from "@/lib/pdfjsWorkerSrc";
 
 const DEFAULT_MAX_PAGES = 48;
@@ -44,18 +45,18 @@ export async function convertPdfToStitchedJpegFile(
   const quality = options.quality ?? 0.82;
   const signal = options.signal;
 
-  const pdfjsLib = await import("pdfjs-dist");
-  const pdfjs = pdfjsLib.default || pdfjsLib;
+  const { pdfjsLib, pdfjs } = await importPdfJsDist();
   const version =
     (pdfjsLib as { version?: string }).version ??
-    (pdfjs as { version?: string }).version ??
+    pdfjs.version ??
     PDFJS_WORKER_VERSION_FALLBACK;
   setPdfJsWorkerSrc(pdfjs as never, version);
 
   const data = await pdfInput.arrayBuffer();
-  const loadingTask = (pdfjs as { getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<PdfJsDocLike> } }).getDocument({
+  // PdfJsDocumentLike ↔ PdfJsDocLike compatible — stitched export paths
+  const loadingTask = pdfjs.getDocument({
     data,
-  });
+  }) as { promise: Promise<PdfJsDocLike>; destroy?: () => void };
   const pdfSrc = await loadingTask.promise;
 
   const numPages = Math.min(pdfSrc.numPages, maxPages);

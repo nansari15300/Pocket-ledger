@@ -100,6 +100,29 @@ export function recomputePlanSyncBannerState(
 
 export type SyncCompanyPlanResult = { ok: boolean; applied: boolean; reason?: string };
 
+/** Fetch timeout helper — static `serve`/APK par broken `/api/*` kabhi‑kabhi lambi pending rakhta hai UI block feel. */
+const PLAN_SYNC_FETCH_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const tid = typeof setTimeout !== "undefined" ? setTimeout(() => ctrl.abort(), ms) : undefined;
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    if (tid !== undefined) clearTimeout(tid);
+  }
+}
+
+/**
+ * APK/static export bundle me `/api/*` hota nahin — bina billing host ke POST bar‑bar waste + hang‑risk.
+ * Prod static me `NEXT_PUBLIC_BILLING_API_ORIGIN=https://your-next.app` set karo jahan ye API live ho.
+ */
+function shouldSkipPlanServerSyncDueToStaticExportWithoutApi(): boolean {
+  if (process.env.NEXT_PUBLIC_STATIC_BUILD !== "1") return false;
+  const origin = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_BILLING_API_ORIGIN?.trim() : "";
+  return !origin;
+}
+
 export async function syncCompanyPlanFromServer(opts: {
   /** Firestore `companies/{id}` */
   firebaseCompanyId: string;
@@ -107,6 +130,9 @@ export async function syncCompanyPlanFromServer(opts: {
   localCompanyId: string;
   getIdToken: () => Promise<string>;
 }): Promise<SyncCompanyPlanResult> {
+  if (shouldSkipPlanServerSyncDueToStaticExportWithoutApi()) {
+    return { ok: false, applied: false, reason: "static_no_billing_api" };
+  }
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, applied: false, reason: "offline" };
   }
@@ -136,18 +162,20 @@ export async function syncCompanyPlanFromServer(opts: {
 
   let res: Response;
   try {
-    res = await fetch(primaryUrl, fetchOpts);
-  } catch {
-    return { ok: false, applied: false, reason: "network" };
+    res = await fetchWithTimeout(primaryUrl, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
+  } catch (e: unknown) {
+    const aborted = typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
+    return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
   }
 
   // NEXT_PUBLIC_BILLING_API_ORIGIN galat host par ho to 404 — dev me API yahin Next par ho to same-origin dobara try karo
   const triedRemote = typeof primaryUrl === "string" && /^https?:\/\//i.test(primaryUrl);
   if (res.status === 404 && triedRemote && typeof window !== "undefined") {
     try {
-      res = await fetch(syncPlanPath, fetchOpts);
-    } catch {
-      return { ok: false, applied: false, reason: "network" };
+      res = await fetchWithTimeout(syncPlanPath, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
+    } catch (e: unknown) {
+      const aborted = typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
+      return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
     }
   }
 

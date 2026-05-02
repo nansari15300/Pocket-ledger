@@ -34,10 +34,14 @@ function CreateCompanyPageContent() {
   const [userHasCompanies, setUserHasCompanies] = useState(false);
   const skipCloseRedirectRef = useRef(false);
 
+  /** Create-company precheck: hidden-tab/deleted companies ko active company-count me include mat karo. */
+  const isVisibleCompanyRow = (row: { isDeleted?: unknown; movedToAdminRecycleAt?: unknown }) =>
+    row.isDeleted !== true && row.movedToAdminRecycleAt == null;
+
   // Sirf list length / dismissable — `allCompanies` par mat jodo warna create ke turant baad effect dubara chal kar dialog phir `open` kar deta tha.
   useEffect(() => {
     if (!isLocalOnlyMode() || authLoading || companyContextLoading) return;
-    const selectable = (allCompanies || []).filter((c) => !c.isDeleted);
+    const selectable = (allCompanies || []).filter((c) => isVisibleCompanyRow(c));
     setUserHasCompanies(selectable.length > 0);
   }, [allCompanies, authLoading, companyContextLoading]);
 
@@ -86,7 +90,7 @@ function CreateCompanyPageContent() {
     };
 
     const unsubOwned = onSnapshot(ownedQuery, (snapshot) => {
-      ownedCount = snapshot.docs.filter(doc => !doc.data().isDeleted).length;
+      ownedCount = snapshot.docs.filter((doc) => isVisibleCompanyRow(doc.data() as { isDeleted?: unknown; movedToAdminRecycleAt?: unknown })).length;
       ownedDone = true;
       maybeDone();
     }, () => {
@@ -94,7 +98,7 @@ function CreateCompanyPageContent() {
     });
 
     const unsubShared = onSnapshot(sharedQuery, (snapshot) => {
-      sharedCount = snapshot.docs.filter(doc => !doc.data().isDeleted).length;
+      sharedCount = snapshot.docs.filter((doc) => isVisibleCompanyRow(doc.data() as { isDeleted?: unknown; movedToAdminRecycleAt?: unknown })).length;
       sharedDone = true;
       maybeDone();
     }, () => {

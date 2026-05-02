@@ -14,7 +14,7 @@ import { useRowsPerPage } from "@/hooks/useRowsPerPage";
 import { AddVoucherDialog } from "../vouchers/AddVoucherDialog";
 import { ScrollArea } from "../ui/scroll-area";
 import { Badge } from "../ui/badge";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -47,6 +47,11 @@ export function NoteDetails({
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [showTitle, setShowTitle] = useState(true);
+
+  // Account / "All Vouchers" switch par purana page index mat rakho — nahi to nayi list pe galat slice dikhti hai.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [entity?.id, entity?.type, isAllVouchersView]);
 
   const handleEditVoucher = (voucher: any) => {
     setSelectedVoucher(voucher);
@@ -144,7 +149,13 @@ export function NoteDetails({
         currentPage * rowsPerPage
       )
     : sortedTransactions;
-  
+
+  const notePagerStart = rowsPerPage > 0 ? (currentPage - 1) * rowsPerPage : 0;
+  const notePagerEnd =
+    rowsPerPage > 0 ? Math.min(notePagerStart + rowsPerPage, sortedTransactions.length) : sortedTransactions.length;
+  const noteBeforeCount = notePagerStart;
+  const noteAfterCount = Math.max(0, sortedTransactions.length - notePagerEnd);
+
   return (
     <>
     <Card className="h-full flex flex-col">
@@ -204,36 +215,15 @@ export function NoteDetails({
               <label htmlFor="show-title-note" className="text-sm font-medium leading-none">Show Title</label>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <TransactionTableSortDropdown
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode="statement"
             />
-            <p className="text-sm font-medium">Rows per page</p>
-            <Select
-              value={`${rowsPerPage}`}
-              onValueChange={(value) => {
-                setRowsPerPage(Number(value) || 0);
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger className="h-8 w-[70px]">
-                <SelectValue placeholder={`${rowsPerPage}`} />
-              </SelectTrigger>
-              <SelectContent side="top">
-                {[10, 20, 30, 50].map((pageSize) => (
-                  <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                ))}
-                <SelectItem value="0">All</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center space-x-2">
-            <p className="text-sm font-medium">
-              Page {currentPage} of {totalPages}
-            </p>
+            {/* Party ledger jaisa: (pehle rows) << < [page size] > >> (baad ki rows) + Total Trxn */}
+            <p className="text-sm font-medium tabular-nums">({noteBeforeCount})</p>
             <div className="flex items-center space-x-1">
               <Button
                 variant="outline"
@@ -251,6 +241,23 @@ export function NoteDetails({
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
+              <Select
+                value={`${rowsPerPage}`}
+                onValueChange={(value) => {
+                  setRowsPerPage(Number(value) || 0);
+                  setCurrentPage(1);
+                }}
+              >
+                <SelectTrigger className="h-8 w-[70px]">
+                  <SelectValue placeholder={`${rowsPerPage}`} />
+                </SelectTrigger>
+                <SelectContent side="top">
+                  {[10, 20, 30, 50].map((pageSize) => (
+                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
+                  ))}
+                  <SelectItem value="0">All</SelectItem>
+                </SelectContent>
+              </Select>
               <Button
                 variant="outline"
                 className="h-8 w-8 p-0"
@@ -268,6 +275,10 @@ export function NoteDetails({
                 <ChevronsRight className="h-4 w-4" />
               </Button>
             </div>
+            <p className="text-sm font-medium tabular-nums">({noteAfterCount})</p>
+            <p className="text-sm font-medium tabular-nums whitespace-nowrap">
+              Page {currentPage} of {totalPages} · Total Trxn {sortedTransactions.length}
+            </p>
           </div>
         </div>
     </Card>

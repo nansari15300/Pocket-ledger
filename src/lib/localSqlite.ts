@@ -3,19 +3,31 @@
  * Use when data source = "browser" (no Node server). See docs/BROWSER-SQLITE-NO-SERVER.md.
  */
 
-const IDB_NAME = "pocket-ledger-browser-db";
+const BASE_IDB_NAME = "pocket-ledger-browser-db";
+const LEGACY_IDB_NAME = BASE_IDB_NAME;
 const IDB_STORE = "store";
 const IDB_KEY = "sqlite-db";
 
 export type SqlJsDatabase = import("sql.js").Database;
 
-function openIndexedDB(): Promise<IDBDatabase> {
+function getRuntimeDbScope(): string {
+  if (typeof window === "undefined") return "default";
+  // Host-based DB scope: localhost vs production domain ko अलग rakhkar data conflict avoid kare.
+  const host = `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`;
+  return host.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
+}
+
+function getScopedIdbName(): string {
+  return `${BASE_IDB_NAME}__${getRuntimeDbScope()}`;
+}
+
+function openIndexedDB(idbName: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
       reject(new Error("IndexedDB not available"));
       return;
     }
-    const req = indexedDB.open(IDB_NAME, 1);
+    const req = indexedDB.open(idbName, 1);
     req.onerror = () => reject(req.error);
     req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = () => {
@@ -26,32 +38,43 @@ function openIndexedDB(): Promise<IDBDatabase> {
 
 /** IndexedDB se DB binary read karo. Nahi mile to null (nayi DB banayenge). */
 export function loadDbFromIndexedDB(): Promise<ArrayBuffer | null> {
-  return openIndexedDB().then(
-    (idb) =>
-      new Promise<ArrayBuffer | null>((resolve, reject) => {
-        const tx = idb.transaction(IDB_STORE, "readonly");
-        const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
-        req.onsuccess = () => {
-          idb.close();
-          const v = req.result;
-          if (v == null) {
-            resolve(null);
-            return;
-          }
-          const buf = v instanceof ArrayBuffer ? v : (v as Uint8Array).buffer;
-          resolve(buf instanceof ArrayBuffer ? buf : new Uint8Array(buf as ArrayBufferLike).slice().buffer);
-        };
-        req.onerror = () => {
-          idb.close();
-          reject(req.error);
-        };
-      })
-  );
+  const readByName = (idbName: string): Promise<ArrayBuffer | null> =>
+    openIndexedDB(idbName).then(
+      (idb) =>
+        new Promise<ArrayBuffer | null>((resolve, reject) => {
+          const tx = idb.transaction(IDB_STORE, "readonly");
+          const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+          req.onsuccess = () => {
+            idb.close();
+            const v = req.result;
+            if (v == null) {
+              resolve(null);
+              return;
+            }
+            const buf = v instanceof ArrayBuffer ? v : (v as Uint8Array).buffer;
+            resolve(buf instanceof ArrayBuffer ? buf : new Uint8Array(buf as ArrayBufferLike).slice().buffer);
+          };
+          req.onerror = () => {
+            idb.close();
+            reject(req.error);
+          };
+        })
+    );
+  return (async () => {
+    const scopedName = getScopedIdbName();
+    const scoped = await readByName(scopedName);
+    if (scoped) return scoped;
+    // First run after DB scoping change: legacy DB se one-time fallback read so offline companies immediately visible rahein.
+    const legacy = await readByName(LEGACY_IDB_NAME);
+    if (!legacy) return null;
+    await saveDbToIndexedDB(new Uint8Array(legacy));
+    return legacy;
+  })();
 }
 
 /** DB binary IndexedDB me save karo (refresh/close ke baad bhi rahega). */
 export function saveDbToIndexedDB(data: Uint8Array): Promise<void> {
-  return openIndexedDB().then(
+  return openIndexedDB(getScopedIdbName()).then(
     (idb) =>
       new Promise<void>((resolve, reject) => {
         const tx = idb.transaction(IDB_STORE, "readwrite");

@@ -40,7 +40,6 @@ import {
   Sidebar,
   SidebarHeader,
   SidebarContent,
-  SidebarFooter,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -66,6 +65,8 @@ import { collectPartyIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesP
 import { collectBankAccountIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesBankLedger";
 import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesItemLedger";
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
+import { getSuperAdminEmails } from "@/lib/superAdminEmails";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
 
 type MenuItem = {
@@ -128,6 +129,16 @@ function filterByPermission<T extends { permission?: Permission; permissionAny?:
 
 const ENTITY_IDS = ['party', 'bank-cash', 'staff', 'tax', 'items', 'incomes'] as const;
 
+/** Sidebar ke pehle chrome-card ke liye: party/tax/bank… core navigation */
+const CORE_NAV_IDS = new Set<string>([
+  "dashboard",
+  "party",
+  "bank-cash",
+  "staff",
+  "tax",
+  "incomes",
+]);
+
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -145,7 +156,7 @@ export function AppSidebar() {
   } = useVouchers();
   const { isOpen, isMobile, setIsOpen } = useSidebar();
   /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
-  const isStaticApp = process.env.NEXT_PUBLIC_STATIC_BUILD === "1";
+  const isStaticApp = isStaticAppBuild();
   const onNavLinkClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
       if (isStaticApp) {
@@ -391,7 +402,14 @@ export function AppSidebar() {
       .join("");
   };
   
-  const isAdmin = customUser?.role === 'SuperAdmin';
+  const isSuperAdminByEmail = useMemo(() => {
+    const e = (user?.email || "").toLowerCase().trim();
+    if (!e) return false;
+    return getSuperAdminEmails().some((x) => (x || "").toLowerCase().trim() === e);
+  }, [user?.email]);
+  const isAdmin = customUser?.role === "SuperAdmin" || isSuperAdminByEmail;
+  /** Static EXE/APK: `/admin` bundle me hota hi nahi — role ya super-admin email ho tab bhi sidebar link mat dikhao */
+  const showAdminNavLink = isAdmin && !isStaticApp;
   
   // Default to showing when not explicitly off (so ticked/default = show without needing save). Alerts only for company owner.
   const transactionAlerts = effectiveNotificationSettings?.transactionAlerts;
@@ -412,6 +430,13 @@ export function AppSidebar() {
     return filterByPermission(byFeature, can);
   }, [featureConfig, can]);
 
+  const { coreMenuItems, catalogMenuItems } = React.useMemo(() => {
+    const core = visibleMenuItems.filter((i) => CORE_NAV_IDS.has(i.id));
+    // Gallery, Items, Reports, etc. yahi "More" (emerald) card me — CORE_NAV_IDS me sirf main rail
+    const catalog = visibleMenuItems.filter((i) => !CORE_NAV_IDS.has(i.id));
+    return { coreMenuItems: core, catalogMenuItems: catalog };
+  }, [visibleMenuItems]);
+
   // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
   const visibleBottomMenuItems = React.useMemo(() => {
     const hideBilling = company != null && company.isOwned === false;
@@ -427,9 +452,66 @@ export function AppSidebar() {
     });
     return filterByPermission(byFeature, can);
   }, [featureConfig, customUser, can, company]);
-  
+
+  /** Ek nav row — core / catalog dono cards reuse (dashboard-style list) */
+  function renderMainNavRow(item: MenuItem) {
+    const pendingCount = ENTITY_IDS.includes(item.id as (typeof ENTITY_IDS)[number])
+      ? (pendingCountByEntity[item.id] ?? 0)
+      : 0;
+    const showPendingBadge = pendingCount > 0;
+    const tooltipText = pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
+    return (
+      <SidebarMenuItem key={item.href}>
+        <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+          <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
+            <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
+              <item.icon />
+              {showPendingBadge && (
+                <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500 px-1 text-[10px] font-medium text-white flex items-center justify-center">
+                  {pendingCount}
+                </span>
+              )}
+            </span>
+            {isOpen && (
+              <span className="flex min-w-0 flex-1 items-center gap-1">
+                <span className="truncate">{item.label}</span>
+                {item.id === "reports" ? (
+                  <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px] leading-none">
+                    Experimental
+                  </Badge>
+                ) : null}
+              </span>
+            )}
+          </SidebarMenuButton>
+        </Link>
+      </SidebarMenuItem>
+    );
+  }
+
+  function renderBottomNavRow(item: MenuItem) {
+    const badgeCount = item.id === "settings" ? pendingHandovers : item.id === "messages" ? messagesBadgeCount : 0;
+    const showBadge = badgeCount > 0;
+    return (
+      <SidebarMenuItem key={item.href}>
+        <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+          <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={item.label} data-theme-nav={item.id}>
+            <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
+              <item.icon />
+              {showBadge && (
+                <span className="absolute top-0 right-0 h-4 min-w-[1rem] translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 px-0.5 text-[10px] text-white flex items-center justify-center">
+                  {badgeCount}
+                </span>
+              )}
+            </span>
+            {isOpen && <span className="flex-1 truncate">{item.label}</span>}
+          </SidebarMenuButton>
+        </Link>
+      </SidebarMenuItem>
+    );
+  }
+
   const userProfileSection = (
-      <div className={cn("flex items-center gap-3", isMobile ? "p-4 border-t" : "mt-4")}>
+      <div className={cn("flex items-center gap-3", "p-2")}>
           <Avatar className="h-10 w-10">
             <AvatarImage src={user?.photoURL ?? undefined} alt={displayName ?? "User"} />
             <AvatarFallback>{getInitials(displayName ?? user?.email)}</AvatarFallback>
@@ -459,166 +541,114 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center gap-2">
-            {/* App icon: hover pe full-size preview */}
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="shrink-0 rounded-lg border border-black cursor-pointer">
-                    <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-md border-2 border-white bg-primary/20">
-                      <img
-                        src="/app-icon.png"
-                        alt="Pocket Ledger"
-                        className="h-full w-full scale-125 object-cover"
-                        onError={(e) => {
-                          e.currentTarget.style.display = "none";
-                          const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                          if (fallback) fallback.style.display = "flex";
-                        }}
-                      />
-                      <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-                        <Flame />
-                      </span>
-                    </div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="right" sideOffset={8} className="p-0 border overflow-hidden rounded-lg">
-                  <img src="/app-icon.png" alt="Pocket Ledger" className="block w-[512px] h-[512px] object-cover rounded-lg" />
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            {isOpen && <h1 className="font-headline text-xl font-semibold">Pocket Ledger</h1>}
+      <SidebarHeader className="shrink-0">
+        {/* User request: top brand card ko green tone me dikhana */}
+        <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-center gap-2 p-2">
+          {/* Web + static desktop/APK: ek hi jagah bada icon — Electron tab strip ka chhota OS logo alag cheez hai. */}
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30">
+                  <img
+                    src="/app-icon.png"
+                    alt=""
+                    className="h-full w-full object-contain"
+                    loading="eager"
+                    decoding="async"
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                      const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                      if (fallback) fallback.style.display = "flex";
+                    }}
+                  />
+                  <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+                    <Flame />
+                  </span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8} className="max-w-[200px] rounded-md border p-2 text-xs">
+                Pocket Ledger
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          {isOpen && (
+            <h1 className="font-headline min-w-0 truncate text-center text-base font-semibold leading-tight sm:text-lg">
+              Pocket Ledger
+            </h1>
+          )}
+          {!isOpen && <span className="sr-only">Pocket Ledger</span>}
         </div>
       </SidebarHeader>
-      <SidebarContent>
+
+      <SidebarContent className="min-h-0 flex-1">
         {loadingFeatures ? (
-            <div className="flex justify-center items-center h-full">
-                <Loader2 className="h-6 w-6 animate-spin"/>
-            </div>
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
         ) : (
-        <SidebarMenu>
-          {visibleMenuItems.map((item) => {
-            const pendingCount = ENTITY_IDS.includes(item.id as any) ? (pendingCountByEntity[item.id] ?? 0) : 0;
-            const showPendingBadge = pendingCount > 0;
-            const tooltipText = pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
-            return (
-            <SidebarMenuItem key={item.href}>
-              <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
-                  <SidebarMenuButton
-                    isActive={isMenuItemActive(item)}
-                    tooltip={tooltipText}
-                    data-theme-nav={item.id}
-                  >
-                      <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
-                        <item.icon />
-                        {showPendingBadge && (
-                          <span className="absolute top-0 right-0 h-4 min-w-[1rem] px-1 flex items-center justify-center rounded-full bg-pink-500 text-white text-[10px] font-medium translate-x-1/2 -translate-y-1/2">
-                            {pendingCount}
-                          </span>
-                        )}
-                      </span>
-                      {isOpen && (
-                        <span className="flex flex-1 items-center gap-1 min-w-0">
-                          <span className="truncate">{item.label}</span>
-                          {item.id === "reports" ? (
-                            // Sidebar request: mark Reports as Experimental.
-                            <Badge variant="secondary" className="h-4 px-1 text-[10px] leading-none shrink-0">
-                              Experimental
-                            </Badge>
-                          ) : null}
-                        </span>
-                      )}
-                  </SidebarMenuButton>
-              </Link>
-            </SidebarMenuItem>
-          );
-          })}
-          {isAdmin && (
-               <SidebarMenuItem>
-                 <Link href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
-                    <SidebarMenuButton
-                        isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
-                        tooltip="Admin Panel"
-                        data-theme-nav="admin"
-                    >
-                        <Shield />
-                        {isOpen && <span>Admin Panel</span>}
-                    </SidebarMenuButton>
-                 </Link>
-               </SidebarMenuItem>
-          )}
+          <div className="flex h-full min-h-0 flex-col gap-0.5">
+            {/* User request: Main group ko pink tone card me dikhana */}
+            <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full shrink-0 p-2">
+              {isOpen ? (
+                <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Main</p>
+              ) : null}
+              <SidebarMenu className="gap-0.5 py-1">{coreMenuItems.map(renderMainNavRow)}</SidebarMenu>
+            </div>
 
-          {/* Moved from footer for mobile */}
-           {isMobile && (
-            <>
-                <div className="my-4 border-t border-border -mx-2"></div>
-                {visibleBottomMenuItems.map((item) => {
-                    const badgeCount = item.id === 'settings' ? pendingHandovers : (item.id === 'messages' ? messagesBadgeCount : 0);
-                    const showBadge = badgeCount > 0;
-                    return (
-                        <SidebarMenuItem key={item.href}>
-                            <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
-                                <SidebarMenuButton
-                                    isActive={isMenuItemActive(item)}
-                                    tooltip={item.label}
-                                    data-theme-nav={item.id}
-                                >
-                                    <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
-                                      <item.icon />
-                                      {showBadge && (
-                                        <span className="absolute top-0 right-0 h-4 min-w-[1rem] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] translate-x-1/2 -translate-y-1/2 px-0.5">{badgeCount}</span>
-                                      )}
-                                    </span>
-                                    {isOpen && <span className="flex-1 truncate">{item.label}</span>}
-                                </SidebarMenuButton>
-                            </Link>
-                        </SidebarMenuItem>
-                    )
-                })}
-             </>
-           )}
+            {(catalogMenuItems.length > 0 || showAdminNavLink) && (
+              <div
+                className={cn(
+                  "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex w-full min-h-0 flex-1 flex-col overflow-hidden p-2",
+                  /* Sheet menu me jagah kam: sirf More block andar scroll — Main + Account sticky feel */
+                  isMobile && "max-h-[min(52vh,380px)]"
+                )}
+              >
+                {isOpen ? (
+                  <p className="mb-1 shrink-0 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    More
+                  </p>
+                ) : null}
+                <div
+                  className={cn(
+                    "min-h-0 flex-1 overflow-x-hidden",
+                    isMobile ? "overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]" : "overflow-y-auto"
+                  )}
+                >
+                  <SidebarMenu className="gap-0.5 py-1">
+                    {catalogMenuItems.map(renderMainNavRow)}
+                    {showAdminNavLink && (
+                      <SidebarMenuItem>
+                        <Link href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
+                          <SidebarMenuButton
+                            isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
+                            tooltip="Admin Panel"
+                            data-theme-nav="admin"
+                          >
+                            <Shield />
+                            {isOpen && <span>Admin Panel</span>}
+                          </SidebarMenuButton>
+                        </Link>
+                      </SidebarMenuItem>
+                    )}
+                  </SidebarMenu>
+                </div>
+              </div>
+            )}
 
-        </SidebarMenu>
+            {/* Account/profile bottom cluster: More flex hone par bhi yeh screen ke niche aligned rahein */}
+            <div className="mt-auto flex flex-col gap-0.5">
+              <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-amber w-full shrink-0 p-2">
+                {isOpen ? (
+                  <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
+                ) : null}
+                <SidebarMenu className="gap-0.5 py-1">{visibleBottomMenuItems.map(renderBottomNavRow)}</SidebarMenu>
+              </div>
+              {/* User request: profile/user card ko green tone me dikhana */}
+              <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full shrink-0 overflow-hidden p-0">{userProfileSection}</div>
+            </div>
+          </div>
         )}
       </SidebarContent>
-
-      {/* Footer is now conditional */}
-      {!isMobile && (
-        <SidebarFooter>
-            <SidebarMenu>
-                {visibleBottomMenuItems.map((item) => {
-                    const badgeCount = item.id === 'settings' ? pendingHandovers : (item.id === 'messages' ? messagesBadgeCount : 0);
-                    const showBadge = badgeCount > 0;
-
-                    return (
-                        <SidebarMenuItem key={item.href}>
-                            <Link href={appNavHref(item.href)} onClick={(e) => onNavLinkClick(e, item.href)}>
-                                <SidebarMenuButton
-                                    isActive={isMenuItemActive(item)}
-                                    tooltip={item.label}
-                                    data-theme-nav={item.id}
-                                >
-                                    <span className="relative shrink-0 flex items-center justify-center [&_svg]:size-5">
-                                      <item.icon />
-                                      {showBadge && (
-                                        <span className="absolute top-0 right-0 h-4 min-w-[1rem] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] translate-x-1/2 -translate-y-1/2 px-0.5">{badgeCount}</span>
-                                      )}
-                                    </span>
-                                    {isOpen && <span className="flex-1 truncate">{item.label}</span>}
-                                </SidebarMenuButton>
-                            </Link>
-                        </SidebarMenuItem>
-                    )
-                })}
-            </SidebarMenu>
-            {userProfileSection}
-        </SidebarFooter>
-      )}
-
-      {/* User Profile for mobile is inside content */}
-      {isMobile && userProfileSection}
-
     </Sidebar>
   );
 }

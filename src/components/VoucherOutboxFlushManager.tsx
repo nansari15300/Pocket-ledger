@@ -38,13 +38,22 @@ export function VoucherOutboxFlushManager() {
         scheduleFlush(FLUSH_AFTER_ONLINE_MS);
       }, ONLINE_DEBOUNCE_MS);
     };
+    const onVisibleOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        scheduleFlush(350);
+      }
+    };
     window.addEventListener("online", onOnline);
+    window.addEventListener("focus", onVisibleOrFocus);
+    document.addEventListener("visibilitychange", onVisibleOrFocus);
     if (typeof navigator !== "undefined" && navigator.onLine) scheduleFlush(FLUSH_AFTER_ONLINE_MS);
-    const iv = setInterval(tick, 45_000);
+    const iv = setInterval(tick, 15_000);
     return () => {
       if (onlineTimer != null) clearTimeout(onlineTimer);
       pendingFlushTimers.forEach((t) => clearTimeout(t));
       window.removeEventListener("online", onOnline);
+      window.removeEventListener("focus", onVisibleOrFocus);
+      document.removeEventListener("visibilitychange", onVisibleOrFocus);
       clearInterval(iv);
     };
   }, []);

@@ -52,6 +52,14 @@ import {
   DrawerFooter,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  patchMasterDetailUrlAfterModalClose,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import AdCalendar from "@/components/ui/ad-calendar";
 import {
   Select,
@@ -217,6 +225,10 @@ export function AccountDetails({
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [account.id]);
+
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...(userNames || {}) }),
     [journalAccountNames, userNames]
@@ -252,7 +264,8 @@ export function AccountDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     params.set("modalts", String(Date.now()));
     router.push(`${pathname}?${params.toString()}`);
@@ -260,17 +273,16 @@ export function AccountDetails({
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    // APK/static: save ke baad `useSearchParams()` kabhi ek frame purana reh jata hai — `?selected=` drop → master-detail / route tutkar "home" feel.
-    const raw =
-      typeof window !== "undefined" && window.location.search
-        ? window.location.search.replace(/^\?/, "")
-        : searchParams.toString();
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
     const params = new URLSearchParams(raw);
     params.delete("modal");
     params.delete("modalts");
+    patchMasterDetailUrlAfterModalClose(params, { entityId: account.id });
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
-  }, [pathname, searchParams, router]);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
+  }, [pathname, searchParams, router, account.id]);
 
   const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;

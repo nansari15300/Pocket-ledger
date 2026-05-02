@@ -4,7 +4,7 @@
 import type { User } from "firebase/auth";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter, usePathname } from "next/navigation";
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { auth, firestore } from "@/lib/firebase";
 import { slugify } from "@/lib/slugify";
 import { getCountryByIP } from "@/lib/getCountryByIP";
@@ -16,6 +16,18 @@ import { getLocalAuthUser } from "@/lib/localApiClient";
 import { restoreRememberedLocalCompanyForFastBoot } from "@/lib/postAuthCompanyRoute";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
+/**
+ * Sign-out / token revoke ke turant baad user-doc listeners `permission-denied` dete hain — expected, noise mat bhejo.
+ * Real issue tab hi log karo jab yahi session ab bhi `auth.currentUser` ho.
+ */
+function shouldReportAuthBootstrapPermissionDenied(firebaseUser: User): boolean {
+  try {
+    const cu = auth.currentUser;
+    return cu != null && cu.uid === firebaseUser.uid;
+  } catch {
+    return false;
+  }
+}
 
 export type AppUser = {
   id: string
@@ -159,21 +171,25 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                   const slugSnap = await getDoc(doc(firestore, "users", userDocIdByName));
                   if (slugSnap.exists()) existingByEmail = slugSnap;
                 } catch (error) {
-                  logFirestorePermissionDenied({
-                    page: "auth_bootstrap",
-                    operation: "get",
-                    path: `users/${userDocIdByName}`,
-                    error,
-                  });
+                  if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                    logFirestorePermissionDenied({
+                      page: "auth_bootstrap",
+                      operation: "get",
+                      path: `users/${userDocIdByName}`,
+                      error,
+                    });
+                  }
                 }
               }
             } catch (error) {
-              logFirestorePermissionDenied({
-                page: "auth_bootstrap",
-                operation: "get",
-                path: `users/${firebaseUser.uid}`,
-                error,
-              });
+              if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                logFirestorePermissionDenied({
+                  page: "auth_bootstrap",
+                  operation: "get",
+                  path: `users/${firebaseUser.uid}`,
+                  error,
+                });
+              }
             }
 
             // Fallback: email query for legacy docs with random IDs. If denied, continue without failing auth.
@@ -186,12 +202,14 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                   snapshot.docs[0] ??
                   null;
               } catch (error) {
-                logFirestorePermissionDenied({
-                  page: "auth_bootstrap",
-                  operation: "list",
-                  path: "users?where=email",
-                  error,
-                });
+                if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                  logFirestorePermissionDenied({
+                    page: "auth_bootstrap",
+                    operation: "list",
+                    path: "users?where=email",
+                    error,
+                  });
+                }
               }
             }
 
@@ -215,12 +233,14 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                     await batch.commit();
                   }
                 } catch (error) {
-                  logFirestorePermissionDenied({
-                    page: "auth_bootstrap",
-                    operation: "list",
-                    path: "companies?where=ownerId(legacy-migration)",
-                    error,
-                  });
+                  if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                    logFirestorePermissionDenied({
+                      page: "auth_bootstrap",
+                      operation: "list",
+                      path: "companies?where=ownerId(legacy-migration)",
+                      error,
+                    });
+                  }
                 }
               }
             } else {
@@ -259,12 +279,14 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             const userDocRefForUpdate = doc(firestore, "users", docSnap.id);
             if (userData.email === "nansari15300@gmail.com" && userData.role !== "SuperAdmin") {
               updateDoc(userDocRefForUpdate, { role: "SuperAdmin" }).catch((error) => {
-                logFirestorePermissionDenied({
-                  page: "auth_bootstrap",
-                  operation: "update",
-                  path: `users/${docSnap.id}`,
-                  error,
-                });
+                if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                  logFirestorePermissionDenied({
+                    page: "auth_bootstrap",
+                    operation: "update",
+                    path: `users/${docSnap.id}`,
+                    error,
+                  });
+                }
               });
               userData = { ...userData, role: "SuperAdmin" };
             }
@@ -345,12 +367,15 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
           }
           setLoading(false);
         }, (err: any) => {
-          logFirestorePermissionDenied({
-            page: "auth_bootstrap",
-            operation: "get",
-            path: `users/${userDocRef.id}`,
-            error: err,
-          });
+          // Logout: listener detach se pehle token invalid → permission-denied; bug nahi.
+          if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+            logFirestorePermissionDenied({
+              page: "auth_bootstrap",
+              operation: "get",
+              path: `users/${userDocRef.id}`,
+              error: err,
+            });
+          }
           setLoading(false);
         });
         } catch (e) {
@@ -416,8 +441,9 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
     const isAuthPage = pathname === "/";
     const isPublicPage = isAuthPage;
-    
     if (!user && !isPublicPage) {
+      /** IndexedDB hydrate: observer kabhi turant `null` bharta hai jab `auth.currentUser` already set hai — "/" pe bhagna + phir "/" se `/company` = 3× SPA jump / "auto refresh" jaisa lagta hai */
+      if (auth.currentUser) return;
       router.push("/");
     }
   }, [user, loading, pathname, router, skipRedirects]);

@@ -18,6 +18,14 @@ import { SpendWiseBlinkInfoDialog } from "../vouchers/SpendWiseBlinkInfoDialog";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
+import {
+  clearPlModalParentQueryBackup,
+  pathnameForModalRouterReplace,
+  patchMasterDetailUrlAfterModalClose,
+  persistPlModalParentQuery,
+  searchParamsStringAfterClosingModal,
+  searchParamsStringForModalClose,
+} from "@/lib/modalUrlSync";
 import { startOfDay, endOfDay, format } from "date-fns";
 import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -159,6 +167,9 @@ export function AccountGroupDetails({
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [group.id]);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteEntityId, setNoteEntityId] = useState<string | null>(null);
   const [showNarration, setShowNarration] = useState(true);
@@ -575,7 +586,8 @@ export function AccountGroupDetails({
 
   const openModalInUrl = useCallback(() => {
     if (!isMobile || !pathname) return;
-    const params = new URLSearchParams(searchParams.toString());
+    persistPlModalParentQuery(searchParams.toString());
+    const params = new URLSearchParams(searchParamsStringForModalClose(searchParams.toString()));
     params.set("modal", "1");
     params.set("modalts", String(Date.now()));
     router.push(`${pathname}?${params.toString()}`);
@@ -583,16 +595,16 @@ export function AccountGroupDetails({
 
   const closeModalInUrl = useCallback(() => {
     if (!pathname) return;
-    const raw =
-      typeof window !== "undefined" && window.location.search
-        ? window.location.search.replace(/^\?/, "")
-        : searchParams.toString();
+    const raw = searchParamsStringAfterClosingModal(searchParams.toString());
     const params = new URLSearchParams(raw);
     params.delete("modal");
     params.delete("modalts");
+    patchMasterDetailUrlAfterModalClose(params, { entityId: group.id, groupsTab: true });
     const q = params.toString();
-    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
-  }, [pathname, searchParams, router]);
+    const basePath = pathnameForModalRouterReplace(pathname);
+    router.replace(q ? `${basePath}?${q}` : basePath, { scroll: false });
+    clearPlModalParentQueryBackup();
+  }, [pathname, searchParams, router, group.id]);
 
   const modalParam = searchParams.get("modal");
   const urlModalOpen = isMobile && modalParam === "1" && anyMobilePopupOpen;

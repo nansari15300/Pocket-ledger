@@ -18,6 +18,7 @@ const adminComponentsPath = path.join(root, "src", "components", "admin");
 const adminComponentsBakPath = path.join(root, ".build-static-bak", "admin-components");
 const deleteCompanyPath = path.join(root, "src", "lib", "actions", "deleteCompanyAction.ts");
 const deleteCompanyBakPath = path.join(root, ".build-static-bak", "deleteCompanyAction.ts");
+const nextStaticPath = path.join(root, ".next", "static");
 
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) return;
@@ -38,6 +39,28 @@ function rmDir(dir) {
     else fs.unlinkSync(p);
   }
   fs.rmdirSync(dir);
+}
+
+function sleepMs(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // Windows file-lock race: short busy-wait is enough here and avoids extra async wiring in this build script.
+  }
+}
+
+function rmPathRobust(targetPath, options = {}) {
+  if (!fs.existsSync(targetPath)) return;
+  const attempts = options.attempts ?? 6;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      // Build cache cleanup: recursive+force handles nested files; retry covers transient ENOTEMPTY/EPERM on Windows.
+      fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 80 });
+      return;
+    } catch (err) {
+      if (i === attempts - 1) throw err;
+      sleepMs(120 * (i + 1));
+    }
+  }
 }
 
 try {
@@ -85,6 +108,17 @@ try {
       console.error(
         "[build-static] Cannot remove .next/lock — stop `npm run dev` and any other Next process, then run build again."
       );
+      throw e;
+    }
+  }
+
+  // Next static chunk dir kabhi stale file-handle se ENOTEMPTY deta hai; pre-clean karne se `next build` stable hota hai.
+  if (fs.existsSync(nextStaticPath)) {
+    try {
+      rmPathRobust(nextStaticPath);
+      console.log("[build-static] Cleaned .next/static to avoid ENOTEMPTY on Windows");
+    } catch (e) {
+      console.error("[build-static] Cannot clean .next/static — close Android Studio preview/dev server and retry.");
       throw e;
     }
   }

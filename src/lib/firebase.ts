@@ -5,6 +5,7 @@ import { disableNetwork, enableNetwork, getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
+import { computeIsLocalOnlyMode } from '@/lib/dataSourceModeDefaults';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAtHvZ3PY50rwF5oqHjtRMjbec6NzMl6dM",
@@ -14,6 +15,10 @@ const firebaseConfig = {
   messagingSenderId: "469450068553",
   appId: "1:469450068553:web:168952ea08dc78e2396598"
 };
+
+/** Google OAuth "Web client" ID (google-services.json → oauth_client client_type 3). Capacitor `GoogleAuth.initialize` needs this; static APK build often omits NEXT_PUBLIC_* — same-project fallback keeps native Google login working. */
+export const FIREBASE_WEB_OAUTH_CLIENT_ID =
+  "469450068553-h848203thcqi3u8mvl8bvnm7gh8v5icl.apps.googleusercontent.com";
 
 // Initialize Firebase
 const apps = getApps();
@@ -33,11 +38,7 @@ function isFirestoreWatchTeardownAssertionMessage(message: string): boolean {
 // Suppress Firebase console errors for offline/unavailable; track PERMISSION_DENIED (skip when logged out)
 if (typeof window !== 'undefined') {
   const originalError = console.error;
-  const isLocalFirstEnabled = () => {
-    const mode = window.localStorage.getItem('dataSourceMode');
-    // Local-first startup: missing key is treated as local.
-    return !mode || mode === 'local';
-  };
+  const isLocalFirstEnabled = () => computeIsLocalOnlyMode();
   console.error = (...args: any[]) => {
     const errorMessage = args.join(' ');
     // Don't log Firebase offline/unavailable errors
@@ -65,7 +66,8 @@ if (typeof window !== 'undefined') {
     if (
       (errorMessage.includes('permission-denied') ||
         errorMessage.includes('PERMISSION_DENIED') ||
-        errorMessage.includes('Missing or insufficient permissions')) &&
+        errorMessage.includes('Missing or insufficient permissions') ||
+        errorMessage.includes('[Firestore Rules][Permission Denied]')) &&
       auth.currentUser == null
     ) {
       return;
@@ -182,11 +184,8 @@ export function markFirestoreNetworkDisabledByApi(disabled: boolean): void {
 async function syncFirestoreNetworkFromLocalConfigInner(): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
-    const mode = window.localStorage.getItem('dataSourceMode');
-    const localFirst =
-      !mode || mode === 'local' ||
-      process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === '1' ||
-      process.env.NEXT_PUBLIC_STATIC_BUILD === '1';
+    // Web par missing `dataSourceMode` ab Firebase treat — `DISABLE_FIRESTORE_NETWORK` sirf local-first + flag par.
+    const localFirst = computeIsLocalOnlyMode();
     const forceOff =
       process.env.NEXT_PUBLIC_DISABLE_FIRESTORE_NETWORK === '1' && localFirst;
     if (forceOff) {

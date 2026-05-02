@@ -1,7 +1,7 @@
 "use client";
 
 /** Shared IndexedDB for offline data (companies, pending files). */
-const DB_NAME = "pocket-ledger-pending";
+const BASE_DB_NAME = "pocket-ledger-pending";
 // Browser me pehle se zyada version ho to `open(..., 2)` fail: "requested version < existing".
 // Purane builds ne 7 tak bump kiya tha — yahan kabhi isse neeche mat karo.
 const DB_VERSION = 8;
@@ -12,7 +12,14 @@ export function openDB(): Promise<IDBDatabase> {
       reject(new Error("IndexedDB not available"));
       return;
     }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const hostScope =
+      typeof window === "undefined"
+        ? "default"
+        : `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`
+            .replace(/[^a-zA-Z0-9_.-]/g, "_")
+            .toLowerCase();
+    // Host-scoped pending DB prevents localhost/prod pending queues from mixing.
+    const req = indexedDB.open(`${BASE_DB_NAME}__${hostScope}`, DB_VERSION);
     req.onerror = () => reject(req.error);
     req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = (e) => {

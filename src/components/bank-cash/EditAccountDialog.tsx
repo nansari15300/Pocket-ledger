@@ -54,6 +54,7 @@ import { SpecialAccountAccessControl } from "./SpecialAccountAccessControl";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "@/lib/masterEntityDialogClasses";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 
 /** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
 function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
@@ -257,6 +258,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     const accountRefSnap = account;
 
     void (async () => {
+      // APK ledger URL + company pin: save/async turant baad stale router `/dashboard`/company picker jump rokho.
+      beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
       const toastId = sonnerToast.loading("Updating account...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";

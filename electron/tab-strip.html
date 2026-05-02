@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'" />
+  <title>Tabs</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      font-size: 12px;
+      background: #202124;
+      color: #e8eaed;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Ek hi row: menu + title + scroll tabs + new + 10px gap + win buttons — merged-titlebar class tab-strip.js set karta hai */
+    #bar {
+      display: flex;
+      align-items: center;
+      height: 100%;
+      min-height: 100%;
+      padding: 0 0 0 4px;
+      gap: 6px;
+      border-bottom: 1px solid #000;
+      background: #202124;
+    }
+    #menuBtn {
+      flex-shrink: 0;
+      width: 36px;
+      height: 30px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: #e8eaed;
+      font-size: 16px;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+    #menuBtn:hover { background: rgba(255,255,255,0.1); }
+    /* Title "Pocket Ledger (N tabs)" — drag region (Windows frameless move) */
+    #titleCluster {
+      flex-shrink: 0;
+      max-width: min(280px, 28vw);
+      padding: 4px 10px 4px 4px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 13px;
+      font-weight: 600;
+      color: #e8eaed;
+      -webkit-app-region: drag;
+      cursor: default;
+    }
+    body.merged-titlebar #titleCluster { max-width: min(260px, 26vw); }
+    #tabs {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 4px 0 2px;
+      scrollbar-width: thin;
+      -webkit-app-region: no-drag;
+    }
+    #tabs::-webkit-scrollbar { height: 4px; }
+    #tabs::-webkit-scrollbar-thumb { background: #5f6368; border-radius: 2px; }
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 220px;
+      min-width: 120px;
+      height: 32px;
+      padding: 0 10px 0 12px;
+      background: #35363a;
+      border: 1px solid #000;
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      flex-shrink: 0;
+      color: #bdc1c6;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+    }
+    .tab:hover { background: #3c4043; color: #e8eaed; }
+    .tab.active {
+      background: #3d4045;
+      color: #e8eaed;
+      padding-bottom: 1px;
+      margin-bottom: -1px;
+      z-index: 1;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .tab.active .title { font-weight: 600; }
+    .tab .title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .tab .close {
+      opacity: 0.7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 15px;
+      line-height: 1;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+    .tab .close:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+    #newBtn {
+      flex-shrink: 0;
+      width: 32px;
+      height: 28px;
+      margin-bottom: 2px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: #9aa0a6;
+      font-size: 20px;
+      font-weight: 300;
+      line-height: 1;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+    }
+    #newBtn:hover { background: rgba(255,255,255,0.1); color: #e8eaed; }
+    /* Minimize ke pehle exactly 10px — user request */
+    #chromeGap {
+      flex-shrink: 0;
+      width: 10px;
+      height: 1px;
+      -webkit-app-region: no-drag;
+    }
+    #winControls {
+      display: none;
+      flex-shrink: 0;
+      align-items: center;
+      height: 100%;
+      padding-right: 4px;
+      gap: 0;
+      -webkit-app-region: no-drag;
+    }
+    body.merged-titlebar #winControls { display: flex; }
+    body.merged-titlebar #chromeGap { display: block; }
+    body:not(.merged-titlebar) #chromeGap,
+    body:not(.merged-titlebar) #menuBtn,
+    body:not(.merged-titlebar) #titleCluster {
+      display: none !important;
+    }
+    #winControls button {
+      width: 46px;
+      height: 100%;
+      min-height: 36px;
+      border: none;
+      background: transparent;
+      color: #e8eaed;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #winControls button:hover { background: rgba(255,255,255,0.08); }
+    #closeBtn:hover { background: #e81123; color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <button type="button" id="menuBtn" title="Menu (Alt)">&#9776;</button>
+    <div id="titleCluster" title="">
+      <span id="titleBarLabel">Pocket Ledger</span>
+    </div>
+    <div id="tabs"></div>
+    <button type="button" id="newBtn" title="New tab (Ctrl+T)">+</button>
+    <div id="chromeGap" aria-hidden="true"></div>
+    <div id="winControls">
+      <button type="button" id="minBtn" title="Minimize">&#x2013;</button>
+      <button type="button" id="maxBtn" title="Maximize">&#x25A1;</button>
+      <button type="button" id="closeBtn" title="Close">&#x2715;</button>
+    </div>
+  </div>
+  <script src="./tab-strip.js"></script>
+</body>
+</html>

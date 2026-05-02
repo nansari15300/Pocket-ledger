@@ -58,6 +58,7 @@ import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@
 import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 
 /** CreateStaffForm jaisa: Ungrouped bucket → form value `ungrouped_staff` (null / empty legacy). */
 function normalizeStaffEditGroupId(groupId: string | null | undefined): string {
@@ -194,6 +195,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     const staffRefSnap = staff;
 
     void (async () => {
+      beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
       const toastId = sonnerToast.loading("Updating staff member...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";

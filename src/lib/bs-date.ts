@@ -45,6 +45,12 @@ export function adToBs(date: Date): BSDate {
   }
 }
 
+/** Ek BS mahina aage/peeche — navigation (Baisakh→Jestha, Chaitra→agle saal Baisakh). */
+export function addBsMonths(y: number, m: number, delta: number): { y: number; m: number } {
+  const idx = y * 12 + (m - 1) + delta;
+  return { y: Math.floor(idx / 12), m: (idx % 12) + 1 };
+}
+
 export function bsToAd(bs: BSDate): Date {
   try {
     // NepaliDate constructor uses 0-indexed months (0 = Baisakh, 11 = Chaitra)

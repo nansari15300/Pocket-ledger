@@ -40,7 +40,15 @@ import { useCompany } from "@/hooks/useCompany";
 import usePermissions from "@/hooks/usePermissions";
 import { firestore } from "@/lib/firebase";
 import { compressFile } from "@/lib/compression";
-import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+import {
+  MAX_IMAGE_BYTES_BEFORE_COMPRESS,
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_BEFORE_COMPRESS,
+} from "@/lib/fileUploadLimits";
+import {
+  fetchRemoteUrlAsFile,
+  staffPrefillPartsFromStaffRow,
+} from "@/lib/crossCompanyMasterPrefill";
 import { useDate } from "@/hooks/useDate";
 
 import type { StaffGroup } from "@/components/staff/types";
@@ -50,6 +58,7 @@ import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { BTN_DIALOG_CANCEL_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -307,6 +316,71 @@ export function CreateStaffForm({
     setDocumentFiles([]);
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
+
+  /** Save & Copy To / Copy chip: source staff row + HTTPS avatar/docs → local File staging (party-full parity). */
+  useEffect(() => {
+    const handleFull = async (event: CustomEvent<{ rowPayload?: Record<string, unknown> }>) => {
+      const row = event.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      const { defaults, remoteAvatarUrl, remoteDocumentUrls } = staffPrefillPartsFromStaffRow(row);
+      setAvatarToUpload((prev) => {
+        if (prev?.preview) URL.revokeObjectURL(prev.preview);
+        return null;
+      });
+      setDocumentFiles([]);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+      if (docsInputRef.current) docsInputRef.current.value = "";
+      form.reset({
+        name: defaults.name,
+        email: defaults.email,
+        phone: defaults.phone,
+        address: defaults.address,
+        salary: defaults.salary,
+        openingBalance: defaults.openingBalance,
+        openingBalanceDate: defaults.openingBalanceDate,
+        salaryPeriod: defaults.salaryPeriod,
+        groupId: getUngroupedGroupId("staff"),
+        openingBalanceNarration: defaults.openingBalanceNarration,
+      });
+      if (remoteAvatarUrl?.trim() && canAddAvatar) {
+        try {
+          const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "staff-avatar.jpg");
+          if (raw) {
+            let f = raw;
+            try {
+              f = await compressFile(raw);
+            } catch {
+              /* raw hi use karo */
+            }
+            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+              toast({
+                variant: "destructive",
+                title: "Avatar too large",
+                description: "Fetched image could not be compressed enough.",
+              });
+            } else {
+              const preview = URL.createObjectURL(f);
+              setAvatarToUpload({ file: f, preview });
+            }
+          }
+        } catch {
+          /* network/CORS par fetch fail — text fields phir bhi prefilled */
+        }
+      }
+      if (remoteDocumentUrls?.length && canAttachDocuments) {
+        const files: File[] = [];
+        for (let i = 0; i < Math.min(remoteDocumentUrls.length, 5); i++) {
+          const url = remoteDocumentUrls[i];
+          const guessed = url.toLowerCase().includes(".pdf") ? `staff-doc-${i + 1}.pdf` : `staff-doc-${i + 1}.jpg`;
+          const f = await fetchRemoteUrlAsFile(url, guessed);
+          if (f) files.push(f);
+        }
+        if (files.length) setDocumentFiles(files);
+      }
+    };
+    document.addEventListener("prefill-create-staff-full", handleFull as unknown as EventListener);
+    return () => document.removeEventListener("prefill-create-staff-full", handleFull as unknown as EventListener);
+  }, [form, canAddAvatar, canAttachDocuments, toast]);
 
   // ---------------------------
   // Submit
@@ -826,6 +900,10 @@ export function CreateStaffForm({
           </div>
 
           <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-4 border-t border-border/80 bg-background/95 py-3">
+            {/* Cancel — pink pill (`BTN_DIALOG_CANCEL_CLASS`), baki footer buttons jaisi height */}
+            <Button type="button" className={BTN_DIALOG_CANCEL_CLASS} onClick={() => (onCloseDialogRequest ?? onClose)?.()} disabled={isLoading}>
+              Cancel
+            </Button>
             <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & New

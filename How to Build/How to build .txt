@@ -7,7 +7,7 @@ npm run cap:copy:android
 
 npm run cap:copy:ios
 
-npm run electron:build:win
+for exe -->   npm run electron:build:win
 
 npm run electron:build:linux
 

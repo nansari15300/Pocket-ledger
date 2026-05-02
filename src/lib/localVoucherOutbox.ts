@@ -389,7 +389,8 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
     } catch (e) {
       console.warn("[flushVoucherOutbox] row failed", row.outbox_id, e);
       failed++;
-      break;
+      // One bad row should not block the entire outbox forever; keep flushing remaining rows.
+      continue;
     }
   }
   return { ok, failed };

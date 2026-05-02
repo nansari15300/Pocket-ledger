@@ -1192,7 +1192,9 @@ export const TransactionRow = React.memo(
             ? "border-b-0"
             : (isSpendWiseGroupFirst || isSpendWiseChild || isSpendWiseGroupLast)
               ? "border-b-0"
-              : "border-b"
+              : "border-b",
+          // Main transaction row divider: force pure black so unapproved pink rows never look white.
+          "border-black"
         )}
       >
         {mainRowContent}
@@ -1224,6 +1226,8 @@ export const TransactionRow = React.memo(
         onDoubleClick={() => onRowClick?.(transaction)}
         className={cn(
           "narration-row border-b cursor-pointer",
+          // Narration sub-row divider: keep pure black across normal + unapproved states.
+          "border-black [&>td]:border-black",
           isBillWise && "-mt-1.5",
           spendWiseNarrInset,
           effSpendBottom && cn(

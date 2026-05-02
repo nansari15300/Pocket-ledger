@@ -36,7 +36,8 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     if (isClient) {
       document.body.className = '';
-      document.body.classList.add(theme, primaryColor);
+      // Root layout jaisa typography + theme; sirf theme classes se base Tailwind classes wipe na hon
+      document.body.classList.add("font-body", "antialiased", theme, primaryColor);
       localStorage.setItem('theme', theme);
       localStorage.setItem('primaryColor', primaryColor);
     }

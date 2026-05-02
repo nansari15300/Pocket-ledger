@@ -80,6 +80,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
+import { bankPrefillPartsFromRow, fetchRemoteUrlAsFile } from "@/lib/crossCompanyMasterPrefill";
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -113,11 +114,13 @@ export function CreateBankAccountDialog({
   children,
   isOpen: parentIsOpen,
   onOpenChange: parentOnOpenChange,
+  contextNote,
 }: {
   onAccountCreated: (id: string) => void;
   children?: React.ReactNode;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  contextNote?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -337,6 +340,60 @@ export function CreateBankAccountDialog({
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
 
+  /** Copy-to-company: source bank row + remote avatar/docs → form (naye company par save). */
+  useEffect(() => {
+    const h = async (e: CustomEvent<{ rowPayload?: Record<string, unknown> }>) => {
+      const row = e.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      clearUploads();
+      const { defaults, remoteAvatarUrl, remoteDocumentUrls } = bankPrefillPartsFromRow(row);
+      form.reset({
+        accountName: defaults.accountName,
+        accountType: defaults.accountType,
+        openingBalance: defaults.openingBalance,
+        openingBalanceDate: defaults.openingBalanceDate,
+        bankName: defaults.bankName,
+        accountNumber: defaults.accountNumber,
+        ifscCode: defaults.ifscCode,
+        openingBalanceNarration: defaults.openingBalanceNarration,
+        groupId: getUngroupedGroupId("bank"),
+        isSpecial: defaults.isSpecial,
+        useFor:
+          defaults.useFor ?? {
+            in: company?.ownerEmail ? [company.ownerEmail] : [],
+            out: company?.ownerEmail ? [company.ownerEmail] : [],
+          },
+      });
+      if (remoteAvatarUrl?.trim() && canAddAvatar) {
+        setIsCompressing(true);
+        try {
+          const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "bank-avatar.jpg");
+          if (raw) {
+            const compressed = await compressFile(raw);
+            setCompressionResult({ originalSize: raw.size, compressedSize: compressed.size });
+            const preview = URL.createObjectURL(compressed);
+            setAvatarToUpload({ file: compressed, preview });
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          setIsCompressing(false);
+        }
+      }
+      if (remoteDocumentUrls?.length && canAttachDocuments) {
+        const next: File[] = [];
+        for (let i = 0; i < Math.min(remoteDocumentUrls.length, 5); i++) {
+          const u = remoteDocumentUrls[i];
+          const nameGuess = u.toLowerCase().includes(".pdf") ? `bank-doc-${i + 1}.pdf` : `bank-doc-${i + 1}.jpg`;
+          const f = await fetchRemoteUrlAsFile(u, nameGuess);
+          if (f && isProfileDocumentFile(f)) next.push(f);
+        }
+        if (next.length) setDocumentFiles(next);
+      }
+    };
+    document.addEventListener("prefill-create-bank-account-full", h as EventListener);
+    return () => document.removeEventListener("prefill-create-bank-account-full", h as EventListener);
+  }, [form, company, canAddAvatar, canAttachDocuments]);
 
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
@@ -656,6 +713,10 @@ export function CreateBankAccountDialog({
           <DialogHeader className={masterEntityDialogHeaderClassName}>
             <DialogTitle>Create a New Bank/Cash Account</DialogTitle>
             <DialogDescription>Add a new bank or cash account to manage your transactions.</DialogDescription>
+            {contextNote ? (
+              // Copy-to flow: user ko target-company context dialog ke andar clear dikhna chahiye.
+              <p className="text-xs font-semibold text-emerald-700">{contextNote}</p>
+            ) : null}
           </DialogHeader>
           <div className={masterEntityDialogFormWrapperClassName}>
           <Form {...form}>

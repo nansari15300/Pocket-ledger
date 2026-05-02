@@ -1,7 +1,19 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { collection, getDocs, getDoc, deleteDoc, doc, onSnapshot, query, where, updateDoc, orderBy } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  getDoc,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  query,
+  where,
+  updateDoc,
+  orderBy,
+  writeBatch,
+} from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
@@ -84,6 +96,7 @@ export function ManageDevices() {
   const [savingHistoryLimit, setSavingHistoryLimit] = useState(false);
   const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
   const [confirmDeleteAllHistory, setConfirmDeleteAllHistory] = useState(false);
+  const [deletingAllHistory, setDeletingAllHistory] = useState(false);
 
   const { refreshDeviceCheck } = useDeviceLimitContext();
   // Local company: device list should not depend on Firestore listeners.
@@ -246,19 +259,32 @@ export function ManageDevices() {
     }
   };
 
-  const handleKickOut = async (device: DeviceRow) => {
+  /** Firestore history+delete lambi chain — dialog turant band, spinner row par; server sync background (SQLite outbox abhi sirf local-only mode me) */
+  const handleKickOut = (device: DeviceRow) => {
     if (!companyId) return;
+    setConfirmKick(null);
     setKickingId(device.id);
-    try {
-      await addDeviceHistoryEntryWhenRemoved(companyId, { id: device.id, userId: device.userId, deviceType: device.deviceType, deviceLabel: device.deviceLabel });
-      await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
-      toast({ title: "Device removed", description: "That device will see slot full and can switch company or remove that device." });
-      setConfirmKick(null);
-    } catch (e: any) {
-      toast({ title: "Error", description: e?.message ?? "Failed to remove device", variant: "destructive" });
-    } finally {
-      setKickingId(null);
-    }
+    void (async () => {
+      try {
+        await addDeviceHistoryEntryWhenRemoved(companyId, {
+          id: device.id,
+          userId: device.userId,
+          deviceType: device.deviceType,
+          deviceLabel: device.deviceLabel,
+        });
+        await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
+        refreshDeviceCheck();
+        toast({
+          title: "Device removed",
+          description: "That device will see slot full and can switch company or remove that device.",
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to remove device";
+        toast({ title: "Error", description: msg, variant: "destructive" });
+      } finally {
+        setKickingId(null);
+      }
+    })();
   };
 
   const handleSaveHistoryLimit = async () => {
@@ -292,15 +318,26 @@ export function ManageDevices() {
 
   const handleDeleteAllHistory = async () => {
     if (!companyId) return;
-    setConfirmDeleteAllHistory(false);
+    setDeletingAllHistory(true);
     try {
       const snap = await getDocs(collection(firestore, "companies", companyId, "device_history"));
-      for (const d of snap.docs) {
-        await deleteDoc(d.ref);
+      const docs = snap.docs;
+      const chunk = 450;
+      for (let i = 0; i < docs.length; i += chunk) {
+        const batch = writeBatch(firestore);
+        docs.slice(i, i + chunk).forEach((d) => batch.delete(d.ref));
+        await batch.commit();
       }
       toast({ title: "History cleared", description: "All device history entries removed." });
+      setConfirmDeleteAllHistory(false);
     } catch (e: unknown) {
-      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed to delete all", variant: "destructive" });
+      toast({
+        title: "Error",
+        description: e instanceof Error ? e.message : "Failed to delete all",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingAllHistory(false);
     }
   };
 
@@ -576,9 +613,43 @@ export function ManageDevices() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => confirmKick && handleKickOut(confirmKick)}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmKick) handleKickOut(confirmKick);
+              }}
             >
               Kick out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Pehle sirf `setConfirmDeleteAllHistory(true)` tha — koi AlertDialog nahi tha, isliye "Delete all history" dead tha */}
+      <AlertDialog
+        open={confirmDeleteAllHistory}
+        onOpenChange={(open) => {
+          if (!deletingAllHistory) setConfirmDeleteAllHistory(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete all device history?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes every history row for this company. Active synced devices are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingAllHistory}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deletingAllHistory}
+              onClick={(e) => {
+                e.preventDefault();
+                void handleDeleteAllHistory();
+              }}
+            >
+              {deletingAllHistory ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              <span className={deletingAllHistory ? "ml-2" : ""}>Delete all</span>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

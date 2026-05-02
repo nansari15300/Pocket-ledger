@@ -2134,7 +2134,7 @@ function GalleryPageContent() {
   // PDF hover pe pdf.js pehli baar ~few sec — gallery open hote hi chunk load karke pehle PDF thoda jaldi
   useEffect(() => {
     if (typeof window === "undefined") return;
-    void import("pdfjs-dist");
+    void import("pdfjs-dist/build/pdf.mjs");
     void import("@/lib/pdfToImage");
   }, []);
 

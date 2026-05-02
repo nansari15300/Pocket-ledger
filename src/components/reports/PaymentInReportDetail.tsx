@@ -18,9 +18,11 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 export function PaymentInReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const {
     vouchers: allVouchers,
@@ -39,10 +41,15 @@ export function PaymentInReportDetail() {
   const [defaultTab, setDefaultTab] = useState<"payment_in" | "direct_income">("payment_in");
   const hasAutoSelected = useRef(false);
 
-  const paymentInVouchers = useMemo(
-    () => allVouchers.filter((v) => ["payment_in", "direct_income"].includes(v.type)),
-    [allVouchers]
-  );
+  // Dashboard deep-link `voucherScope`: same split as stat cards (Payment In vs Direct Income).
+  const voucherScope = searchParams.get("voucherScope");
+
+  const paymentInVouchers = useMemo(() => {
+    const family = allVouchers.filter((v) => ["payment_in", "direct_income"].includes(v.type));
+    if (voucherScope === "directIncomeOnly") return family.filter((v) => v.type === "direct_income");
+    if (voucherScope === "paymentInOnly") return family.filter((v) => v.type === "payment_in");
+    return family;
+  }, [allVouchers, voucherScope]);
 
   const expenseAccounts = unprocessedExpenseAccounts;
 
@@ -150,6 +157,14 @@ export function PaymentInReportDetail() {
   const REPORT_MEMORY_KEY = "reportPaymentInState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedPayee(null);
+      }
+      return;
+    }
     if (payeesWithReceipts.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -167,7 +182,7 @@ export function PaymentInReportDetail() {
       }
     } catch (_) {}
     setSelectedPayee(payeesWithReceipts[0]);
-  }, [payeesWithReceipts, isMobile]);
+  }, [payeesWithReceipts, isMobile, searchParams]);
 
   const handleSelectPayee = useCallback(
     (payee: UnifiedPayee) => {

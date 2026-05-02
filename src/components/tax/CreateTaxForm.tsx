@@ -33,7 +33,12 @@ import { Button } from "@/components/ui/button";
 import { CreateTaxGroupDialog } from "./CreateTaxGroupDialog";
 import { Combobox } from "../ui/combobox";
 import { compressFile } from "@/lib/compression";
-import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+import {
+  MAX_IMAGE_BYTES_BEFORE_COMPRESS,
+  MAX_IMAGE_BYTES_AFTER_COMPRESS,
+  MAX_IMAGE_MB_BEFORE_COMPRESS,
+} from "@/lib/fileUploadLimits";
+import { fetchRemoteUrlAsFile, taxPrefillPartsFromTaxRow } from "@/lib/crossCompanyMasterPrefill";
 import { toast as sonnerToast } from "sonner";
 import { useDate } from "@/hooks/useDate";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
@@ -47,6 +52,7 @@ import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { BTN_DIALOG_CANCEL_CLASS } from "@/components/vouchers/voucherButtonStyles";
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -206,6 +212,69 @@ export function CreateTaxForm({
     setDocumentFiles([]);
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
+
+  /** Copy chip / Save & Copy To: source tax row + HTTPS avatar/docs → local staging (`prefill-create-tax-from-row`). */
+  React.useEffect(() => {
+    const handlePrefillRow = async (event: Event) => {
+      const ce = event as CustomEvent<{ rowPayload?: Record<string, unknown> }>;
+      const row = ce.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      const { patch, remoteAvatarUrl, remoteDocumentUrls } = taxPrefillPartsFromTaxRow(row);
+      setAvatarToUpload((prev) => {
+        if (prev?.preview) URL.revokeObjectURL(prev.preview);
+        return null;
+      });
+      setDocumentFiles([]);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+      if (docsInputRef.current) docsInputRef.current.value = "";
+      form.reset({
+        name: "",
+        rate: 0,
+        openingBalance: 0,
+        openingBalanceDate: undefined,
+        groupId: "",
+        openingBalanceNarration: "",
+        ...patch,
+      } as z.infer<typeof formSchema>);
+      if (remoteAvatarUrl?.trim() && canAddAvatar) {
+        try {
+          const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "tax-avatar.jpg");
+          if (raw) {
+            let f = raw;
+            try {
+              f = await compressFile(raw);
+            } catch {
+              /* raw */
+            }
+            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+              toast({
+                variant: "destructive",
+                title: "Avatar too large",
+                description: "Fetched image could not be compressed enough.",
+              });
+            } else {
+              const preview = URL.createObjectURL(f);
+              setAvatarToUpload({ file: f, preview });
+            }
+          }
+        } catch {
+          /* fetch fail — scalars phir bhi set */
+        }
+      }
+      if (remoteDocumentUrls?.length && canAttachDocuments) {
+        const files: File[] = [];
+        for (let i = 0; i < Math.min(remoteDocumentUrls.length, 5); i++) {
+          const url = remoteDocumentUrls[i];
+          const guessed = url.toLowerCase().includes(".pdf") ? `tax-doc-${i + 1}.pdf` : `tax-doc-${i + 1}.jpg`;
+          const f = await fetchRemoteUrlAsFile(url, guessed);
+          if (f) files.push(f);
+        }
+        if (files.length) setDocumentFiles(files);
+      }
+    };
+    document.addEventListener("prefill-create-tax-from-row", handlePrefillRow as EventListener);
+    return () => document.removeEventListener("prefill-create-tax-from-row", handlePrefillRow as EventListener);
+  }, [form, canAddAvatar, canAttachDocuments, toast]);
 
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
@@ -670,6 +739,10 @@ export function CreateTaxForm({
         </div>
         </div>
         <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-2 border-t border-border/80 bg-background/95 py-3">
+           {/* Cancel — pink pill (`BTN_DIALOG_CANCEL_CLASS`), Save & New / primary ke saath height match */}
+           <Button type="button" className={BTN_DIALOG_CANCEL_CLASS} onClick={() => onCloseDialogRequest?.()} disabled={isLoading}>
+                Cancel
+            </Button>
            <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New

@@ -65,6 +65,11 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { BTN_DIALOG_CANCEL_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import {
+  fetchRemoteUrlAsFile,
+  partyPrefillPartsFromPartyRow,
+} from "@/lib/crossCompanyMasterPrefill";
 
 
 const formSchema = z
@@ -301,6 +306,64 @@ export function CreatePartyForm({
     document.addEventListener('prefill-create-party-name', handlePrefill as any);
     return () => document.removeEventListener('prefill-create-party-name', handlePrefill as any);
   }, [form]);
+
+  /** Copy-to-company: poora source party row + remote Storage URLs se form + attachments भरो (IDs target par naye banenge). */
+  useEffect(() => {
+    const handleFull = async (event: CustomEvent<{ rowPayload?: Record<string, unknown> }>) => {
+      const row = event.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      const { defaults, remoteAvatarUrl, remoteDocumentUrls } = partyPrefillPartsFromPartyRow(row);
+      removeAvatar();
+      setDocumentFiles([]);
+      form.reset({
+        name: defaults.name,
+        address: defaults.address,
+        phone: defaults.phone,
+        email: defaults.email,
+        pan: defaults.pan,
+        openingBalance: defaults.openingBalance,
+        openingBalanceDate: defaults.openingBalanceDate,
+        openingBalanceNarration: defaults.openingBalanceNarration,
+        groupId: getUngroupedGroupId("party"),
+        password: "",
+        confirmPassword: "",
+      });
+      if (remoteAvatarUrl?.trim() && canAddAvatar) {
+        setIsCompressing(true);
+        try {
+          const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "party-avatar.jpg");
+          if (raw) {
+            let f = raw;
+            try {
+              f = await compressFile(raw);
+            } catch {
+              /* raw hi use karo */
+            }
+            if (f.size > MAX_IMAGE_BYTES_AFTER_COMPRESS) {
+              toast({ variant: "destructive", title: "Avatar too large", description: "Fetched image could not be compressed enough." });
+            } else {
+              const preview = URL.createObjectURL(f);
+              setAvatarToUpload({ file: f, preview });
+            }
+          }
+        } finally {
+          setIsCompressing(false);
+        }
+      }
+      if (remoteDocumentUrls?.length && canAttachDocuments) {
+        const files: File[] = [];
+        for (let i = 0; i < Math.min(remoteDocumentUrls.length, 5); i++) {
+          const url = remoteDocumentUrls[i];
+          const guessed = url.toLowerCase().includes(".pdf") ? `party-doc-${i + 1}.pdf` : `party-doc-${i + 1}.jpg`;
+          const f = await fetchRemoteUrlAsFile(url, guessed);
+          if (f) files.push(f);
+        }
+        if (files.length) setDocumentFiles(files);
+      }
+    };
+    document.addEventListener("prefill-create-party-full", handleFull as unknown as EventListener);
+    return () => document.removeEventListener("prefill-create-party-full", handleFull as unknown as EventListener);
+  }, [form, canAddAvatar, canAttachDocuments, toast]);
 
 
   async function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
@@ -886,6 +949,10 @@ export function CreatePartyForm({
 
         </div>
         <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-4 border-t border-border/80 bg-background/95 py-3">
+          {/* Cancel — dialog band (parent `onCloseDialogRequest`); bina submit */}
+          <Button type="button" className={BTN_DIALOG_CANCEL_CLASS} onClick={() => onCloseDialogRequest?.()} disabled={isLoading}>
+            Cancel
+          </Button>
           {onPartyCreated && (
             <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

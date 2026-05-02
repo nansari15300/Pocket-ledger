@@ -16,9 +16,11 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 export function AddSalaryReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedStaff, userNames } = useVouchers();
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
@@ -30,10 +32,11 @@ export function AddSalaryReportDetail() {
 
   useEffect(() => {
     if (!isMobile) return;
-    // Mobile reports requirement: always land on staff list first when opening Add Salary report.
+    // Dashboard `allVouchers=1` mobile par bhi combined list dikhaye — warna pehle list view.
+    if (searchParams.get("allVouchers") === "1") return;
     setSelectedStaff(null);
     setShowAllCompanyVouchers(false);
-  }, [isMobile]);
+  }, [isMobile, searchParams]);
 
   const addSalaryVouchers = useMemo(
     () => allVouchers.filter((v) => v.type === "journal" && v.subType === "add_salary"),
@@ -79,6 +82,14 @@ export function AddSalaryReportDetail() {
   const REPORT_MEMORY_KEY = "reportAddSalaryState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedStaff(null);
+      }
+      return;
+    }
     if (staffWithSalary.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -96,7 +107,7 @@ export function AddSalaryReportDetail() {
       }
     } catch (_) {}
     setSelectedStaff(staffWithSalary[0]);
-  }, [staffWithSalary, isMobile]);
+  }, [staffWithSalary, isMobile, searchParams]);
 
   const handleSelectStaff = useCallback((staff: Staff) => {
     setShowAllCompanyVouchers(false);

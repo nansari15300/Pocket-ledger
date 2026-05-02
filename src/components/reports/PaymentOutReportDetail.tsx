@@ -21,9 +21,15 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
+import {
+  voucherCountsAsDashboardPaySalary,
+  voucherCountsAsDashboardPaymentOutExcludingPaySalary,
+} from "@/lib/dashboardPaySalaryStat";
 
 export function PaymentOutReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const {
     vouchers: allVouchers,
@@ -42,10 +48,22 @@ export function PaymentOutReportDetail() {
   const [defaultTab, setDefaultTab] = useState<"payment_out" | "direct_expense">("payment_out");
   const hasAutoSelected = useRef(false);
 
-  const paymentOutVouchers = useMemo(
-    () => allVouchers.filter((v) => ["payment_out", "direct_expense"].includes(v.type)),
-    [allVouchers]
-  );
+  const voucherScope = searchParams.get("voucherScope");
+
+  const paymentOutVouchers = useMemo(() => {
+    // Pay Salary dashboard count = `pay_salary` type + staff `payment_out` (see `dashboardPaySalaryStat`) — not only payment_out/direct_expense.
+    if (voucherScope === "paySalary") {
+      return allVouchers.filter((v) => voucherCountsAsDashboardPaySalary(v));
+    }
+    let list = allVouchers.filter((v) => ["payment_out", "direct_expense"].includes(v.type));
+    if (voucherScope === "paymentOutExclPaySalary") {
+      list = list.filter((v) => voucherCountsAsDashboardPaymentOutExcludingPaySalary(v));
+    } else if (voucherScope === "directExpenseOnly") {
+      // Direct Expense card: sirf `direct_expense` vouchers; Payment Out family mix nahi.
+      list = list.filter((v) => v.type === "direct_expense");
+    }
+    return list;
+  }, [allVouchers, voucherScope]);
 
   const expenseAccounts = unprocessedExpenseAccounts;
 
@@ -156,6 +174,15 @@ export function PaymentOutReportDetail() {
   const REPORT_MEMORY_KEY = "reportPaymentOutState";
 
   useEffect(() => {
+    // Dashboard deep-link: `?allVouchers=1` → "All Vouchers" table (useTransactions `payment-out` + entity all pehle empty tha — fix hooks me)
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedPayee(null);
+      }
+      return;
+    }
     if (payeesWithPayments.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -173,7 +200,7 @@ export function PaymentOutReportDetail() {
       }
     } catch (_) {}
     setSelectedPayee(payeesWithPayments[0]);
-  }, [payeesWithPayments, isMobile]);
+  }, [payeesWithPayments, isMobile, searchParams]);
 
   const handleSelectPayee = useCallback(
     (payee: UnifiedPayee) => {

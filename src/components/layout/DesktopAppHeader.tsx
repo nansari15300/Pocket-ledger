@@ -77,6 +77,7 @@ import { cn } from "@/lib/utils";
 import { useReportList } from "@/contexts/ReportListContext";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
@@ -85,10 +86,18 @@ import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/li
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 
+/** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
+const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
+
 /** Static export trailingSlash: URL /party/ vs /party — normalize for route checks */
 function pathRoot(pathname: string | null, segment: string): boolean {
   const p = (pathname ?? "").replace(/\/$/, "") || "/";
   return p === `/${segment}`;
+}
+
+/** Header company dropdown guard: admin-hidden/deleted company normal app header me hide rahe. */
+function isCompanyVisibleInHeader(c: Company & { movedToAdminRecycleAt?: unknown }): boolean {
+  return c.isDeleted !== true && c.movedToAdminRecycleAt == null;
 }
 
 
@@ -1091,10 +1100,11 @@ function DateSystemSwitcher() {
         </DropdownMenuContent>
       </DropdownMenu>
       <DateFormatSettingsDialog open={dateFormatDialogOpen} onOpenChange={setDateFormatDialogOpen} />
-      {forcedViewMode === 'mobile' ? (
-        <Button 
-          variant="outline" 
-          size="icon" 
+      {/* Web + APK: PC Chrome jaisa 768 default + ye icon se force mobile/pc (`use-mobile`). */}
+      {forcedViewMode === "mobile" ? (
+        <Button
+          variant="outline"
+          size="icon"
           title="Switch to PC View"
           onClick={handlePCClick}
           className="h-9 w-9"
@@ -1103,9 +1113,9 @@ function DateSystemSwitcher() {
           <Monitor className="h-4 w-4" />
         </Button>
       ) : (
-        <Button 
-          variant="outline" 
-          size="icon" 
+        <Button
+          variant="outline"
+          size="icon"
           title="Switch to Mobile View"
           onClick={handleMobileClick}
           className="h-9 w-9"
@@ -1143,7 +1153,7 @@ export function DesktopAppHeader() {
           c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
       const mapped = filterSharedOnlyCompaniesForSuperAdminInMainApp(
         (contextCompanies || [])
-          .filter((c) => !c.isDeleted)
+          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
           .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[],
         user,
         isSuperAdminUser,
@@ -1154,7 +1164,8 @@ export function DesktopAppHeader() {
         listLocalCompanies()
           .then((rows) => {
             const mappedRows = rows
-              .filter((r: { isDeleted?: boolean }) => !r?.isDeleted)
+              // Local fallback me bhi hidden tab companies suppress rakho.
+              .filter((r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) => !r?.isDeleted && r?.movedToAdminRecycleAt == null)
               .map((r) => {
                 const c = { ...(r as unknown as Company) };
                 return { ...c, isOwned: isOwnedByUser(c) } as Company;
@@ -1250,7 +1261,7 @@ export function DesktopAppHeader() {
     listLocalCompanies()
       .then((rows) => {
         localCompaniesCache = rows
-          .filter((c: any) => !c?.isDeleted)
+          .filter((c: any) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
           .map((c) => ({ ...(c as unknown as Company), isOwned: isOwnedByCurrentUser(c as unknown as Company) }));
         combineAndSet();
       })
@@ -1263,7 +1274,7 @@ export function DesktopAppHeader() {
       (snap) => {
         ownedCompaniesCache = snap.docs
           .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-          .filter((c) => !c.isDeleted);
+          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
         ownedReady = true;
         combineAndSet();
       },
@@ -1278,7 +1289,7 @@ export function DesktopAppHeader() {
       (snap) => {
         sharedCompaniesCache = snap.docs
           .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-          .filter((c) => !c.isDeleted);
+          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
         sharedReady = true;
         combineAndSet();
       },
@@ -1294,7 +1305,7 @@ export function DesktopAppHeader() {
           (snap) => {
             ownedByEmailCache = snap.docs
               .map((doc) => ({ id: doc.id, ...doc.data() } as Company))
-              .filter((c) => !c.isDeleted);
+              .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }));
             ownedByEmailReady = true;
             combineAndSet();
           },
@@ -1325,6 +1336,41 @@ export function DesktopAppHeader() {
   // the control (Report, company, etc.) runs first; then we collapse. Toggle is excluded.
   const mobileHeaderRootRef = useRef<HTMLElement | null>(null);
 
+  /** Electron `.exe`: pink header ki quick-action strip (Add Sale…) hide/show — localStorage + View menu sync */
+  const isElectronDesk = isElectronDesktopApp();
+  const [quickActionsCollapsed, setQuickActionsCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem(PL_DESKTOP_QUICK_ACTIONS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    const sync = () => {
+      try {
+        setQuickActionsCollapsed(localStorage.getItem(PL_DESKTOP_QUICK_ACTIONS_KEY) === "1");
+      } catch {
+        setQuickActionsCollapsed(false);
+      }
+    };
+    window.addEventListener("pl-desktop-quick-actions-toggle", sync);
+    return () => window.removeEventListener("pl-desktop-quick-actions-toggle", sync);
+  }, []);
+
+  const toggleElectronQuickActionsRibbon = useCallback(() => {
+    try {
+      const nextHidden = localStorage.getItem(PL_DESKTOP_QUICK_ACTIONS_KEY) !== "1";
+      if (nextHidden) localStorage.setItem(PL_DESKTOP_QUICK_ACTIONS_KEY, "1");
+      else localStorage.removeItem(PL_DESKTOP_QUICK_ACTIONS_KEY);
+      setQuickActionsCollapsed(nextHidden);
+      window.dispatchEvent(new Event("pl-desktop-quick-actions-toggle"));
+    } catch {
+      setQuickActionsCollapsed((v) => !v);
+    }
+  }, []);
+
   useEffect(() => {
     if (!headerIsMobile || !mobileHeaderExpanded) return;
     const handleDocumentClick = (event: MouseEvent) => {
@@ -1338,74 +1384,99 @@ export function DesktopAppHeader() {
   }, [headerIsMobile, mobileHeaderExpanded]);
 
   return (
-    <header ref={mobileHeaderRootRef} className="relative sticky top-0 z-30 border-b bg-background px-2 py-2">
-      <div
-        className={cn(
-          "flex items-center gap-2 w-full min-w-0",
-          headerIsMobile ? (mobileHeaderExpanded ? "items-start" : "flex-nowrap") : "flex-wrap"
-        )}
-      >
+    <header ref={mobileHeaderRootRef} className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-0.5 py-0.5">
+      {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
+      {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
+      {/* User request: header container ko pink tone me dikhana */}
+      <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full min-w-0 p-2">
         <div
           className={cn(
-            "flex items-center gap-2 min-w-0",
-            headerIsMobile
-              ? mobileHeaderExpanded
-                ? "flex-1 flex-wrap overflow-visible"
-                : "flex-1 overflow-hidden"
-              : "flex-shrink-0"
+            "flex items-center gap-2 w-full min-w-0",
+            headerIsMobile ? (mobileHeaderExpanded ? "items-start" : "flex-nowrap") : "flex-wrap"
           )}
         >
-          <SidebarTrigger />
-          {loading ? (
-            <div className="h-8 w-32 animate-pulse rounded-md bg-muted" />
-          ) : (
-            <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
-          )}
-          <DateSystemSwitcher />
-          {/* Mobile request: report shortcuts should also move with the same horizontal scroll strip. */}
-          {headerIsMobile ? (
-            <>
-              <MobileReportButtonsOnly />
-              <ReportListButton />
-            </>
-          ) : null}
-        </div>
-
-        <HeaderActions />
-
-        {/* Desktop: spacer; mobile par grow hata kar saari cheezein scroll row me */}
-        {!headerIsMobile ? <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" /> : null}
-
-        <div className="flex items-center gap-2 flex-shrink-0 min-w-0 ml-auto">
-          {/* Mobile request: always show expand/collapse arrow + account avatar on the right. */}
-          {headerIsMobile ? (
-            <>
+          <div
+            className={cn(
+              "flex items-center gap-2 min-w-0",
+              headerIsMobile
+                ? mobileHeaderExpanded
+                  ? "flex-1 flex-wrap overflow-visible"
+                  : "flex-1 overflow-hidden"
+                : "flex-shrink-0"
+            )}
+          >
+            <SidebarTrigger />
+            {isElectronDesk && !headerIsMobile ? (
               <Button
                 type="button"
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 flex-shrink-0"
-                data-mobile-header-expand-toggle="true"
-                onClick={() => setMobileHeaderExpanded((prev) => !prev)}
-                title={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
-                aria-label={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+                onClick={toggleElectronQuickActionsRibbon}
+                title={
+                  quickActionsCollapsed
+                    ? "Show quick actions (Add Sale, Payment…)"
+                    : "Hide quick actions ribbon"
+                }
+                aria-label={
+                  quickActionsCollapsed ? "Show quick actions ribbon" : "Hide quick actions ribbon"
+                }
               >
-                {mobileHeaderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {quickActionsCollapsed ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronUp className="h-4 w-4" />
+                )}
               </Button>
-              <UserProfileButton />
-            </>
-          ) : null}
-          <AddNewButtonOnReportPage />
-          {!headerIsMobile && (
-            <>
-              {/* Desktop keeps report affordances on the right cluster (mobile handled in scroll strip above). */}
-              <UserProfileButton />
-              <ReportListButton />
-              <CopyLedgerHeaderButton />
-              <GlobalFileHoverPreviewSwitch />
-              <ScreenControls />
-            </>
-          )}
+            ) : null}
+            {loading ? (
+              <div className="h-8 w-32 animate-pulse rounded-md bg-background/60" />
+            ) : (
+              <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
+            )}
+            <DateSystemSwitcher />
+            {headerIsMobile ? (
+              <>
+                <MobileReportButtonsOnly />
+                <ReportListButton />
+              </>
+            ) : null}
+          </div>
+
+          {!(isElectronDesk && quickActionsCollapsed) ? <HeaderActions /> : null}
+
+          {/* Desktop alignment anchor: purane header ki tarah right tools ko edge par dhakelna */}
+          {!headerIsMobile ? <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" /> : null}
+
+          <div className="flex items-center gap-2 flex-shrink-0 min-w-0 ml-auto">
+            {headerIsMobile ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 flex-shrink-0"
+                  data-mobile-header-expand-toggle="true"
+                  onClick={() => setMobileHeaderExpanded((prev) => !prev)}
+                  title={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+                  aria-label={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+                >
+                  {mobileHeaderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </Button>
+                <UserProfileButton />
+              </>
+            ) : null}
+            <AddNewButtonOnReportPage />
+            {!headerIsMobile && (
+              <>
+                <UserProfileButton />
+                <ReportListButton />
+                <CopyLedgerHeaderButton />
+                <GlobalFileHoverPreviewSwitch />
+                <ScreenControls />
+              </>
+            )}
+          </div>
         </div>
       </div>
     </header>

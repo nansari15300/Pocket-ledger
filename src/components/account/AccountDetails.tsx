@@ -163,6 +163,10 @@ export function AccountDetails({
     return allAccounts.find(p => p.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [account.id, isAllVouchersView]);
+
   // Fix: "All Vouchers" view should still filter to the specific account, not all accounts
   // It should show all transaction types for this account, not all transactions for all accounts
   // Column header filters (Voucher No., User, …) — `useTransactions` mein `filteredByColumn` tabhi chale jab yahan `filters` pass ho

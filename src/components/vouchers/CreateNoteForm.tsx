@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printer } from "lucide-react";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
@@ -463,7 +463,6 @@ export function CreateNoteForm({
     e?.preventDefault?.();
     void form.handleSubmit(
       async (data) => {
-        onVoucherAction?.("saved", options.saveAndNew);
         await processAndSave(data, options.saveAndNew, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave, options.saveAndPrint);
       },
       (errors) => {
@@ -606,10 +605,6 @@ export function CreateNoteForm({
         } else {
           sonnerToast.success(isEdit ? "Note updated!" : "Note Saved!", { id: toastId });
         }
-        if (onVoucherAction && !saveAndNew) {
-          onVoucherAction('saved', false, result?.id ?? undefined);
-        }
-
         if (saveAndNew) {
             form.reset(getInitialFormValues(initialContext, initialEntityId));
             setFiles([]);
@@ -655,6 +650,8 @@ export function CreateNoteForm({
             ],
           }, true);
         }
+
+        onVoucherAction?.("saved", saveAndNew, result?.id ?? undefined);
     } catch (err) {
         if (err instanceof PermissionDeniedError) {
           sonnerToast.error("Permission Denied", { id: toastId, description: err.message });
@@ -714,6 +711,8 @@ export function CreateNoteForm({
               "space-y-4 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               isMobile ? "" : "px-[2px]"
             )}>
+              {/* Section 1: Note No + Date in one ribbon container. */}
+              <div className="rounded-lg border border-sky-300/80 bg-sky-50 p-3">
               {/* Voucher No. and Date */}
               {isMobile ? (
                 <>
@@ -891,44 +890,48 @@ export function CreateNoteForm({
                   </div>
                 </>
               )}
-                <FormField control={form.control} name="title" render={({ field }: any) => (<FormItem><FormLabel>Title</FormLabel><FormControl><Input placeholder="Note title" {...field} /></FormControl></FormItem>)} />
-                <div className="grid grid-cols-2 gap-4">
+              </div>
+              {/* Section 2: Title + Link To + Specific Party/Entity in one ribbon container. */}
+              <div className="rounded-lg border border-violet-300/80 bg-violet-50 p-3 space-y-4">
+                <FormField control={form.control} name="title" render={({ field }: any) => (<FormItem><FormLabel>Title</FormLabel><FormControl><Input placeholder="Note title" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                <div className={cn("grid gap-4", isMobile ? "grid-cols-1" : "grid-cols-2")}>
                      <FormField control={form.control} name="context" render={({ field }: any) => (
                         <FormItem><FormLabel>Link to</FormLabel><Select onValueChange={field.onChange} value={field.value}><FormControl><SelectTrigger><SelectValue placeholder="Select context" /></SelectTrigger></FormControl><SelectContent><SelectItem value="Party">Party</SelectItem><SelectItem value="Bank/Cash">Bank/Cash Account</SelectItem><SelectItem value="Staff">Staff</SelectItem><SelectItem value="Tax">Tax</SelectItem><SelectItem value="Items">Items</SelectItem><SelectItem value="Income">Income</SelectItem><SelectItem value="Expense">Expense</SelectItem></SelectContent></Select></FormItem>
                      )} />
-                    {selectedContext && (
-                         <FormField control={form.control} name="entityId" render={({ field }: any) => (
-                            <FormItem>
-                              <FormLabel>Specific {selectedContext}</FormLabel>
-                              {/* Combobox + filter: Dialog ke andar popoverModal=false taaki search input focus / list filter sahi kaam kare */}
-                              <FormControl>
-                                <Combobox
-                                  options={getEntityOptions()}
-                                  value={field.value}
-                                  onChange={(id, newName) => {
-                                    if (id === "add-new") {
-                                      openCreateEntityFromCombobox(newName);
-                                      return;
-                                    }
-                                    field.onChange(id);
-                                  }}
-                                  placeholder="Select entity"
-                                  searchPlaceholder={entityComboboxSearchPlaceholder}
-                                  addNewLabel={entityAddNewLabel}
-                                  disabled={editingDisabled}
-                                  contentWidthMode="auto"
-                                  popoverModal={false}
-                                  autoFocusSearchOnOpen
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                         )} />
-                    )}
+                    <FormField control={form.control} name="entityId" render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>{selectedContext ? `Specific ${selectedContext}` : "Specific Party / Entity"}</FormLabel>
+                        {/* Keep combobox in same section; disable until Link to context is selected. */}
+                        <FormControl>
+                          <Combobox
+                            options={getEntityOptions()}
+                            value={field.value}
+                            onChange={(id, newName) => {
+                              if (id === "add-new") {
+                                openCreateEntityFromCombobox(newName);
+                                return;
+                              }
+                              field.onChange(id);
+                            }}
+                            placeholder={selectedContext ? "Select entity" : "Select link to first"}
+                            searchPlaceholder={entityComboboxSearchPlaceholder}
+                            addNewLabel={entityAddNewLabel}
+                            disabled={editingDisabled || !selectedContext}
+                            contentWidthMode="auto"
+                            popoverModal={false}
+                            autoFocusSearchOnOpen
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
                 </div>
-                <FormField control={form.control} name="content" render={({ field }: any) => (<FormItem><FormLabel>Details</FormLabel><FormControl><Textarea placeholder="Details..." {...field} rows={6} /></FormControl></FormItem>)} />
+              </div>
+              {/* Section 3: Attachment + Narration together; mobile stacks, desktop puts narration on right. */}
+              <div className="rounded-lg border border-amber-300/80 bg-amber-50 p-3">
+                <div className={cn("grid gap-4 items-start", isMobile ? "grid-cols-1" : "grid-cols-2")}>
                 <div className="space-y-2">
-                  <FormLabel>Attachments</FormLabel>
+                  <FormLabel>Attach Files (Optional)</FormLabel>
                   {showPdfAsImageToggle && (
                     <VoucherPdfAsImageToggle
                       id="voucher-save-pdf-as-image-note"
@@ -986,6 +989,18 @@ export function CreateNoteForm({
                     </div>
                   </RestrictedFileUploader>
                 </div>
+                <FormField control={form.control} name="content" render={({ field }: any) => (
+                  <FormItem className="min-w-0">
+                    <FormLabel>Narration</FormLabel>
+                    <FormControl>
+                      {/* resize-y + max-h: static PC dialog me lambi narration scroll / drag se poori dikhe */}
+                      <Textarea placeholder="Narration..." {...field} rows={6} className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                </div>
+              </div>
             </div>
         </ScrollArea>
         <div className={cn("border-t min-w-0 max-w-full overflow-x-hidden shrink-0 bg-background", isMobile ? "mt-[3px] pt-[3px] pb-[max(6px,env(safe-area-inset-bottom,0px))]" : "pt-4 flex flex-col md:flex-row items-stretch md:items-center gap-4", !isMobile && useCompactFooter && "justify-end", !isMobile && !useCompactFooter && "justify-between")}>

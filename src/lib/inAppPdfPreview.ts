@@ -1,6 +1,7 @@
 "use client";
 
 import { Capacitor } from "@capacitor/core";
+import { importPdfJsDist } from "@/lib/importPdfJsDist";
 import { shouldUsePdfJsCanvasPreview } from "@/lib/shouldUseInAppPdfPreview";
 
 /**
@@ -311,12 +312,11 @@ export function showInAppPdfPreview(
       return;
     }
     try {
-      const pdfjsLib = await import("pdfjs-dist");
-      const pdfjs = pdfjsLib.default || pdfjsLib;
+      const { pdfjsLib, pdfjs } = await importPdfJsDist();
       const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
       const version =
         (pdfjsLib as { version?: string }).version ??
-        (pdfjs as { version?: string }).version ??
+        pdfjs.version ??
         PDFJS_WORKER_VERSION_FALLBACK;
       setPdfJsWorkerSrc(pdfjs, version);
 

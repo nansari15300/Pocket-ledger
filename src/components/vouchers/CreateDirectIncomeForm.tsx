@@ -45,7 +45,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDialog";
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
-import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
@@ -900,7 +900,8 @@ export function CreatePaymentInForm({
                   <FormItem>
                     <FormLabel>Narration</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="Additional details..." {...field} />
+                      {/* Narration: PC static dialog me resize + scroll */}
+                      <Textarea placeholder="Additional details..." {...field} className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

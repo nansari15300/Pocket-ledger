@@ -18,6 +18,7 @@ import { getBrowserDb } from "@/lib/localSqlite";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
+import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 
 /** UI/listeners ko batane ke liye: local `company_docs` update hua (static APk/Electron). */
 export const BROWSER_DB_COLLECTION_BUMP = "pocket-ledger-browser-db-bump";
@@ -37,6 +38,12 @@ export function notifyBrowserDbCollectionUpdated(companyId: string, collectionNa
 /** True jab local browser DB mirror chalana hai (static + web local-only). */
 function shouldMirrorToBrowserDb(): boolean {
   return isLocalOnlyMode();
+}
+
+/** Explicit row-delete: kabhi-kabhi `force` ho (Firestore wipe ke baad merge ghost rokna) chahe mirror write path band ho */
+function shouldApplyBrowserCompanyDocMutation(force?: boolean): boolean {
+  if (force === true && typeof window !== "undefined") return true;
+  return shouldMirrorToBrowserDb();
 }
 
 /**
@@ -166,6 +173,32 @@ export async function deleteAllCompanyDocsForCompany(companyId: string): Promise
   }
 }
 
+export type DeleteCompanyBrowserDbOptions = {
+  /** Offline mirror ke alawa backup-merge path pe bhi row hataao (Firestore deleteDoc ke baad stale merge rokna). */
+  force?: boolean;
+  notify?: boolean;
+};
+
+/** Firestore se doc permanently delete hone ke baad isi row ko SQLite mirror se hatado — mergeRemoteSnapshot extras se ghost list na बने. */
+export async function deleteCompanyDocFromBrowserDb(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  options?: DeleteCompanyBrowserDbOptions
+): Promise<void> {
+  // `force`: backup-merge SQLite row hataao jab authoritative doc Firestore se delete ho chuka ho (extras merge ghotala).
+  if (!shouldApplyBrowserCompanyDocMutation(options?.force) || typeof window === "undefined" || !companyId || !collectionName || !docId) return;
+  const notify = options?.notify !== false;
+  try {
+    const db = await getBrowserDb();
+    if (!db) return;
+    db.prepare("DELETE FROM company_docs WHERE company_id = ? AND collection = ? AND id = ?").run(companyId, collectionName, docId);
+    if (notify) notifyBrowserDbCollectionUpdated(companyId, collectionName);
+  } catch (e) {
+    console.warn("[localCompanyDocMirror] deleteCompanyDocFromBrowserDb failed", collectionName, docId, e);
+  }
+}
+
 /**
  * Generic upsert into company_docs; errors swallow — main Firestore flow kabhi fail na ho.
  */
@@ -236,7 +269,8 @@ export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: 
     );
     if (dec) payload = dec;
     else if (isEncryptedServerBackupDoc(payload)) return;
-    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
+    /** Post-flush Firebase read confirm — orphans ko extras merge band kare META se (extras par stamp mat lagu). */
+    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, stampLocalMirrorBackedByFirestore(payload));
   } catch (e) {
     console.warn("[localCompanyDocMirror] mirror voucher failed", voucherId, e);
   }

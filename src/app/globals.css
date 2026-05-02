@@ -3,6 +3,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Chromium/Android WebView + Samsung S25: `only` se UA "auto-darken" mix na kare; ribbon/card gradients browser jaisa rahein */
+@layer base {
+  html {
+    color-scheme: light only;
+  }
+}
+
 /* Master–detail lists: grid → dayaan amount (auto width) poora, baayaan naam minmax(0,1fr) + truncate */
 @layer components {
   .pl-master-list-row {
@@ -23,6 +30,125 @@
   }
   .pl-master-list-row-amount-xs {
     @apply justify-self-end text-right text-xs font-bold whitespace-nowrap tabular-nums;
+  }
+  /* Sidebar / header / mobile dock: primary rang ki patli ribbon — dashboard body se visual separation */
+  /* Purane Android System WebView: `hsl(var(--primary) / α)` ignore ho sakta hai — pseudo + opacity har version me ribbon dikhta hai */
+  .app-chrome-top-ribbon {
+    position: relative;
+    z-index: 0;
+  }
+  .app-chrome-top-ribbon::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 3px;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background-color: hsl(var(--primary));
+    opacity: 0.28;
+  }
+  .app-chrome-sidebar-ribbon {
+    position: relative;
+    z-index: 0;
+  }
+  .app-chrome-sidebar-ribbon::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: var(--radius) 0 0 var(--radius);
+    background-color: hsl(var(--primary));
+    opacity: 0.22;
+  }
+  /* Chrome blocks: dashboard stat cards jaisa rounded + border-2 + shadow; rang alag class se */
+  .pl-chrome-card {
+    @apply rounded-lg border-2 text-foreground shadow-sm;
+    /* Chrome cards me soft depth: dashboard cards jaisa halka upar chamak + niche dim tone */
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+  /* Dashboard-jaisa mild tones: kuch dim, kuch halka white, over-saturated colors avoid */
+  .pl-chrome-tone-sky {
+    @apply border-slate-200/90 bg-slate-50/90 dark:border-slate-800/85 dark:bg-slate-950/45;
+    /* Dashboard-card copy tone: side tint + center white, very soft contrast */
+    background-image: linear-gradient(92deg, rgba(241, 245, 249, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(241, 245, 249, 0.82) 100%);
+  }
+  .pl-chrome-tone-emerald {
+    @apply border-emerald-200/70 bg-emerald-50/65 dark:border-emerald-900/60 dark:bg-emerald-950/35;
+    /* Stock summary jaisa subtle green tone */
+    background-image: linear-gradient(92deg, rgba(236, 253, 245, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(236, 253, 245, 0.82) 100%);
+  }
+  .pl-chrome-tone-pink {
+    @apply border-pink-200/75 bg-pink-50/70 dark:border-pink-800/70 dark:bg-pink-950/35;
+    /* User request: Main sidebar ko dashboard-style soft pink tone do */
+    background-image: linear-gradient(92deg, rgba(253, 242, 248, 0.84) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(253, 242, 248, 0.84) 100%);
+  }
+  .pl-chrome-tone-violet {
+    @apply border-violet-200/70 bg-violet-50/60 dark:border-violet-800/70 dark:bg-violet-950/35;
+    /* Cash-flow/contra wale violet cards jaisa */
+    background-image: linear-gradient(92deg, rgba(245, 243, 255, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(245, 243, 255, 0.82) 100%);
+  }
+  .pl-chrome-tone-amber {
+    @apply border-amber-200/70 bg-amber-50/60 dark:border-amber-800/70 dark:bg-amber-950/35;
+    /* Tax summary type pale yellow */
+    background-image: linear-gradient(92deg, rgba(254, 252, 232, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(254, 252, 232, 0.82) 100%);
+  }
+  .pl-chrome-tone-cream {
+    @apply border-yellow-200/75 bg-yellow-50/65 dark:border-yellow-800/70 dark:bg-yellow-950/35;
+    /* Top brand card: very light yellow tone (user request), not too saturated */
+    background-image: linear-gradient(92deg, rgba(254, 249, 195, 0.62) 0%, rgba(255, 255, 255, 0.97) 50%, rgba(254, 249, 195, 0.62) 100%);
+  }
+  .pl-chrome-tone-rose {
+    @apply border-slate-200/90 bg-white/90 dark:border-slate-800/80 dark:bg-slate-950/40;
+    /* Mostly white card (dashboard ke neutral cards ke jaise) */
+    background-image: linear-gradient(92deg, rgba(248, 250, 252, 0.75) 0%, rgba(255, 255, 255, 0.97) 50%, rgba(248, 250, 252, 0.75) 100%);
+  }
+  .pl-chrome-tone-blue {
+    @apply border-blue-200/85 bg-blue-50/90 dark:border-blue-800/80 dark:bg-blue-950/40;
+    /* Blue ko thoda soft rakho: chamak rahe, lekin zyada dark na lage */
+    background-image: linear-gradient(92deg, rgba(191, 219, 254, 0.62) 0%, rgba(239, 246, 255, 0.98) 50%, rgba(191, 219, 254, 0.62) 100%);
+  }
+  .pl-chrome-tone-orange {
+    @apply border-orange-200/65 bg-orange-50/60 dark:border-orange-800/70 dark:bg-orange-950/35;
+    /* Bottom dock: soft orange card like dashboard accents */
+    background-image: linear-gradient(92deg, rgba(255, 247, 237, 0.82) 0%, rgba(255, 255, 255, 0.96) 50%, rgba(255, 247, 237, 0.82) 100%);
+  }
+  /* Financial summary ribbons: Samsung/WebView par Tailwind `bg-gradient-to-r` fail ho to bhi rgba `linear-gradient` paint hota hai */
+  .pl-dashboard-ribbon-emerald {
+    background-color: #ecfdf5 !important;
+    background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.98) 0%, #ffffff 50%, rgba(209, 250, 229, 0.92) 100%) !important;
+  }
+  .pl-dashboard-ribbon-sky {
+    background-color: #f0f9ff !important;
+    background-image: linear-gradient(90deg, rgba(224, 242, 254, 0.98) 0%, #ffffff 50%, rgba(207, 250, 254, 0.92) 100%) !important;
+  }
+  .pl-dashboard-ribbon-violet {
+    background-color: #f5f3ff !important;
+    background-image: linear-gradient(90deg, rgba(245, 243, 255, 0.98) 0%, #ffffff 50%, rgba(250, 232, 255, 0.92) 100%) !important;
+  }
+  .pl-dashboard-ribbon-amber {
+    background-color: #fffbeb !important;
+    background-image: linear-gradient(90deg, rgba(254, 252, 232, 0.98) 0%, #ffffff 50%, rgba(254, 243, 199, 0.92) 100%) !important;
+  }
+  .pl-dashboard-ribbon-rose {
+    background-color: #fff1f2 !important;
+    background-image: linear-gradient(90deg, rgba(255, 241, 242, 0.98) 0%, #ffffff 50%, rgba(252, 231, 243, 0.92) 100%) !important;
+  }
+  .pl-dashboard-ribbon-teal {
+    background-color: #f0fdfa !important;
+    background-image: linear-gradient(90deg, rgba(236, 253, 245, 0.96) 0%, #ffffff 50%, rgba(204, 251, 241, 0.9) 100%) !important;
+  }
+  .pl-dashboard-ribbon-indigo {
+    background-color: #eef2ff !important;
+    background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
   }
 }
 
@@ -53,6 +179,8 @@ body {
 @layer base {
   :root {
     --background: 0 0% 100%;
+    /* App chrome: nav sidebar, sticky header, mobile dashboard tabs — main scroll (cards) se halka alag */
+    --app-chrome: 214 32% 96%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
@@ -77,7 +205,7 @@ body {
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
     --radius: 0.5rem;
-    --sidebar-background: 0 0% 100%;
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: 222.2 84% 4.9%;
     --sidebar-primary: 22 96% 54%;
     --sidebar-primary-foreground: 210 40% 98%;
@@ -87,81 +215,99 @@ body {
     --sidebar-ring: 22 96% 54%;
   }
 
+  /* Electron + Windows: `100vh` kabhi layout viewport = poori screen hoti hai, niche taskbar UI clip ho jata hai — html/body chain `%` helpers ke liye */
+  html {
+    height: 100%;
+  }
+  body {
+    min-height: 100%;
+    margin: 0;
+  }
+
   .theme-pure-white { 
     --background: 0 0% 100%; 
+    --app-chrome: 214 32% 96%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --sidebar-background: 0 0% 100%;
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: 222.2 84% 4.9%;
   }
   .theme-soft-green { 
     --background: 160 70% 95%; 
+    --app-chrome: 160 55% 90%;
     --foreground: 95 35% 20%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
     --muted: 95 35% 85%;
   }
   .theme-dim-soft-green { 
     --background: 140 200% 96.5%; 
+    --app-chrome: 140 45% 93%;
     --foreground: 540 50% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
   }
   .theme-soft-blue { 
     --background: 197 71% 94%;
+    --app-chrome: 200 50% 90%;
     --foreground: 210 90% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
   }
   .theme-sky-blue { 
     --background: 197 71% 85%;
+    --app-chrome: 205 55% 80%;
     --foreground: 159 89% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
   }
   .theme-soft-yellow { 
     --background: 48 100% 96%; 
+    --app-chrome: 48 85% 91%;
     --foreground: 45 95% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
   }
   .theme-soft-pink { 
     --background: 350 100% 94%; 
+    --app-chrome: 350 85% 89%;
     --foreground: 350 80% 25%; 
     --card: var(--background);
     --card-foreground: var(--foreground);
     --popover: var(--background);
     --popover-foreground: var(--foreground);
-    --sidebar-background: var(--background);
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: var(--foreground);
   }
 
   /* Colorfull: sab jagah same dim green background; sidebar bold nahi; buttons alag-alag single color; saari lines black 20% kam (dark grey) */
   .theme-colorfull {
     --background: 140 28% 94%;
+    /* Header/sidebar/dock: pehle wala sidebar tone — main list-page se ab bhi alag */
+    --app-chrome: 140 22% 88%;
     --foreground: 140 30% 18%;
     --card: 140 22% 96%;
     --card-foreground: 140 30% 18%;
@@ -170,7 +316,7 @@ body {
     --muted: 140 20% 90%;
     --muted-foreground: 140 25% 40%;
     --border: 0 0% 20%;
-    --sidebar-background: 140 22% 88%;
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: 140 35% 18%;
     --sidebar-primary: 140 50% 38%;
     --sidebar-primary-foreground: 0 0% 98%;
@@ -179,7 +325,7 @@ body {
     --sidebar-border: 0 0% 20%;
     --sidebar-ring: 140 50% 38%;
     --input: 0 0% 20%;
-    --header-bg: 140 28% 94%;
+    --header-bg: var(--app-chrome);
     --list-page-bg: 140 28% 94%;
     --details-header-bg: 140 28% 94%;
     --table-header-bg: 210 40% 88%;
@@ -220,7 +366,8 @@ body {
     --border: 220 13% 25%;
     --input: 220 13% 25%;
     --ring: 22 96% 54%;
-    --sidebar-background: var(--background);
+    --app-chrome: 220 13% 14%;
+    --sidebar-background: var(--app-chrome);
     --sidebar-foreground: 210 20% 88%;
     --sidebar-primary: 22 96% 54%;
     --sidebar-primary-foreground: 210 40% 98%;

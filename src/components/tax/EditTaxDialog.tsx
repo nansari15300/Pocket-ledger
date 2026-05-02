@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Combobox } from "../ui/combobox";
@@ -170,6 +171,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     const taxRefSnap = tax;
 
     void (async () => {
+      beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
       const toastId = sonnerToast.loading("Updating tax...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
       const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";

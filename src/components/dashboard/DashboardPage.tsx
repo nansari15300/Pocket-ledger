@@ -40,8 +40,15 @@ import {
   FileDigit,
   FileText as FileTextIcon,
   Filter,
-  Wand2
+  Wand2,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  StickyNote,
+  Factory,
+  HandCoins,
+  BarChart3,
 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -77,6 +84,11 @@ import {
 import { useDate } from '@/hooks/useDate';
 import { openPrintDirect } from "@/lib/printDirect";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
+import {
+  voucherCountsAsDashboardPaySalary,
+  voucherCountsAsDashboardPaymentOutExcludingPaySalary,
+} from "@/lib/dashboardPaySalaryStat";
+import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DaybookReport } from '@/components/reports/DaybookReport';
@@ -92,6 +104,7 @@ import { AddVoucherDialog } from '@/components/vouchers/AddVoucherDialog';
 import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
 import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
+import { DASHBOARD_VIEW_DETAILS_TABLE_CN } from "@/lib/dashboardViewDetailsTableClass";
 
 // Type definitions
 type Voucher = {
@@ -163,6 +176,7 @@ function getTransactionAmounts(transaction: any) {
   return { debit, credit };
 }
 
+// Payment Out card: staff Pay To wale Pay Salary bucket me — yahan party/tax/expense/other payout
 const statCardData = [
   { title: 'Sales', icon: ShoppingBag, type: 'sale', link: '/sale', isCredit: true },
   { title: 'Purchases', icon: ShoppingCart, type: 'purchase', link: '/purchase', isCredit: false },
@@ -171,6 +185,11 @@ const statCardData = [
   { title: 'Contra', icon: Landmark, type: 'contra', link: '/contra', isCredit: false },
   { title: 'Direct Income', icon: TrendingUp, type: 'direct_income', link: '/incomes', isCredit: true },
   { title: 'Direct Expense', icon: TrendingDown, type: 'direct_expense', link: '/incomes', isCredit: false },
+  { title: 'Payment In', icon: ArrowDownCircle, type: 'payment_in', link: '/payment-in', isCredit: true },
+  { title: 'Payment Out', icon: ArrowUpCircle, type: 'payment_out_excl_pay_salary', link: '/payment-out', isCredit: false },
+  { title: 'Pay Salary', icon: HandCoins, type: 'pay_salary', link: '/add-salary', isCredit: false },
+  { title: 'Notes', icon: StickyNote, type: 'note', link: '/notes', isCredit: true },
+  { title: 'Production', icon: Factory, type: 'production', link: '/production', isCredit: true },
 ];
 
 // --- REUSABLE DATE FILTER COMPONENT ---
@@ -449,7 +468,8 @@ useEffect(() => {
             </CardHeader>
             <CardContent className="flex-1 flex flex-col min-h-0 p-0">
                 <ScrollArea className="flex-1 w-full">
-                  <Table>
+                  {/* Patla row divider — global Table 3px black override (Bank/Cash card + summary rows). */}
+                  <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Account</TableHead>
@@ -473,7 +493,8 @@ useEffect(() => {
                                 </motion.tr>
                             ))}
                         </AnimatePresence>
-                         <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
+                         {/* Summary separator: pehle border-b-2 tha; view details jaisa patla rakha */}
+                         <TableRow className="font-bold bg-muted/50 border-b border-border/75">
                             <TableCell colSpan={2}>Bank Total</TableCell>
                             <TableCell className="text-right text-green-600">{formatCurrency(bankCashSummary.totalBankInflow, {noSuffix: true, duration: 2})}</TableCell>
                             <TableCell className="text-right text-red-600">{formatCurrency(bankCashSummary.totalBankOutflow, {noSuffix: true, duration: 2})}</TableCell>
@@ -494,7 +515,7 @@ useEffect(() => {
                                 </motion.tr>
                             ))}
                         </AnimatePresence>
-                         <TableRow className="font-bold bg-muted/50 border-b-2 border-foreground">
+                         <TableRow className="font-bold bg-muted/50 border-b border-border/75">
                             <TableCell colSpan={2}>Cash Total</TableCell>
                             <TableCell className="text-right text-green-600">{formatCurrency(bankCashSummary.totalCashInflow, {noSuffix: true, duration: 2})}</TableCell>
                             <TableCell className="text-right text-red-600">{formatCurrency(bankCashSummary.totalCashOutflow, {noSuffix: true, duration: 2})}</TableCell>
@@ -818,8 +839,8 @@ export default function DashboardPage() {
     return { amount: 0, side: "equal" as const };
   }, [receivablesPayablesDialogListTotals]);
 
-  /** Outstanding dialog tables: mobile par account … truncate, Amount column poora. */
-  const rpDlgTableClass = cn(isMobile && "w-full table-fixed");
+  /** Outstanding dialog tables: mobile par account … truncate, Amount column poora + patla horizontal line. */
+  const rpDlgTableClass = cn(DASHBOARD_VIEW_DETAILS_TABLE_CN, isMobile && "w-full table-fixed");
   const rpDlgAccountThClass = cn(isMobile && "min-w-0 w-[58%] max-w-[58%]");
   const rpDlgAmountThClass = cn("text-right", isMobile && "w-[42%] min-w-0 whitespace-nowrap");
   const rpDlgAccountTdClass = cn(isMobile && "min-w-0 max-w-0 truncate");
@@ -1070,29 +1091,28 @@ export default function DashboardPage() {
 }, [processedItems, vouchers, stockDateRange]);
 
   const stats = React.useMemo(() => {
-    if (!vouchers) return { paymentInTotal: 0, paymentOutTotal: 0, otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
-
-    const paymentInTotal = vouchers.filter(v => v.type === 'payment_in').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
-    const paymentOutTotal = vouchers.filter(v => v.type === 'payment_out').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
+    if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
     const otherStats = statCardData.map((card) => {
       const filteredVouchers = vouchers.filter((v) => {
         if (card.type === 'journal') return v.type === 'journal' && !v.subType;
         if (card.type === 'add_salary') return v.type === 'journal' && v.subType === 'add_salary';
+        if (card.type === 'pay_salary') return voucherCountsAsDashboardPaySalary(v);
+        if (card.type === 'payment_out_excl_pay_salary') return voucherCountsAsDashboardPaymentOutExcludingPaySalary(v);
         return v.type === card.type;
       });
-      
+
       let total = 0;
       if (card.type === 'journal' || card.type === 'add_salary' || card.type === 'contra') {
-            total = filteredVouchers.reduce((sum, v) => sum + Number(getTransactionAmounts(v).debit), 0);
+        total = filteredVouchers.reduce((sum, v) => sum + Number(getTransactionAmounts(v).debit), 0);
       } else {
-            total = filteredVouchers.reduce((sum, v) => sum + Number(v.total || v.amount || 0), 0);
+        total = filteredVouchers.reduce((sum, v) => sum + Number(v.total || v.amount || 0), 0);
       }
 
       return { ...card, total, count: filteredVouchers.length };
     });
 
-    return { paymentInTotal, paymentOutTotal, otherStats };
+    return { otherStats };
   }, [vouchers]);
   
   // Unapproved quick filter: force all-time + all types + clear table column filters.
@@ -1693,7 +1713,7 @@ export default function DashboardPage() {
                                                 <h3 className="text-lg font-semibold mb-2 text-green-600">Inflow</h3>
                                                 <div className="flex-1 border rounded-lg flex flex-col min-h-0">
                                                     <ScrollArea className="flex-1 min-w-0">
-                                                        <Table className="w-full table-fixed">
+                                                        <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                             <TableBody>
                                                                 {orderedCashFlowCategories(cashFlowDetails.categorizedInflow).map(([category, items]) => { 
                                                                     if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
@@ -1720,7 +1740,7 @@ export default function DashboardPage() {
                                                 <h3 className="text-lg font-semibold mb-2 text-red-600">Outflow</h3>
                                                 <div className="flex-1 border rounded-lg flex flex-col min-h-0">
                                                     <ScrollArea className="flex-1 min-w-0">
-                                                        <Table className="w-full table-fixed">
+                                                        <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                             <TableBody>
                                                                 {orderedCashFlowCategories(cashFlowDetails.categorizedOutflow).map(([category, items]) => { 
                                                                     if(cashFlowCategoryFilter !== 'all' && cashFlowCategoryFilter.replace('_', ' / ').toLowerCase() !== category.toLowerCase()) return null; 
@@ -1791,7 +1811,7 @@ export default function DashboardPage() {
                                              <div className="flex flex-col min-h-0">
                                                 <h3 className="text-base font-semibold p-3 text-center text-green-600 border-b bg-green-50/50">Input (Paid)</h3>
                                                 <ScrollArea className="flex-1">
-                                                    <Table>
+                                                    <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                                                         <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Voucher</TableHead><TableHead>Account</TableHead><TableHead className="text-right">Tax</TableHead></TableRow></TableHeader>
                                                         <TableBody>
                                                             {(taxFilter === 'all' || taxFilter === 'input') && taxBreakdownData.inputs.map((tx, i) => (
@@ -1815,7 +1835,7 @@ export default function DashboardPage() {
                                              <div className="flex flex-col min-h-0">
                                                 <h3 className="text-base font-semibold p-3 text-center text-red-600 border-b bg-red-50/50">Output (Collected)</h3>
                                                 <ScrollArea className="flex-1">
-                                                    <Table>
+                                                    <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                                                         <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Voucher</TableHead><TableHead>Account</TableHead><TableHead className="text-right">Tax</TableHead></TableRow></TableHeader>
                                                         <TableBody>
                                                             {(taxFilter === 'all' || taxFilter === 'output') && taxBreakdownData.outputs.map((tx, i) => (
@@ -1953,13 +1973,13 @@ export default function DashboardPage() {
                                     <div className="flex-1 p-4 flex flex-col min-h-0 min-w-0">
                                         <div className="border rounded-lg flex-1 flex flex-col min-h-0 min-w-0 overflow-x-auto overflow-y-auto overscroll-x-contain">
                                             <div className="min-w-max">
-                                            <Table><TableHeader><TableRow><TableHead>Item Name</TableHead><TableHead className="text-right">Quantity</TableHead><TableHead className="text-right">Rate</TableHead><TableHead className="text-right">Value</TableHead></TableRow></TableHeader></Table>
-                                                <Table>
+                                            <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}><TableHeader><TableRow><TableHead>Item Name</TableHead><TableHead className="text-right">Quantity</TableHead><TableHead className="text-right">Rate</TableHead><TableHead className="text-right">Value</TableHead></TableRow></TableHeader></Table>
+                                                <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                                                     <TableBody>
                                                         {overallStockSummary.items.map((item, i) => ( <TableRow key={i}><TableCell className="font-medium whitespace-nowrap">{item.name}</TableCell><TableCell className="text-right whitespace-nowrap">{item.qty.toFixed(2)} {item.unit}</TableCell><TableCell className="text-right whitespace-nowrap">{formatCurrency(item.rate, {noSuffix: true})}</TableCell><TableCell className="text-right font-bold whitespace-nowrap">{formatCurrency(item.value, {noSuffix: true})}</TableCell></TableRow> ))}
                                                     </TableBody>
                                                 </Table>
-                                            <Table><TableFooter><TableRow><TableCell className="font-bold whitespace-nowrap" colSpan={3}>Total Stock Value</TableCell><TableCell className="text-right font-bold text-green-600 whitespace-nowrap">{formatCurrency(overallStockSummary.totalStockValue, {noSuffix: true})}</TableCell></TableRow></TableFooter></Table>
+                                            <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}><TableFooter><TableRow><TableCell className="font-bold whitespace-nowrap" colSpan={3}>Total Stock Value</TableCell><TableCell className="text-right font-bold text-green-600 whitespace-nowrap">{formatCurrency(overallStockSummary.totalStockValue, {noSuffix: true})}</TableCell></TableRow></TableFooter></Table>
                                             </div>
                                         </div>
                                     </div>
@@ -1970,13 +1990,18 @@ export default function DashboardPage() {
                 </CardContent>
             </Card>
   
-        {can("view_voucher_type_summaries") && stats.otherStats.map((stat) => (
+        {can("view_voucher_type_summaries") && stats.otherStats.map((stat) => {
+            const deepHref = dashboardStatCardReportHref(stat.type);
+            const canClickTxns =
+              !!deepHref && (deepHref.startsWith("/reports") ? can("export_data") : true);
+            return (
             <Card key={stat.type} className="hover:bg-muted/50 transition-colors border-foreground/20">
               <CardHeader className="p-3 flex-row items-center justify-between">
                   <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
                   <stat.icon className="h-5 w-5 text-muted-foreground" />
               </CardHeader>
               <CardContent className="p-3 pt-0">
+                  {/* Journal-style debit total sirf journal / add_salary / contra */}
                   {stat.type === 'journal' || stat.type === 'add_salary' || stat.type === 'contra' ? (
                       <div className='text-xl font-bold text-blue-600'>{formatCurrency(stat.total, { noSuffix: true, duration: 2 })}</div>
                   ) : (
@@ -1984,10 +2009,20 @@ export default function DashboardPage() {
                           {formatCurrency(stat.total, { noSuffix: true, duration: 2 })}
                       </div>
                   )}
-                  <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
+                  {canClickTxns ? (
+                    <Link
+                      href={deepHref}
+                      // Dashboard quick-jump labels: blue link treatment so users can identify click target.
+                      className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5"
+                    >
+                      {stat.count} transaction(s)
+                    </Link>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
+                  )}
               </CardContent>
             </Card>
-        ))}
+          );})}
   
         {can("view_entity_counts_summary") && (
           <>
@@ -2085,12 +2120,50 @@ export default function DashboardPage() {
     </div>
   );
 
+  const renderDashboardCharts = () => {
+    // Dashboard chart mirrors current stat-card totals/counts so tab numbers and chart stay in sync.
+    const chartData = stats.otherStats.map((s) => ({
+      name: s.title,
+      amount: Number(s.total || 0),
+      txns: Number(s.count || 0),
+    }));
+
+    return (
+      <Card className="border-foreground/20">
+        <CardHeader className="p-3 pb-2">
+          {/* Clear heading helps users identify this is visual summary of same dashboard cards. */}
+          <CardTitle className="text-sm">Voucher Summary Chart</CardTitle>
+        </CardHeader>
+        <CardContent className="p-3 pt-0">
+          <div className="h-[320px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-15} textAnchor="end" height={55} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(value: number, key: string) =>
+                    key === "amount"
+                      ? [formatCurrency(value, { noSuffix: true, duration: 2 }), "Amount"]
+                      : [String(value), "Transactions"]
+                  }
+                />
+                <Bar dataKey="amount" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
   const renderDashboardContent = () => {
     const shouldShow = (cardId: string) => visibleCard === 'all' || visibleCard === cardId;
 
     return (
-    <div className="space-y-3">
+    <div className="space-y-0.5">
       {shouldShow('financial-summaries') && renderFinancialSummaries(isReportsEnabled)}
+      {shouldShow('dashboard-charts') && renderDashboardCharts()}
       {shouldShow('bank-cash-summary') && can('view_bank_cash_summary') && <BankCashSummary />}
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
@@ -2142,6 +2215,7 @@ export default function DashboardPage() {
   const dashboardCards = [
     { id: 'all', title: 'All' },
     { id: 'financial-summaries', title: 'Summary' },
+    { id: 'dashboard-charts', title: 'Chart' },
     { id: 'bank-cash-summary', title: 'Bank' },
     { id: 'daybook', title: 'Daybook' },
     { id: 'recent-transactions', title: 'Recent' },
@@ -2153,24 +2227,40 @@ export default function DashboardPage() {
         {renderDashboardContent()}
       </div>
        
-      <div className="fixed bottom-0 left-0 md:left-64 right-0 p-2 border-t bg-background/95 backdrop-blur-sm flex items-center justify-around gap-2 h-16 z-40">
-        {dashboardCards.map(card => {
-              const Icon = card.id === 'all' ? Home : card.id === 'financial-summaries' ? TrendingUp : card.id === 'daybook' ? FileTextIcon : card.id === 'bank-cash-summary' ? Landmark : History;
-              return (
-                  <Button 
-                      key={card.id}
-                      variant="ghost"
-                      className={cn(
-                          "flex-1 flex-col h-full p-2 text-muted-foreground",
-                          visibleCard === card.id && "bg-primary/10 text-primary"
-                      )}
-                      onClick={() => setVisibleCard(card.id)}
-                  >
-                      <Icon className="h-5 w-5 mb-1" />
-                      <span className="text-xs">{card.title}</span>
-                  </Button>
-              )
+      <div className="fixed bottom-0 left-0 right-0 z-40 p-0.5 md:left-64">
+        {/* User request: footer tabs ek hi green container me, row-layout labels ke saath */}
+        <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex h-16 items-stretch justify-center gap-0.5 p-2">
+          {dashboardCards.map((card) => {
+            const Icon =
+              card.id === "all"
+                ? Home
+                : card.id === "financial-summaries"
+                  ? TrendingUp
+                  : card.id === "dashboard-charts"
+                    ? BarChart3
+                  : card.id === "daybook"
+                    ? FileTextIcon
+                    : card.id === "bank-cash-summary"
+                      ? Landmark
+                      : History;
+            return (
+              <Button
+                key={card.id}
+                variant="ghost"
+                className={cn(
+                  // Desktop/PC: icon left + label right in same row; mobile: icon hide, text center
+                  "h-full min-h-[3.25rem] min-w-0 flex-1 rounded-md border-2 border-emerald-200/65 bg-white/55 px-2 py-1 text-muted-foreground dark:border-emerald-800/45 dark:bg-background/35",
+                  isMobile ? "justify-center text-center" : "justify-center flex-row items-center gap-1.5",
+                  visibleCard === card.id && "border-primary/45 bg-primary/15 text-primary shadow-sm hover:bg-primary/12"
+                )}
+                onClick={() => setVisibleCard(card.id)}
+              >
+                {!isMobile && <Icon className="h-4.5 w-4.5 shrink-0" />}
+                <span className="text-[10px] font-medium leading-tight sm:text-xs">{card.title}</span>
+              </Button>
+            );
           })}
+        </div>
       </div>
        <AddVoucherDialog 
           isOpen={isVoucherDialogOpen}

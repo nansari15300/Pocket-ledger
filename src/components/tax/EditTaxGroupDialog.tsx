@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { useAuth } from "@/hooks/useAuth";
 import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
@@ -65,6 +66,7 @@ export function EditTaxGroupDialog({ group, allGroups, onGroupUpdated, onGroupDe
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
     
     setIsOpen(false);
     

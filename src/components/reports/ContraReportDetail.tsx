@@ -16,9 +16,11 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 export function ContraReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts, userNames } = useVouchers();
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
@@ -75,6 +77,14 @@ export function ContraReportDetail() {
   const REPORT_MEMORY_KEY = "reportContraState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedAccount(null);
+      }
+      return;
+    }
     if (accountsWithContra.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -92,7 +102,7 @@ export function ContraReportDetail() {
       }
     } catch (_) {}
     setSelectedAccount(accountsWithContra[0]);
-  }, [accountsWithContra, isMobile]);
+  }, [accountsWithContra, isMobile, searchParams]);
 
   const handleSelectAccount = useCallback((account: Account) => {
     setShowAllCompanyVouchers(false);

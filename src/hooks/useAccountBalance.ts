@@ -15,11 +15,13 @@ export function useAccountBalance(accountId: string | null | undefined) {
   const { can } = usePermissions();
 
   const accountDetails = useMemo(() => {
-    if (!accountId) {
+    // Firestore / copy-seed ids kabhi trailing space ya number vs string mismatch — strict `===` se row miss ho jati thi.
+    const key = String(accountId ?? "").trim();
+    if (!key) {
       return { account: null, displayBalance: null };
     }
 
-    const account = processedAccounts.find(a => a.id === accountId);
+    const account = processedAccounts.find((a) => String(a.id ?? "").trim() === key);
 
     if (!account) {
       return { account: null, displayBalance: null };

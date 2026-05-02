@@ -2,6 +2,7 @@
 "use client"
 
 import * as React from "react"
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative"
 
 // Check if device is actually a mobile device (phones + tablets)
 export function isRealMobileDevice(): boolean {
@@ -92,7 +93,7 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     };
   }, [isClient]);
 
-  // Mount: saved PC/Mobile choice restore (phone + desktop) — landscape se auto-PC band; sirf saved / icon
+  // Mount: saved PC/Mobile restore — web + APK dono (header icon PC Chrome jaisa 768 + toggle).
   React.useEffect(() => {
     if (!isClient) return;
     const savedMode = localStorage.getItem("forcedViewMode") as "mobile" | "pc" | null;
@@ -109,7 +110,19 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
       const portrait = getIsPortrait();
       const realMobile = isRealMobileDevice();
 
-      // Phone: landscape rotate se auto PC view NAHI — default mobile layout; PC sirf icon / saved `forcedViewMode === 'pc'`
+      // Capacitor APK: PC Chrome jaisa — default `innerWidth < 768`; icon se forced mobile/pc override
+      if (isCapacitorNativeApp()) {
+        if (forcedViewMode === "mobile") {
+          setIsMobile(true);
+        } else if (forcedViewMode === "pc") {
+          setIsMobile(false);
+        } else {
+          setIsMobile(window.innerWidth < 768);
+        }
+        return;
+      }
+
+      // Web phone: default mobile; PC sirf icon / saved `forcedViewMode === 'pc'`
       if (isRealMobilePhone()) {
         if (forcedViewMode === "pc") {
           setIsMobile(false);
@@ -173,6 +186,15 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
     } else {
       localStorage.removeItem("forcedViewMode");
     }
+
+    // APK pehle — web-phone branch na chhede (UA phone hone par bhi 768 + toggle chahiye)
+    if (typeof window !== "undefined" && isCapacitorNativeApp()) {
+      if (mode === "mobile") setIsMobile(true);
+      else if (mode === "pc") setIsMobile(false);
+      else setIsMobile(window.innerWidth < 768);
+      return;
+    }
+
     // Phone par bhi PC/Mobile toggle ka asar ho — pehle portrait me early return se icon kaam nahi karta tha
     if (isRealMobilePhone()) {
       if (mode === "pc") setIsMobile(false);

@@ -99,6 +99,7 @@ import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
@@ -256,6 +257,22 @@ export function CreateItemDialog({
     };
   }, [form, defaultType]);
   
+  /** Save & Copy To: source company ki poori item row se form bharo (Payment In party-full jaisa). */
+  useEffect(() => {
+    const handlePrefillRow = (event: Event) => {
+      const ce = event as CustomEvent<{ rowPayload?: Record<string, unknown>; type?: "item" | "service" | "finished_good" }>;
+      const row = ce.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      const t = (ce.detail?.type || defaultType || "item") as "item" | "service" | "finished_good";
+      const patch = itemStrippedRowToCreateItemFormPatch(row, t);
+      const resolvedType = (patch.type as typeof t) || t;
+      const base = getInitialFormValues(resolvedType);
+      form.reset({ ...base, ...patch } as z.infer<typeof formSchema>);
+    };
+    document.addEventListener("prefill-create-item-from-row", handlePrefillRow as EventListener);
+    return () => document.removeEventListener("prefill-create-item-from-row", handlePrefillRow as EventListener);
+  }, [form, defaultType]);
+
   // Only reset form when main dialog opens (not when nested dialogs open/close)
   const prevIsOpenRef = useRef(false);
   const defaultTypeRef = useRef(defaultType);

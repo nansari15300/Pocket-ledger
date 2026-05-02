@@ -19,9 +19,11 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 export function PurchaseReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { companyId } = useCompany();
   const { formatCurrency } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties } = useVouchers();
@@ -104,6 +106,14 @@ export function PurchaseReportDetail() {
   const REPORT_MEMORY_KEY = "reportPurchaseRegisterState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedParty(null);
+      }
+      return;
+    }
     if (partiesWithPurchases.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -121,7 +131,7 @@ export function PurchaseReportDetail() {
       }
     } catch (_) {}
     setSelectedParty(partiesWithPurchases[0]);
-  }, [partiesWithPurchases, isMobile]);
+  }, [partiesWithPurchases, isMobile, searchParams]);
 
   const handleSelectParty = useCallback((party: Party) => {
     setShowAllCompanyVouchers(false);

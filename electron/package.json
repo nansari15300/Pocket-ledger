@@ -8,8 +8,9 @@
     "dev:web": "cd .. && npm run dev",
     "dev:electron": "wait-on http://localhost:3000 && electron .",
     "build:web": "cd .. && npm run build:static",
-    "build": "electron-builder --win --projectDir .",
-    "build:win": "electron-builder --win --projectDir .",
+    "gen-icon": "node scripts/gen-win-icon.mjs",
+    "build": "npm run gen-icon && electron-builder --win --projectDir .",
+    "build:win": "npm run gen-icon && electron-builder --win --projectDir .",
     "build:linux": "electron-builder --linux --projectDir ."
   },
   "build": {
@@ -21,6 +22,9 @@
     },
     "files": [
       "main.js",
+      "tab-strip.html",
+      "tab-strip.js",
+      "tab-strip-preload.js",
       {
         "from": "../out",
         "to": "out",
@@ -39,7 +43,16 @@
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false,
-      "icon": "../public/app-icon.png"
+      "icon": "build/icon.ico",
+      "executableName": "Pocket Ledger"
+    },
+    "nsis": {
+      "shortcutName": "Pocket Ledger",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "icon": "../public/app-icon.png"
   },
@@ -47,6 +60,8 @@
     "concurrently": "^9.2.1",
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
+    "jimp": "^1.6.1",
+    "png-to-ico": "^3.0.1",
     "wait-on": "^9.0.4"
   },
   "dependencies": {

@@ -1,6 +1,6 @@
 "use client";
 
-import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { computeIsLocalOnlyMode } from "@/lib/dataSourceModeDefaults";
 
 /**
  * Jab naya company sirf SQLite pe banana ho (Firestore "Online / Local" chooser hi na dikhe).
@@ -11,14 +11,7 @@ export function isForceLocalCompanyCreationBuild(): boolean {
   return process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === "1";
 }
 
-/** Local-only mode: static build ya env-flag web (login still required). */
+/** Local-only mode: static/APK, env-flag, ya user ne Local choose kiya; web default ab Firebase (server). */
 export function isLocalOnlyMode(): boolean {
-  if (typeof window !== "undefined") {
-    const mode = window.localStorage.getItem("dataSourceMode");
-    // Local-first default: missing key bhi local treat karo to startup me accidental Firestore listeners na lage.
-    if (!mode || mode === "local") return true;
-  }
-  if (isStaticAppBuild()) return true;
-  if (process.env.NEXT_PUBLIC_LOCAL_ONLY_MODE === "1") return true;
-  return false;
+  return computeIsLocalOnlyMode();
 }

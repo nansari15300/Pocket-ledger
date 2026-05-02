@@ -1,5 +1,6 @@
 "use client";
 
+import { importPdfJsDist } from "@/lib/importPdfJsDist";
 import {
   alternatePdfJsWorkerSrc,
   PDFJS_WORKER_VERSION_FALLBACK,
@@ -261,19 +262,18 @@ async function tryRasterizePdfToSmaller(file: File, maxBytes: number): Promise<F
   if (typeof document === "undefined") return file;
 
   try {
-    const pdfjsLib = await import("pdfjs-dist");
-    const pdfjs = pdfjsLib.default || pdfjsLib;
+    const { pdfjsLib, pdfjs } = await importPdfJsDist();
     const version =
       (pdfjsLib as { version?: string }).version ??
-      (pdfjs as { version?: string }).version ??
+      pdfjs.version ??
       PDFJS_WORKER_VERSION_FALLBACK;
 
     setPdfJsWorkerSrc(pdfjs as never, version);
 
     const data = await file.arrayBuffer();
-    const loadingTask = (pdfjs as { getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<PdfJsDocLike> } }).getDocument({
+    const loadingTask = pdfjs.getDocument({
       data,
-    });
+    }) as { promise: Promise<PdfJsDocLike>; destroy?: () => void };
     const pdfSrc = await loadingTask.promise;
 
     if (pdfSrc.numPages > MAX_PDF_PAGES_FOR_RASTER) {

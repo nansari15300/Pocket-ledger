@@ -54,6 +54,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
+import { expenseAccountPrefillPartsFromRow, fetchRemoteUrlAsFile } from "@/lib/crossCompanyMasterPrefill";
 
 function createLocalEntityId(prefix: string): string {
   // Local-first mode me account create ke liye stable client-side id use karo.
@@ -81,6 +82,7 @@ export function CreateExpenseAccountDialog({
   isOpen,
   onOpenChange,
   defaultGroupType,
+  contextNote,
 }: {
   onExpenseAccountCreated: (id: string) => void;
   children?: React.ReactNode;
@@ -88,6 +90,7 @@ export function CreateExpenseAccountDialog({
   onOpenChange?: (open: boolean) => void;
   /** When "income", default to first Income group (for Sale form Sales Account). */
   defaultGroupType?: "income" | "expense";
+  contextNote?: string;
 }) {
   const [isLoading, setIsLoading] = useState(false);
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -262,6 +265,51 @@ export function CreateExpenseAccountDialog({
     setDocumentFiles([]);
     if (docsInputRef.current) docsInputRef.current.value = "";
   };
+
+  /** Copy draft: source expense row + remote files — target company me recreate. */
+  useEffect(() => {
+    const h = async (e: CustomEvent<{ rowPayload?: Record<string, unknown> }>) => {
+      const row = e.detail?.rowPayload;
+      if (!row || typeof row !== "object") return;
+      clearUploads();
+      const { defaults, remoteAvatarUrl, remoteDocumentUrls } = expenseAccountPrefillPartsFromRow(row);
+      form.reset({
+        name: defaults.name,
+        openingBalance: defaults.openingBalance,
+        openingBalanceDate: defaults.openingBalanceDate,
+        openingBalanceNarration: defaults.openingBalanceNarration,
+        groupId: getUngroupedGroupId("expense"),
+      });
+      if (remoteAvatarUrl?.trim() && canAddAvatar) {
+        try {
+          const raw = await fetchRemoteUrlAsFile(remoteAvatarUrl, "expense-avatar.jpg");
+          if (raw) {
+            const compressed = await compressFile(raw);
+            if (compressed.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+              setAvatarToUpload({
+                file: compressed,
+                preview: URL.createObjectURL(compressed),
+              });
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (remoteDocumentUrls?.length && canAttachDocuments) {
+        const next: File[] = [];
+        for (let i = 0; i < Math.min(remoteDocumentUrls.length, 5); i++) {
+          const u = remoteDocumentUrls[i];
+          const nameGuess = u.toLowerCase().includes(".pdf") ? `exp-doc-${i + 1}.pdf` : `exp-doc-${i + 1}.jpg`;
+          const f = await fetchRemoteUrlAsFile(u, nameGuess);
+          if (f && isProfileDocumentFile(f)) next.push(f);
+        }
+        if (next.length) setDocumentFiles(next);
+      }
+    };
+    document.addEventListener("prefill-create-expense-account-full", h as EventListener);
+    return () => document.removeEventListener("prefill-create-expense-account-full", h as EventListener);
+  }, [form, canAddAvatar, canAttachDocuments]);
 
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
@@ -609,6 +657,10 @@ export function CreateExpenseAccountDialog({
               ? "Add a new income/sales account, like \"Sales\" or \"Service Income\"."
               : "Add a new category for your expenses, like \"Office Rent\" or \"Utilities\"."}
           </DialogDescription>
+          {contextNote ? (
+            // Copy-to flow: selected target company context user ko dialog me hi visible rakho.
+            <p className="text-xs font-semibold text-emerald-700">{contextNote}</p>
+          ) : null}
         </DialogHeader>
         <div className={masterEntityDialogFormWrapperClassName}>
         <Form {...form}>

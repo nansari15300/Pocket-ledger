@@ -61,7 +61,8 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
 
@@ -106,7 +107,8 @@ import {
   shouldSuggestPdfAsImage,
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { CreateBankAccountDialog } from "../bank-cash/CreateBankAccountDialog";
-import { AddVoucherDialog } from "./AddVoucherDialog";
+// Types only — runtime circular import SalaryForm ↔ AddVoucherDialog avoid.
+import type { CopyMasterDraftRequestPayload, CopyMissingMasterOpts } from "./AddVoucherDialog";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import type { Staff } from "@/components/staff/types";
@@ -232,18 +234,41 @@ const getInitialFormValues = (
 
   let lineItems: any[] = [];
   if (isSalaryJournal) {
-    const staffEntries = (voucher.entries || []).filter((e: any) =>
-      processedStaff?.some((s) => s.id === e.accountId)
-    );
+    const rawEntries = voucher.entries || [];
+    // Copy-To remap kabhi `accountId` "" kar deta hai — purana filter `!e.accountId` se row gir jaati thi; isliye yahan sirf "salary credit" shape dekho.
+    const taxSatelliteLines = rawEntries.filter((e: any) => {
+      const nar = String(e.narration || "");
+      if (!nar.includes("(Staff ID:")) return false;
+      return Number(e.credit) > 0 || Number(e.debit) > 0;
+    });
+    const staffEntries = rawEntries.filter((e: any) => {
+      const credit = Number(e.credit) || 0;
+      if (credit <= 0) return false;
+      const nar = String(e.narration || "");
+      if (nar.includes("(Staff ID:")) return false;
+      if (e.accountId && processedTaxes?.some((pt: any) => pt.id === e.accountId)) return false;
+      return true;
+    });
 
-    lineItems = staffEntries.map((staffEntry: any) => {
+    lineItems = staffEntries.map((staffEntry: any, rowIndex: number) => {
       const staffCredit = staffEntry.credit || 0;
       const staffMemberId = staffEntry.accountId;
-      const taxEntry = (voucher.entries || []).find((taxE: any) =>
-          processedTaxes?.some(pt => pt.id === taxE.accountId) && (taxE.narration || "").includes(`(Staff ID: ${staffMemberId})`)
-      );
+      const allEnt = voucher.entries || [];
+      const sidMarker = `(Staff ID: ${staffMemberId})`;
+      let taxEntry =
+        allEnt.find((taxE: any) =>
+          processedTaxes?.some((pt) => pt.id === taxE.accountId) && String(taxE.narration || "").includes(sidMarker)
+        ) ||
+        allEnt.find(
+          (taxE: any) =>
+            String(taxE.narration || "").includes(sidMarker) && Number(taxE.credit || taxE.debit) > 0
+        );
+      // Staff id remap-clear: sidMarker "(Staff ID: )" tax dhundh nahi paata — satellite tax line same index se jodo (typical 1-row).
+      if (!taxEntry && !String(staffMemberId || "").trim() && taxSatelliteLines[rowIndex]) {
+        taxEntry = taxSatelliteLines[rowIndex];
+      }
 
-      const taxAmount = taxEntry?.credit || 0;
+      const taxAmount = Number(taxEntry?.credit) || Number(taxEntry?.debit) || 0;
       const grossSalary = staffCredit + taxAmount;
 
       return {
@@ -254,16 +279,20 @@ const getInitialFormValues = (
         taxAccountId: taxEntry?.accountId || "",
         taxAmount: taxAmount,
         afterTaxSalary: staffCredit,
-        rate: 0, 
+        rate: 0,
       };
     });
   }
 
   const debitEntry = voucher.entries?.find((e: any) => e.debit > 0);
 
+  // Copy-to-company seed me date kabhi Timestamp / ISO / missing — InvalidDate se BS picker khali rehta tha.
+  const rawDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date as string | number | Date);
+  const safeDate = Number.isFinite(rawDate.getTime()) ? rawDate : startOfDay(new Date());
+
   return {
     ...voucher,
-    date: voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date),
+    date: safeDate,
     total: voucher.total || voucher.amount,
     debitAccountId: debitEntry?.accountId || "",
     lineItems,
@@ -288,6 +317,13 @@ export function SalaryForm({
   onApprove,
   isApproving = false,
   onEffectiveLinksChange,
+  copySaveTargetCompanyId,
+  /** Save & Copy To: naam-match na hone par red field + Copy chip (Debit / Staff / Tax). */
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  copyMasterDraftRequest,
+  onRefreshCopyMismatch,
+  isCopyingMissingMasters = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -303,6 +339,12 @@ export function SalaryForm({
   isApproving?: boolean;
   /** Report effective has-links (bill-wise) so dialog locks fields as soon as user links in this session. */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  onCopyMissingCategory?: (category: string, opts?: CopyMissingMasterOpts) => void;
+  copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
+  onRefreshCopyMismatch?: () => void | Promise<void>;
+  isCopyingMissingMasters?: boolean;
 }) {
   const isMounted = useRef(true);
 
@@ -350,10 +392,13 @@ export function SalaryForm({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkPaymentDialogOpen, setIsLinkPaymentDialogOpen] = useState(false);
+  // Show-link toggle keeps link card collapsed in add/new and non-linked edits.
+  const [showLinkSection, setShowLinkSection] = useState(false);
   const [linkPaymentAmounts, setLinkPaymentAmounts] = useState<Record<string, number>>({});
   const [linkPaymentSaving, setLinkPaymentSaving] = useState(false);
   const [autoLinkSaving, setAutoLinkSaving] = useState(false);
-  const [linkBalanceKind, setLinkBalanceKind] = useState<"tax" | "net">("net");
+  // Default salary link mode should open with taxable balance selected.
+  const [linkBalanceKind, setLinkBalanceKind] = useState<"tax" | "net">("tax");
   /** Latest openingBalanceAllocated for this salary voucher, kept in state so edit-mode form save cannot overwrite DONE changes with stale props. */
   const [latestOBAllocated, setLatestOBAllocated] = useState<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
   /** Local-first bill-wise link draft; sync to server only on main Save like party bill-wise flow. */
@@ -362,10 +407,24 @@ export function SalaryForm({
   const [hasLocalBillWiseDraftEdits, setHasLocalBillWiseDraftEdits] = useState(false);
   const initialSalaryLinkMapRef = useRef<SalaryLinkMap>({});
   const initialOBAllocatedRef = useRef<number>(Number((voucher as any)?.openingBalanceAllocated) || 0);
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setLocalSalaryLinkMap({});
+    initialSalaryLinkMapRef.current = {};
+    setLatestOBAllocated(0);
+    initialOBAllocatedRef.current = 0;
+    setHasLocalBillWiseDraftEdits(false);
+    setLinkPaymentAmounts({});
+    setShowLinkSection(false);
+    setIsLinkPaymentDialogOpen(false);
+    onEffectiveLinksChange?.(false);
+  }, [onEffectiveLinksChange]);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
 
   const [activeLineIndex, setActiveLineIndex] = React.useState<number | null>(null);
+  /** Tab-switch / remount par stale `copyMasterDraftRequest` se create dialog auto-open na ho — sirf nayi request par. */
+  const hasInitializedCopyRequestRef = useRef(false);
 
   const openCreateStaffDialog = React.useCallback((lineIndex: number, newName?: string) => {
     setActiveLineIndex(lineIndex);
@@ -447,11 +506,14 @@ export function SalaryForm({
         if (isEditingExisting) {
             const vid = voucher.id;
             const isSameVoucher = lastResetVoucherIdRef.current === vid;
-            // Snapshot se bar‑bar reset — date/amount wipe (baaki forms jaisa)
-            if (isSameVoucher) return;
+            const initialValues = getInitialFormValues(voucher, processedStaff, processedTaxes);
+            const hydratedLen = initialValues.lineItems?.length ?? 0;
+            const currentLen = (form.getValues("lineItems") ?? []).length;
+            // Pehli reset par staff/tax lists khali → lineItems []; lists load hone ke baad dubara hydrate karna zaroori — purana `isSameVoucher` early-return isko rokta tha.
+            const needsLateHydration = isSameVoucher && hydratedLen > 0 && currentLen === 0;
+            if (isSameVoucher && !needsLateHydration) return;
             lastResetVoucherIdRef.current = vid;
             // Existing salary voucher edit: hydrate full form + linked files from saved voucher.
-            const initialValues = getInitialFormValues(voucher, processedStaff, processedTaxes);
             form.reset(initialValues);
             setSavedVoucherIdRef(voucher.id);
             const initialUrls = voucher.fileUrls || [];
@@ -466,11 +528,16 @@ export function SalaryForm({
         }
         // Naya salary + defaultVoucherData: sirf ek baar hydrate — pehle `files` dep + har rerun par `setFiles` se attach mitt ti thi (Payment In jaisa fix).
         if (defaultVoucherData) {
-            if (lastResetVoucherIdRef.current === "new") {
+            const seedValues = getInitialFormValues(defaultVoucherData, processedStaff, processedTaxes);
+            const seedLines = seedValues.lineItems?.length ?? 0;
+            const curNewLen = (form.getValues("lineItems") ?? []).length;
+            const needsLateSeedHydration =
+              lastResetVoucherIdRef.current === "new" && seedLines > 0 && curNewLen === 0;
+            if (lastResetVoucherIdRef.current === "new" && !needsLateSeedHydration) {
                 return;
             }
             lastResetVoucherIdRef.current = "new";
-            const initialValues = getInitialFormValues(defaultVoucherData, processedStaff, processedTaxes);
+            const initialValues = seedValues;
             form.reset(initialValues);
             const urls = defaultVoucherData.unassignedFile?.url ? [defaultVoucherData.unassignedFile.url] : (defaultVoucherData.fileUrls || []);
             setFiles(urls);
@@ -519,6 +586,7 @@ export function SalaryForm({
       form.setValue(`lineItems.${activeLineIndex}.taxAccountId`, newTaxId);
     }
     setIsCreateTaxOpen(false);
+    void onRefreshCopyMismatch?.();
   }
 
   const handleStaffCreated = (newStaffId: string) => {
@@ -532,11 +600,13 @@ export function SalaryForm({
       });
     }
     setIsCreateStaffOpen(false);
+    void onRefreshCopyMismatch?.();
   };
   
    const handleExpenseAccountCreated = (newAccountId: string) => {
     form.setValue("debitAccountId", newAccountId);
     setIsCreateExpenseOpen(false);
+    void onRefreshCopyMismatch?.();
   };
 
   /** Apply bill-wise link changes locally; actual server sync happens only when the main voucher is saved. */
@@ -915,6 +985,18 @@ export function SalaryForm({
         return dB - dA;
       });
   }, [localSalaryLinkMap, allVouchers, linkBalanceKind, voucher?.id, savedVoucherIdRef, latestOBAllocated, obLinkState]);
+  // Edit voucher with existing links should auto-show link section; add/non-linked edit keeps it hidden until user clicks.
+  const hasBillWiseLinks = billWiseCardRows.length > 0 || billWiseLinkedTotal > 0;
+  const shouldShowBillWiseSection = showLinkSection || (!!voucher?.id && hasBillWiseLinks);
+  useEffect(() => {
+    if (voucher?.id && hasBillWiseLinks) {
+      setShowLinkSection(true);
+      return;
+    }
+    if (!voucher?.id) {
+      setShowLinkSection(false);
+    }
+  }, [voucher?.id, hasBillWiseLinks]);
 
   /** Report effective has-links to dialog so fields lock as soon as user links (bill-wise) in this session. */
   useEffect(() => {
@@ -1020,6 +1102,129 @@ export function SalaryForm({
     return processedExpenseAccounts.find(a => a.id === debitAccountId)?.balance;
   }, [debitAccountId, processedExpenseAccounts]);
 
+  /** Copy-To: chip tab dikhao jab save-target company par id resolve na ho — sirf `copyMismatchCategories` pe mat rely karo ( naam match par wo [] reh sakta hai ). */
+  const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  const debitNeedsCopyChip = useCallback(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    const id = String(form.getValues("debitAccountId") || "");
+    if (!id) return true;
+    return !processedExpenseAccounts.some((a) => a.id === id);
+  }, [copyDraftMasterHelpersEnabled, form, processedExpenseAccounts]);
+
+  const staffLineNeedsCopyChip = useCallback(
+    (index: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const id = String(form.getValues(`lineItems.${index}.staffId`) || "");
+      // Khali staff: sirf tab Copy chip jab remap ne mismatch bataya ho — warna nayi blank row par galat chip na dikhe.
+      if (!id) return Boolean(copyMismatchCategories?.includes("staff"));
+      return !processedStaff.some((s) => s.id === id);
+    },
+    [copyDraftMasterHelpersEnabled, copyMismatchCategories, form, processedStaff]
+  );
+
+  const taxLineNeedsCopyChip = useCallback(
+    (index: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const id = String(form.getValues(`lineItems.${index}.taxAccountId`) || "");
+      const taxAmt = Number(form.getValues(`lineItems.${index}.taxAmount`) || 0);
+      const salaryVal = Number(form.getValues(`lineItems.${index}.salary`) || 0);
+      const staffId = String(form.getValues(`lineItems.${index}.staffId`) || "");
+      const staffUnresolved =
+        (staffId && !processedStaff.some((s) => s.id === staffId)) ||
+        (!staffId && Boolean(copyMismatchCategories?.includes("staff")));
+      if (!id) {
+        if (taxAmt > 0) return true;
+        if (copyMismatchCategories?.includes("tax")) return true;
+        // Staff abhi mismatch — tax combo aksar saath me resolve hota; Copy chip dikhao taaki tax master copy ho sake.
+        if (salaryVal > 0 && staffUnresolved) return true;
+        return false;
+      }
+      return !processedTaxes.some((t) => t.id === id);
+    },
+    [copyDraftMasterHelpersEnabled, copyMismatchCategories, form, processedTaxes, processedStaff]
+  );
+
+  /** Copy entry-point: pehli mismatched staff row index (header chip se same existing label par action). */
+  const firstStaffCopyRowIndex = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return null;
+    const rows = (watchedLineItems ?? []) as any[];
+    for (let i = 0; i < rows.length; i++) {
+      if (staffLineNeedsCopyChip(i)) return i;
+    }
+    return null;
+  }, [copyDraftMasterHelpersEnabled, watchedLineItems, staffLineNeedsCopyChip]);
+
+  /** Copy entry-point: pehli mismatched tax row index (Tax header label ke right copy chip). */
+  const firstTaxCopyRowIndex = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return null;
+    const rows = (watchedLineItems ?? []) as any[];
+    for (let i = 0; i < rows.length; i++) {
+      if (taxLineNeedsCopyChip(i)) return i;
+    }
+    return null;
+  }, [copyDraftMasterHelpersEnabled, watchedLineItems, taxLineNeedsCopyChip]);
+
+  /** Parent `copyMasterDraftRequest` → full master create dialog (files ke saath jahan lagta hai). */
+  useEffect(() => {
+    if (!hasInitializedCopyRequestRef.current) {
+      hasInitializedCopyRequestRef.current = true;
+      return;
+    }
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest;
+    const at = req.applyTarget;
+    if (typeof at?.addSalaryLineIndex === "number") setActiveLineIndex(at.addSalaryLineIndex);
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+
+    if (payload && sc === "expense_accounts") {
+      setIsCreateExpenseOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-expense-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Expense account prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "staff") {
+      setIsCreateStaffOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-staff-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Staff prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "taxes") {
+      setIsCreateTaxOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-tax-from-row", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Tax prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (!nm) return;
+    switch (req.category) {
+      case "staff":
+        setIsCreateStaffOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-staff-name", { detail: nm })), 80);
+        sonnerToast.message(`Staff prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "tax":
+        setIsCreateTaxOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: nm })), 80);
+        sonnerToast.message(`Tax prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "account_expense":
+        setIsCreateExpenseOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Expense account prefilled -> save adds to "${targetLabel}".`);
+        return;
+      default:
+        break;
+    }
+  }, [copyMasterDraftRequest]);
+
   const transactionDates = useMemo(() => {
     if (!allVouchers?.length) return [];
     return allVouchers.map((v) => {
@@ -1034,7 +1239,6 @@ export function SalaryForm({
     e?.preventDefault?.();
     void form.handleSubmit(
       async (data) => {
-        onVoucherAction?.("saved", options.saveAndNew);
         await processAndSave(data, options.saveAndNew, options.approveAfterSave ? onApprove : undefined);
       },
       (errors) => {
@@ -1367,6 +1571,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
         }
 
         onSuccess?.();
+
+        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
     
     } catch (error) {
         if (error instanceof PermissionDeniedError) {
@@ -1548,6 +1754,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
               "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
               isMobile ? "" : "px-[2px]"
             )}>
+              {/* Section 1: Voucher No + Date in single ribbon block. */}
+              <div className="rounded-lg border border-sky-300/80 bg-sky-50 p-3">
               {/* Voucher No. and Date */}
               {isMobile ? (
                 <>
@@ -1742,15 +1950,34 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   </div>
                 </>
               )}
+              </div>
 
-              {/* Debit Account */}
+              {/* Section 2: Debit account in its own ribbon block. */}
+              <div className="rounded-lg border border-emerald-300/80 bg-emerald-50 p-3">
+              {/* Debit Account — Copy-To: label ke daayein Copy chip; mismatch par laal combobox. */}
               <FormField
                 control={form.control}
                 name="debitAccountId"
                 render={({ field }: any) => (
                   <FormItem className={cn(isMobile && "flex-shrink-0")} style={isMobile ? { width: '80mm', maxWidth: '80mm' } : undefined}>
-                    <div className={cn("flex justify-between items-baseline", isMobile && "flex-col gap-1")}>
-                      <FormLabel className={cn(isMobile && "text-xs")}>Debit Account</FormLabel>
+                    <div className={cn("flex justify-between items-center gap-2 flex-wrap", isMobile && "flex-col gap-1 items-stretch")}>
+                      <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                        <FormLabel className={cn(isMobile && "text-xs", debitNeedsCopyChip() && "text-red-600 font-semibold")}>Debit Account</FormLabel>
+                        {debitNeedsCopyChip() && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                            onClick={() =>
+                              onCopyMissingCategory?.("account_expense", { addSalaryField: "debitAccountId" })
+                            }
+                            disabled={isCopyingMissingMasters}
+                          >
+                            {isCopyingMissingMasters ? "…" : "Copy"}
+                          </Button>
+                        )}
+                      </div>
                       {debitAccountBalance !== null && debitAccountBalance !== undefined && (
                         <FormLabel className={cn(
                           isMobile ? "text-[10px] font-semibold" : "text-xs font-semibold",
@@ -1765,6 +1992,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     </div>
                     <div className={cn(isMobile && "[&_button]:h-9 [&_button]:text-xs")}>
                       <Combobox
+                        triggerClassName={cn(debitNeedsCopyChip() && "!border-red-400 !bg-red-100/80 !text-red-700")}
                         options={processedExpenseAccounts
                           .filter((a) => a.id !== "sales_account" && a.id !== "purchase_account")
                           .map((a) => ({
@@ -1788,10 +2016,31 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                   </FormItem>
                 )}
               />
+              </div>
                 
-                <div className="space-y-2 px-[2px]">
-                  <div className="flex justify-between items-center">
-                    <FormLabel className={cn("font-semibold", isMobile ? "text-sm" : "text-base")}>Salary Details</FormLabel>
+                {/* Section 3: Salary details table/list in one ribbon block. */}
+                <div className="space-y-2 px-[2px] rounded-lg border border-violet-300/80 bg-violet-50 p-3">
+                  <div className="flex justify-between items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                      <FormLabel className={cn("font-semibold shrink-0", isMobile ? "text-sm" : "text-base")}>Salary Details</FormLabel>
+                      {isMobile && firstStaffCopyRowIndex !== null && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                          onClick={() =>
+                            onCopyMissingCategory?.("staff", {
+                              addSalaryField: "staffId",
+                              addSalaryLineIndex: firstStaffCopyRowIndex,
+                            })
+                          }
+                          disabled={isCopyingMissingMasters}
+                        >
+                          {isCopyingMissingMasters ? "…" : "Copy"}
+                        </Button>
+                      )}
+                    </div>
                     {!isPaymentMode && <Button type="button" variant="outline" size="sm" onClick={handleSelectAllStaff} disabled={deleteDisabledWhenLinked} className={cn(isMobile && "text-xs h-8")}><UserPlus className={cn("h-4 w-4", isMobile && "mr-1")}/> {isMobile ? "Add All" : "Add All Staff"}</Button>}
                   </div>
                   {isMobile ? (
@@ -1806,15 +2055,17 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                           
                           return (
                             <div key={field.id} className="border-t p-[2px] space-y-2">
-                              {/* Row 1: Staff Member (full width) */}
+                              {/* Row 1: Staff — mobile par Copy chip section title ke paas; yahan sirf label + combo. */}
                               <div className="w-full">
                                 <FormField 
                                   control={form.control} 
                                   name={`lineItems.${index}.staffId`} 
                                   render={({ field }: any) => (
                                     <FormItem>
+                                      <FormLabel className={cn("text-xs", staffLineNeedsCopyChip(index) && "text-red-600 font-semibold")}>Staff Member</FormLabel>
                                       <div className="[&_button]:h-9 [&_button]:text-xs">
                                         <Combobox
+                                          triggerClassName={cn(staffLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
                                           options={processedStaff.map((s) => ({ value: s.id, label: s.name }))}
                                           value={field.value}
                                           onChange={(value, newName) => {
@@ -1850,8 +2101,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 />
                               </div>
                               
-                              {/* Row 2: Salary Amount and Tax (2 columns) */}
-                              <div className="grid grid-cols-2 gap-[2px]">
+                              {/* Row 2: Salary + Tax — tax ki min width half (pehle 12rem); upper max screen/fr se barhegi. */}
+                              <div className="grid grid-cols-[minmax(0,1fr)_minmax(6rem,1fr)] gap-[2px]">
                                 <FormField 
                                   control={form.control} 
                                   name={`lineItems.${index}.salary`} 
@@ -1880,9 +2131,29 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                   name={`lineItems.${index}.taxAccountId`} 
                                   render={({ field }: any) => (
                                     <FormItem>
-                                      <FormLabel className="text-xs">Tax</FormLabel>
-                                      <div className="[&_button]:h-9 [&_button]:text-xs">
+                                      <div className="flex items-center justify-between gap-1 flex-wrap">
+                                        <FormLabel className={cn("text-xs", taxLineNeedsCopyChip(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
+                                        {taxLineNeedsCopyChip(index) && (
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                            onClick={() =>
+                                              onCopyMissingCategory?.("tax", {
+                                                addSalaryField: "taxAccountId",
+                                                addSalaryLineIndex: index,
+                                              })
+                                            }
+                                            disabled={isCopyingMissingMasters}
+                                          >
+                                            {isCopyingMissingMasters ? "…" : "Copy"}
+                                          </Button>
+                                        )}
+                                      </div>
+                                      <div className="[&_button]:h-9 [&_button]:text-xs min-w-0 w-full">
                                         <Combobox
+                                          triggerClassName={cn(taxLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
                                           // Searchable tax picker so user can type and quickly find tax.
                                           options={[
                                             { value: "none", label: "None" },
@@ -2025,9 +2296,53 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-1/4">Staff Member</TableHead>
+                            {/* PC: existing "Staff Member" label ke right Copy chip — row ke andar extra "Staff Member" label na dikhe. */}
+                            <TableHead className="w-1/4">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>Staff Member</span>
+                                {firstStaffCopyRowIndex !== null && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                    onClick={() =>
+                                      onCopyMissingCategory?.("staff", {
+                                        addSalaryField: "staffId",
+                                        addSalaryLineIndex: firstStaffCopyRowIndex,
+                                      })
+                                    }
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
+                              </div>
+                            </TableHead>
                             <TableHead>Salary Amount</TableHead>
-                            <TableHead>Tax</TableHead>
+                            {/* PC Tax label ke right Copy chip — body row me extra chip/label avoid. */}
+                            <TableHead className="min-w-[10.5rem] w-auto max-w-none">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>Tax</span>
+                                {firstTaxCopyRowIndex !== null && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                    onClick={() =>
+                                      onCopyMissingCategory?.("tax", {
+                                        addSalaryField: "taxAccountId",
+                                        addSalaryLineIndex: firstTaxCopyRowIndex,
+                                      })
+                                    }
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
+                              </div>
+                            </TableHead>
                             <TableHead>Taxable Amount</TableHead>
                             <TableHead>Tax Amount</TableHead>
                             <TableHead>After Tax Salary</TableHead>
@@ -2047,7 +2362,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                 {/* Keep desktop salary cells top-aligned so balance helper text does not visually lift only the staff/tax fields. */}
                                 <TableCell>
                                   <FormField control={form.control} name={`lineItems.${index}.staffId`} render={({ field }: any) => (<FormItem>
+                                        {/* Desktop row: existing header label handles Copy chip; yahan sirf staff combobox. */}
+                                        <div className="min-w-0 w-full overflow-hidden [&_button]:h-9">
                                         <Combobox
+                                          triggerClassName={cn(staffLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
                                           options={processedStaff.map((s) => ({ value: s.id, label: s.name }))}
                                           value={field.value}
                                           onChange={(value, newName) => {
@@ -2071,6 +2389,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                           contentWidthMode={isMobile ? "trigger" : "auto"}
                                           disabled={deleteDisabledWhenLinked}
                                         />
+                                        </div>
                                          {balance !== undefined && (
                                             <div className={cn("text-xs font-semibold mt-1", balance < 0 ? "text-red-600" : "text-green-600")}>
                                                 Bal: {formatCurrency(balance, { showDrCr: true, noAnimation: true })}
@@ -2079,10 +2398,14 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                         <FormMessage /></FormItem>)}/>
                                 </TableCell>
                                 <TableCell><FormField control={form.control} name={`lineItems.${index}.salary`} render={({ field }: any) => (<FormItem><FormControl><Input type="number" value={field.value || ''} onChange={(e) => { const value = e.target.value === '' ? '' : parseFloat(e.target.value) || 0; field.onChange(value); }} onBlur={field.onBlur} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/></TableCell>
-                                 <TableCell>
+                                 <TableCell className="min-w-[10.5rem] w-auto max-w-none align-top">
                                     <FormField control={form.control} name={`lineItems.${index}.taxAccountId`} render={({ field }: any) => (
                                         <FormItem>
+                                            {/* Tax combo: chhota minimum, zyada jagah table/layout flexibly de sakta hai. */}
+                                            <div className="flex items-start gap-1 min-w-0 w-full">
+                                              <div className="min-w-0 flex-1 [&_button]:h-9">
                                             <Combobox
+                                              triggerClassName={cn(taxLineNeedsCopyChip(index) && "!border-red-400 !bg-red-100/80 !text-red-700")}
                                               // Searchable tax picker on desktop salary rows.
                                               options={[
                                                 { value: "none", label: "None" },
@@ -2108,6 +2431,9 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                                               contentWidthMode={isMobile ? "trigger" : "auto"}
                                               disabled={deleteDisabledWhenLinked}
                                             />
+                                              </div>
+                                              {/* Desktop row: Tax copy chip header label me hai; row me sirf combobox रखो. */}
+                                            </div>
                                             {taxBalance !== undefined && (
                                                 <div className={cn("text-xs font-semibold mt-1", taxBalance < 0 ? "text-red-600" : "text-green-600")}>
                                                     Bal: {formatCurrency(taxBalance, { showDrCr: true, noAnimation: true })}
@@ -2145,209 +2471,116 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     </>
                   )}
                 </div>
-                <div className="grid grid-cols-1 gap-4">
-                  <FormField
-                    control={form.control}
-                    name="narration"
-                    render={({ field }: any) => (
-                      <FormItem>
-                        <FormLabel>Overall Narration</FormLabel>
-                        <FormControl>
-                          <Textarea placeholder="e.g. Salary for the month of Baisakh" className="min-h-[80px]" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  {!isPaymentMode ? (
-                    <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-4">
-                      <FormItem className="order-1 md:order-2">
-                        <FormLabel>Attach Files (Optional)</FormLabel>
-                        {showPdfAsImageToggle && (
-                          <VoucherPdfAsImageToggle
-                            id="voucher-save-pdf-as-image-salary-mobile"
-                            checked={savePdfAsImage}
-                            onCheckedChange={setSavePdfAsImage}
-                            disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
-                            className="mb-2"
-                          />
-                        )}
-                        <RestrictedFileUploader>
-                          {/* Mobile: Attach Files appears above bill-wise. Desktop: it stays to the right of bill-wise. */}
-                          <div className="flex flex-wrap gap-4">
-                            {files.map((file, index) => (
-                              <FilePreview 
-                                key={index} 
-                                file={file} 
-                                attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
-                                onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                                className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                              />
-                            ))}
-                            {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                              <>
-                                <label
-                                  htmlFor={attachFileInputId}
-                                  className={cn(
-                                    "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                      : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                  )}
-                                >
-                                  <PlusCircle className="h-6 w-6" />
-                                  <span className="text-xs mt-1">Add File</span>
-                                </label>
-                                <input
-                                  id={attachFileInputId}
-                                  type="file"
-                                  className="sr-only"
-                                  ref={fileInputRef}
-                                  onChange={handleFileChange}
-                                  accept={[
-                                    fileAttachmentLimits.allowImage ? "image/*" : "",
-                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                                  multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                                />
-                              </>
-                            )}
-                          </div>
-                        </RestrictedFileUploader>
-                      </FormItem>
-                      {/* Link for bill wise: always editable so user can unlink when voucher edit is disabled (banner). Never lock this section. */}
-                      <div className="order-2 md:order-1 space-y-2 rounded-lg border p-3 bg-muted/30">
-                        <div className="flex items-center gap-2 font-medium">
-                          <Link2 className="h-4 w-4 text-muted-foreground" />
-                          <span>Link for bill wise</span>
+                {/* Keep attachment block above link block on desktop too (no same-row split). */}
+                <div className={cn("grid grid-cols-1 gap-4", !isPaymentMode && "md:grid-cols-1")}>
+                  {!isPaymentMode && (
+                    <div className="order-2 md:order-2 space-y-2 rounded-lg border-2 border-rose-300/80 bg-rose-50 p-3">
+                      {!shouldShowBillWiseSection ? (
+                        <div className="pb-1">
+                          {/* Add/new and non-linked edit starts collapsed; click reveals link card. */}
+                          <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSection(true)}>Show Link</Button>
                         </div>
-                        {/* Keep linkable voucher count visible in the card, same style as other bill-wise forms. */}
-                        <p className="text-sm text-muted-foreground">
-                          {billWiseLinkableVoucherCount} voucher(s) available to link.
-                        </p>
-                        <div className="flex gap-2">
-                          <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                            <input
-                              type="radio"
-                              name="linkBalanceKind"
-                              checked={linkBalanceKind === "tax"}
-                              onChange={() => setLinkBalanceKind("tax")}
-                              className="rounded-full"
-                            />
-                            <span>Tax balance</span>
-                          </label>
-                          <label className="flex items-center gap-1.5 cursor-pointer text-sm">
-                            <input
-                              type="radio"
-                              name="linkBalanceKind"
-                              checked={linkBalanceKind === "net"}
-                              onChange={() => setLinkBalanceKind("net")}
-                              className="rounded-full"
-                            />
-                            <span>Net balance</span>
-                          </label>
-                        </div>
-                        {billWiseCardRows.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">
-                            {linkBalanceKind === "tax" ? "No tax-linked payment details." : "No payment outs linked to this voucher (net)."}
-                          </p>
-                        ) : (
-                          <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
-                            <table className="w-full text-sm border-collapse min-w-[400px]">
-                              <thead>
-                                <tr className="border-b bg-muted/50">
-                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
-                                  <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
-                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Amount</th>
-                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on others</th>
-                                  <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on current</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {billWiseCardRows.map((p, idx) => {
-                                  const rowDate = p.date ? (typeof (p.date as any)?.toDate === "function" ? (p.date as any).toDate() : new Date(p.date as string | number)) : null;
-                                  return (
-                                    <tr
-                                      key={`${p.id}-${idx}`}
-                                      role="button"
-                                      tabIndex={0}
-                                      className="cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0"
-                                      onClick={handleOpenBillWiseDialog}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                          e.preventDefault();
-                                          handleOpenBillWiseDialog();
-                                        }
-                                      }}
-                                    >
-                                      <td className="p-2 text-muted-foreground whitespace-nowrap">{p.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (rowDate ? (dateSystem === "BS" ? formatDateBS(rowDate) : formatDate(rowDate)) : "—")}</td>
-                                      <td className="p-2 font-medium whitespace-nowrap">{p.voucherNumber ?? "—"}</td>
-                                      <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(p.totalAmount, { noSuffix: true, noAnimation: true })}</td>
-                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.linkedOnOthers, { noSuffix: true, noAnimation: true })}</td>
-                                      <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.currentLinked, { noSuffix: true, noAnimation: true })}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 font-medium">
+                            <Link2 className="h-4 w-4 text-muted-foreground" />
+                            <span>Link for bill wise</span>
                           </div>
-                        )}
-                        <div className="pt-2 border-t flex justify-end min-w-0">
-                          {/* Keep Linked/Balance in right-aligned boxes to match the other bill-wise cards. */}
-                          <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
-                              <span className="text-muted-foreground truncate leading-tight">Linked</span>
+                          <p className="text-sm text-muted-foreground">{billWiseLinkableVoucherCount} voucher(s) available to link.</p>
+                          <div className="flex gap-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                              <input type="radio" name="linkBalanceKind" checked={linkBalanceKind === "tax"} onChange={() => setLinkBalanceKind("tax")} className="rounded-full" />
+                              <span>Tax balance</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer text-sm">
+                              <input type="radio" name="linkBalanceKind" checked={linkBalanceKind === "net"} onChange={() => setLinkBalanceKind("net")} className="rounded-full" />
+                              <span>Net balance</span>
+                            </label>
+                          </div>
+                          {billWiseCardRows.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">{linkBalanceKind === "tax" ? "No tax-linked payment details." : "No payment outs linked to this voucher (net)."}</p>
+                          ) : (
+                            <div className="overflow-x-auto -mx-1 min-w-0 scrollbar-slim-dim-extra">
+                              <table className="w-full text-sm border-collapse min-w-[400px]">
+                                <thead>
+                                  <tr className="border-b bg-muted/50">
+                                    <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Date</th>
+                                    <th className="text-left p-2 font-semibold text-black whitespace-nowrap">Voucher No.</th>
+                                    <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Amount</th>
+                                    <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on others</th>
+                                    <th className="text-right p-2 font-semibold text-black whitespace-nowrap">Linked on current</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {billWiseCardRows.map((p, idx) => {
+                                    const rowDate = p.date ? (typeof (p.date as any)?.toDate === "function" ? (p.date as any).toDate() : new Date(p.date as string | number)) : null;
+                                    return (
+                                      <tr
+                                        key={`${p.id}-${idx}`}
+                                        role="button"
+                                        tabIndex={0}
+                                        className="cursor-pointer hover:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1 border-b border-border/30 last:border-b-0"
+                                        onClick={handleOpenBillWiseDialog}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter" || e.key === " ") {
+                                            e.preventDefault();
+                                            handleOpenBillWiseDialog();
+                                          }
+                                        }}
+                                      >
+                                        <td className="p-2 text-muted-foreground whitespace-nowrap">{p.id === OPENING_BALANCE_VOUCHER_ID ? "—" : (rowDate ? (dateSystem === "BS" ? formatDateBS(rowDate) : formatDate(rowDate)) : "—")}</td>
+                                        <td className="p-2 font-medium whitespace-nowrap">{p.voucherNumber ?? "—"}</td>
+                                        <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(p.totalAmount, { noSuffix: true, noAnimation: true })}</td>
+                                        <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.linkedOnOthers, { noSuffix: true, noAnimation: true })}</td>
+                                        <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(p.currentLinked, { noSuffix: true, noAnimation: true })}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
                             </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                              <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrency(billWiseLinkedTotal, { noSuffix: true, noAnimation: true })}</span>
+                          )}
+                          <div className="pt-2 border-t flex justify-end min-w-0">
+                            <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
+                                <span className="text-muted-foreground truncate leading-tight">Linked</span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
+                                <span className="truncate text-right whitespace-nowrap leading-tight">{formatCurrency(billWiseLinkedTotal, { noSuffix: true, noAnimation: true })}</span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
+                                <span className="truncate leading-tight">Balance</span>
+                              </div>
+                              <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
+                                <span className={cn("truncate text-right whitespace-nowrap leading-tight", billWiseRemainingTotal === 0 ? "text-green-600 font-semibold" : "")}>
+                                  {billWiseRemainingTotal === 0 ? "Settled" : formatCurrency(billWiseRemainingTotal, { noSuffix: true, noAnimation: true })}
+                                </span>
+                              </div>
                             </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className="truncate leading-tight">Balance</span>
-                            </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                              {/* Keep zero balance visually consistent with other settled bill-wise summaries. */}
-                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", billWiseRemainingTotal === 0 ? "text-green-600 font-semibold" : "")}>
-                                {billWiseRemainingTotal === 0 ? "Settled" : formatCurrency(billWiseRemainingTotal, { noSuffix: true, noAnimation: true })}
-                              </span>
+                          </div>
+                          <div className="space-y-1 text-sm">
+                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                              <Button type="button" variant="outline" size="sm" className="w-fit" disabled={!deleteDisabledWhenLinked && (voucher?.id ?? savedVoucherIdRef) && billWiseRemainingTotal <= 0} onClick={handleOpenBillWiseDialog}>
+                                <Link2 className="h-4 w-4 mr-2" />
+                                Add Link
+                              </Button>
+                              <Button type="button" variant="outline" size="sm" className="w-fit" disabled={autoLinkSaving || ((voucher?.id ?? savedVoucherIdRef) ? (billWiseRemainingTotal <= 0 || paymentOutsOldestFirst.length === 0) : false)} onClick={handleAutoLinkFromCard}>
+                                {autoLinkSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Zap className="h-4 w-4 mr-2" />}
+                                Auto Link
+                              </Button>
                             </div>
                           </div>
                         </div>
-                        <div className="space-y-1 text-sm">
-                          <div className="flex items-center gap-2 mt-2 flex-wrap">
-                            {/* When linked, keep Add Link enabled so user can open dialog and unlink (edit link). */}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="w-fit"
-                              disabled={!deleteDisabledWhenLinked && (voucher?.id ?? savedVoucherIdRef) && billWiseRemainingTotal <= 0}
-                              onClick={handleOpenBillWiseDialog}
-                            >
-                              <Link2 className="h-4 w-4 mr-2" />
-                              Add Link
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="w-fit"
-                              disabled={autoLinkSaving || ((voucher?.id ?? savedVoucherIdRef) ? (billWiseRemainingTotal <= 0 || paymentOutsOldestFirst.length === 0) : false)}
-                              onClick={handleAutoLinkFromCard}
-                            >
-                              {autoLinkSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Zap className="h-4 w-4 mr-2" />}
-                              Auto Link
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
+                      )}
                     </div>
-                  ) : (
+                  )}
+                  {/* Attachment + narration block: mobile narration below, desktop narration at right. */}
+                  <div className={cn("grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg border border-amber-300/80 bg-amber-50 p-3", !isPaymentMode && "order-1 md:order-1")}>
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       {showPdfAsImageToggle && (
                         <VoucherPdfAsImageToggle
-                          id="voucher-save-pdf-as-image-salary-desktop"
+                          id="voucher-save-pdf-as-image-salary-shared"
                           checked={savePdfAsImage}
                           onCheckedChange={setSavePdfAsImage}
                           disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
@@ -2355,12 +2588,11 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         />
                       )}
                       <RestrictedFileUploader>
-                        {/* Payment mode keeps file upload full width because bill-wise section is salary-only. */}
                         <div className="flex flex-wrap gap-4">
                           {files.map((file, index) => (
-                            <FilePreview 
-                              key={index} 
-                              file={file} 
+                            <FilePreview
+                              key={index}
+                              file={file}
                               attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
@@ -2398,7 +2630,21 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                         </div>
                       </RestrictedFileUploader>
                     </FormItem>
-                  )}
+                    <FormField
+                      control={form.control}
+                      name="narration"
+                      render={({ field }: any) => (
+                        <FormItem className="min-w-0">
+                          <FormLabel>Overall Narration</FormLabel>
+                          <FormControl>
+                            {/* Overall narration: PC static me lambi text ke liye resize + scroll */}
+                            <Textarea placeholder="e.g. Salary for the month of Baisakh" className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
                 </div>
             </div>
           </ScrollArea>

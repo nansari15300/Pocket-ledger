@@ -676,22 +676,41 @@ export function useTransactions(
              return { processedTransactions: [], totalTransactions: 0, openingBalanceForPeriod: 0, periodDr: 0, periodCr: 0, closingBalance: 0, daybookSummary: null };
         }
         
-        // Always use the full voucher list for ledger math. Passing a pre-filtered list (e.g. date-sliced
-        // or page-sliced) made pre-period & opening balance wrong: opening must be master OB + all txns
-        // strictly before the visible date range, which requires every voucher for the entity.
-        // `passedTransactions` is kept in the API for compatibility; it is not used to build the list.
-        const transactionsToProcess = vouchers ?? [];
+        // Ledger math generally needs full vouchers, but report deep-link "All Vouchers" uses
+        // pre-scoped `passedTransactions` (e.g. Pay Salary subset) and must stay aligned with dashboard count.
+        const shouldUseScopedPassedTransactions =
+            entity.id === "all" && Boolean(transactionContext) && Array.isArray(passedTransactions);
+        const transactionsToProcess = shouldUseScopedPassedTransactions
+            ? (passedTransactions ?? [])
+            : (vouchers ?? []);
         
         let entityTransactions: any[] = [];
         
         if (transactionContext && entity.id === 'all') {
-            // "All Vouchers" in Add Salary report must include current (journal+subType) and legacy add_salary rows.
-            if (transactionContext === 'add_salary') {
-                entityTransactions = transactionsToProcess.filter(
-                    (v: any) => v.type === 'add_salary' || (v.type === 'journal' && v.subType === 'add_salary')
-                );
+            // Pre-scoped `passedTransactions` (dashboard All Vouchers deep-link): list already matches card count — do not
+            // re-apply payment family filter (drops `pay_salary` type and breaks Pay Salary vs Payment Out parity).
+            if (shouldUseScopedPassedTransactions) {
+                entityTransactions = [...(transactionsToProcess ?? [])];
             } else {
-                entityTransactions = transactionsToProcess.filter((v: any) => v.type === transactionContext);
+            // Normalize `payment-in` / `payment-out` (URL/report context) → Firestore `type` underscore keys
+            const ctx =
+                transactionContext === "payment-in"
+                    ? "payment_in"
+                    : transactionContext === "payment-out"
+                      ? "payment_out"
+                      : transactionContext;
+            if (ctx === "add_salary") {
+                entityTransactions = transactionsToProcess.filter(
+                    (v: any) => v.type === "add_salary" || (v.type === "journal" && v.subType === "add_salary")
+                );
+            } else if (ctx === "payment_in" || ctx === "payment_out") {
+                entityTransactions = transactionsToProcess.filter((v: any) => {
+                    if (ctx === "payment_in") return v.type === "payment_in" || v.type === "direct_income";
+                    return v.type === "payment_out" || v.type === "direct_expense";
+                });
+            } else {
+                entityTransactions = transactionsToProcess.filter((v: any) => v.type === ctx);
+            }
             }
         } else if (context === 'group' && 'items' in entity) {
             // Check if this is "All Journal Vouchers" view
@@ -800,7 +819,8 @@ export function useTransactions(
             });
         }
 
-        if (transactionContext) {
+        // Second pass: narrow by context from full ledger only — scoped dashboard lists skip (see `shouldUseScopedPassedTransactions`).
+        if (transactionContext && !shouldUseScopedPassedTransactions) {
             const contextType = transactionContext === 'payment-in' ? 'payment_in' : 
                               transactionContext === 'payment-out' ? 'payment_out' : transactionContext;
             entityTransactions = entityTransactions.filter((v: any) => {

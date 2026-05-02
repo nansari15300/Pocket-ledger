@@ -412,38 +412,39 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     
     setIsLoading(true);
     try {
-        if (isLocalOnlyMode()) {
-          const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
-          const base: Record<string, unknown> = fromDb ?? {
-            id: party.id,
-            companyId,
-            ownerId: user?.uid ?? "local_guest_user",
-            balance: party.balance ?? 0,
-            debit: party.debit ?? 0,
-            credit: party.credit ?? 0,
-            name: party.name,
-            groupId: party.groupId ?? getUngroupedGroupId("party"),
-            isDeleted: false,
-          };
-          const payload: Record<string, unknown> = {
-            ...base,
-            id: party.id,
-            companyId,
-            isDeleted: true,
-            deletedAt: Timestamp.now(),
-          };
-          await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
-          await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
-          toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.` });
-          onPartyDeleted(party.id);
-          setIsOpen(false);
-          setIsDeleteDialogOpen(false);
-          return;
+        const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
+        const base: Record<string, unknown> = fromDb ?? {
+          id: party.id,
+          companyId,
+          ownerId: user?.uid ?? "local_guest_user",
+          balance: party.balance ?? 0,
+          debit: party.debit ?? 0,
+          credit: party.credit ?? 0,
+          name: party.name,
+          groupId: party.groupId ?? getUngroupedGroupId("party"),
+          isDeleted: false,
+        };
+        const payload: Record<string, unknown> = {
+          ...base,
+          id: party.id,
+          companyId,
+          isDeleted: true,
+          deletedAt: Timestamp.now(),
+        };
+        // Copy-to / offline-created parties ke liye delete action hamesha local DB me reflect karo.
+        await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
+        await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
+        if (!isLocalOnlyMode()) {
+          try {
+            // Online mode me server mirror best-effort: missing remote doc ho tab bhi local delete rollback na ho.
+            await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
+              isDeleted: true,
+              deletedAt: serverTimestamp()
+            });
+          } catch (error) {
+            console.warn("Remote delete fallback to local outbox for party:", party.id, error);
+          }
         }
-        await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
-            isDeleted: true,
-            deletedAt: serverTimestamp()
-        });
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
         onPartyDeleted(party.id);
         setIsOpen(false);

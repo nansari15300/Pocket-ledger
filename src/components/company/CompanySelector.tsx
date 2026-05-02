@@ -68,6 +68,11 @@ import { hasAnySelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 
+/** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
+function isCompanyVisibleInSelector(c: CompanyData): boolean {
+  return c.isDeleted !== true && (c as CompanyData & { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt == null;
+}
+
 /** Offline login + online company password dono: same "Remember for" options (localStorage expiry alag module). */
 function RememberCompanyPasswordDurationSelect({
   id,
@@ -128,7 +133,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     company: CompanyData | null;
   }>({ type: null, company: null });
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
-    (initialCompanies ?? []).filter((c) => !c.isDeleted)
+    (initialCompanies ?? []).filter(isCompanyVisibleInSelector)
   );
 
   // States for password dialog
@@ -145,7 +150,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   useEffect(() => {
     if (isLocalOnlyMode()) {
       const raw = contextCompanies || [];
-      setCompanies(raw.filter((c) => !c.isDeleted));
+      setCompanies(raw.filter(isCompanyVisibleInSelector));
       return;
     }
     // Online: parent `/company` page is the single source — Firestore listeners + loading gate live there only.
@@ -154,7 +159,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       setCompanies([]);
       return;
     }
-    setCompanies((initialCompanies ?? []).filter((c) => !c.isDeleted));
+    setCompanies((initialCompanies ?? []).filter(isCompanyVisibleInSelector));
   }, [user, contextCompanies, contextCompanyLoading, initialCompanies]);
 
 

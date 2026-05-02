@@ -29,7 +29,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
-import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -56,7 +55,8 @@ import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedEr
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -184,8 +184,9 @@ function formatPurchaseFormValidationErrors(errors: FieldErrors<PurchaseFormValu
 
 // MAX_ATTACHMENTS is now from permissions: fileAttachmentLimits.maxFileCount
 
+// Desktop line grid: Unit (3rd track) Qty + 15px — header/cell thoda wider; baaki Qty jaisa.
 const COLS =
-  "grid grid-cols-[2fr_0.5fr_0.6fr_0.8fr_1fr_0.7fr_0.8fr_48px] gap-0";
+  "grid grid-cols-[minmax(220px,2.2fr)_minmax(8.5rem,0.52fr)_minmax(calc(8.5rem+15px),0.52fr)_minmax(8.5rem,0.52fr)_minmax(3.25rem,0.34fr)_minmax(12rem,1.25fr)_minmax(8.5rem,0.58fr)_minmax(8.5rem,0.62fr)_40px] gap-0";
 const TH_BASE = "px-2 py-2 bg-muted/50 font-semibold text-sm box-border";
 const TD_BASE = "px-2 py-1 box-border";
 const FLAT_INPUT = "h-9 w-full border-0 shadow-none focus-visible:ring-0 rounded-none";
@@ -276,6 +277,11 @@ export function CreatePurchaseForm({
   onApprove,
   isApproving = false,
   onEffectiveLinksChange,
+  copySaveTargetCompanyId,
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  isCopyingMissingMasters = false,
+  copyMasterDraftRequest,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -289,11 +295,23 @@ export function CreatePurchaseForm({
   isApproving?: boolean;
   /** Report effective has-links so dialog can hide banner and enable fields when user unlinks locally. */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  onCopyMissingCategory?: (category: string) => void;
+  isCopyingMissingMasters?: boolean;
+  copyMasterDraftRequest?: {
+    category: string;
+    targetCompanyName: string;
+    sourceCollection: string;
+    sourceName: string;
+    /** AddVoucherDialog `openCopyMasterDraftForCategory` se poori source row (Payment In jaisa). */
+    sourceRowPayload?: Record<string, unknown>;
+  } | null;
 }) {
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
   type ProcessedItem = Item & { stockInQty?: number; stockOutQty?: number; stockQty?: number; displayStockQty?: number; };
-  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups } = useVouchers();
+  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups, loading: vouchersLoading } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
   const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
@@ -307,6 +325,8 @@ export function CreatePurchaseForm({
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  /** Naye party save ke turant baad parties sync se pehle stale-master effect `partyId` na wipe kare. */
+  const pendingPartyIdUntilInPartiesListRef = useRef<string | null>(null);
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   // Purchase Account combobox: allow creating a new expense/income account inline.
@@ -329,7 +349,16 @@ export function CreatePurchaseForm({
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkAdvancesOpen, setIsLinkAdvancesOpen] = useState(false);
+  // Link sections are collapsed by default in add/new; edit shows automatically only when already linked.
+  const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setPendingLinkAllocations(null);
+    setShowLinkSections(false);
+    setIsLinkAdvancesOpen(false);
+    onEffectiveLinksChange?.(false);
+  }, [onEffectiveLinksChange]);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher;
@@ -497,6 +526,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0
   );
   const hasItemEditLock = linkedAmountRows.length > 0;
+  const isEditMode = !!voucher?.id;
+  const canRenderBillWiseSection = isEditing || !!partyId;
+  const shouldShowBillWiseSection = canRenderBillWiseSection && (showLinkSections || (isEditMode && linkedAmountRows.length > 0));
+  const shouldShowLinkButton = canRenderBillWiseSection && !shouldShowBillWiseSection;
+
+  useEffect(() => {
+    if (isEditMode && linkedAmountRows.length > 0) setShowLinkSections(true);
+  }, [isEditMode, linkedAmountRows.length]);
 
   const transactionDates = useMemo(() => {
     if (!vouchers?.length) return [];
@@ -831,9 +868,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       e.preventDefault();
       void form.handleSubmit(
         async (data) => {
-          setTimeout(() => {
-            onVoucherAction?.("saved", options.saveAndNew);
-          }, 100);
           await processAndSaveRef.current?.(data, options);
         },
         (errors) => {
@@ -841,7 +875,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       )(e);
     },
-    [form, onVoucherAction]
+    [form]
   );
 
    const processAndSave = useCallback(
@@ -1131,6 +1165,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             await fetchVoucherNumber();
         }
 
+        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
         return docId;
 
       } catch (error) {
@@ -1153,12 +1188,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
 
   const handleDelete = async () => {
-    if (!savedVoucherId || !companyId) return;
+    // Local/static mode me savedVoucherId kabhi stale/null ho sakta hai; voucher prop fallback se delete reliable banao.
+    const voucherIdToDelete = savedVoucherId || voucher?.id || null;
+    if (!voucherIdToDelete || !companyId) {
+      toast({ variant: "destructive", title: "Delete failed", description: "Voucher id missing." });
+      return;
+    }
     
     try {
+      const isLocalDataMode = isLocalOnlyMode() || company?.storageOption === "local";
+      // Local mode permission/date checks ke liye current in-memory voucher row use karo.
+      const localVoucherData = voucher ?? vouchers?.find((v: any) => v.id === voucherIdToDelete) ?? null;
       // Permission check: delete (and delete_approved_voucher if voucher is approved)
-      const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-      const voucherData = voucherDoc.exists() ? voucherDoc.data() : null;
+      const voucherDoc = isLocalDataMode
+        ? null
+        : await getDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherIdToDelete));
+      const voucherData = voucherDoc?.exists() ? voucherDoc.data() : localVoucherData;
       if (!canDeleteVoucher(voucherData)) {
         throw new PermissionDeniedError(
           (voucherData as any)?.isApproved ? "You do not have permission to delete approved vouchers." : "You do not have permission to delete records."
@@ -1168,7 +1213,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         toast({ variant: "destructive", title: "Cannot Delete", description: "First unlink linked transactions." });
         return;
       }
-      if (voucherDoc.exists() && voucherData) {
+      if (voucherData) {
         const voucherDate = voucherData.date?.toDate ? voucherData.date.toDate() : new Date(voucherData.date);
         assertCanPerformBackdated(canPerformBackdatedAction, "delete", voucherDate);
       }
@@ -1191,14 +1236,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     setIsLoading(true);
     try {
-      await updateDoc(
-        doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId),
-        {
-          isDeleted: true,
-          deletedAt: serverTimestamp(),
-          deletedBy: user?.uid || '',
-        }
-      );
+      // Recycle-bin delete local-first helper se: local DB + online mirror dono consistent rahte hain.
+      await patchVoucherFields(companyId, voucherIdToDelete, {
+        isDeleted: true,
+        deletedAt: serverTimestamp(),
+        deletedBy: user?.uid || "",
+      });
       toast({
         title: "Voucher Moved to Bin",
         description: "The purchase bill has been moved to the recycle bin.",
@@ -1343,6 +1386,199 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [filteredItems, allProcessedItems]);
   
   const availableAccounts = useMemo(() => processedAccounts.filter(acc => !acc.isSpecial), [processedAccounts]);
+  /** Save & Copy To: mismatch categories source-driven rakho; source me item na ho to item Copy chip hide. */
+  const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  // Source voucher me actual item mismatch mila tabhi blank item row par Copy chip dikhao.
+  const hasSourceItemMismatch = Boolean(copyMismatchCategories?.includes("item"));
+  const purchaseAccountId = form.watch("purchaseAccountId");
+  const showCopyPartyFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    const pid = String(partyId || "").trim();
+    if (!pid) return true;
+    return !processedParties.some((p: any) => p.id === pid);
+  }, [copyDraftMasterHelpersEnabled, partyId, processedParties]);
+  const showCopyPurchaseAccountFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    const paid = String(purchaseAccountId || "").trim();
+    // Copy chip tabhi dikhao jab value blank ho ya options me missing ho; fallback-selected value par force na karo.
+    if (!paid) return true;
+    return !purchaseAccountOptions.some((o: { value: string }) => o.value === paid);
+  }, [copyDraftMasterHelpersEnabled, purchaseAccountId, purchaseAccountOptions]);
+  const highlightPartyLabelCopyMismatch = showCopyPartyFromSource;
+  const highlightPurchaseAccountLabelCopyMismatch = showCopyPurchaseAccountFromSource;
+  const purchaseLineNeedsCopyItem = useCallback(
+    (idx: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const li = watchedLineItems?.[idx] as Record<string, unknown> | undefined;
+      if (!li) return false;
+      const iid = String(li.itemId || "").trim();
+      // Blank item row par Copy tabhi dikhao jab source voucher me item mismatch aaya ho.
+      if (!iid) return hasSourceItemMismatch;
+      return !(items || []).some((it: Item) => it.id === iid);
+    },
+    [copyDraftMasterHelpersEnabled, watchedLineItems, items, hasSourceItemMismatch]
+  );
+  const purchaseLineNeedsCopyTax = useCallback(
+    (idx: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const li = watchedLineItems?.[idx] as Record<string, unknown> | undefined;
+      if (!li) return false;
+      const tid = String(li.taxAccountId || "").trim();
+      // Item jaisa: khali tax field bhi copy-draft mode me mismatch (header Tax + Copy dikhane ke liye).
+      if (!tid) return true;
+      const taxOk = Boolean(processedTaxes.some((t: any) => t.id === tid));
+      if (taxOk) return false;
+      return true;
+    },
+    [copyDraftMasterHelpersEnabled, watchedLineItems, processedTaxes]
+  );
+  /** Desktop line grid: Copy chip header row me — koi bhi line mismatch ho to dikhao. */
+  const desktopHeaderCopyItem = useMemo(
+    () =>
+      copyDraftMasterHelpersEnabled &&
+      (watchedLineItems || []).some((_, idx) => purchaseLineNeedsCopyItem(idx)),
+    [copyDraftMasterHelpersEnabled, watchedLineItems, purchaseLineNeedsCopyItem]
+  );
+  const desktopHeaderCopyTax = useMemo(
+    () =>
+      copyDraftMasterHelpersEnabled &&
+      (watchedLineItems || []).some((_, idx) => purchaseLineNeedsCopyTax(idx)),
+    [copyDraftMasterHelpersEnabled, watchedLineItems, purchaseLineNeedsCopyTax]
+  );
+
+  /** Copy-draft: sirf prefilled dialogs — auto-create nahin (`AddVoucherDialog` se request). */
+  useEffect(() => {
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest;
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+
+    if (payload && sc === "items") {
+      setIsCreateItemOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(
+          new CustomEvent("prefill-create-item-from-row", {
+            detail: {
+              rowPayload: payload,
+              type: primaryLineItemType === "service" ? "service" : "item",
+            },
+          })
+        );
+      }, 90);
+      sonnerToast.message(`Item prefilled from source → save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "taxes") {
+      setIsCreateTaxOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-tax-from-row", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Tax prefilled from source → save adds to "${targetLabel}".`);
+      return;
+    }
+
+    if (!nm) return;
+    switch (req.category) {
+      case "party":
+        setIsCreatePartyOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-party-name", { detail: nm })), 80);
+        sonnerToast.message(`Party prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "tax":
+        setIsCreateTaxOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: nm })), 80);
+        sonnerToast.message(`Tax prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "item":
+        setIsCreateItemOpen(true);
+        setTimeout(() => {
+          document.dispatchEvent(
+            new CustomEvent("prefill-create-item-name", { detail: { name: nm, type: primaryLineItemType === "service" ? "service" : "item" } })
+          );
+        }, 80);
+        sonnerToast.message(`Item prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "account":
+        setIsCreateExpenseAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Purchase account prefilled → save adds under "${targetLabel}".`);
+        return;
+      default:
+        break;
+    }
+  }, [copyMasterDraftRequest, primaryLineItemType]);
+
+  /** Dusra tab/item delete hone par stale master IDs toast + clear. */
+  useEffect(() => {
+    if (vouchersLoading || !companyId) return;
+    const missing: string[] = [];
+    const pid = String(partyId || "").trim();
+    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+      if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
+        missing.push("supplier");
+        form.setValue("partyId", "");
+      }
+    }
+    const pah = String(form.getValues("purchaseAccountId") || "").trim();
+    if (pah && pah !== "purchase_account" && !purchaseAccountOptions.some((o: { value: string }) => o.value === pah)) {
+      // Save & Copy To: sirf 100% naam-match remap hota hai — target par orphan source-ID pe random pehla expense A/c mat lagaao; placeholder + Copy chip.
+      if (copySaveTargetCompanyId) {
+        form.setValue("purchaseAccountId", "purchase_account");
+      } else {
+        missing.push("purchase account");
+        form.setValue("purchaseAccountId", purchaseAccountOptions[0]?.value || "purchase_account");
+      }
+    }
+    (watchedLineItems || []).forEach((line: Record<string, unknown>, idx: number) => {
+      const iid = String(line?.itemId || "").trim();
+      const itemRows = items ?? [];
+      if (iid && !itemRows.some((it: Item) => it.id === iid)) {
+        missing.push(`line ${idx + 1} item`);
+        form.setValue(`lineItems.${idx}.itemId`, "");
+      }
+      const tid = String(line?.taxAccountId || "").trim();
+      if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
+        missing.push(`line ${idx + 1} tax`);
+        form.setValue(`lineItems.${idx}.taxAccountId`, "");
+      }
+    });
+    if (missing.length > 0) {
+      sonnerToast.error("Master no longer exists", {
+        description: `Removed: ${[...new Set(missing)].join(", ")}. Pick again.`,
+      });
+    }
+  }, [
+    vouchersLoading,
+    companyId,
+    partyId,
+    processedParties,
+    purchaseAccountOptions,
+    items,
+    watchedLineItems,
+    processedTaxes,
+    form,
+    copySaveTargetCompanyId,
+  ]);
+
+  // Pending party ab listener ke baad list me — ref clear (create-party vs stale-ID race).
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    if (!pend) return;
+    if (processedParties.some((p: any) => p.id === pend)) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [processedParties]);
+
+  // User ne aur supplier choose kiya to pending-create guard hata do.
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    const pid = String(partyId || "").trim();
+    if (pend && pid && pid !== pend) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [partyId]);
 
   /* --------------------------------- RENDER -------------------------------- */
 
@@ -1350,11 +1586,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     <>
       <Form {...form}>
         <form onSubmit={handleFormSubmit} className="h-full flex flex-col min-w-0 w-full max-w-full">
-          <ScrollArea className={cn("flex-1 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
-            <div className={cn(
-              "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
-              isMobile ? "" : "px-[2px]"
-            )}>
+          {/* PC: Radix ScrollArea viewport nested overflow clip karti hai—yahan native overflow-auto se horizontal scrollbar milta hai; footer form ke bahar hi rehta hai. */}
+          <div
+            className={cn(
+              "flex-1 min-h-0 min-w-0 w-full",
+              isMobile
+                ? "overflow-y-auto overflow-x-hidden [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400/80 [&::-webkit-scrollbar-track]:bg-gray-200/60"
+                : /* w-2 = vertical track patla (pehle sirf h-2 tha — horizontal patla, vertical mota) */
+                  "overflow-auto pr-6 -mr-6 touch-pan-x [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-track]:bg-gray-200"
+            )}
+          >
+            <div
+              className={cn(
+                "space-y-6 min-w-0 w-full bg-slate-100",
+                !isMobile && "min-w-[1320px] px-[2px]",
+                isMobile ? "max-w-full overflow-x-hidden [&>*]:max-w-full" : "",
+                "[&>*]:min-w-0"
+              )}
+            >
+              <div className="rounded-lg border border-sky-400 bg-sky-100 p-1">
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
@@ -1441,23 +1691,40 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     );
                   })()}
                   {/* Mobile: Party and Purchase Account - 2 columns */}
-                  <div className="flex gap-[2px] w-full">
+                  {/* Mobile row uses fixed 2-column grid so one long account name cannot resize sibling field. */}
+                  <div className="grid grid-cols-2 gap-[2px] w-full min-w-0 max-w-full overflow-hidden">
 
                     <FormField
                       control={form.control}
                       name="partyId"
                       render={({ field }: any) => (
-                        <FormItem className="flex-1 min-w-0">
-                           <div className="flex justify-between items-baseline mb-1">
-                            <FormLabel className="text-xs">Party</FormLabel>
+                        <FormItem className="min-w-0 w-full overflow-hidden">
+                          <div className="flex justify-between items-center mb-1 gap-1">
+                            <FormLabel className={cn("text-xs", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
+                              Party
+                            </FormLabel>
+                            {showCopyPartyFromSource && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("party")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                             {partyBalance !== null && partyBalance !== undefined && (
                               <FormLabel className={cn("text-[10px] font-semibold mr-[2px]", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                 {formatCurrencyForPrint(partyBalance, { noSuffix: true, noAnimation: true })} {partyBalance >= 0 ? 'Dr' : 'Cr'}
                               </FormLabel>
                             )}
                           </div>
-                          <div className="flex gap-1">
+                          {/* Supplier dropdown wrapper keeps combobox from stretching with long selected text. */}
+                          <div className="flex gap-1 w-full min-w-0 overflow-hidden">
                             <Combobox
+                              triggerClassName="h-9 w-full min-w-0 max-w-full overflow-hidden"
                               options={processedPartiesForSelection.map((p) => ({
                                 value: p.id,
                                 label: p.name,
@@ -1490,12 +1757,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="purchaseAccountId"
                       render={({ field }: any) => (
-                        <FormItem className="flex-1 min-w-0">
-                          <div className="flex justify-between items-baseline mb-1">
-                            <FormLabel className="text-xs">Purchase A/c</FormLabel>
+                        <FormItem className="min-w-0 w-full overflow-hidden">
+                          <div className="flex justify-between items-center mb-1 gap-1">
+                            <FormLabel className={cn("text-xs", highlightPurchaseAccountLabelCopyMismatch && "font-semibold text-red-600")}>
+                              Purchase A/c
+                            </FormLabel>
+                            {showCopyPurchaseAccountFromSource && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("account")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                           </div>
-                          <div className="flex gap-1">
+                          {/* Purchase account dropdown must truncate selected name with ellipsis on mobile. */}
+                          <div className="flex gap-1 w-full min-w-0 overflow-hidden">
                             <Combobox
+                              triggerClassName="h-9 w-full min-w-0 max-w-full overflow-hidden"
                               // Purchase account should show only Expense-group accounts.
                               options={purchaseAccountOptions}
                               value={field.value}
@@ -1536,10 +1819,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           name="partyId"
                           render={({ field }: any) => (
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
-                              <div className="flex justify-between items-baseline">
-                                <FormLabel className="truncate">Supplier (Cr.)</FormLabel>
+                              <div className="flex items-center gap-1 flex-wrap w-full">
+                                <FormLabel className={cn("truncate shrink-0", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
+                                  Supplier (Cr.)
+                                </FormLabel>
+                                {showCopyPartyFromSource && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                    onClick={() => onCopyMissingCategory?.("party")}
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
                                 {partyBalance !== null && partyBalance !== undefined && (
-                                  <FormLabel className={cn("text-xs font-semibold shrink-0", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
+                                  <FormLabel className={cn("text-xs font-semibold ml-auto shrink-0", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                     {partyBalance >= 0 ? `Rec: ${formatCurrencyForPrint(partyBalance, { noSuffix: true, noAnimation: true })} Dr` : `Pay: ${formatCurrencyForPrint(Math.abs(partyBalance), { noSuffix: true, noAnimation: true })} Cr`}
                                   </FormLabel>
                                 )}
@@ -1567,7 +1864,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           name="purchaseAccountId"
                           render={({ field }: any) => (
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
-                              <FormLabel className="truncate">Purchase Account (Dr.)</FormLabel>
+                              <div className="flex items-center justify-between gap-2">
+                                <FormLabel className={cn("truncate", highlightPurchaseAccountLabelCopyMismatch && "font-semibold text-red-600")}>
+                                  Purchase Account (Dr.)
+                                </FormLabel>
+                                {showCopyPurchaseAccountFromSource && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                    onClick={() => onCopyMissingCategory?.("account")}
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
+                              </div>
                               <Combobox
                                 triggerClassName="h-10 w-full min-w-0"
                                 // Purchase account should show only Expense-group accounts.
@@ -1663,36 +1976,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   })()}
                 </>
               )}
-
-              {/* Items / Services Toggle */}
-              <div className={cn(isMobile && "flex justify-start")}>
-                <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
-                  <TabsList className={cn(
-                    isMobile && "flex gap-[2px] px-[2px]"
-                  )}>
-                    <TabsTrigger
-                      value="item"
-                      className={cn(isMobile && "flex-shrink-0")}
-                      style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
-                    >
-                      Items
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="service"
-                      className={cn(isMobile && "flex-shrink-0")}
-                      style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
-                    >
-                      Services
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
               </div>
 
-              {/* Line Items Grid */}
-              <div className={cn(
-                "border rounded-lg overflow-hidden relative",
-                isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px]" : "px-[2px]"
-              )}>
+              {/* Line Items Grid (same green section treatment as Sale form). */}
+                <div className={cn(
+                  "border border-emerald-300/80 rounded-lg relative bg-emerald-50 p-1 min-w-0",
+                  isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px] overflow-hidden" : "px-[2px] overflow-x-visible"
+                )}>
+                <div className={cn("mb-2", isMobile && "flex justify-start")}>
+                  <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
+                    <TabsList className={cn(
+                      isMobile && "flex gap-[2px] px-[2px]"
+                    )}>
+                      <TabsTrigger
+                        value="item"
+                        className={cn(isMobile && "flex-shrink-0")}
+                        style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
+                      >
+                        Items
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="service"
+                        className={cn(isMobile && "flex-shrink-0")}
+                        style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
+                      >
+                        Services
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
                 {isMobile ? (
                   // Mobile View: No scrollable container, broken rows
                   <div className="w-full">
@@ -1712,13 +2024,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
                       return (
                         <div key={line.id} className="border-t px-[2px] py-2 space-y-2">
-                        {/* Row 1: Item field (full width) */}
+                        {/* Row 1: Item + Copy (cross-company master chip item ke right) */}
                         <div className="w-full px-[2px]">
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.itemId`}
-                            render={({ field }: any) => (
-                              <FormItem className="w-full">
+                          <div className="flex items-start gap-1 w-full min-w-0">
+                            <FormField
+                              control={form.control}
+                              name={`lineItems.${index}.itemId`}
+                              render={({ field }: any) => (
+                                <FormItem className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
@@ -1752,6 +2065,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormItem>
                             )}
                           />
+                            {purchaseLineNeedsCopyItem(index) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-9 shrink-0 px-2 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("item")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
 
                         {/* Row 2 & 3: Qty/Unit and Rate/Tax in 2 columns with 6px gap */}
@@ -1835,8 +2161,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               )}
                             />
                           </div>
-                          {/* Right Column: Unit (top) and Tax (bottom) */}
-                          <div className="flex-1 space-y-2">
+                          {/* Right column: Unit trigger ko chhoti screen par bhi ≥12ch — cramped placeholder avoid. */}
+                          <div className="flex-1 min-w-[calc(8.5rem+15px)] space-y-2">
                             <FormField
                               control={form.control}
                               name={`lineItems.${index}.unit`}
@@ -1844,7 +2170,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem>
                                   <FormLabel className="text-xs">Unit</FormLabel>
                                   <FormControl>
-                                    <div className="[&_button]:h-9 [&_button]:text-xs">
+                                    <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
                                       <Combobox
                                         options={[
                                           ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -1864,6 +2190,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         }}
                                         placeholder="Unit"
                                         addNewLabel="+ Add unit"
+                                        triggerLabelMinCh={12}
                                       />
                                     </div>
                                   </FormControl>
@@ -1875,7 +2202,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.taxAccountId`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Tax</FormLabel>
+                                  {/* Copy chip visible => Tax label red; resolved selection => normal label color. */}
+                                  <FormLabel className={cn("text-xs", purchaseLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
                                   <FormControl>
                                     <div className="[&_button]:h-9 [&_button]:text-xs">
                                       <Combobox
@@ -1915,7 +2243,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.isTaxInclusive`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Tax Inc.</FormLabel>
+                                  <div className="flex items-center justify-between gap-1">
+                                    {/* Copy chip visible => Tax Inc label red; resolved selection => normal label color. */}
+                                    <FormLabel className={cn("text-xs", purchaseLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax Inc.</FormLabel>
+                                    {purchaseLineNeedsCopyTax(index) && (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                        onClick={() => onCopyMissingCategory?.("tax")}
+                                        disabled={isCopyingMissingMasters}
+                                      >
+                                        {isCopyingMissingMasters ? "…" : "Copy"}
+                                      </Button>
+                                    )}
+                                  </div>
                                   <div className="flex items-center h-9">
                                     <FormControl>
                                       <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
@@ -2010,31 +2353,58 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                   </div>
                 ) : (
-                  // Desktop View: Scrollable container with grid
-                  <div className={cn(
-                    "overflow-x-auto w-full",
-                    "[&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-gray-200"
-                  )}>
-                    <div className="w-full">
-                      {/* Header Row */}
-                      <div className={cn(COLS, "divide-x divide-border border-b")}>
-                        <div className={TH_BASE}>Item</div>
+                  // PC: wide layout ka horizontal scroll form ke scroll wale parent div me (footer fixed).
+                  <div className="w-full min-w-0">
+                    <div className={cn(COLS, "divide-x divide-border border-b")}>
+                        <div className={cn(TH_BASE, "flex items-center justify-between gap-1 min-w-0")}>
+                          {/* Desktop: Item Copy visible ho to Item header red highlight. */}
+                          <span className={cn("truncate", desktopHeaderCopyItem && "text-red-600 font-semibold")}>Item</span>
+                          {desktopHeaderCopyItem && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                              onClick={() => onCopyMissingCategory?.("item")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
                         <div className={cn(TH_BASE, "text-center")}>Qty</div>
                         <div className={cn(TH_BASE, "text-center")}>Unit</div>
                         <div className={cn(TH_BASE, "text-center")}>Rate</div>
-                        <div className={cn(TH_BASE, "flex items-center justify-center")}>
+                        <div className={cn(TH_BASE, "flex flex-col items-center justify-center gap-0.5 px-1 text-center")}>
                           <Checkbox
                             checked={(form.watch("lineItems") || []).every((li) => li.isTaxInclusive)}
                             onCheckedChange={handleToggleAllInclusive}
                             id="all-inclusive"
                           />
-                          <label htmlFor="all-inclusive" className="cursor-pointer select-none ml-2">
+                          {/* Header: Tax copy mismatch ho to Tax Inc label red; resolved case me normal. */}
+                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-[10px] leading-tight font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
                             Tax Inc.
                           </label>
                         </div>
+                        <div className={cn(TH_BASE, "flex items-center gap-1 min-w-0 flex-nowrap justify-end")}>
+                          {/* Desktop: Tax Copy visible ho to Tax header red highlight. */}
+                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left", desktopHeaderCopyTax && "text-red-600")}>Tax</span>
+                          {desktopHeaderCopyTax && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                              onClick={() => onCopyMissingCategory?.("tax")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
                         <div className={cn(TH_BASE, "text-right")}>Tax Amt.</div>
                         <div className={cn(TH_BASE, "text-right")}>Amount</div>
-                        <div className={TH_BASE}></div>
+                        <div className={TH_BASE} />
                       </div>
                       {/* Desktop Rows */}
                       {fields.map((line, index) => {
@@ -2051,12 +2421,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
                         return (
                           <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
-                        <div className={cn(TD_BASE, "flex flex-col")}>
+                        <div className={cn(TD_BASE, "min-w-0")}>
                           <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.itemId`}
-                            render={({ field }: any) => (
-                              <FormItem className="w-full">
+                              control={form.control}
+                              name={`lineItems.${index}.itemId`}
+                              render={({ field }: any) => (
+                                <FormItem className="min-w-0 w-full">
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
@@ -2098,7 +2468,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lineItems.${index}.quantity`}
                             render={({ field }: any) => (
                               <FormControl>
-                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right")} disabled={itemFieldsDisabled} />
+                                <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} />
                               </FormControl>
                             )}
                           />
@@ -2111,7 +2481,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem className="w-full">
                                 <FormControl>
-                                  <div className="[&_button]:h-9 [&_button]:text-xs">
+                                  <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
                                     <Combobox
                                       options={[
                                         ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -2131,6 +2501,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       }}
                                       placeholder="Unit"
                                       addNewLabel="+ Add unit"
+                                      triggerLabelMinCh={12}
                                     />
                                   </div>
                                 </FormControl>
@@ -2153,7 +2524,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           type="number"
                                           {...field}
                                           disabled={purchaseRateDisabled(index, itemFieldsDisabled)}
-                                          className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                          className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right tabular-nums", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                           title={
                                             !canEditRates
                                               ? "No role permission to edit rates"
@@ -2203,25 +2574,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           />
                         </div>
 
-                        <div className={cn(TD_BASE, "flex items-center justify-center gap-1")}>
-                          {/* Inclusive checkbox */}
+                        <div className={cn(TD_BASE, "flex items-center justify-center")}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.isTaxInclusive`}
                             render={({ field }: any) => (
-                              <FormItem className="flex items-center">
+                              <FormItem className="flex items-center shrink-0 m-0 space-y-0">
                                 <FormControl>
                                   <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
                                 </FormControl>
                               </FormItem>
                             )}
                           />
-                          {/* Tax selector */}
+                        </div>
+                        <div className={cn(TD_BASE, "min-w-0")}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.taxAccountId`}
                             render={({ field }: any) => (
-                              <FormItem className="w-full">
+                              <FormItem className="w-full min-w-0">
                                 <Combobox
                                   options={processedTaxes.map((t) => ({
                                     value: t.id,
@@ -2259,7 +2630,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   type="number"
                                   {...field}
                                   readOnly
-                                  className={cn(FLAT_INPUT, "bg-muted text-right")}
+                                  className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
                                 />
                               </FormControl>
                             )}
@@ -2277,7 +2648,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   type="number"
                                   {...field}
                                   readOnly
-                                  className={cn(FLAT_INPUT, "bg-muted text-right")}
+                                  className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
                                 />
                               </FormControl>
                             )}
@@ -2328,15 +2699,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </Button>
                       </div>
                     </div>
-                  </div>
                 )}
               </div>
 
               {/* Bottom: Narration + Attach / Totals */}
               {isMobile ? (
                 <div className="grid grid-cols-2 gap-3 w-[calc(100%-4px)] mx-auto px-[2px]">
-                  {/* Mobile: Narration - Left Column */}
-                  <div className="col-span-2 px-[2px]">
+                  {/* Mobile: narration + due date grouped container color (same as Sale form). */}
+                  <div className="col-span-2 rounded-lg border border-amber-300/80 bg-amber-50 p-2">
+                  <div className="px-[2px]">
                     <FormField
                       control={form.control}
                       name="narration"
@@ -2344,11 +2715,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FormItem>
                           <FormLabel>Narration</FormLabel>
                           <FormControl>
+                            {/* Mobile: shared narration resize/scroll — static app me clip na ho */}
                             <Textarea
                               placeholder="Add any notes for this bill..."
                               {...field}
                               rows={2}
-                              className="text-sm"
+                              className={cn("text-sm", VOUCHER_NARRATION_TEXTAREA_CLASS)}
                             />
                           </FormControl>
                           <FormMessage />
@@ -2357,7 +2729,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     />
                   </div>
                   {showApprovalCheckbox && (
-                    <div className="col-span-2 px-[2px]">
+                    <div className="px-[2px] pt-2">
                       <FormField
                         control={form.control}
                         name="isApproved"
@@ -2375,8 +2747,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       />
                     </div>
                   )}
-                  {/* Mobile: Due Date */}
-                  <div className={cn("col-span-2 px-[2px]", (dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
+                  <div className={cn("px-[2px] pt-2", (dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
                     <FormField
                       control={form.control}
                       name="dueDate"
@@ -2427,9 +2798,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                     />
                   </div>
+                  </div>
                   
                   {/* Mobile: Attach Files - Left Column */}
-                  <div className="col-span-2 px-[2px]">
+                  <div className="col-span-2 rounded-lg border border-indigo-300/80 bg-indigo-50 p-2">
                     <FormItem>
                       <FormLabel className="text-sm">Attach Files</FormLabel>
                       {showPdfAsImageToggle && (
@@ -2496,7 +2868,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {/* Mobile: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap between */}
                   <div className="col-span-2 flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
-                    <div className="bg-muted/20 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
+                    <div className="bg-cyan-50 border-cyan-300/80 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
                       <div className="flex justify-between items-center">
                         <span className="text-xs">Sub Total:</span>
                         <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
@@ -2530,8 +2902,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out. Shown for both new and edit so user can link before/after save. */}
-                    {(isEditing || partyId) && (
-                      <div className="bg-muted/30 rounded-lg border-2 border-border px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
+                    {shouldShowLinkButton && (
+                      <div className="pb-1.5">
+                        {/* User request: keep hidden unless Show Link is clicked for add/non-linked edit. */}
+                        <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                      </div>
+                    )}
+                    {shouldShowBillWiseSection && (
+                      <div className="bg-rose-50 rounded-lg border-2 border-rose-300/80 px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
                         <div className="border-b border-border/60 pb-2">
                           <span className="text-xs font-semibold">Link for bill wise</span>
                           {company?.enableLinkPaymentToTxns && (
@@ -2619,6 +2997,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Desktop: Left: Narration + Due Date + Files */}
                   <div className="space-y-4">
+                    <div className="rounded-lg border border-amber-300/80 bg-amber-50 p-3">
                     <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-start">
                       <FormField
                         control={form.control}
@@ -2627,9 +3006,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <FormItem>
                             <FormLabel>Narration</FormLabel>
                             <FormControl>
+                              {/* Desktop narration: poora text dikhe */}
                               <Textarea
                                 placeholder="Add any notes for this bill..."
                                 {...field}
+                                className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)}
                               />
                             </FormControl>
                             <FormMessage />
@@ -2699,6 +3080,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                       />
                     </div>
+                    </div>
+                    <div className="rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
                     <FormItem>
                       <FormLabel>Attach Files (Optional)</FormLabel>
                       {showPdfAsImageToggle && (
@@ -2757,12 +3140,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       </RestrictedFileUploader>
                     </FormItem>
+                    </div>
                   </div>
 
                   {/* Desktop: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap, same as mobile */}
                   <div className="flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
-                    <div className="space-y-4 border rounded-lg px-[2px] py-4 bg-muted/20 w-full">
+                    <div className="space-y-4 border border-cyan-300/80 rounded-lg px-[2px] py-4 bg-cyan-50 w-full">
                       <div className="flex justify-between items-center font-medium">
                         <span>Sub Total:</span>
                         <span>{(subTotal || 0).toFixed(2)}</span>
@@ -2796,8 +3180,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out. Shown for both new and edit so user can link before/after save. */}
-                    {(isEditing || partyId) && (
-                      <div className="space-y-4 border-2 border-border rounded-lg px-[2px] py-4 pb-[45px] bg-muted/30 w-full">
+                    {shouldShowLinkButton && (
+                      <div className="pb-1">
+                        {/* Desktop add/non-linked edit path uses same reveal button. */}
+                        <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                      </div>
+                    )}
+                    {shouldShowBillWiseSection && (
+                      <div className="space-y-4 border-2 border-rose-300/80 rounded-lg px-[2px] py-4 pb-[45px] bg-rose-50 w-full">
                         <div className="border-b border-border/60 pb-2">
                           <span className="text-sm font-semibold">Link for bill wise</span>
                           {company?.enableLinkPaymentToTxns && (
@@ -2884,7 +3274,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Footer Actions */}
           <div className={cn(
@@ -2985,6 +3375,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       
       <CreatePartyDialog
         onPartyCreated={(id) => {
+          pendingPartyIdUntilInPartiesListRef.current = id;
           setIsCreatePartyOpen(false);
           form.setValue("partyId", id);
         }}

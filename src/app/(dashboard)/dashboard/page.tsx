@@ -39,7 +39,13 @@ import {
   FileDigit,
   FileText as FileTextIcon,
   Filter,
-  Wand2
+  Wand2,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  StickyNote,
+  Factory,
+  HandCoins,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -96,9 +102,15 @@ import { LinkPaymentToTxnsDialog } from '@/components/vouchers/LinkPaymentToTxns
 import { toast } from 'sonner';
 import { useTransactions } from '@/hooks/use-transactions';
 import { useFeatureAccess } from '@/hooks/use-feature-access';
+import { useSidebar } from "@/components/ui/sidebar";
 import { FinancialSummaryCards } from '@/components/reports/FinancialSummaryCards';
 import { shouldReplaceWithMasterDetailCanonical } from "@/lib/maybeReplaceMasterDetailUrl";
+import { isDashboardRedirectGuardActive } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { orderedCashFlowCategories } from "@/lib/cashFlowCategoryOrder";
+import {
+  voucherCountsAsDashboardPaySalary,
+  voucherCountsAsDashboardPaymentOutExcludingPaySalary,
+} from "@/lib/dashboardPaySalaryStat";
 
 // Type definitions
 type Voucher = {
@@ -178,6 +190,11 @@ const statCardData = [
   { title: 'Contra', icon: Landmark, type: 'contra', link: '/contra', isCredit: false },
   { title: 'Direct Income', icon: TrendingUp, type: 'direct_income', link: '/incomes', isCredit: true },
   { title: 'Direct Expense', icon: TrendingDown, type: 'direct_expense', link: '/incomes', isCredit: false },
+  { title: 'Payment In', icon: ArrowDownCircle, type: 'payment_in', link: '/payment-in', isCredit: true },
+  { title: 'Payment Out', icon: ArrowUpCircle, type: 'payment_out_excl_pay_salary', link: '/payment-out', isCredit: false },
+  { title: 'Pay Salary', icon: HandCoins, type: 'pay_salary', link: '/add-salary', isCredit: false },
+  { title: 'Notes', icon: StickyNote, type: 'note', link: '/notes', isCredit: true },
+  { title: 'Production', icon: Factory, type: 'production', link: '/production', isCredit: true },
 ];
 
 // --- REUSABLE DATE FILTER COMPONENT ---
@@ -398,7 +415,8 @@ useEffect(() => {
             id="bank-cash-summary-area"
             // Dashboard top cards: give each card a different soft ribbon tone.
             // Bold border requested for dashboard cards while preserving ribbon tint.
-            className="flex-1 flex flex-col min-h-0 border-2 border-sky-300/70 bg-gradient-to-r from-sky-50 via-white to-cyan-100/70 dark:from-sky-950/25 dark:via-card dark:to-cyan-900/20"
+            // APK WebView compatibility: force same top ribbon class used by header/sidebar so stripe is always visible.
+            className="app-chrome-top-ribbon pl-dashboard-ribbon-sky flex-1 flex flex-col min-h-0 border-2 border-sky-300/70"
         >
             <CardHeader className="py-3">
                 <div className="flex items-center justify-between">
@@ -523,6 +541,10 @@ function DashboardPageContent() {
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = React.useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = React.useState<any>(null);
   const { visibleCard, setVisibleCard } = useDashboard();
+  /** Chart se wapas: jis tab par user tha (All/Summary/…) — doosra Chart click pe wahi restore, warna state same reh jata tha. */
+  const visibleCardBeforeChartsRef = useRef<string>("financial-summaries");
+  /** Desktop: rail `w-64` open / `w-16` collapsed — footer `fixed` inset is sidebar ke hisaab se shift hona chahiye. */
+  const { isOpen: sidebarRailOpen } = useSidebar();
   const [greeting, setGreeting] = useState('');
   
   const [recentVoucherTypes, setRecentVoucherTypes] = useState<string[]>(['all']);
@@ -575,7 +597,11 @@ function DashboardPageContent() {
       } finally {
         pendingEditVoucherRef.current = null;
         // companyId / searchParams deps se effect dubara — URL pehle hi /dashboard ho to replace mat chalao
-        if (shouldReplaceWithMasterDetailCanonical("/dashboard")) {
+        // APK mobile approve guard active ho to bhi /dashboard push mat karo (user ko original page par rakho).
+        if (
+          !isDashboardRedirectGuardActive() &&
+          shouldReplaceWithMasterDetailCanonical("/dashboard")
+        ) {
           router.replace("/dashboard");
         }
       }
@@ -1003,29 +1029,28 @@ function DashboardPageContent() {
 }, [processedItems, vouchers, stockDateRange]);
 
   const stats = React.useMemo(() => {
-    if (!vouchers) return { paymentInTotal: 0, paymentOutTotal: 0, otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
-
-    const paymentInTotal = vouchers.filter(v => v.type === 'payment_in').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
-    const paymentOutTotal = vouchers.filter(v => v.type === 'payment_out').reduce((sum, v) => sum + (v.total || v.amount || 0), 0);
+    if (!vouchers) return { otherStats: statCardData.map(s => ({ ...s, total: 0, count: 0 })) };
 
     const otherStats = statCardData.map((card) => {
       const filteredVouchers = vouchers.filter((v) => {
         if (card.type === 'journal') return v.type === 'journal' && !v.subType;
         if (card.type === 'add_salary') return v.type === 'journal' && v.subType === 'add_salary';
+        if (card.type === 'pay_salary') return voucherCountsAsDashboardPaySalary(v);
+        if (card.type === 'payment_out_excl_pay_salary') return voucherCountsAsDashboardPaymentOutExcludingPaySalary(v);
         return v.type === card.type;
       });
-      
+
       let total = 0;
       if (card.type === 'journal' || card.type === 'add_salary' || card.type === 'contra') {
-            total = filteredVouchers.reduce((sum, v) => sum + Number(getTransactionAmounts(v).debit), 0);
+        total = filteredVouchers.reduce((sum, v) => sum + Number(getTransactionAmounts(v).debit), 0);
       } else {
-            total = filteredVouchers.reduce((sum, v) => sum + Number(v.total || v.amount || 0), 0);
+        total = filteredVouchers.reduce((sum, v) => sum + Number(v.total || v.amount || 0), 0);
       }
 
       return { ...card, total, count: filteredVouchers.length };
     });
 
-    return { paymentInTotal, paymentOutTotal, otherStats };
+    return { otherStats };
   }, [vouchers]);
   
   // Unapproved quick filter: force all-time + all types + clear table column filters.
@@ -1411,7 +1436,7 @@ function DashboardPageContent() {
   };
 
 
-  const renderFinancialSummaries = (reportsEnabled: boolean) => {
+  const renderFinancialSummaries = (reportsEnabled: boolean, showVoucherDateCharts = false) => {
     return (
       <FinancialSummaryCards
         vouchers={vouchers}
@@ -1424,6 +1449,7 @@ function DashboardPageContent() {
         loading={loading}
         showDetails={reportsEnabled}
         compact={false}
+        showVoucherDateCharts={showVoucherDateCharts}
       />
     );
   };
@@ -1432,7 +1458,7 @@ function DashboardPageContent() {
     <div className="w-full max-w-full">
     <Card
       className={cn(
-        "border-2 w-full border-violet-300/70 bg-gradient-to-r from-violet-50 via-white to-fuchsia-100/70 dark:from-violet-950/25 dark:via-card dark:to-fuchsia-900/20",
+        "border-2 w-full border-violet-300/70 pl-dashboard-ribbon-violet",
         isMobile && "px-0"
       )}
     >
@@ -1570,13 +1596,14 @@ function DashboardPageContent() {
     return (
     <div className="space-y-[5px]">
       {/* Keep consistent 5px spacing between dashboard cards/sections. */}
-      {shouldShow('financial-summaries') && renderFinancialSummaries(isReportsEnabled)}
+      {(visibleCard === "all" || visibleCard === "financial-summaries") && renderFinancialSummaries(isReportsEnabled, false)}
+      {visibleCard === "dashboard-charts" && renderFinancialSummaries(isReportsEnabled, true)}
       {shouldShow('bank-cash-summary') && can('view_bank_cash_summary') && <BankCashSummary />}
       {/* Dashboard cards (Daybook, Bank, Recent) are gated by role permissions. If shared user doesn't see a card, check Settings → role permissions (e.g. View Daybook). */}
       {shouldShow('daybook') && can('view_daybook') && <div className="px-0.5"><DaybookReport /></div>}
       {shouldShow('recent-transactions') && can('view_recent_transactions') && renderRecentTransactions()}
       
-      <Card className="col-span-full border-2 border-amber-300/70 bg-gradient-to-r from-amber-50 via-white to-orange-100/70 dark:from-amber-950/25 dark:via-card dark:to-orange-900/20 p-2 overflow-hidden relative">
+      <Card className="col-span-full border-2 border-amber-300/70 pl-dashboard-ribbon-amber p-2 overflow-hidden relative">
         {newYearInfo && !newYearInfo.isNewYear && (
           <div className="absolute top-0 right-0 bg-red-500 text-white text-xs font-bold px-4 py-1 rounded-bl-lg animate-pulse">
             {newYearInfo.daysLeft} days to {newYearInfo.year}!
@@ -1626,32 +1653,90 @@ function DashboardPageContent() {
     { id: 'bank-cash-summary', title: 'Bank' },
     { id: 'daybook', title: 'Daybook' },
     { id: 'recent-transactions', title: 'Recent' },
+    { id: 'dashboard-charts', title: 'Chart' },
   ];
+  /** User request: footer buttons solid, high-contrast alag-alag colors me dikhe */
+  const footerToneClassByCard: Record<string, string> = {
+    all: "border-slate-400 bg-slate-200 text-slate-800 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-100",
+    "financial-summaries": "border-orange-500 bg-orange-300 text-orange-950 dark:border-orange-400 dark:bg-orange-700 dark:text-orange-50",
+    "bank-cash-summary": "border-emerald-500 bg-emerald-300 text-emerald-950 dark:border-emerald-400 dark:bg-emerald-700 dark:text-emerald-50",
+    daybook: "border-sky-500 bg-sky-300 text-sky-950 dark:border-sky-400 dark:bg-sky-700 dark:text-sky-50",
+    "recent-transactions": "border-violet-500 bg-violet-300 text-violet-950 dark:border-violet-400 dark:bg-violet-700 dark:text-violet-50",
+    "dashboard-charts": "border-fuchsia-500 bg-fuchsia-300 text-fuchsia-950 dark:border-fuchsia-400 dark:bg-fuchsia-800 dark:text-fuchsia-50",
+  };
+
+  /* Footer stack height = top pad + inner pad + row — `pb-[72px]` zyada tha, niche safed khali strip + scroll dead zone; fixed strip `pb-0` se window edge tak chipke */
+  const footerReservePx = isMobile
+    ? 2 + 4 + 32
+    : 2 + 4 + 38;
 
   return (
-    <div className="pb-[72px] p-0.5">
-      <div className="p-0">
+    <div className="px-0.5 pt-0.5" style={{ paddingBottom: footerReservePx }}>
+      <div className="p-0 min-h-0">
         {renderDashboardContent()}
       </div>
-       
-      <div className="fixed bottom-0 left-0 md:left-64 right-0 p-2 border-t bg-background/95 backdrop-blur-sm flex items-center justify-around gap-2 h-16 z-40">
-        {dashboardCards.map(card => {
-              const Icon = card.id === 'all' ? Home : card.id === 'financial-summaries' ? TrendingUp : card.id === 'daybook' ? FileTextIcon : card.id === 'bank-cash-summary' ? Landmark : History;
-              return (
-                  <Button 
-                      key={card.id}
-                      variant="ghost"
-                      className={cn(
-                          "flex-1 flex-col h-full p-2 text-muted-foreground",
-                          visibleCard === card.id && "bg-primary/10 text-primary"
-                      )}
-                      onClick={() => setVisibleCard(card.id)}
-                  >
-                      <Icon className="h-5 w-5 mb-1" />
-                      <span className="text-xs">{card.title}</span>
-                  </Button>
-              )
+
+      <div
+        className={cn(
+          "fixed bottom-0 left-0 right-0 z-40 px-0.5 pt-0.5 pb-0",
+          !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16")
+        )}
+      >
+        {/* User request: footer tabs ko ek hi green container me rakho; desktop row icon+label, mobile icon hide */}
+        <div
+          className={cn(
+            "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex items-stretch justify-center gap-0.5 px-1 pt-1 pb-0",
+            // User request: desktop/PC me footer buttons ~20% taller; mobile unchanged.
+            isMobile ? "h-8" : "h-[38px]"
+          )}
+        >
+          {dashboardCards.map((card) => {
+            const Icon =
+              card.id === "all"
+                ? Home
+                : card.id === "financial-summaries"
+                  ? TrendingUp
+                  : card.id === "daybook"
+                    ? FileTextIcon
+                    : card.id === "bank-cash-summary"
+                      ? Landmark
+                      : card.id === "dashboard-charts"
+                        ? BarChart3
+                      : History;
+            return (
+              <Button
+                key={card.id}
+                variant="ghost"
+                className={cn(
+                  // Height compact: footer ko approx 50% reduce karo without breaking alignment
+                  "h-full min-h-0 min-w-0 flex-1 rounded-md border-2 px-1 py-0.5 text-muted-foreground",
+                  footerToneClassByCard[card.id] ?? "border-emerald-200/65 bg-white/55 dark:border-emerald-800/45 dark:bg-background/35",
+                  isMobile ? "justify-center text-center" : "justify-center flex-row items-center gap-1.5",
+                  // Active/focus state strong: selected button clearly pop kare
+                  visibleCard === card.id && "ring-2 ring-primary/70 shadow-md saturate-125",
+                  "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
+                )}
+                onClick={() => {
+                  if (card.id === "dashboard-charts") {
+                    if (visibleCard === "dashboard-charts") {
+                      setVisibleCard(visibleCardBeforeChartsRef.current);
+                      return;
+                    }
+                    if (visibleCard !== "dashboard-charts") {
+                      visibleCardBeforeChartsRef.current = visibleCard;
+                    }
+                    setVisibleCard("dashboard-charts");
+                    return;
+                  }
+                  setVisibleCard(card.id);
+                }}
+              >
+                {!isMobile && <Icon className="h-3.5 w-3.5 shrink-0" />}
+                <span className="text-[9px] font-medium leading-tight sm:text-[10px]">{card.title}</span>
+              </Button>
+            );
           })}
+        </div>
       </div>
        <AddVoucherDialog 
           isOpen={isVoucherDialogOpen}
@@ -1707,7 +1792,8 @@ function DashboardPageContent() {
 
 function DashboardPageLoading() {
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    // Loading shell: `min-h-screen`/`100vh` Windows taskbar overlap — dvh = visible viewport (Electron static app)
+    <div className="flex min-h-dvh items-center justify-center p-4">
       <div className="text-center text-muted-foreground">Loading dashboard...</div>
     </div>
   );

@@ -1,0 +1,120 @@
+/**
+ * Tab strip + merged title bar (Win/Linux frameless). CSP: external file only.
+ */
+(function () {
+  const tabsEl = document.getElementById("tabs");
+  const newBtn = document.getElementById("newBtn");
+  const titleBarLabel = document.getElementById("titleBarLabel");
+  const titleCluster = document.getElementById("titleCluster");
+  const menuBtn = document.getElementById("menuBtn");
+  const minBtn = document.getElementById("minBtn");
+  const maxBtn = document.getElementById("maxBtn");
+  const closeBtn = document.getElementById("closeBtn");
+
+  if (!tabsEl || !newBtn || !window.electronTabStrip) return;
+
+  const merged =
+    typeof window !== "undefined" &&
+    window.plElectronChrome &&
+    window.plElectronChrome.mergedTitleBar === true;
+  document.body.classList.toggle("merged-titlebar", !!merged);
+
+  function setMaximizedUi(maximized) {
+    if (!maxBtn) return;
+    maxBtn.title = maximized ? "Restore down" : "Maximize";
+    maxBtn.textContent = "\u25A1";
+  }
+
+  if (merged && window.plElectronChrome) {
+    menuBtn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      try {
+        window.plElectronChrome.showAppMenu();
+      } catch (_) {}
+    });
+    minBtn?.addEventListener("click", () => {
+      try {
+        window.plElectronChrome.minimize();
+      } catch (_) {}
+    });
+    maxBtn?.addEventListener("click", () => {
+      try {
+        window.plElectronChrome.maximizeToggle();
+      } catch (_) {}
+    });
+    closeBtn?.addEventListener("click", () => {
+      try {
+        window.plElectronChrome.close();
+      } catch (_) {}
+    });
+    titleCluster?.addEventListener("dblclick", () => {
+      try {
+        window.plElectronChrome.maximizeToggle();
+      } catch (_) {}
+    });
+    try {
+      const unsubMax = window.plElectronChrome.onMaximizedChange((p) => setMaximizedUi(!!p?.maximized));
+      window.addEventListener("beforeunload", () => {
+        try {
+          unsubMax();
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
+  function render(payload) {
+    const list = payload.tabs || [];
+    if (titleBarLabel && payload.titleBarLabel) {
+      titleBarLabel.textContent = payload.titleBarLabel;
+      if (titleCluster) titleCluster.title = payload.titleBarLabel;
+    }
+    tabsEl.innerHTML = "";
+    list.forEach((t) => {
+      const row = document.createElement("div");
+      row.className = "tab" + (t.active ? " active" : "");
+      row.title = t.title || "";
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = t.title || "Tab " + (t.index + 1);
+      const close = document.createElement("span");
+      close.className = "close";
+      close.textContent = "\u00D7";
+      close.title = "Close tab";
+      row.appendChild(title);
+      row.appendChild(close);
+      row.addEventListener("click", async (e) => {
+        if (e.target === close) {
+          e.stopPropagation();
+          try {
+            await window.electronTabStrip.closeTab(t.index);
+          } catch (err) {
+            console.error(err);
+          }
+        } else {
+          try {
+            await window.electronTabStrip.switchTab(t.index);
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      });
+      tabsEl.appendChild(row);
+    });
+  }
+
+  newBtn.addEventListener("click", async () => {
+    try {
+      const r = await window.electronTabStrip.newTab();
+      if (r && r.ok === false) console.error("New tab:", r.error);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  const unsub = window.electronTabStrip.onTabsUpdate(render);
+  window.addEventListener("beforeunload", () => {
+    try {
+      unsub();
+    } catch (_) {}
+  });
+})();

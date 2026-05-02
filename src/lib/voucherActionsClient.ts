@@ -37,6 +37,9 @@ import type { Allocation } from "@/lib/payment-allocation-utils";
 import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
+import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY } from "@/lib/localMirrorServerMeta";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 
 function removeUndefined(obj: any): any {
   // File/Blob SQLite/outbox JSON me nahi ja sakte — agar form se leak ho to strip karo (warn: BigInt JSON me throw karta hai).
@@ -47,6 +50,8 @@ function removeUndefined(obj: any): any {
   if (obj !== null && typeof obj === "object") {
     if (obj instanceof Date || (obj && "toDate" in obj && typeof obj.toDate === "function")) return obj;
     return Object.keys(obj).reduce((acc: any, key) => {
+      // SQLite mirror-only meta — Firestore document me kabhi persist mat karo
+      if (key === LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY) return acc;
       const value = removeUndefined(obj[key]);
       if (value !== undefined) acc[key] = value;
       return acc;
@@ -152,6 +157,8 @@ export async function patchVoucherFields(
   partial: Record<string, unknown>
 ): Promise<void> {
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
+  // APK / static mobile: SQLite+outbox ke beech pathname race — `/dashboard` jump se pehle URL + company pin.
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   if (isLocalOnlyMode()) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
     const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
@@ -172,8 +179,10 @@ export async function patchVoucherFields(
     if (canSync && !encFlag) {
       const fsCompanyId =
         String((reg as Record<string, unknown> | null)?.authoritativeCompanyId || companyId).trim() || companyId;
+      // Firestore path: authoritative id (shared / mirror company) — same as updateDoc branch below.
+      const voucherFsRef = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
       try {
-        await updateDoc(doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId), partial);
+        await updateDoc(voucherFsRef, partial);
         await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
         await mirrorVoucherDocToBrowserDb(companyId, voucherId);
         return;
@@ -181,6 +190,22 @@ export async function patchVoucherFields(
         if (isLikelyOfflineFirestoreError(e)) {
           await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
           return;
+        }
+        // Naya voucher abhi sirf SQLite + create-outbox pe ho sakta hai; server pe doc nahi → updateDoc "No document to update".
+        // setDoc merge se poora local payload likho, warna SalaryForm ka syncSalaryBillWiseLinks throw karke Save success UI / dialog band nahi hota.
+        if (isCompanyNotFoundError(e)) {
+          try {
+            await setDoc(voucherFsRef, payload, { merge: true });
+            await removeOutboxRowsForCompanyDoc(companyId, "vouchers", voucherId);
+            await mirrorVoucherDocToBrowserDb(companyId, voucherId);
+            return;
+          } catch (e2) {
+            if (isLikelyOfflineFirestoreError(e2)) {
+              await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+              return;
+            }
+            throw e2;
+          }
         }
         throw e;
       }
@@ -215,9 +240,12 @@ function getChanges(oldData: any, newData: any): Record<string, { from: any; to:
       (oldVal instanceof Date || (oldVal?.toDate instanceof Function)) &&
       (newVal instanceof Date || (newVal?.toDate instanceof Function))
     ) {
-      const oldTime = oldVal instanceof Date ? oldVal.toISOString() : oldVal.toDate().toISOString();
-      const newTime = newVal instanceof Date ? newVal.toISOString() : new Date(newVal).toISOString();
-      if (oldTime !== newTime) changes[key] = { from: oldData?.[key] ?? null, to: newData?.[key] ?? null };
+      // Timestamp: `new Date(ts)` Invalid Date; form kabhi Invalid Date bhej deta — `toISOString` se RangeError na aaye (convert-save).
+      const oldD = toJsDateFromVoucherField(oldVal);
+      const newD = toJsDateFromVoucherField(newVal);
+      const oldIso = oldD ? oldD.toISOString() : "";
+      const newIso = newD ? newD.toISOString() : "";
+      if (oldIso !== newIso) changes[key] = { from: oldData?.[key] ?? null, to: newData?.[key] ?? null };
     } else if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
       changes[key] = { from: oldVal ?? null, to: newData?.[key] ?? null };
     }
@@ -305,7 +333,11 @@ async function saveVoucherOfflineLocalCreate(
   const useLocalLim = companyStorageIsLocal(storageOption);
   const dailyLimitOff = numericEntitlement(mergedEnt, "dailyVoucherLimit", useLocalLim);
   const monthlyLimitOff = numericEntitlement(mergedEnt, "monthlyVoucherLimit", useLocalLim);
-  const existingVouchers = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+  // Dono caps unlimited (0) hon to poori vouchers list mat khinchein — pehle har create par SQLite full scan hota tha (slow feel).
+  const existingVouchers =
+    dailyLimitOff > 0 || monthlyLimitOff > 0
+      ? await listCompanyDocsFromBrowserDb(companyId, "vouchers")
+      : [];
   const now = new Date();
   if (dailyLimitOff > 0) {
     const n = countLocalMirrorVouchersInRange(existingVouchers, startOfDay(now), endOfDay(now));
@@ -392,6 +424,7 @@ export async function saveVoucher(
   approveAfterSave?: SaveVoucherApproveOption,
   options?: SaveVoucherOptions
 ): Promise<{ id: string }> {
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
 
@@ -898,6 +931,7 @@ export async function approveVoucherWithHistory(
   if (!companyId || !voucherId || !approvedByUserId) {
     throw new Error("Missing required approval parameters.");
   }
+  beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
 
   if (isLocalOnlyMode()) {
     // Local-only mode me approve state local voucher doc par apply karo + queue sync.

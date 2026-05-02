@@ -9,7 +9,15 @@
 import { collection, getDocs, query } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import type { Company } from "@/hooks/useCompany";
-import { listCompanyDocsFromBrowserDb, mirrorCollectionDocsToBrowserDbSilent } from "@/lib/localCompanyDocMirror";
+import {
+  deleteCompanyDocFromBrowserDb,
+  listCompanyDocsFromBrowserDb,
+  mirrorCollectionDocsToBrowserDbSilent,
+} from "@/lib/localCompanyDocMirror";
+import {
+  isLocalMirrorMarkedServerBacked,
+  stampLocalMirrorBackedByFirestore,
+} from "@/lib/localMirrorServerMeta";
 import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
 
 /** Merge options: `storageOption: local` par same doc id pe Firestore purana na jeete (restore / backup). */
@@ -31,6 +39,9 @@ function sortMergedByField(merged: any[], orderByField: string): any[] {
 /**
  * Firestore list me abhi nahi — sirf SQLite + outbox (pending create/update flush se pehle).
  * `onSnapshot` / pull sirf server rows set karte the → cross-copy / naya voucher refresh pe "gayab" dikhta tha.
+ *
+ * **Server-hard-delete orphans:** SQLite row jisme `__mirrorBackedByFirestore` aur ab server snapshot me wo id nahin —
+ * stale “extra” ghost ban jati thi + mirror usko wapas bake karta tha → hard-delete SQLite row (restore impossible).
  */
 export async function mergeRemoteSnapshotWithLocalOnlyDocs(
   localCompanyId: string,
@@ -40,13 +51,40 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
   options?: MergeRemoteLocalDocsOptions
 ): Promise<any[]> {
   try {
-    // `forBackupMerge`: global `dataSourceMode` "cloud" par bhi SQLite se rows lo — upload ke baad merge
-    const cached = await listCompanyDocsFromBrowserDb(localCompanyId, collectionPath, { forBackupMerge: true });
+    // Har Firestore snapshot row ko mirror marker lagao taaki purge vs pending-local differentiate ho sake.
+    const remoteStamped = remoteData.map((r: any) =>
+      stampLocalMirrorBackedByFirestore({ ...(typeof r === "object" && r ? r : {}), id: r?.id } as Record<string, unknown>)
+    );
+    let cached = await listCompanyDocsFromBrowserDb(localCompanyId, collectionPath, { forBackupMerge: true });
+
+    const fsIds = new Set(remoteStamped.map((d: any) => String(d?.id ?? "")));
+    const orphanSqliteIds: string[] = [];
+    for (const row of cached) {
+      const id = String((row as any)?.id ?? "").trim();
+      if (!id || (row as any)?.isDeleted === true) continue;
+      if (!fsIds.has(id) && isLocalMirrorMarkedServerBacked(row as Record<string, unknown>)) {
+        orphanSqliteIds.push(id);
+      }
+    }
+    if (orphanSqliteIds.length) {
+      // Online row server se hat chuki → local mirror se DELETE; extras merge ghosts restore na lau.
+      // Sequential har id = zyada orphans par lamba critical path — chhota parallel batch SQLite pressure safe rakhta hai.
+      const ORPHAN_DELETE_CONCURRENCY = 8;
+      for (let i = 0; i < orphanSqliteIds.length; i += ORPHAN_DELETE_CONCURRENCY) {
+        const slice = orphanSqliteIds.slice(i, i + ORPHAN_DELETE_CONCURRENCY);
+        await Promise.all(
+          slice.map((oid) =>
+            deleteCompanyDocFromBrowserDb(localCompanyId, collectionPath, oid, { force: true, notify: false })
+          )
+        );
+      }
+      cached = await listCompanyDocsFromBrowserDb(localCompanyId, collectionPath, { forBackupMerge: true });
+    }
 
     // Local registry: restore ke baad Firestore purane rows same id rakhe → pehle wala "extras only" merge un rows ko chhod deta tha
     if (options?.preferLocalSqliteWhenIdsConflict && cached.length) {
       const byId = new Map<string, any>();
-      for (const r of remoteData) {
+      for (const r of remoteStamped) {
         const id = String(r?.id ?? "");
         if (id) byId.set(id, r);
       }
@@ -60,20 +98,35 @@ export async function mergeRemoteSnapshotWithLocalOnlyDocs(
       return sortMergedByField(merged, orderByField);
     }
 
-    if (!cached.length) return remoteData;
-    const fsIds = new Set(remoteData.map((d: any) => String(d?.id ?? "")));
+    // Sirf snapshot — poora stamped server list waapas do (purge ke baad local empty).
+    if (!cached.length) {
+      if (!orderByField) return remoteStamped;
+      return sortMergedByField(remoteStamped, orderByField);
+    }
+
+    /** Pending local/outbox extras: META false / missing — snapshot me id nahin kyunki abhi flush nahi. */
     const extras = cached.filter((c: any) => {
       if (c?.isDeleted === true) return false;
       const id = String(c?.id ?? "");
       if (!id) return false;
+      if (!fsIds.has(id) && isLocalMirrorMarkedServerBacked(c as Record<string, unknown>)) return false;
       return !fsIds.has(id);
     });
-    if (!extras.length) return remoteData;
-    const merged = [...remoteData, ...extras];
+    if (!extras.length) {
+      if (!orderByField) return remoteStamped;
+      return sortMergedByField(remoteStamped, orderByField);
+    }
+    const merged = [...remoteStamped, ...extras];
     if (!orderByField) return merged;
     return sortMergedByField(merged, orderByField);
   } catch {
-    return remoteData;
+    try {
+      return remoteData.map((r: any) =>
+        stampLocalMirrorBackedByFirestore({ ...(typeof r === "object" && r ? r : {}), id: r?.id } as Record<string, unknown>)
+      );
+    } catch {
+      return remoteData;
+    }
   }
 }
 
@@ -126,13 +179,9 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
   const merged = await mergeRemoteSnapshotWithLocalOnlyDocs(localCompanyId, collectionPath, remoteData, orderByField, {
     preferLocalSqliteWhenIdsConflict: preferLocal,
   });
-  // Local company: raw Firestore mirror SQLite ko restore par overwrite karta tha — merged UI truth mirror karo
-  if (preferLocal) {
-    if (merged.length > 0) {
-      await mirrorCollectionDocsToBrowserDbSilent(localCompanyId, collectionPath, merged);
-    }
-  } else if (remoteData.length > 0) {
-    await mirrorCollectionDocsToBrowserDbSilent(localCompanyId, collectionPath, remoteData);
+  /** Purani bugfix: sirf remoteData mirror se offline extras + purge/META SQLite me align nahi ho paate — merged hi bake karo */
+  if (merged.length > 0) {
+    await mirrorCollectionDocsToBrowserDbSilent(localCompanyId, collectionPath, merged);
   }
   return merged;
 }

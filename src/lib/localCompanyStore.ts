@@ -70,7 +70,8 @@ export async function getLocalCompanyById(
   if (!row?.data) return null;
   const parsed = safeParseCompany(row.data);
   if (!parsed) return null;
-  if (options?.includeDeleted !== true && parsed.isDeleted === true) return null;
+  // SQLite/JSON rows may store soft-delete as true/1/"1"; use normalized check everywhere.
+  if (options?.includeDeleted !== true && localCompanyRowIsDeleted(parsed)) return null;
   return { ...parsed, id: row.id };
 }
 
@@ -83,7 +84,7 @@ export async function listLocalCompanies(options?: { includeDeleted?: boolean })
   for (const row of rows) {
     const parsed = safeParseCompany(row.data);
     if (!parsed) continue;
-    if (!includeDeleted && parsed.isDeleted === true) continue;
+    if (!includeDeleted && localCompanyRowIsDeleted(parsed)) continue;
     out.push({ ...parsed, id: row.id });
   }
   return out;

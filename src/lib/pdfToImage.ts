@@ -27,6 +27,8 @@
  * - Worker file must be served from same origin (e.g. public/pdf.worker.mjs).
  */
 
+import { importPdfJsDist } from "@/lib/importPdfJsDist";
+
 export interface PdfThumbnailResult {
   thumbnailUrl: string;
   thumbnailBlob: Blob;
@@ -86,12 +88,11 @@ export async function convertPdfFirstPageToImage(
   const effectiveMaxWidth = useReducedScale ? Math.min(400, maxWidth) : maxWidth;
   const effectiveQuality = useReducedScale ? 0.75 : quality;
 
-  const pdfjsLib = await import("pdfjs-dist");
-  const pdfjs = pdfjsLib.default || pdfjsLib;
+  const { pdfjsLib, pdfjs } = await importPdfJsDist();
   const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
   const version =
     (pdfjsLib as { version?: string }).version ??
-    (pdfjs as { version?: string }).version ??
+    pdfjs.version ??
     PDFJS_WORKER_VERSION_FALLBACK;
   setPdfJsWorkerSrc(pdfjs, version);
 

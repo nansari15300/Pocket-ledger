@@ -10,8 +10,8 @@ const DesktopAppHeaderNoSSR = dynamic(
     ssr: false,
     // Keep header space stable on first paint while client-only header mounts.
     loading: () => (
-      <header className="relative sticky top-0 z-30 border-b bg-background px-2 py-2">
-        <div className="h-9" />
+      <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-appChrome px-2 py-2">
+        <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-blue h-11 w-full max-w-md animate-pulse opacity-90" />
       </header>
     ),
   }

@@ -69,7 +69,17 @@ export function getAttachmentFormatLabel(source: string | File): string {
     if (mime === "application/pdf") return "PDF";
     return "FILE";
   }
-  const ext = extensionFromPath(s);
+  let ext = extensionFromPath(s);
+  /* Firebase / CDN: last segment `foo%2Fdoc.pdf` — bina decode ke extension miss ho jata tha */
+  if (!ext) {
+    try {
+      const seg = s.split("?")[0].split("/").pop() || "";
+      const decoded = decodeURIComponent(seg);
+      ext = extensionFromPath(decoded);
+    } catch {
+      /* ignore */
+    }
+  }
   if (ext) return normalizeExt(ext);
   const lower = s.split("?")[0].toLowerCase();
   if (lower.endsWith(".pdf")) return "PDF";

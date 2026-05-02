@@ -62,12 +62,18 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
         type="button"
         role="switch"
         aria-checked={enabled}
+        data-state={enabled ? "checked" : "unchecked"}
         title={enabled ? "Hover preview on" : "Hover preview off"}
         onClick={handleClick}
         className={cn(
-          "relative w-full shrink-0 rounded-full border border-neutral-300 bg-white shadow-sm outline-none transition-shadow",
+          // Track colors synced with global switch: ON dim green, OFF gray.
+          "relative w-full shrink-0 rounded-full border shadow-sm outline-none transition-colors",
+          // Header toggle me explicit state classes: ON pe green track pakka lage.
+          enabled ? "border-green-300 bg-green-100/80" : "border-neutral-300 bg-neutral-200",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-          "dark:border-neutral-400 dark:bg-white"
+          enabled
+            ? "dark:border-green-700 dark:bg-green-900/40"
+            : "dark:border-neutral-500 dark:bg-neutral-700/70"
         )}
         style={{ height: TRACK_H_PX }}
       >
@@ -78,9 +84,10 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
             "pointer-events-none absolute top-1/2 z-[1] h-[calc(100%-6px)] -translate-y-1/2 rounded-full shadow-sm",
             // OFF knob: black ki jagah neutral gray (readable light/dark dono par)
             motion === null && !enabled && "bg-neutral-500 dark:bg-neutral-400",
-            motion === null && enabled && "bg-green-500",
+            // ON knob: same green family as track, but slightly stronger for visibility.
+            motion === null && enabled && "bg-green-400",
             // Animation ke dauran bhi rang — warna sirf `animate-*` ho to bg missing (tailwind me pehle keyframes define hi nahi the)
-            motion === "to-on" && "animate-file-hover-switch-on bg-green-500",
+            motion === "to-on" && "animate-file-hover-switch-on bg-green-400",
             motion === "to-off" && "animate-file-hover-switch-off bg-neutral-500 dark:bg-neutral-400"
           )}
           style={

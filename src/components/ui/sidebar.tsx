@@ -124,7 +124,9 @@ export const SidebarTrigger = React.forwardRef<
 SidebarTrigger.displayName = "SidebarTrigger"
 
 const sidebarVariants = cva(
-  "flex flex-col bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out",
+  // Chrome cards AppSidebar ke andar; yahan sirf dashboard jaisa tight gutter
+  /* gap/padding dashboard stats grid jaisa: gap-0.5 px-0.5 */
+  "flex min-h-0 flex-col gap-0.5 bg-sidebar p-0.5 text-sidebar-foreground transition-all duration-300 ease-in-out",
   {
     variants: {
       isOpen: {
@@ -154,11 +156,12 @@ export const Sidebar = React.forwardRef<
           // Allow opening, but auto-close when clicking outside
           setIsOpen(open);
         }}>
-          <SheetContent side="left" className="w-64 p-0">
+          {/* User request: sidebar top-right cross icon hide (SheetContent close button). */}
+          <SheetContent side="left" className="w-64 p-0 [&>button]:hidden">
             <SheetHeader>
               <SheetTitle className="sr-only">Main Menu</SheetTitle>
             </SheetHeader>
-            <div ref={ref} className="flex h-full flex-col bg-sidebar text-sidebar-foreground" {...props}>
+            <div ref={ref} className="flex h-full min-h-0 flex-col gap-0.5 overflow-y-auto bg-sidebar p-0.5 text-sidebar-foreground" {...props}>
                {children}
             </div>
           </SheetContent>
@@ -188,8 +191,9 @@ export const SidebarHeader = React.forwardRef<
         <div
             ref={ref}
             className={cn(
-                "flex h-16 items-center border-b border-sidebar-border", 
-                isOpen ? "justify-start px-4" : "justify-center px-2", 
+                /* Height content se; AppSidebar apna chrome-card wrap karta hai */
+                "flex min-h-0 shrink-0 items-center border-0",
+                isOpen ? "justify-start" : "justify-center",
                 className
             )}
             {...props}
@@ -294,7 +298,7 @@ export const SidebarFooter = React.forwardRef<
     return (
         <div
             ref={ref}
-            className={cn("mt-auto border-t border-sidebar-border p-2", !isOpen && "px-1", className)}
+            className={cn("mt-auto flex min-h-0 shrink-0 flex-col gap-2 border-0 p-0", className)}
             {...props}
         />
     )

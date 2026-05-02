@@ -29,7 +29,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
-import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -55,7 +54,8 @@ import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -184,8 +184,9 @@ function formatSaleFormValidationErrors(errors: FieldErrors<SaleFormValues>): st
 
 // MAX_ATTACHMENTS is now from permissions: fileAttachmentLimits.maxFileCount
 
+// Desktop line grid: Unit (3rd track) Qty + 15px — header/cell thoda wider; baaki Qty jaisa.
 const COLS =
-  "grid grid-cols-[2fr_0.5fr_0.6fr_0.8fr_1fr_0.7fr_0.8fr_48px] gap-0";
+  "grid grid-cols-[minmax(220px,2.2fr)_minmax(8.5rem,0.52fr)_minmax(calc(8.5rem+15px),0.52fr)_minmax(8.5rem,0.52fr)_minmax(3.25rem,0.34fr)_minmax(12rem,1.25fr)_minmax(8.5rem,0.58fr)_minmax(8.5rem,0.62fr)_40px] gap-0";
 const TH_BASE = "px-2 py-2 bg-muted/50 font-semibold text-sm box-border";
 const TD_BASE = "px-2 py-1 box-border";
 const FLAT_INPUT = "h-9 w-full border-0 shadow-none focus-visible:ring-0 rounded-none";
@@ -276,6 +277,11 @@ export function CreateSaleForm({
   onApprove,
   isApproving = false,
   onEffectiveLinksChange,
+  copySaveTargetCompanyId,
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  isCopyingMissingMasters = false,
+  copyMasterDraftRequest,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -289,11 +295,22 @@ export function CreateSaleForm({
   isApproving?: boolean;
   /** Report effective has-links so dialog can hide banner and enable fields when user unlinks locally. */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  onCopyMissingCategory?: (category: string) => void;
+  isCopyingMissingMasters?: boolean;
+  copyMasterDraftRequest?: {
+    category: string;
+    targetCompanyName: string;
+    sourceCollection: string;
+    sourceName: string;
+    sourceRowPayload?: Record<string, unknown>;
+  } | null;
 }) {
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
   type ProcessedItem = Item & { stockInQty?: number; stockOutQty?: number; stockQty?: number; displayStockQty?: number; };
-  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups } = useVouchers();
+  const { vouchers, processedParties, processedPartiesForSelection, processedTaxes, processedAccounts, expenseAccounts, processedExpenseGroups, loading: vouchersLoading } = useVouchers();
   const [items, setItems] = useState<Item[]>([]);
   const { toast } = useToast();
   const { company, companyId, reloadLocalCompanyRegistry, triggerSync } = useCompany();
@@ -308,6 +325,8 @@ export function CreateSaleForm({
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isCreatePartyOpen, setIsCreatePartyOpen] = useState(false);
+  /** Naye party save ke turant baad parties sync se pehle stale-master effect `partyId` na wipe kare. */
+  const pendingPartyIdUntilInPartiesListRef = useRef<string | null>(null);
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [isCreateTaxOpen, setIsCreateTaxOpen] = useState(false);
   // Sales Account combobox: allow creating a new income/expense account inline.
@@ -330,7 +349,16 @@ export function CreateSaleForm({
   const [isDueDateCalendarOpen, setIsDueDateCalendarOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isLinkAdvancesOpen, setIsLinkAdvancesOpen] = useState(false);
+  // Link section visibility: add mode hidden by default; edit mode auto-show only when links already exist.
+  const [showLinkSections, setShowLinkSections] = useState(false);
   const [pendingLinkAllocations, setPendingLinkAllocations] = useState<Record<string, number> | null>(null);
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setPendingLinkAllocations(null);
+    setShowLinkSections(false);
+    setIsLinkAdvancesOpen(false);
+    onEffectiveLinksChange?.(false);
+  }, [onEffectiveLinksChange]);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
   // Keep "Read me" help controlled from this form so sale link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher;
@@ -500,6 +528,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0
   );
   const hasItemEditLock = linkedAmountRows.length > 0;
+  const isEditMode = !!voucher?.id;
+  const canRenderBillWiseSection = isEditing || !!partyId;
+  const shouldShowBillWiseSection = canRenderBillWiseSection && (showLinkSections || (isEditMode && linkedAmountRows.length > 0));
+  const shouldShowLinkButton = canRenderBillWiseSection && !shouldShowBillWiseSection;
+
+  useEffect(() => {
+    if (isEditMode && linkedAmountRows.length > 0) setShowLinkSections(true);
+  }, [isEditMode, linkedAmountRows.length]);
 
   const transactionDates = useMemo(() => {
     if (!vouchers?.length) return [];
@@ -838,11 +874,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       e.preventDefault();
       void form.handleSubmit(
         async (data) => {
-          // Debounce callback to prevent multiple re-renders and transaction shaking
-          // Update happens in background via Firestore onSnapshot listeners
-          setTimeout(() => {
-            onVoucherAction?.("saved", options.saveAndNew);
-          }, 100);
           await processAndSaveRef.current?.(data, options);
         },
         (errors) => {
@@ -850,7 +881,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       )(e);
     },
-    [form, onVoucherAction]
+    [form]
   );
 
    const processAndSave = useCallback(
@@ -1139,6 +1170,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             await fetchVoucherNumber();
         }
 
+        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
         return docId;
 
       } catch (error) {
@@ -1351,6 +1383,200 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   }, [filteredItems, allProcessedItems]);
   
   const availableAccounts = useMemo(() => processedAccounts.filter(acc => !acc.isSpecial), [processedAccounts]);
+  /** Save & Copy To: mismatch categories source-driven rakho; source me item na ho to item Copy chip hide. */
+  const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  // Source voucher me actual item mismatch mila tabhi blank item row par Copy chip dikhao.
+  const hasSourceItemMismatch = Boolean(copyMismatchCategories?.includes("item"));
+  const salesAccountId = form.watch("salesAccountId");
+  const showCopyPartyFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    const pid = String(partyId || "").trim();
+    if (!pid) return true;
+    return !processedParties.some((p: any) => p.id === pid);
+  }, [copyDraftMasterHelpersEnabled, partyId, processedParties]);
+  const showCopySalesAccountFromSource = useMemo(() => {
+    if (!copyDraftMasterHelpersEnabled) return false;
+    const sid = String(salesAccountId || "").trim();
+    // Copy chip tabhi dikhao jab value blank ho ya options me missing ho; fallback-selected value par force na karo.
+    if (!sid) return true;
+    return !salesAccountOptions.some((o: { value: string }) => o.value === sid);
+  }, [copyDraftMasterHelpersEnabled, salesAccountId, salesAccountOptions]);
+  const highlightPartyLabelCopyMismatch = showCopyPartyFromSource;
+  const highlightSalesAccountLabelCopyMismatch = showCopySalesAccountFromSource;
+  const saleLineNeedsCopyItem = useCallback(
+    (idx: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const li = watchedLineItems?.[idx] as Record<string, unknown> | undefined;
+      if (!li) return false;
+      const iid = String(li.itemId || "").trim();
+      // Blank item row par Copy tabhi dikhao jab source voucher me item mismatch aaya ho.
+      if (!iid) return hasSourceItemMismatch;
+      return !(items || []).some((it: Item) => it.id === iid);
+    },
+    [copyDraftMasterHelpersEnabled, watchedLineItems, items, hasSourceItemMismatch]
+  );
+  const saleLineNeedsCopyTax = useCallback(
+    (idx: number) => {
+      if (!copyDraftMasterHelpersEnabled) return false;
+      const li = watchedLineItems?.[idx] as Record<string, unknown> | undefined;
+      if (!li) return false;
+      const tid = String(li.taxAccountId || "").trim();
+      // Item jaisa: khali tax field bhi copy-draft mode me mismatch (header Tax + Copy dikhane ke liye).
+      if (!tid) return true;
+      const taxOk = Boolean(processedTaxes.some((t: any) => t.id === tid));
+      if (taxOk) return false;
+      return true;
+    },
+    [copyDraftMasterHelpersEnabled, watchedLineItems, processedTaxes]
+  );
+  /** Desktop line grid: Copy chip header row me — koi bhi line mismatch ho to dikhao (Purchase jaisa). */
+  const desktopHeaderCopyItem = useMemo(
+    () =>
+      copyDraftMasterHelpersEnabled &&
+      (watchedLineItems || []).some((_, idx) => saleLineNeedsCopyItem(idx)),
+    [copyDraftMasterHelpersEnabled, watchedLineItems, saleLineNeedsCopyItem]
+  );
+  const desktopHeaderCopyTax = useMemo(
+    () =>
+      copyDraftMasterHelpersEnabled &&
+      (watchedLineItems || []).some((_, idx) => saleLineNeedsCopyTax(idx)),
+    [copyDraftMasterHelpersEnabled, watchedLineItems, saleLineNeedsCopyTax]
+  );
+
+  /** Copy-draft: sirf prefilled dialogs — auto-create nahin (`AddVoucherDialog` se request). */
+  useEffect(() => {
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest;
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+
+    if (payload && sc === "items") {
+      setIsCreateItemOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(
+          new CustomEvent("prefill-create-item-from-row", {
+            detail: {
+              rowPayload: payload,
+              type: primaryLineItemType === "service" ? "service" : "item",
+            },
+          })
+        );
+      }, 90);
+      sonnerToast.message(`Item prefilled from source → save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "taxes") {
+      setIsCreateTaxOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-tax-from-row", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Tax prefilled from source → save adds to "${targetLabel}".`);
+      return;
+    }
+
+    if (!nm) return;
+    switch (req.category) {
+      case "party":
+        setIsCreatePartyOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-party-name", { detail: nm })), 80);
+        sonnerToast.message(`Party prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "tax":
+        setIsCreateTaxOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-tax-name", { detail: nm })), 80);
+        sonnerToast.message(`Tax prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "item":
+        setIsCreateItemOpen(true);
+        setTimeout(() => {
+          document.dispatchEvent(
+            new CustomEvent("prefill-create-item-name", { detail: { name: nm, type: primaryLineItemType === "service" ? "service" : "item" } })
+          );
+        }, 80);
+        sonnerToast.message(`Item prefilled → save adds to "${targetLabel}".`);
+        return;
+      case "account":
+        setIsCreateExpenseAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Sales account prefilled → save adds under "${targetLabel}".`);
+        return;
+      default:
+        break;
+    }
+  }, [copyMasterDraftRequest, primaryLineItemType]);
+
+  /** Dusra tab/item delete hone par stale master IDs toast + clear. */
+  useEffect(() => {
+    if (vouchersLoading || !companyId) return;
+    const missing: string[] = [];
+    const pid = String(partyId || "").trim();
+    if (pid && !processedParties.some((p: any) => p.id === pid)) {
+      if (pendingPartyIdUntilInPartiesListRef.current !== pid) {
+        missing.push("customer");
+        form.setValue("partyId", "");
+      }
+    }
+    const sah = String(form.getValues("salesAccountId") || "").trim();
+    if (sah && sah !== "sales_account" && !salesAccountOptions.some((o: { value: string }) => o.value === sah)) {
+      // Save & Copy To: orphan source sales-ledger id par pehla income A/c auto mat — `CreatePurchaseForm` jaisa placeholder.
+      if (copySaveTargetCompanyId) {
+        form.setValue("salesAccountId", "sales_account");
+      } else {
+        missing.push("sales account");
+        form.setValue("salesAccountId", salesAccountOptions[0]?.value || "sales_account");
+      }
+    }
+    (watchedLineItems || []).forEach((line: Record<string, unknown>, idx: number) => {
+      const iid = String(line?.itemId || "").trim();
+      // Line row ka item dubara sirf existence check — type toggle se filtered list me na chhute.
+      const itemRows = items ?? [];
+      if (iid && !itemRows.some((it: Item) => it.id === iid)) {
+        missing.push(`line ${idx + 1} item`);
+        form.setValue(`lineItems.${idx}.itemId`, "");
+      }
+      const tid = String(line?.taxAccountId || "").trim();
+      if (tid && !processedTaxes.some((t: any) => t.id === tid)) {
+        missing.push(`line ${idx + 1} tax`);
+        form.setValue(`lineItems.${idx}.taxAccountId`, "");
+      }
+    });
+    if (missing.length > 0) {
+      sonnerToast.error("Master no longer exists", {
+        description: `Removed: ${[...new Set(missing)].join(", ")}. Pick again.`,
+      });
+    }
+  }, [
+    vouchersLoading,
+    companyId,
+    partyId,
+    processedParties,
+    salesAccountOptions,
+    items,
+    watchedLineItems,
+    processedTaxes,
+    form,
+    copySaveTargetCompanyId,
+  ]);
+
+  // Pending party ab listener ke baad list me — ref clear (Payment Out jaisa create-party race fix).
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    if (!pend) return;
+    if (processedParties.some((p: any) => p.id === pend)) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [processedParties]);
+
+  // User ne aur party choose kiya to pending-create guard hata do.
+  useEffect(() => {
+    const pend = pendingPartyIdUntilInPartiesListRef.current;
+    const pid = String(partyId || "").trim();
+    if (pend && pid && pid !== pend) {
+      pendingPartyIdUntilInPartiesListRef.current = null;
+    }
+  }, [partyId]);
 
   /* --------------------------------- RENDER -------------------------------- */
 
@@ -1358,12 +1584,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     <>
       <Form {...form}>
         <form onSubmit={handleFormSubmit} className="h-full flex flex-col min-w-0 w-full max-w-full">
-          <ScrollArea className={cn("flex-1 min-h-0 overflow-x-hidden min-w-0 w-full", !isMobile && "pr-6 -mr-6")}>
-            <div className={cn(
-              "space-y-6 min-w-0 max-w-full w-full overflow-x-hidden [&>*]:min-w-0 [&>*]:max-w-full",
-              "px-0"
-            )}>
-              {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
+          {/* PC: Radix ScrollArea viewport nested overflow clip karti hai—yahan native overflow-auto se horizontal scrollbar milta hai; footer form ke bahar hi rehta hai. */}
+          <div
+            className={cn(
+              "flex-1 min-h-0 min-w-0 w-full",
+              isMobile
+                ? "overflow-y-auto overflow-x-hidden [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400/80 [&::-webkit-scrollbar-track]:bg-gray-200/60"
+                : /* w-2 = vertical track patla (pehle sirf h-2 tha — horizontal patla, vertical mota) */
+                  "overflow-auto pr-6 -mr-6 touch-pan-x [scrollbar-width:thin] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-track]:bg-gray-200"
+            )}
+          >
+            <div
+              className={cn(
+                "space-y-6 min-w-0 w-full bg-slate-100 px-0",
+                !isMobile && "min-w-[1320px] px-[2px]",
+                isMobile && "max-w-full overflow-x-hidden [&>*]:max-w-full",
+                "[&>*]:min-w-0"
+              )}
+            >
+              {/* Main voucher info section: Invoice/Date/Party/Sales A/c in one consistent container color. */}
+              {/* Main voucher info block: deepen blue so it is not dim compared to green item section. */}
+              <div className="rounded-lg border border-sky-400 bg-sky-100 p-1">
               {isMobile ? (
                 <>
                   {/* Mobile: Prefix + Invoice + Date एक row में; `date` को `voucherNumber` के अंदर nest नहीं — वरना RHF में date submit तक bind नहीं होती */}
@@ -1448,23 +1689,39 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </>
                     );
                   })()}
-                  {/* Mobile: Customer and Sales Account - 2 columns */}
-                  <div className="flex gap-[2px] w-full">
+                  {/* Mobile row uses fixed 2-column grid so long Sales A/c text cannot resize Party field. */}
+                  <div className="grid grid-cols-2 gap-[2px] w-full min-w-0 max-w-full overflow-hidden">
                     <FormField
                       control={form.control}
                       name="partyId"
                       render={({ field }: any) => (
-                        <FormItem className="flex-1 min-w-0">
-                           <div className="flex justify-between items-baseline mb-1">
-                            <FormLabel className="text-xs">Party</FormLabel>
+                        <FormItem className="min-w-0 w-full overflow-hidden">
+                          <div className="flex justify-between items-center mb-1 gap-1">
+                            <FormLabel className={cn("text-xs", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
+                              Party
+                            </FormLabel>
+                            {showCopyPartyFromSource && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("party")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                             {partyBalance !== null && partyBalance !== undefined && (
                               <FormLabel className={cn("text-[10px] font-semibold mr-[2px]", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                 {formatCurrencyForPrint(partyBalance, { noSuffix: true, noAnimation: true })} {partyBalance >= 0 ? 'Dr' : 'Cr'}
                               </FormLabel>
                             )}
                           </div>
-                          <div className="flex gap-1">
+                          {/* Keep combobox width locked inside Party column on mobile. */}
+                          <div className="flex gap-1 w-full min-w-0 overflow-hidden">
                             <Combobox
+                              triggerClassName="h-9 w-full min-w-0 max-w-full overflow-hidden"
                               options={processedPartiesForSelection.map((p) => ({
                                 value: p.id,
                                 label: p.name,
@@ -1497,12 +1754,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       control={form.control}
                       name="salesAccountId"
                       render={({ field }: any) => (
-                        <FormItem className="flex-1 min-w-0">
-                          <div className="flex justify-between items-baseline mb-1">
-                            <FormLabel className="text-xs">Sales A/c</FormLabel>
+                        <FormItem className="min-w-0 w-full overflow-hidden">
+                          <div className="flex justify-between items-center mb-1 gap-1">
+                            <FormLabel className={cn("text-xs", highlightSalesAccountLabelCopyMismatch && "font-semibold text-red-600")}>
+                              Sales A/c
+                            </FormLabel>
+                            {showCopySalesAccountFromSource && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("account")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                           </div>
-                          <div className="flex gap-1">
+                          {/* Keep Sales A/c combobox from stretching row width on long labels. */}
+                          <div className="flex gap-1 w-full min-w-0 overflow-hidden">
                             <Combobox
+                              triggerClassName="h-9 w-full min-w-0 max-w-full overflow-hidden"
                               // Sales account should show only Income-group accounts.
                               options={salesAccountOptions}
                               value={field.value}
@@ -1543,10 +1816,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           name="partyId"
                           render={({ field }: any) => (
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
-                              <div className="flex justify-between items-baseline">
-                                <FormLabel className="truncate">Customer (Dr.)</FormLabel>
+                              <div className="flex items-center gap-1 flex-wrap w-full">
+                                <FormLabel className={cn("truncate shrink-0", highlightPartyLabelCopyMismatch && "font-semibold text-red-600")}>
+                                  Customer (Dr.)
+                                </FormLabel>
+                                {showCopyPartyFromSource && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                    onClick={() => onCopyMissingCategory?.("party")}
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
                                 {partyBalance !== null && partyBalance !== undefined && (
-                                  <FormLabel className={cn("text-xs font-semibold shrink-0", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
+                                  <FormLabel className={cn("text-xs font-semibold ml-auto shrink-0", partyBalance >= 0 ? 'text-green-600' : 'text-red-600')}>
                                     {partyBalance >= 0 ? `Rec: ${formatCurrencyForPrint(partyBalance, { noSuffix: true, noAnimation: true })} Dr` : `Pay: ${formatCurrencyForPrint(Math.abs(partyBalance), { noSuffix: true, noAnimation: true })} Cr`}
                                   </FormLabel>
                                 )}
@@ -1574,7 +1861,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           name="salesAccountId"
                           render={({ field }: any) => (
                             <FormItem className="min-w-0 w-full overflow-hidden flex flex-col">
-                              <FormLabel className="truncate">Sales Account (Cr.)</FormLabel>
+                              <div className="flex items-center justify-between gap-2">
+                                <FormLabel className={cn("truncate", highlightSalesAccountLabelCopyMismatch && "font-semibold text-red-600")}>
+                                  Sales Account (Cr.)
+                                </FormLabel>
+                                {showCopySalesAccountFromSource && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                    onClick={() => onCopyMissingCategory?.("account")}
+                                    disabled={isCopyingMissingMasters}
+                                  >
+                                    {isCopyingMissingMasters ? "…" : "Copy"}
+                                  </Button>
+                                )}
+                              </div>
                               <Combobox
                                 triggerClassName="h-10 w-full min-w-0"
                                 // Sales account should show only Income-group accounts.
@@ -1670,36 +1973,37 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   })()}
                 </>
               )}
-
-              {/* Items / Services Toggle */}
-              <div className={cn(isMobile && "flex justify-start")}>
-                <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
-                  <TabsList className={cn(
-                    isMobile && "flex gap-[2px] px-[2px]"
-                  )}>
-                    <TabsTrigger 
-                      value="item" 
-                      className={cn(isMobile && "flex-shrink-0")}
-                      style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
-                    >
-                      Items
-                    </TabsTrigger>
-                    <TabsTrigger 
-                      value="service" 
-                      className={cn(isMobile && "flex-shrink-0")}
-                      style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
-                    >
-                      Services
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
               </div>
 
-              {/* Line Items Grid */}
+              {/* Item section ribbon: keep one consistent green tone so this category is visually clear. */}
               <div className={cn(
-                "border rounded-lg overflow-hidden relative",
-                isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px]" : "px-[2px]"
+                // Mobile: overflow-hidden rounded clip; PC: nested overflow-x-auto scroll bar kata na ho.
+                "border border-emerald-300/80 rounded-lg relative bg-emerald-50 p-1 min-w-0",
+                isMobile ? "w-[calc(100%-4px)] mx-auto px-[2px] overflow-hidden" : "px-[2px] overflow-x-visible"
               )}>
+                {/* Keep item/service selector inside the same item section container for unified color grouping. */}
+                <div className={cn("mb-2", isMobile && "flex justify-start")}>
+                  <Tabs value={itemType} onValueChange={(v) => { if (deleteDisabledWhenLinked) return; setItemType(v as "item" | "service"); }} className={cn(isMobile && "w-auto")}>
+                    <TabsList className={cn(
+                      isMobile && "flex gap-[2px] px-[2px]"
+                    )}>
+                      <TabsTrigger 
+                        value="item" 
+                        className={cn(isMobile && "flex-shrink-0")}
+                        style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
+                      >
+                        Items
+                      </TabsTrigger>
+                      <TabsTrigger 
+                        value="service" 
+                        className={cn(isMobile && "flex-shrink-0")}
+                        style={isMobile ? { width: '25mm', maxWidth: '25mm' } : undefined}
+                      >
+                        Services
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
                 {isMobile ? (
                   // Mobile View: No scrollable container, broken rows
                   <div className="w-full">
@@ -1720,13 +2024,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     isMobile ? (
                       // Mobile View: Broken into multiple rows
                       <div key={line.id} className="border-t px-[2px] py-2 space-y-2">
-                        {/* Row 1: Item field (full width) */}
+                        {/* Row 1: Item + Copy (Save & Copy To target company) */}
                         <div className="w-full px-[2px]">
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.itemId`}
-                            render={({ field }: any) => (
-                              <FormItem className="w-full">
+                          <div className="flex items-start gap-1 w-full min-w-0">
+                            <FormField
+                              control={form.control}
+                              name={`lineItems.${index}.itemId`}
+                              render={({ field }: any) => (
+                                <FormItem className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
@@ -1760,6 +2065,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormItem>
                             )}
                           />
+                            {saleLineNeedsCopyItem(index) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-9 shrink-0 px-2 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("item")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
 
                         {/* Row 2 & 3: Qty/Unit and Rate/Tax in 2 columns with 6px gap */}
@@ -1843,8 +2161,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               )}
                             />
                           </div>
-                          {/* Right Column: Unit (top) and Tax (bottom) */}
-                          <div className="flex-1 space-y-2">
+                          {/* Right column: Unit trigger ko chhoti screen par bhi ≥12ch — cramped placeholder avoid. */}
+                          <div className="flex-1 min-w-[calc(8.5rem+15px)] space-y-2">
                             <FormField
                               control={form.control}
                               name={`lineItems.${index}.unit`}
@@ -1852,7 +2170,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 <FormItem>
                                   <FormLabel className="text-xs">Unit</FormLabel>
                                   <FormControl>
-                                    <div className="[&_button]:h-9 [&_button]:text-xs">
+                                    <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
                                       <Combobox
                                         options={[
                                           ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -1872,6 +2190,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         }}
                                         placeholder="Unit"
                                         addNewLabel="+ Add unit"
+                                        triggerLabelMinCh={12}
                                       />
                                     </div>
                                   </FormControl>
@@ -1883,7 +2202,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.taxAccountId`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Tax</FormLabel>
+                                  {/* Copy chip visible => Tax label red; resolved selection => normal label color. */}
+                                  <FormLabel className={cn("text-xs", saleLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax</FormLabel>
                                   <FormControl>
                                     <div className="[&_button]:h-9 [&_button]:text-xs">
                                       <Combobox
@@ -1923,7 +2243,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               name={`lineItems.${index}.isTaxInclusive`}
                               render={({ field }: any) => (
                                 <FormItem>
-                                  <FormLabel className="text-xs">Tax Inc.</FormLabel>
+                                  <div className="flex items-center justify-between gap-1">
+                                    {/* Copy chip visible => Tax Inc label red; resolved selection => normal label color. */}
+                                    <FormLabel className={cn("text-xs", saleLineNeedsCopyTax(index) && "text-red-600 font-semibold")}>Tax Inc.</FormLabel>
+                                    {saleLineNeedsCopyTax(index) && (
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-5 shrink-0 px-1.5 text-[9px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                        onClick={() => onCopyMissingCategory?.("tax")}
+                                        disabled={isCopyingMissingMasters}
+                                      >
+                                        {isCopyingMissingMasters ? "…" : "Copy"}
+                                      </Button>
+                                    )}
+                                  </div>
                                   <div className="flex items-center h-9">
                                     <FormControl>
                                       <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
@@ -1993,11 +2328,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       // Desktop View: Original grid layout
                       <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
                         <div className={cn(TD_BASE, "flex flex-col")}>
-                          <FormField
-                            control={form.control}
-                            name={`lineItems.${index}.itemId`}
-                            render={({ field }: any) => (
-                              <FormItem className="w-full">
+                          <div className="flex items-start gap-1 w-full min-w-0">
+                            <FormField
+                              control={form.control}
+                              name={`lineItems.${index}.itemId`}
+                              render={({ field }: any) => (
+                                <FormItem className="min-w-0 flex-1 w-full">
                                 <Combobox
                                   options={itemOptions}
                                   value={field.value}
@@ -2031,6 +2367,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormItem>
                             )}
                           />
+                            {saleLineNeedsCopyItem(index) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-9 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                                onClick={() => onCopyMissingCategory?.("item")}
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
+                          </div>
                         </div>
 
                         <div className={cn(TD_BASE, "flex items-center justify-end")}>
@@ -2052,7 +2401,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             render={({ field }: any) => (
                               <FormItem className="w-full">
                                 <FormControl>
-                                  <div className="[&_button]:h-9 [&_button]:text-xs">
+                                  <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
                                     <Combobox
                                       options={[
                                         ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -2072,6 +2421,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       }}
                                       placeholder="Unit"
                                       addNewLabel="+ Add unit"
+                                      triggerLabelMinCh={12}
                                     />
                                   </div>
                                 </FormControl>
@@ -2144,25 +2494,23 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           />
                         </div>
 
-                        <div className={cn(TD_BASE, "flex items-center justify-center gap-1")}>
-                          {/* Inclusive checkbox */}
+                        <div className={cn(TD_BASE, "flex items-center justify-center gap-1 flex-wrap")}>
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.isTaxInclusive`}
                             render={({ field }: any) => (
-                              <FormItem className="flex items-center">
+                              <FormItem className="flex items-center shrink-0">
                                 <FormControl>
                                   <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
                                 </FormControl>
                               </FormItem>
                             )}
                           />
-                          {/* Tax selector */}
                           <FormField
                             control={form.control}
                             name={`lineItems.${index}.taxAccountId`}
                             render={({ field }: any) => (
-                              <FormItem className="w-full">
+                              <FormItem className="w-full min-w-0 flex-1">
                                 <Combobox
                                   options={processedTaxes.map((t) => ({
                                     value: t.id,
@@ -2187,6 +2535,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               </FormItem>
                             )}
                           />
+                          {saleLineNeedsCopyTax(index) && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                              onClick={() => onCopyMissingCategory?.("tax")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
                         </div>
 
                         {/* Tax Amount */}
@@ -2271,31 +2631,58 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     </div>
                   </div>
                 ) : (
-                  // Desktop View: Scrollable container with grid
-                  <div className={cn(
-                    "overflow-x-auto w-full",
-                    "[&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-full [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-gray-200"
-                  )}>
-                    <div className="w-full">
-                      {/* Header Row */}
-                      <div className={cn(COLS, "divide-x divide-border border-b")}>
-                        <div className={TH_BASE}>Item</div>
+                  // PC: wide layout ka horizontal scroll form ke scroll wale parent div me (footer fixed).
+                  <div className="w-full min-w-0">
+                    <div className={cn(COLS, "divide-x divide-border border-b")}>
+                        <div className={cn(TH_BASE, "flex items-center justify-between gap-1 min-w-0")}>
+                          {/* Desktop: Item Copy visible ho to Item header red highlight. */}
+                          <span className={cn("truncate", desktopHeaderCopyItem && "text-red-600 font-semibold")}>Item</span>
+                          {desktopHeaderCopyItem && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                              onClick={() => onCopyMissingCategory?.("item")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
                         <div className={cn(TH_BASE, "text-center")}>Qty</div>
                         <div className={cn(TH_BASE, "text-center")}>Unit</div>
                         <div className={cn(TH_BASE, "text-center")}>Rate</div>
-                        <div className={cn(TH_BASE, "flex items-center justify-center")}>
+                        <div className={cn(TH_BASE, "flex flex-col items-center justify-center gap-0.5 px-1 text-center")}>
                           <Checkbox
                             checked={(form.watch("lineItems") || []).every((li) => li.isTaxInclusive)}
                             onCheckedChange={handleToggleAllInclusive}
                             id="all-inclusive"
                           />
-                          <label htmlFor="all-inclusive" className="cursor-pointer select-none ml-2">
+                          {/* Header: Tax copy mismatch ho to Tax Inc label red; resolved case me normal. */}
+                          <label htmlFor="all-inclusive" className={cn("cursor-pointer select-none text-[10px] leading-tight font-semibold text-foreground", desktopHeaderCopyTax && "text-red-600")}>
                             Tax Inc.
                           </label>
                         </div>
+                        <div className={cn(TH_BASE, "flex items-center gap-1 min-w-0 flex-nowrap justify-end")}>
+                          {/* Desktop: Tax Copy visible ho to Tax header red highlight. */}
+                          <span className={cn("truncate font-semibold text-foreground min-w-0 flex-1 text-left", desktopHeaderCopyTax && "text-red-600")}>Tax</span>
+                          {desktopHeaderCopyTax && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-[10px] border-red-300 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
+                              onClick={() => onCopyMissingCategory?.("tax")}
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
                         <div className={cn(TH_BASE, "text-right")}>Tax Amt.</div>
                         <div className={cn(TH_BASE, "text-right")}>Amount</div>
-                        <div className={TH_BASE}></div>
+                        <div className={TH_BASE} />
                       </div>
                       {/* Desktop Rows */}
                       {fields.map((line, index) => {
@@ -2312,12 +2699,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
                         return (
                           <div key={line.id} className={cn(COLS, "divide-x divide-border border-t")}>
-                            <div className={cn(TD_BASE, "flex flex-col")}>
+                            <div className={cn(TD_BASE, "min-w-0")}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.itemId`}
                                 render={({ field }: any) => (
-                                  <FormItem className="w-full">
+                                  <FormItem className="min-w-0 w-full">
                                     <Combobox
                                       options={itemOptions}
                                       value={field.value}
@@ -2359,7 +2746,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 name={`lineItems.${index}.quantity`}
                                 render={({ field }: any) => (
                                   <FormControl>
-                                    <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right")} disabled={itemFieldsDisabled} />
+                                    <Input type="number" {...field} className={cn(FLAT_INPUT, "text-right tabular-nums")} disabled={itemFieldsDisabled} />
                                   </FormControl>
                                 )}
                               />
@@ -2372,7 +2759,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                 render={({ field }: any) => (
                                   <FormItem className="w-full">
                                     <FormControl>
-                                      <div className="[&_button]:h-9 [&_button]:text-xs">
+                                      <div className="w-full [&_button]:h-9 [&_button]:w-full [&_button]:text-xs">
                                         <Combobox
                                           options={[
                                             ...unitOptions.map((u) => ({ value: u, label: u })),
@@ -2392,6 +2779,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           }}
                                           placeholder="Unit"
                                           addNewLabel="+ Add unit"
+                                          triggerLabelMinCh={12}
                                         />
                                       </div>
                                     </FormControl>
@@ -2414,7 +2802,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                               type="number"
                                               {...field}
                                               disabled={saleRateDisabled(index, itemFieldsDisabled)}
-                                              className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                              className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right tabular-nums", saleRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                               title={
                                                 !canEditRates
                                                   ? "No role permission to edit rates"
@@ -2464,25 +2852,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               />
                             </div>
 
-                            <div className={cn(TD_BASE, "flex items-center justify-center gap-1")}>
-                              {/* Inclusive checkbox */}
+                            <div className={cn(TD_BASE, "flex items-center justify-center")}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.isTaxInclusive`}
                                 render={({ field }: any) => (
-                                  <FormItem className="flex items-center">
+                                  <FormItem className="flex items-center shrink-0 m-0 space-y-0">
                                     <FormControl>
                                       <Checkbox checked={field.value} onCheckedChange={field.onChange} disabled={itemFieldsDisabled} />
                                     </FormControl>
                                   </FormItem>
                                 )}
                               />
-                              {/* Tax selector */}
+                            </div>
+                            <div className={cn(TD_BASE, "min-w-0")}>
                               <FormField
                                 control={form.control}
                                 name={`lineItems.${index}.taxAccountId`}
                                 render={({ field }: any) => (
-                                  <FormItem className="w-full">
+                                  <FormItem className="w-full min-w-0">
                                     <Combobox
                                       options={processedTaxes.map((t) => ({
                                         value: t.id,
@@ -2495,7 +2883,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                           setTaxRowIndex(index);
                                           setIsCreateTaxOpen(true);
                                           setTimeout(() => {
-                                              document.dispatchEvent(new CustomEvent('prefill-create-tax-name', { detail: newName }));
+                                            document.dispatchEvent(new CustomEvent('prefill-create-tax-name', { detail: newName }));
                                           }, 100);
                                         } else {
                                           field.onChange(val === "none" ? "" : val);
@@ -2520,7 +2908,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       type="number"
                                       {...field}
                                       readOnly
-                                      className={cn(FLAT_INPUT, "bg-muted text-right")}
+                                      className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
                                     />
                                   </FormControl>
                                 )}
@@ -2538,7 +2926,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                       type="number"
                                       {...field}
                                       readOnly
-                                      className={cn(FLAT_INPUT, "bg-muted text-right")}
+                                      className={cn(FLAT_INPUT, "bg-muted text-right tabular-nums")}
                                     />
                                   </FormControl>
                                 )}
@@ -2589,108 +2977,109 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </Button>
                       </div>
                     </div>
-                  </div>
                 )}
               </div>
 
               {/* Bottom: Narration + Attach / Totals */}
               {isMobile ? (
                 <div className="grid grid-cols-2 gap-3 w-[calc(100%-4px)] mx-auto px-[2px]">
-                  {/* Mobile: Narration - Left Column */}
-                  <div className="col-span-2 px-[2px]">
-                    <FormField
-                      control={form.control}
-                      name="narration"
-                      render={({ field }: any) => (
-                        <FormItem>
-                          <FormLabel>Narration</FormLabel>
-                          <FormControl>
-                            <Textarea
-                              placeholder="Add any notes for this bill..."
-                              {...field}
-                              rows={2}
-                              className="text-sm"
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                  {showApprovalCheckbox && (
-                    <div className="col-span-2 px-[2px]">
+                  {/* Narration + Due Date share one section color for clear grouping; fields stay white. */}
+                  <div className="col-span-2 rounded-lg border border-amber-300/80 bg-amber-50 p-2">
+                    <div className="px-[2px]">
                       <FormField
                         control={form.control}
-                        name="isApproved"
+                        name="narration"
                         render={({ field }: any) => (
-                          <FormItem className="flex flex-row items-center gap-2 space-y-0">
+                          <FormItem>
+                            <FormLabel>Narration</FormLabel>
                             <FormControl>
-                              <Checkbox
-                                checked={!!field.value}
-                                onCheckedChange={field.onChange}
+                              {/* Mobile narration: chhoti default rows + shared resize/scroll (static PC) */}
+                              <Textarea
+                                placeholder="Add any notes for this bill..."
+                                {...field}
+                                rows={2}
+                                className={cn("text-sm", VOUCHER_NARRATION_TEXTAREA_CLASS)}
                               />
                             </FormControl>
-                            <FormLabel className="font-normal cursor-pointer">Approved</FormLabel>
+                            <FormMessage />
                           </FormItem>
                         )}
                       />
                     </div>
-                  )}
-                  {/* Mobile: Due Date */}
-                  <div className={cn("col-span-2 px-[2px]", (dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
-                    <FormField
-                      control={form.control}
-                      name="dueDate"
-                      render={({ field }: any) => (
-                        <FormItem className={cn(dateSystem === 'Both' && "flex-1 min-w-0")}>
-                          <FormLabel className="text-sm">Due Date</FormLabel>
-                          <div className={cn("flex gap-1", dateSystem === 'Both' && "gap-1")}>
-                            {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                              <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
-                                <BsDatePicker
-                                  valueAD={field.value}
-                                  onChangeAD={(d) => { field.onChange(d as Date); }}
-                                  isRange={false}
-                                  numberOfMonths={1}
-                                  className="h-9 text-sm w-full"
+                    {showApprovalCheckbox && (
+                      <div className="px-[2px] pt-2">
+                        <FormField
+                          control={form.control}
+                          name="isApproved"
+                          render={({ field }: any) => (
+                            <FormItem className="flex flex-row items-center gap-2 space-y-0">
+                              <FormControl>
+                                <Checkbox
+                                  checked={!!field.value}
+                                  onCheckedChange={field.onChange}
                                 />
-                              </div>
-                            )}
-                            {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                              <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
-                                <Popover open={isDueDateCalendarOpen} onOpenChange={setIsDueDateCalendarOpen}>
-                                  <PopoverTrigger asChild>
-                                    <FormControl>
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className={cn("w-full justify-start text-left font-normal text-sm", !field.value && "text-muted-foreground")}
-                                      >
-                                        <CalendarIcon className="mr-2 h-4 w-4" />
-                                        {field.value ? formatDate(field.value) : "Pick date"}
-                                      </Button>
-                                    </FormControl>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-auto p-0" align="start">
-                                    <Calendar
-                                      mode="single"
-                                      selected={field.value ?? undefined}
-                                      onSelect={(date) => { field.onChange(date); setIsDueDateCalendarOpen(false); }}
-                                      initialFocus
-                                    />
-                                  </PopoverContent>
-                                </Popover>
-                              </div>
-                            )}
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                              </FormControl>
+                              <FormLabel className="font-normal cursor-pointer">Approved</FormLabel>
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                    )}
+                    <div className={cn("px-[2px] pt-2", (dateSystem === 'BS' || dateSystem === 'Both') && "flex gap-1")}>
+                      <FormField
+                        control={form.control}
+                        name="dueDate"
+                        render={({ field }: any) => (
+                          <FormItem className={cn(dateSystem === 'Both' && "flex-1 min-w-0")}>
+                            <FormLabel className="text-sm">Due Date</FormLabel>
+                            <div className={cn("flex gap-1", dateSystem === 'Both' && "gap-1")}>
+                              {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                  <BsDatePicker
+                                    valueAD={field.value}
+                                    onChangeAD={(d) => { field.onChange(d as Date); }}
+                                    isRange={false}
+                                    numberOfMonths={1}
+                                    className="h-9 text-sm w-full"
+                                  />
+                                </div>
+                              )}
+                              {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                                <div className={cn("flex-1 min-w-0", dateSystem === 'Both' && "flex-1")}>
+                                  <Popover open={isDueDateCalendarOpen} onOpenChange={setIsDueDateCalendarOpen}>
+                                    <PopoverTrigger asChild>
+                                      <FormControl>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className={cn("w-full justify-start text-left font-normal text-sm", !field.value && "text-muted-foreground")}
+                                        >
+                                          <CalendarIcon className="mr-2 h-4 w-4" />
+                                          {field.value ? formatDate(field.value) : "Pick date"}
+                                        </Button>
+                                      </FormControl>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="start">
+                                      <Calendar
+                                        mode="single"
+                                        selected={field.value ?? undefined}
+                                        onSelect={(date) => { field.onChange(date); setIsDueDateCalendarOpen(false); }}
+                                        initialFocus
+                                      />
+                                    </PopoverContent>
+                                  </Popover>
+                                </div>
+                              )}
+                            </div>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                   </div>
                   
-                  {/* Mobile: Attach Files - Left Column */}
-                  <div className="col-span-2 px-[2px]">
+                  {/* Mobile: Attach files in its own colored container for section-level visual grouping. */}
+                  <div className="col-span-2 rounded-lg border border-indigo-300/80 bg-indigo-50 p-2">
                     <FormItem>
                       <FormLabel className="text-sm">Attach Files</FormLabel>
                       {showPdfAsImageToggle && (
@@ -2757,7 +3146,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   {/* Mobile: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap between */}
                   <div className="col-span-2 flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
-                    <div className="bg-muted/20 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
+                    <div className="bg-cyan-50 border-cyan-300/80 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
                       <div className="flex justify-between items-center">
                         <span className="text-xs">Sub Total:</span>
                         <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
@@ -2791,8 +3180,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out (header bold black, table alignment, Amount green). Shown for both new and edit so user can link before/after save. */}
-                    {(isEditing || partyId) && (
-                      <div className="bg-muted/30 rounded-lg border-2 border-border px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
+                    {shouldShowLinkButton && (
+                      <div className="pb-1.5">
+                        {/* Add mode: keep link sections collapsed until user explicitly opens via Show Link. */}
+                        <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                      </div>
+                    )}
+                    {shouldShowBillWiseSection && (
+                      <div className="bg-rose-50 rounded-lg border-2 border-rose-300/80 px-[2px] py-2 pb-[45px] space-y-1.5 w-full">
                         <div className="border-b border-border/60 pb-2">
                           <span className="text-xs font-semibold">Link for bill wise</span>
                           {company?.enableLinkPaymentToTxns && (
@@ -2880,6 +3275,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
                   {/* Desktop: Left: Narration + Due Date + Files */}
                   <div className="space-y-4 w-full">
+                    {/* Desktop grouping: narration + due date in one colored container for same section identity. */}
+                    <div className="rounded-lg border border-amber-300/80 bg-amber-50 p-3">
                     <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-start">
                       <FormField
                         control={form.control}
@@ -2888,9 +3285,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <FormItem>
                             <FormLabel>Narration</FormLabel>
                             <FormControl>
+                              {/* Desktop narration: lambi text ke liye resize-y + max-h scroll */}
                               <Textarea
                                 placeholder="Add any notes for this bill..."
                                 {...field}
+                                className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)}
                               />
                             </FormControl>
                             <FormMessage />
@@ -2960,70 +3359,74 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         )}
                       />
                     </div>
-                    <FormItem>
-                      <FormLabel>Attach Files (Optional)</FormLabel>
-                      {showPdfAsImageToggle && (
-                        <VoucherPdfAsImageToggle
-                          id="voucher-save-pdf-as-image-sale-desktop"
-                          checked={savePdfAsImage}
-                          onCheckedChange={setSavePdfAsImage}
-                          disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
-                          className="mb-2"
-                        />
-                      )}
-                      <RestrictedFileUploader>
-                        {/* When linked: add/remove disabled; existing files stay clickable to open */}
-                        <div className="flex flex-wrap gap-4">
-                          {files.map((file, index) => (
-                            <FilePreview 
-                              key={index} 
-                              file={file} 
-                              attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
-                              onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                              className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
-                            />
-                          ))}
-                          {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <FormControl>
-                              <div 
-                                className={cn(
-                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                )}
-                                onClick={() => {
-                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                    fileInputRef.current?.click();
-                                  }
-                                }}
-                              >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                  type="file" 
-                                  className="hidden"
-                                  ref={fileInputRef}
-                                  onChange={handleFileChange}
-                                  accept={[
-                                    fileAttachmentLimits.allowImage ? "image/*" : "",
-                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                                  multiple={fileAttachmentLimits.maxFileCount > 1}
-                                  disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                                />
-                              </div>
-                            </FormControl>
-                          )}
-                        </div>
-                      </RestrictedFileUploader>
-                    </FormItem>
+                    </div>
+                    {/* Desktop: Attach files gets a dedicated new color container (same grouping intent as mobile). */}
+                    <div className="rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
+                      <FormItem>
+                        <FormLabel>Attach Files (Optional)</FormLabel>
+                        {showPdfAsImageToggle && (
+                          <VoucherPdfAsImageToggle
+                            id="voucher-save-pdf-as-image-sale-desktop"
+                            checked={savePdfAsImage}
+                            onCheckedChange={setSavePdfAsImage}
+                            disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                            className="mb-2"
+                          />
+                        )}
+                        <RestrictedFileUploader>
+                          {/* When linked: add/remove disabled; existing files stay clickable to open */}
+                          <div className="flex flex-wrap gap-4">
+                            {files.map((file, index) => (
+                              <FilePreview 
+                                key={index} 
+                                file={file} 
+                                attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                                onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                                className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                              />
+                            ))}
+                            {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                              <FormControl>
+                                <div 
+                                  className={cn(
+                                    "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                  )}
+                                  onClick={() => {
+                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                      fileInputRef.current?.click();
+                                    }
+                                  }}
+                                >
+                                  <Upload className="h-6 w-6" />
+                                  <span className="text-xs mt-1">Add File</span>
+                                  <Input 
+                                    type="file" 
+                                    className="hidden"
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    accept={[
+                                      fileAttachmentLimits.allowImage ? "image/*" : "",
+                                      fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                                    ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                    multiple={fileAttachmentLimits.maxFileCount > 1}
+                                    disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                                  />
+                                </div>
+                              </FormControl>
+                            )}
+                          </div>
+                        </RestrictedFileUploader>
+                      </FormItem>
+                    </div>
                   </div>
 
                   {/* Desktop: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap, same as mobile */}
                   <div className="flex flex-col gap-[15px] w-full">
                     {/* Container 1: Sub total se total tak */}
-                    <div className="space-y-4 border rounded-lg px-[2px] py-4 bg-muted/20 w-full">
+                    <div className="space-y-4 border border-cyan-300/80 rounded-lg px-[2px] py-4 bg-cyan-50 w-full">
                       <div className="flex justify-between items-center font-medium">
                         <span>Sub Total:</span>
                         <span>{(subTotal || 0).toFixed(2)}</span>
@@ -3057,8 +3460,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </div>
                     </div>
                     {/* Container 2: Link for bill wise — same table/style as Payment Out (header bold black, table alignment, Amount green). Shown for both new and edit so user can link before/after save. */}
-                    {(isEditing || partyId) && (
-                      <div className="space-y-4 border-2 border-border rounded-lg px-[2px] py-4 pb-[45px] bg-muted/30 w-full">
+                    {shouldShowLinkButton && (
+                      <div className="pb-1">
+                        {/* Edit (without links) and add mode: expose links on demand only. */}
+                        <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                      </div>
+                    )}
+                    {shouldShowBillWiseSection && (
+                      <div className="space-y-4 border-2 border-rose-300/80 rounded-lg px-[2px] py-4 pb-[45px] bg-rose-50 w-full">
                         <div className="border-b border-border/60 pb-2">
                           <span className="text-sm font-semibold">Link for bill wise</span>
                           {company?.enableLinkPaymentToTxns && (
@@ -3145,7 +3554,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Footer Actions */}
           <div className={cn(
@@ -3246,6 +3655,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       
       <CreatePartyDialog
         onPartyCreated={(id) => {
+          pendingPartyIdUntilInPartiesListRef.current = id;
           setIsCreatePartyOpen(false);
           form.setValue("partyId", id);
         }}

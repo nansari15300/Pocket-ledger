@@ -50,6 +50,7 @@ import {
 import { coerceDeletedAtToDate } from "@/lib/coerceDeletedAt";
 import { finalizeCompanyPermanentDeleteOnServer } from "@/lib/recycleBinCompanyFirestoreFinalize";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { deleteCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { ownerFinalizeRecycleBinCompanyOnServer } from "@/lib/ownerRecycleBinApiClient";
 import type { User } from "firebase/auth";
@@ -297,7 +298,8 @@ function RecycleBinContent() {
                 listLocalCompanies({ includeDeleted: true })
                     .then((rows) => {
                         const companyItems: DeletedItem[] = rows
-                            .filter((c) => localCompanyRowIsDeleted(c))
+                            // Hidden-from-company-admin rows local recycle bin me dobara na dikhaye.
+                            .filter((c) => localCompanyRowIsDeleted(c) && !(c as { movedToAdminRecycleAt?: unknown }).movedToAdminRecycleAt)
                             .map((c) => {
                                 const storage = String((c as { storageOption?: string }).storageOption ?? "local").toLowerCase();
                                 return {
@@ -829,6 +831,11 @@ function RecycleBinContent() {
                     await deleteStorageFilesForDoc(docSnap.data() as Record<string, unknown>);
                 }
                 await deleteDoc(docRef);
+                // Browser SQLite extras-merge: Firestore-less local row ghost list me na फिरे permanent delete baad — mirror row भी हटाओ.
+                await deleteCompanyDocFromBrowserDb(companyId, resolvedItem.collectionPath, resolvedItem.id, {
+                    force: true,
+                    notify: true,
+                });
                 if (resolvedItem.collectionPath === "vouchers" && companyId && company) {
                   await sendTransactionAlert(companyId, company, {
                     kind: "deleted",
@@ -964,6 +971,7 @@ function RecycleBinContent() {
                         await deleteStorageFilesForDoc(docSnap.data() as Record<string, unknown>);
                     }
                     await deleteDoc(docRef);
+                    await deleteCompanyDocFromBrowserDb(companyId, item.collectionPath, item.id, { force: true, notify: false });
                     if (item.collectionPath === "vouchers" && companyId && company) {
                       await sendTransactionAlert(companyId, company, {
                         kind: "deleted",
@@ -1168,7 +1176,8 @@ function RecycleBinContent() {
                                                     }
                                                     restoreDisabled={item.isRootCollection || item.collectionPath === 'companies' ? atMaxCompanies : false}
                                                     compactView
-                                                    daysToPermanentDeleteText={recycleBinConfig && !recycleBinConfig.quickDelete ? (() => {
+                                                    daysToPermanentDeleteText={recycleBinConfig ? (() => {
+                                                        // Company-admin recycle bin: quick-delete switch se countdown text hide mat karo.
                                                         const raw = recycleBinConfig.autoDeleteAfterDaysCompanyAdmin;
                                                         const d = (typeof raw === 'number' && raw > 0) ? raw : (Number(raw) || 90);
                                                         const oneDayMs = 24 * 60 * 60 * 1000;

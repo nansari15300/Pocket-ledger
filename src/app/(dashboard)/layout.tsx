@@ -33,6 +33,10 @@ import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
 import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/deviceLimitClient";
+import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -642,6 +646,7 @@ function DashboardMainWithEdgeSwipe({
 function LayoutContent({ children }: { children: React.ReactNode }) {
     const isMobile = useIsMobile();
     const pathname = usePathname();
+    const router = useRouter();
     const { user } = useAuth();
 
     // Settings / gallery: body scroll bandho — andar list ya grid khud scroll kare
@@ -656,6 +661,35 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         }
     }, [pathname]);
     useMarkMessagesDelivered();
+
+    // Static + Capacitor (phone/tablet APK) + narrow static PWA: save ke baad Next pathname `/dashboard`/company glitch — voucherActionsClient aur master dialogs custom event + yahan capture submit.
+    useEffect(() => {
+      if (typeof window === "undefined") return;
+      const narrowStaticMobile =
+        isStaticAppBuild() &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 767px)").matches;
+      const nativeCap = isCapacitorNativeApp();
+      if (!(isStaticAppBuild() && (nativeCap || narrowStaticMobile || isMobile))) return;
+
+      const handleSubmit = () => {
+        const livePath = (window.location.pathname.replace(/\/+$/, "") || "/").toLowerCase();
+        if (livePath === "/" || livePath === "/company" || livePath === "/company/create") return;
+        // Web mobile: intentional dashboard submit — shield mat lagao (native/APK ko `apkLedgerRouteShield` event dhak leta hai).
+        if (livePath === "/dashboard" && !nativeCap) return;
+        armDashboardRedirectGuard(router, { isMobile: isMobile || narrowStaticMobile, durationMs: 12_000 });
+      };
+      /** Voucher `saveVoucher` / `patchVoucherFields` jahan form submit kabhi bubble nahi karta — sirf APK eligible (module andar gate). */
+      const handleLedgerShieldEvent = () => {
+        armDashboardRedirectGuard(router, { isMobile: true, durationMs: 12_000 });
+      };
+      document.addEventListener("submit", handleSubmit, true);
+      document.addEventListener(PL_APK_LEDGER_WRITE_ARM_EVENT, handleLedgerShieldEvent, true);
+      return () => {
+        document.removeEventListener("submit", handleSubmit, true);
+        document.removeEventListener(PL_APK_LEDGER_WRITE_ARM_EVENT, handleLedgerShieldEvent, true);
+      };
+    }, [isMobile, router]);
 
     const noLayoutPages = ["/company", "/company/create"];
     const isEmbedRoute = pathname?.startsWith("/embed");
@@ -684,8 +718,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                     id="app-container"
                     className={cn(
                       "relative flex bg-background",
-                      /** Mobile: dvh = browser chrome / gesture bar; desktop: h-screen */
-                      isMobile ? "h-dvh max-h-dvh min-h-0" : "h-screen min-h-0",
+                      /** Mobile + desktop: `100vh`/h-screen Windows taskbar ke niche leak ho sakta hai (Electron); `dvh` visible area ke hisaab se */
+                      "h-dvh max-h-dvh min-h-0",
                       (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) && "overflow-hidden"
                     )}
                   >

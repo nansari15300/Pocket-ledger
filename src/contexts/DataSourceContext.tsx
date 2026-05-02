@@ -1,10 +1,15 @@
 "use client";
 
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from "react";
+import {
+  type DataSourceMode,
+  DATA_SOURCE_MODE_STORAGE_KEY,
+  buildDefaultDataSourceMode,
+  getEffectiveDataSourceModeFromWindow,
+} from "@/lib/dataSourceModeDefaults";
 
-export type DataSourceMode = "firebase" | "local";
+export type { DataSourceMode };
 
-const STORAGE_MODE = "dataSourceMode";
 const STORAGE_BASE_URL = "localApiBaseUrl";
 /** Default 3001 so it doesn't conflict with Next.js dev server on 3000. */
 const DEFAULT_BASE_URL = "http://127.0.0.1:3001";
@@ -21,19 +26,20 @@ const DataSourceContext = createContext<DataSourceContextType | undefined>(undef
 
 function readStored(): { mode: DataSourceMode; localApiBaseUrl: string } {
   if (typeof window === "undefined") {
-    return { mode: "local", localApiBaseUrl: DEFAULT_BASE_URL };
+    return { mode: buildDefaultDataSourceMode(), localApiBaseUrl: DEFAULT_BASE_URL };
   }
-  // Default to local-first so app keeps working from browser DB even when cloud rules fail.
-  const mode = (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "local";
+  // Web: default Firebase (server); static / LOCAL_ONLY env → default local (`dataSourceModeDefaults`).
+  const mode =
+    (localStorage.getItem(DATA_SOURCE_MODE_STORAGE_KEY) as DataSourceMode) ||
+    buildDefaultDataSourceMode();
   const localApiBaseUrl = localStorage.getItem(STORAGE_BASE_URL) || DEFAULT_BASE_URL;
   return { mode, localApiBaseUrl };
 }
 
 export function DataSourceProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<DataSourceMode>(() => {
-    if (typeof window === "undefined") return "local";
-    // Local-first default; user can still switch explicitly from settings if needed.
-    return (localStorage.getItem(STORAGE_MODE) as DataSourceMode) || "local";
+    if (typeof window === "undefined") return buildDefaultDataSourceMode();
+    return getEffectiveDataSourceModeFromWindow();
   });
   const [localApiBaseUrl, setLocalApiBaseUrlState] = useState<string>(() => {
     if (typeof window === "undefined") return DEFAULT_BASE_URL;
@@ -42,9 +48,9 @@ export function DataSourceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const { mode: m, localApiBaseUrl: url } = readStored();
-    // Persist local-first default immediately so other startup modules read a stable mode value.
-    if (typeof window !== "undefined" && !localStorage.getItem(STORAGE_MODE)) {
-      localStorage.setItem(STORAGE_MODE, m);
+    // Pehli baar: stable mode persist karo taaki `isLocalOnlyMode` / Firestore network same dekhein.
+    if (typeof window !== "undefined" && !localStorage.getItem(DATA_SOURCE_MODE_STORAGE_KEY)) {
+      localStorage.setItem(DATA_SOURCE_MODE_STORAGE_KEY, m);
     }
     setModeState(m);
     setLocalApiBaseUrlState(url);
@@ -52,7 +58,7 @@ export function DataSourceProvider({ children }: { children: ReactNode }) {
 
   const setMode = useCallback((m: DataSourceMode) => {
     setModeState(m);
-    if (typeof window !== "undefined") localStorage.setItem(STORAGE_MODE, m);
+    if (typeof window !== "undefined") localStorage.setItem(DATA_SOURCE_MODE_STORAGE_KEY, m);
   }, []);
 
   const setLocalApiBaseUrl = useCallback((url: string) => {

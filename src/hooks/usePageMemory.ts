@@ -14,7 +14,9 @@ export function usePageMemory<T extends { id: string }>(
   /** When true, skip auto-select (e.g. for mobile reports where list is shown full page first) */
   disableAutoSelect?: boolean,
   /** When provided, use this ID for restore instead of localStorage (URL takes precedence on refresh) */
-  urlSelectedId?: string | null
+  urlSelectedId?: string | null,
+  /** Settings page: kabhi LS se `activeView` restore mat karo — `?view=` / pehla allowed tab hi; warna purana sharing/voucher dabaa deta hai */
+  skipRestoreActiveViewFromStorage?: boolean
 ) {
   // null = SSR/first client frame — never run desktop auto-select until we know real viewport
   const mobileLayoutResolved = useIsMobileLayoutResolved();
@@ -49,7 +51,7 @@ export function usePageMemory<T extends { id: string }>(
             hasViewInLocation ||
             hasSelectedInLocation;
           // disableAutoSelect: mobile settings list-first — localStorage se purana tab mat lao
-          if (!urlWins && !disableAutoSelect && parsed.activeView && parsed.activeView !== activeView) {
+          if (!urlWins && !disableAutoSelect && !skipRestoreActiveViewFromStorage && parsed.activeView && parsed.activeView !== activeView) {
             setActiveView(parsed.activeView);
           }
         } catch (e) {
@@ -58,7 +60,7 @@ export function usePageMemory<T extends { id: string }>(
       }
       isInitialized.current = true;
     }
-  }, [isLoading, storageKey, activeView, setActiveView, urlSelectedId, currentItems, disableAutoSelect]);
+  }, [isLoading, storageKey, activeView, setActiveView, urlSelectedId, currentItems, disableAutoSelect, skipRestoreActiveViewFromStorage]);
 
   // 2. VIEW CHANGE RESTORE & AUTO-SELECT
   // यो इफेक्ट तब मात्र चल्नुपर्छ जब activeView (ट्याब) परिवर्तन हुन्छ वा डाटा लोड हुन्छ।

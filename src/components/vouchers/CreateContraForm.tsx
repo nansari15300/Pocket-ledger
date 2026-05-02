@@ -43,6 +43,8 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
+/** Copy chip → From vs To source account alag — sirf types (runtime circular avoid). */
+import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
 import {
@@ -51,7 +53,8 @@ import {
 } from "@/lib/voucherAttachmentPdfAsImage";
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
@@ -96,6 +99,11 @@ export function CreateContraForm({
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  copySaveTargetCompanyId,
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  isCopyingMissingMasters = false,
+  copyMasterDraftRequest,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -107,6 +115,12 @@ export function CreateContraForm({
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  /** Copy chip: `contraAccountField` se source voucher ka From ya To wala bank id prefer ho. */
+  onCopyMissingCategory?: (category: string, opts?: CopyMissingMasterOpts) => void;
+  isCopyingMissingMasters?: boolean;
+  copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
@@ -141,6 +155,8 @@ export function CreateContraForm({
   const [isLinkPaymentInDialogOpen, setIsLinkPaymentInDialogOpen] = useState(false);
   /** Keep only one Pay In dialog state so Contra Out linking is always handled from the top-left card. */
   const [isLinkPaymentOutDialogOpen, setIsLinkPaymentOutDialogOpen] = useState(false);
+  // Add/non-linked edit should show only "Show Link" button until user opens the section.
+  const [showLinkSections, setShowLinkSections] = useState(false);
   /** Pending Link Pay Out selection (applied to server only on Save, not on Done). */
   const [pendingLinkedPaymentOut, setPendingLinkedPaymentOut] = useState<{ ids: string[]; amountsByVoucherId: Record<string, number> } | null>(null);
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
@@ -149,6 +165,15 @@ export function CreateContraForm({
   // Track last valid amount so invalid keystroke can be reverted immediately.
   const lastValidAmountRef = useRef<number>(Number(voucher?.amount ?? voucher?.total ?? 0) || 0);
   const initialLinkedPaymentInIdsRef = useRef<string[]>([]);
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setLinkedPaymentInIds([]);
+    initialLinkedPaymentInIdsRef.current = [];
+    setPendingLinkedPaymentOut(null);
+    setShowLinkSections(false);
+    setIsLinkPaymentInDialogOpen(false);
+    setIsLinkPaymentOutDialogOpen(false);
+  }, []);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
 
@@ -206,15 +231,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     initialLinkedPaymentInIdsRef.current = ids;
   }, [voucher?.id, voucher?.linkedPaymentInIds]);
 
+  const spendWiseOppositeEditable =
+    (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   const spendWiseEnabled = (company as { spendWiseEnabled?: boolean } | null)?.spendWiseEnabled === true;
-  const requirePaymentLink = (() => {
-    const byRole = (company as { requirePaymentLinkByRole?: Record<string, boolean | { payment_out?: boolean; contra?: boolean; direct_expense?: boolean }> } | null)?.requirePaymentLinkByRole?.[role];
-    if (byRole === undefined) return false;
-    if (typeof byRole === "boolean") return byRole;
-    return byRole.contra === true;
-  })();
-  // Company Spend wise ON ya role matrix: dono me link zaroori jab amount > 0 aur validation chalti ho.
-  const spendWiseLinkRequired = spendWiseEnabled || requirePaymentLink;
+  const requirePaymentLink =
+    spendWiseOppositeEditable &&
+    (() => {
+      const byRole = (company as { requirePaymentLinkByRole?: Record<string, boolean | { payment_out?: boolean; contra?: boolean; direct_expense?: boolean }> } | null)?.requirePaymentLinkByRole?.[role];
+      if (byRole === undefined) return false;
+      if (typeof byRole === "boolean") return byRole;
+      return byRole.contra === true;
+    })();
+  // Opposite master OFF ⇒ spend-wise zaroorat band (`spendWiseEnabled` samaet); master ON ho tab PO jaisi gate.
+  const spendWiseLinkRequired = spendWiseOppositeEditable && (spendWiseEnabled || requirePaymentLink);
   // Rule: Out leg links same-account inflows; In leg links same-account outflows.
   const spendWiseInAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
   const spendWiseOutAccountId = selectedContraLeg === 'in' ? toAccountId : fromAccountId;
@@ -336,6 +365,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       };
     }).filter(Boolean) as { id: string; voucherNumber: string; date: Date | null; amount: number; linked: number; linkedOnOthers: number; linkable: number; from: string }[];
   }, [showSpendWiseSection, allVouchers, linkedPaymentInIds, spendWiseInAccountId, amount, linkedAmountByPaymentInId, paymentInDialogNames, spendWiseInAccountOpeningBalance]);
+  const hasSpendWiseLinks = spendWiseDisplayRows.length > 0 || linkedPaymentInIds.length > 0;
+  const shouldShowSpendWiseSection = showSpendWiseSection && (showLinkSections || (isEditing && hasSpendWiseLinks));
+
+  useEffect(() => {
+    if (isEditing && hasSpendWiseLinks) setShowLinkSections(true);
+  }, [isEditing, hasSpendWiseLinks]);
 
   /** Spend wise: count of Payment In / Direct Income / Contra for fromAccountId with linkable amount. Message uses "bcz" spelling. */
   const spendWiseLinkableCount = useMemo(() => {
@@ -358,7 +393,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const spendWiseFromCardSettled = amount > 0 && spendWiseFromCardTotalLinked >= amount;
 
   const currentContraVoucherId = voucher?.id ?? savedVoucherId;
-  const spendWiseOppositeEditable = (company as { spendWiseOppositeVoucherEditable?: boolean } | null)?.spendWiseOppositeVoucherEditable === true;
   /** Show lower row (Contra voucher in To Other out) in both add new and edit — so user sees spend wise link cards. */
   const showSpendWiseOppositeSection = !!spendWiseOutAccountId;
   const openingBalanceLinkedByOthers = useMemo(() => {
@@ -549,8 +583,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Compute after opposite-row memo so we never read it before initialization.
   const rightCardLinkedTotal = selectedContraLeg === 'in' ? lowerCardTotalLinked : (currentVoucherAsOnOppositeRows[0]?.linked ?? 0);
 
-  const { displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
-  const { displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
+  // `account` row = copy-mismatch red label / Copy chip ke liye same source-of-truth jo balance hook use karta hai (id trim + type-safe).
+  const { account: fromAccountRow, displayBalance: fromAccountBalance } = useAccountBalance(fromAccountId);
+  const { account: toAccountRow, displayBalance: toAccountBalance } = useAccountBalance(toAccountId);
   const isAmountExceedingSelectedFromAccount = useCallback((enteredAmount: number) => {
     if (!fromAccountId) return false;
     const selectedBalance = Number(fromAccountBalance) || 0;
@@ -646,6 +681,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
   }, [voucher, form, isEditingAndConverting, company?.voucherPrefixes, isFormDirty]);
 
+  /** Master list me row mil chuki ho to purana RHF error hatao — FormLabel ka `text-destructive` label par chipak jata tha. */
+  useEffect(() => {
+    if (fromAccountRow) form.clearErrors("fromAccountId");
+  }, [fromAccountRow, form]);
+
+  /** To side: duplicate From=To error tab tak rakho jab tak same-id; alag select par clear. */
+  useEffect(() => {
+    if (!toAccountRow) return;
+    if (String(fromAccountId ?? "").trim() === String(toAccountId ?? "").trim()) return;
+    form.clearErrors("toAccountId");
+  }, [toAccountRow, fromAccountId, toAccountId, form]);
+
   
   useEffect(() => {
     if (!savedVoucherId || isEditingAndConverting) {
@@ -656,6 +703,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const handleAccountCreated = (newAccountId: string) => {
     if (targetFieldForNewAccount) {
       form.setValue(targetFieldForNewAccount, newAccountId);
+      // Naya account lagte hi validation red label hatao (setValue alone kabhi errors clear nahi karta).
+      form.clearErrors(targetFieldForNewAccount);
     }
     setTimeout(() => setIsCreateAccountOpen(false), 50);
   };
@@ -669,6 +718,45 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }, 100);
     }
   };
+  /**
+   * Tab-switch (Contra→Journal→Contra) par form fresh mount hota hai.
+   * Parent ki state me bachi `copyMasterDraftRequest` se prefill dialog auto-open na ho —
+   * sirf user ke Copy chip click ke baad arrive hone wali request par hi dialog khule.
+   */
+  const hasInitializedCopyRequestRef = useRef(false);
+  useEffect(() => {
+    // First mount-time run skip — pehle se set request bhi voucher-convert tab-switch ke baad auto-open na kare.
+    if (!hasInitializedCopyRequestRef.current) {
+      hasInitializedCopyRequestRef.current = true;
+      return;
+    }
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest;
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+    /** Save ke baad naya bank account isi From/To field par lagao — pehle null tha isliye chip useless lagta tha. */
+    const contraSide = req.applyTarget?.contraAccountField ?? null;
+    // Contra copy parity: source bank account row mile to full prefill open karo (attachment/profile सहित).
+    if (payload && sc === "bank_accounts") {
+      setTargetFieldForNewAccount(contraSide);
+      setIsCreateAccountOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-bank-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Bank account prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    // Source row unavailable ho to name fallback se account create dialog prefill karo.
+    if (!nm) return;
+    if (req.category === "account" || req.category === "account_bank") {
+      setTargetFieldForNewAccount(contraSide);
+      setIsCreateAccountOpen(true);
+      setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-bank-account-name", { detail: nm })), 80);
+      sonnerToast.message(`Bank account prefilled -> save adds to "${targetLabel}".`);
+    }
+  }, [copyMasterDraftRequest]);
 
   // Amount guard पहले; फिर validated `data` — `getValues()` से date miss न हो
   const handleFormSubmit = useCallback(
@@ -681,7 +769,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
       void form.handleSubmit(
         async (data) => {
-          onVoucherAction?.("saved", options.saveAndNew);
           await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave ? onApprove : undefined, options.approveAfterSave ?? false);
         },
         () => {
@@ -689,7 +776,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       )(e);
     },
-    [form, onVoucherAction, isAmountExceedingSelectedFromAccount]
+    [form, isAmountExceedingSelectedFromAccount]
   );
   
   async function processAndSave(data: ContraFormValues, saveAndNew: boolean = false, onSuccess?: () => void, approveAfterSave?: boolean) {
@@ -1007,6 +1094,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
         if (approveAfterSave && voucher?.id) onSuccess?.();
         else if (!approveAfterSave) onSuccess?.();
+
+        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
   
     } catch (error: any) {
       if (error instanceof PermissionDeniedError) {
@@ -1195,6 +1284,42 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       })),
     [availableFromAccounts, formatCurrencyForPrint]
   );
+  // Contra safety: same account ko From/To dono side par select karne ki गलती रोकने के लिए opposite side me disable karo.
+  const contraFromAccountOptions = useMemo(
+    () =>
+      fromBankCashAccountOptions.map((opt: any) => ({
+        ...opt,
+        disabled: Boolean(opt.disabled) || (!!toAccountId && String(opt.value) === String(toAccountId)),
+      })),
+    [fromBankCashAccountOptions, toAccountId]
+  );
+  // Opposite side guard: From me selected account To list me disabled dikhe.
+  const contraToAccountOptions = useMemo(
+    () =>
+      availableToAccounts.map((a: any) => ({
+        value: a.id,
+        label: `${a.accountName} (${a.accountType})`,
+        isSpecial: a.isSpecial,
+        disabled: !!fromAccountId && String(a.id) === String(fromAccountId),
+      })),
+    [availableToAccounts, fromAccountId]
+  );
+  /** Copy-draft helpers: source mismatch ho tabhi account Copy chip dikhe (Sale/Purchase jaisa). */
+  const copyDraftAccountHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  const hasSourceAccountMismatch = Boolean(
+    copyMismatchCategories?.includes("account") ||
+      // Journal parity: source voucher me party/staff/tax mismatch ho to contra account copy helper bhi dikhao.
+      copyMismatchCategories?.includes("party") ||
+      copyMismatchCategories?.includes("staff") ||
+      copyMismatchCategories?.includes("tax") ||
+      copyMismatchCategories?.includes("account_bank") ||
+      copyMismatchCategories?.includes("account_expense")
+  );
+  // Copy chip / red cue: `useAccountBalance` jaisa hi master lookup (trim + string) — alag `some()` se drift na ho.
+  const showCopyFromAccountFromSource =
+    copyDraftAccountHelpersEnabled && hasSourceAccountMismatch && (!String(fromAccountId ?? "").trim() || !fromAccountRow);
+  const showCopyToAccountFromSource =
+    copyDraftAccountHelpersEnabled && hasSourceAccountMismatch && (!String(toAccountId ?? "").trim() || !toAccountRow);
 
   const voucherPrefixes = useMemo(() => company?.voucherPrefixes?.contra || [getVoucherPrefix()], [company]);
   
@@ -1211,7 +1336,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* PC View: All 4 Fields in Same Row with Responsive Wrapping */}
               {isMobile ? (
                 <>
+                  {/* Mobile Section 1: Date + Voucher No. grouped in a single ribbon container. */}
+                  {/* Match Sale form's top section tone for visual consistency. */}
+                  <div className="rounded-lg border border-sky-400 bg-sky-100 p-2 space-y-2">
                   {/* Mobile: Date top-left only (old Voucher No. removed; Out/In are voucher numbers). */}
+                  <div>
                   <FormField
                     control={form.control}
                     name="date"
@@ -1247,7 +1376,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </>
                     )}
                   />
+                  </div>
                   {/* Mobile: Contra Out and Contra In above From/To account — width responsive */}
+                  {/* Voucher row stays inside the same Section 1 container. */}
                   <div className="grid grid-cols-2 gap-2 w-full">
                     <FormField control={form.control} name="voucherNumberOut" render={({ field }: any) => (
                       <FormItem className="min-w-0">
@@ -1268,7 +1399,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </FormItem>
                     )} />
                   </div>
+                  </div>
                   {/* Mobile: From Account and To Account - grid-cols-2 so fields fit inside dialog */}
+                  {/* Mobile Section 2: Account + Amount grouped in a single ribbon container. */}
+                  <div className="rounded-lg border border-emerald-300/80 bg-emerald-50/70 p-2 space-y-2">
                   <div className="grid grid-cols-2 gap-2 w-full">
                     <FormField 
                       control={form.control} 
@@ -1276,18 +1410,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="min-w-0">
                           <div className="flex justify-between items-baseline mb-1 min-w-0">
-                            <FormLabel className="text-xs truncate">Pay from (From account)</FormLabel>
+                            <FormLabel className={cn("text-xs truncate", showCopyFromAccountFromSource && "text-red-600 font-semibold")}>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrencyForPrint(fromAccountBalance, { noSuffix: true, noAnimation: true })}</FormLabel>}
                           </div>
-                          <div className="min-w-0 w-full overflow-hidden">
+                          <div className="min-w-0 w-full flex items-center gap-1">
+                            <div className="min-w-0 flex-1 overflow-hidden">
                             <Combobox 
-                              triggerClassName="w-full min-w-0"
-                              options={fromBankCashAccountOptions}
+                              triggerClassName={cn(
+                                "w-full min-w-0",
+                                // Copy visible ho to field bhi red cue de; select hote hi normal classes par wapas.
+                                // Mismatch state: Journal parity ke liye contra account field ko force-red rakho.
+                                showCopyFromAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
+                              )}
+                              options={contraFromAccountOptions}
                               value={field.value} 
-                              onChange={(value, newName) => { 
-                                if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); 
-                                else field.onChange(value); 
-                              }} 
+                              onChange={(value, newName) => {
+                                if (value === "add-new") openCreateAccountDialog("fromAccountId", newName);
+                                else {
+                                  field.onChange(value);
+                                  form.clearErrors("fromAccountId");
+                                }
+                              }}
                               // Keep placeholder short and consistent across voucher forms.
                               placeholder="Select account" 
                               addNewLabel="+ Add New Account" 
@@ -1295,6 +1438,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               highlightBalanceInOptions
                               disabled={deleteDisabledWhenLinked}
                             />
+                            </div>
+                            {showCopyFromAccountFromSource && (
+                              // Mobile: Copy chip ko account field ki same line me fit rakho (Journal jaisa).
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                onClick={() =>
+                                  onCopyMissingCategory?.("account_bank", { contraAccountField: "fromAccountId" })
+                                }
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                           </div>
                           <FormMessage />
                         </FormItem>
@@ -1306,31 +1465,80 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       render={({ field }: any) => (
                         <FormItem className="min-w-0">
                           <div className="flex justify-between items-baseline mb-1 min-w-0">
-                            <FormLabel className="text-xs truncate">To Account</FormLabel>
+                            <FormLabel className={cn("text-xs truncate", showCopyToAccountFromSource && "text-red-600 font-semibold")}>To Account</FormLabel>
                             {toAccountBalance !== null && <FormLabel className="text-[10px] text-muted-foreground shrink-0">Bal: {formatCurrencyForPrint(toAccountBalance, { noSuffix: true, noAnimation: true })}</FormLabel>}
                           </div>
-                          <div className="min-w-0 w-full overflow-hidden">
+                          <div className="min-w-0 w-full flex items-center gap-1">
+                            <div className="min-w-0 flex-1 overflow-hidden">
                             <Combobox 
-                              triggerClassName="w-full min-w-0"
-                              options={availableToAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} 
+                              triggerClassName={cn(
+                                "w-full min-w-0",
+                                // Copy pending state: destination account input ko red highlight karo.
+                                // Mismatch state: destination field ko bhi same force-red.
+                                showCopyToAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
+                              )}
+                              options={contraToAccountOptions} 
                               value={field.value} 
-                              onChange={(value, newName) => { 
-                                if (value === "add-new") openCreateAccountDialog('toAccountId', newName); 
-                                else field.onChange(value); 
-                              }} 
+                              onChange={(value, newName) => {
+                                if (value === "add-new") openCreateAccountDialog("toAccountId", newName);
+                                else {
+                                  field.onChange(value);
+                                  form.clearErrors("toAccountId");
+                                }
+                              }}
                               placeholder="Select account" 
                               addNewLabel="+ Add New Account" 
                               disabled={deleteDisabledWhenLinked}
                             />
+                            </div>
+                            {showCopyToAccountFromSource && (
+                              // Mobile destination row me bhi chip same line par.
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                onClick={() =>
+                                  // Mobile To row: source voucher ki destination bank id prefer — From ke साथ mix na ho.
+                                  onCopyMissingCategory?.("account_bank", { contraAccountField: "toAccountId" })
+                                }
+                                disabled={isCopyingMissingMasters}
+                              >
+                                {isCopyingMissingMasters ? "…" : "Copy"}
+                              </Button>
+                            )}
                           </div>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
                   </div>
+                  {/* Amount block stays in same Section 2 container (below account row). */}
+                  <div>
+                    <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
+                      const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                      // If entered amount exceeds selected from-account balance, keep previous valid value.
+                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                        field.onChange(lastValidAmountRef.current);
+                        setIsAmountMoreThanAccountOpen(true);
+                        return;
+                      }
+                      field.onChange(nextAmount);
+                      // Persist last valid value so next invalid keystroke can rollback cleanly.
+                      lastValidAmountRef.current = nextAmount;
+                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                        // Show immediate popup feedback while typing if amount crosses selected account balance.
+                        setIsAmountMoreThanAccountOpen(true);
+                      }
+                    }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
+                  </div>
+                  </div>
                 </>
               ) : (
                 <>
+                  {/* Desktop Section 1: Date + Voucher No. in one ribbon section. */}
+                  {/* Match Sale form's top section tone for visual consistency. */}
+                  <div className="rounded-lg border border-sky-400 bg-sky-100 p-3 space-y-3">
                   {/* PC View: Date top-left (old Voucher No. field removed; Out/In treated as voucher numbers). */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:justify-start md:items-end">
                     <FormField
@@ -1379,6 +1587,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     />
                   </div>
                   {/* PC View: Contra Out (above From account) and Contra In (above To account) — width like date, responsive */}
+                  {/* Voucher row stays inside same Desktop Section 1 container. */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField
                       control={form.control}
@@ -1407,109 +1616,223 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       )}
                     />
                   </div>
+                  </div>
                   {/* PC View: From Account and To Account */}
+                  {/* Desktop Section 2: Account + Amount in one ribbon section. */}
+                  <div className="rounded-lg border border-emerald-300/80 bg-emerald-50/70 p-3 space-y-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="fromAccountId" render={({ field }: any) => (<FormItem>
                         <div className="flex justify-between items-baseline">
-                            <FormLabel>Pay from (From account)</FormLabel>
+                            <FormLabel className={cn(showCopyFromAccountFromSource && "text-red-600 font-semibold")}>Pay from (From account)</FormLabel>
                             {fromAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", fromAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(fromAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        {/* Keep desktop placeholder text aligned with mobile to avoid mixed wording. */}
-                        <Combobox options={fromBankCashAccountOptions} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('fromAccountId', newName); else field.onChange(value); }} placeholder="Select account" addNewLabel="+ Add New Account" highlightBalanceInOptions disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
+                        <div className="min-w-0 w-full flex items-center gap-1">
+                          <div className="min-w-0 flex-1 overflow-hidden">
+                            {/* Keep desktop placeholder text aligned with mobile to avoid mixed wording. */}
+                            <Combobox
+                              triggerClassName={cn(
+                                "w-full min-w-0",
+                                // Desktop mismatch state: force-red field like Journal.
+                                showCopyFromAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
+                              )}
+                              options={contraFromAccountOptions}
+                              value={field.value}
+                              onChange={(value, newName) => {
+                                if (value === "add-new") openCreateAccountDialog("fromAccountId", newName);
+                                else {
+                                  field.onChange(value);
+                                  form.clearErrors("fromAccountId");
+                                }
+                              }}
+                              placeholder="Select account"
+                              addNewLabel="+ Add New Account"
+                              highlightBalanceInOptions
+                              disabled={deleteDisabledWhenLinked}
+                            />
+                          </div>
+                          {showCopyFromAccountFromSource && (
+                            // Desktop: copy chip ko account input row me fit rakho.
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                              onClick={() =>
+                                onCopyMissingCategory?.("account_bank", { contraAccountField: "fromAccountId" })
+                              }
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
+                        <FormMessage /></FormItem>)}/>
                     <FormField control={form.control} name="toAccountId" render={({ field }: any) => (<FormItem>
                          <div className="flex justify-between items-baseline">
-                            <FormLabel>To Account (Debit)</FormLabel>
+                            <FormLabel className={cn(showCopyToAccountFromSource && "text-red-600 font-semibold")}>To Account (Debit)</FormLabel>
                             {toAccountBalance !== null && <FormLabel className={cn("text-xs font-semibold", toAccountBalance >= 0 ? 'text-green-600' : 'text-red-600')}>{`Balance: ${formatCurrencyForPrint(toAccountBalance, { showDrCr: true, noAnimation: true })}`}</FormLabel>}
                         </div>
-                        <Combobox options={availableToAccounts.map(a => ({ value: a.id, label: `${a.accountName} (${a.accountType})`, isSpecial: a.isSpecial }))} value={field.value} onChange={(value, newName) => { if (value === "add-new") openCreateAccountDialog('toAccountId', newName); else field.onChange(value); }} placeholder="Select destination account" addNewLabel="+ Add New Account" disabled={deleteDisabledWhenLinked} /><FormMessage /></FormItem>)}/>
+                        <div className="min-w-0 w-full flex items-center gap-1">
+                          <div className="min-w-0 flex-1 overflow-hidden">
+                            <Combobox
+                              triggerClassName={cn(
+                                "w-full min-w-0",
+                                // Desktop destination mismatch state: force-red.
+                                showCopyToAccountFromSource && "!border-red-400 !bg-red-100/80 !text-red-700"
+                              )}
+                              options={contraToAccountOptions}
+                              value={field.value}
+                              onChange={(value, newName) => {
+                                if (value === "add-new") openCreateAccountDialog("toAccountId", newName);
+                                else {
+                                  field.onChange(value);
+                                  form.clearErrors("toAccountId");
+                                }
+                              }}
+                              placeholder="Select destination account"
+                              addNewLabel="+ Add New Account"
+                              disabled={deleteDisabledWhenLinked}
+                            />
+                          </div>
+                          {showCopyToAccountFromSource && (
+                            // Desktop destination account row me same inline chip.
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                              onClick={() =>
+                                onCopyMissingCategory?.("account_bank", { contraAccountField: "toAccountId" })
+                              }
+                              disabled={isCopyingMissingMasters}
+                            >
+                              {isCopyingMissingMasters ? "…" : "Copy"}
+                            </Button>
+                          )}
+                        </div>
+                        <FormMessage /></FormItem>)}/>
+                  </div>
+                  {/* Amount block sits below account row within Desktop Section 2. */}
+                  <div>
+                    <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
+                      const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
+                      // If entered amount exceeds selected from-account balance, keep previous valid value.
+                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                        field.onChange(lastValidAmountRef.current);
+                        setIsAmountMoreThanAccountOpen(true);
+                        return;
+                      }
+                      field.onChange(nextAmount);
+                      // Persist last valid value so next invalid keystroke can rollback cleanly.
+                      lastValidAmountRef.current = nextAmount;
+                      if (isAmountExceedingSelectedFromAccount(nextAmount)) {
+                        // Show immediate popup feedback while typing if amount crosses selected account balance.
+                        setIsAmountMoreThanAccountOpen(true);
+                      }
+                    }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
+                  </div>
                   </div>
                 </>
               )}
-              <FormField control={form.control} name="amount" render={({ field }: any) => (<FormItem><FormLabel>Amount</FormLabel><FormControl><Input type="number" placeholder="Enter amount" {...field} value={field.value ?? ""} onChange={(e) => {
-                const nextAmount = e.target.value === "" ? 0 : Number(e.target.value);
-                // If entered amount exceeds selected from-account balance, keep previous valid value.
-                if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                  field.onChange(lastValidAmountRef.current);
-                  setIsAmountMoreThanAccountOpen(true);
-                  return;
-                }
-                field.onChange(nextAmount);
-                // Persist last valid value so next invalid keystroke can rollback cleanly.
-                lastValidAmountRef.current = nextAmount;
-                if (isAmountExceedingSelectedFromAccount(nextAmount)) {
-                  // Show immediate popup feedback while typing if amount crosses selected account balance.
-                  setIsAmountMoreThanAccountOpen(true);
-                }
-              }} disabled={deleteDisabledWhenLinked} /></FormControl><FormMessage /></FormItem>)}/>
-              {/* File pehle — link cards ke upar; warna link ke baad attach band ho jata hai */}
-              <FormItem>
-                <FormLabel>Attach Files (Optional)</FormLabel>
-                {showPdfAsImageToggle && (
-                  <VoucherPdfAsImageToggle
-                    id="voucher-save-pdf-as-image-contra"
-                    checked={savePdfAsImage}
-                    onCheckedChange={setSavePdfAsImage}
-                    disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
-                    className="mb-2"
-                  />
-                )}
-                <RestrictedFileUploader>
-                  {/* When linked: add/remove disabled; existing files remain clickable to open */}
-                  <div className="flex flex-wrap gap-4">
-                    {files.map((file, index) => (
-                      <FilePreview
-                        key={index}
-                        file={file}
-                        attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
-                        onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
-                        className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+              {/* Amount moved into Account+Amount grouped section above (mobile + desktop). */}
+              {/* Attach + Narration in one ribbon container: mobile stacks (narration below), desktop shows narration at right. */}
+              <div className="rounded-lg border border-indigo-300/80 bg-indigo-50/70 p-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <FormItem>
+                    <FormLabel>Attach Files (Optional)</FormLabel>
+                    {showPdfAsImageToggle && (
+                      <VoucherPdfAsImageToggle
+                        id="voucher-save-pdf-as-image-contra"
+                        checked={savePdfAsImage}
+                        onCheckedChange={setSavePdfAsImage}
+                        disabled={!allowAttachments || fileAttachLockedByDialog || fileAttachmentLimits.maxFileCount === 0}
+                        className="mb-2"
                       />
-                    ))}
-                    {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                      <>
-                        <label
-                          htmlFor={attachFileInputId}
-                          className={cn(
-                            "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                              ? "text-muted-foreground hover:border-primary cursor-pointer"
-                              : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                          )}
-                        >
-                          <PlusCircle className="h-6 w-6" />
-                          <span className="text-xs mt-1">Add File</span>
-                        </label>
-                        <Input
-                          id={attachFileInputId}
-                          type="file"
-                          className="sr-only"
-                          ref={fileInputRef}
-                          onChange={handleFileChange}
-                          accept={[
-                            fileAttachmentLimits.allowImage ? "image/*" : "",
-                            fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                          ].filter(Boolean).join(",") || "image/*,application/pdf"}
-                          multiple={fileAttachmentLimits.maxFileCount > 1}
-                          disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
-                        />
-                      </>
                     )}
-                  </div>
-                </RestrictedFileUploader>
-              </FormItem>
-              {showSpendWiseSection && (
+                    <RestrictedFileUploader>
+                      {/* File actions stay unchanged; only grouped in shared container with narration. */}
+                      <div className="flex flex-wrap gap-4">
+                        {files.map((file, index) => (
+                          <FilePreview
+                            key={index}
+                            file={file}
+                            attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                            onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
+                            className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
+                          />
+                        ))}
+                        {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
+                          <>
+                            <label
+                              htmlFor={attachFileInputId}
+                              className={cn(
+                                "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                  ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                  : "pointer-events-none text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                              )}
+                            >
+                              <PlusCircle className="h-6 w-6" />
+                              <span className="text-xs mt-1">Add File</span>
+                            </label>
+                            <Input
+                              id={attachFileInputId}
+                              type="file"
+                              className="sr-only"
+                              ref={fileInputRef}
+                              onChange={handleFileChange}
+                              accept={[
+                                fileAttachmentLimits.allowImage ? "image/*" : "",
+                                fileAttachmentLimits.allowPDF ? "application/pdf" : ""
+                              ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                              multiple={fileAttachmentLimits.maxFileCount > 1}
+                              disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
+                            />
+                          </>
+                        )}
+                      </div>
+                    </RestrictedFileUploader>
+                  </FormItem>
+                  <FormField
+                    control={form.control}
+                    name="narration"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Narration</FormLabel>
+                        <FormControl>
+                          {/* Shared narration sizing: fixed chhoti height ki jagah resize + scroll */}
+                          <Textarea placeholder="e.g., Cash deposited to bank" {...field} className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
+              {(showSpendWiseSection && !shouldShowSpendWiseSection) && (
+                <div className="pb-1">
+                  {/* Keep Contra link UI hidden until user opts in, unless existing links already present. */}
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                </div>
+              )}
+              {shouldShowSpendWiseSection && (
                 <div className="space-y-4 min-w-0 w-full">
                   {/* Upper row: single main container for To Voucher + To Voucher (current) */}
-                  <div className="min-w-0 w-full rounded-xl border-4 border-foreground/40 bg-muted/20 p-4">
+                  {/* Match sale-style pink ribbon tone on spend-wise main container (without inner box). */}
+                  <div className="min-w-0 w-full rounded-xl border-2 border-rose-300/80 bg-rose-50 p-4">
                     <div className="flex justify-center mb-3">
                     <span className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 text-center">
                       {/* Show opposite account name so user knows which inflow side is being linked. */}
                       Other voucher in To Contra out{spendWiseInAccountId ? ` ( account ${allProcessedAccounts?.find((a: any) => a.id === spendWiseInAccountId)?.accountName ?? "—"} )` : ""}
                     </span>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0 w-full items-stretch">
+                    {/* PC + mobile: keep only one full-width spend-wise card after current-voucher card removal. */}
+                    {/* Inner wrapper kept minimal: no boxed styling, only layout container. */}
+                    <div className="min-w-0 w-full">
                   {/* Top left: From Voucher — message inside card when Link for Bill Wise is ON */}
-                  <div className="flex flex-col h-full min-h-0 space-y-2 rounded-lg border border-green-200 p-3 bg-green-50/80 min-w-0 w-full max-w-full overflow-hidden">
+                  {/* Spend-wise card uses a distinct warm tone so this form doesn't repeat green section color. */}
+                  {/* Inner spend-wise box removed as requested; content sits directly on main container. */}
+                  <div className="flex flex-col h-full min-h-0 space-y-2 min-w-0 w-full max-w-full overflow-hidden">
                     <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
                       <div className="flex items-center gap-2 font-medium min-w-0">
                         <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -1607,96 +1930,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                     )}
                   </div>
-                  {/* Top right: To Voucher ( current voucher ) — light blue */}
-                  <div className="flex flex-col h-full min-h-0 space-y-2 rounded-lg border border-sky-200 p-3 bg-sky-50/80 min-w-0 w-full max-w-full overflow-hidden">
-                    <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
-                      <div className="flex items-center gap-2 font-medium min-w-0">
-                        <Link2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="truncate">Link for spend wise</span>
-                      </div>
-                      <span className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-base font-medium text-blue-700">To Voucher ( current voucher )</span>
-                    </div>
-                    <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
-                    {currentVoucherAsOnOppositeRows.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Save the voucher to see how it appears on the opposite voucher.</p>
-                    ) : (
-                      <div className="overflow-x-auto -mx-1 min-w-0">
-                        <table className="w-full text-sm border-collapse min-w-[400px]">
-                          <thead>
-                            <tr className="border-b bg-muted/50">
-                              <th className="text-left p-2 font-medium whitespace-nowrap">Date</th>
-                              <th className="text-left p-2 font-medium whitespace-nowrap">Voucher No.</th>
-                              <th className="text-left p-2 font-medium whitespace-nowrap">From</th>
-                              <th className="text-right p-2 font-medium whitespace-nowrap">Amount</th>
-                              <th className="text-right p-2 font-medium whitespace-nowrap">Linked</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {currentVoucherAsOnOppositeRows.map((row) => (
-                              <tr key={row.id} className="border-b last:border-b-0">
-                                <td className="p-2 text-muted-foreground whitespace-nowrap">{row.date ? formatDate(row.date) : "—"}</td>
-                                <td className="p-2 font-medium whitespace-nowrap">{row.voucherNumber}</td>
-                                <td className="p-2 whitespace-nowrap">{row.from}</td>
-                                <td className="p-2 text-right font-medium text-green-600 whitespace-nowrap">{formatCurrency(row.amount, { noSuffix: true, noAnimation: true })} Dr</td>
-                                <td className="p-2 text-right text-muted-foreground whitespace-nowrap">{formatCurrency(row.linked, { noSuffix: true, noAnimation: true })} Dr</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                    </div>
-                    <div className="pt-2 border-t space-y-2 shrink-0">
-                      {currentVoucherAsOnOppositeRows.length > 0 && (
-                        <div className="flex justify-end min-w-0">
-                          <div className="grid grid-cols-2 gap-1.5 text-sm w-fit">
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center min-h-0 min-w-0 overflow-hidden">
-                              <span className="text-muted-foreground truncate leading-tight">Total linked</span>
-                            </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end min-h-0 min-w-0 overflow-hidden">
-                                <span className="truncate text-right whitespace-nowrap leading-tight">
-                                  {formatCurrency(rightCardLinkedTotal, { noSuffix: true, noAnimation: true })} Dr
-                              </span>
-                            </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-center font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className="truncate leading-tight">Balance</span>
-                            </div>
-                            <div className="rounded border border-border/60 bg-muted/40 px-1.5 py-px flex items-center justify-end font-medium min-h-0 min-w-0 overflow-hidden">
-                              <span className={cn("truncate text-right whitespace-nowrap leading-tight", rightCardLinkedTotal >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0 ? "text-green-600 font-semibold" : "")}>
-                                {rightCardLinkedTotal >= currentVoucherAsOnOppositeRows[0].amount && currentVoucherAsOnOppositeRows[0].amount > 0
-                                  ? "Settled"
-                                  : `${formatCurrency(Math.max(0, currentVoucherAsOnOppositeRows[0].amount - rightCardLinkedTotal), { noSuffix: true, noAnimation: true })} Dr`}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex flex-wrap gap-2 items-center">
-                        {/* Same link action as From card — current voucher totals ke saath */}
-                        {showSpendWiseSection && (
-                          <Button
-                            type="button"
-                            onClick={() => selectedContraLeg === "in" ? setIsLinkPaymentOutDialogOpen(true) : setIsLinkPaymentInDialogOpen(true)}
-                            className={cn("w-fit", BTN_SAVE_CLASS)}
-                          >
-                            <Link2 className="h-4 w-4 mr-2" />
-                            {selectedContraLeg === "in" ? "Link Pay Out" : "Link Pay In"}
-                          </Button>
-                        )}
-                        <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-muted-foreground hover:text-foreground" onClick={() => setLinkSectionInfoOpen(true)} aria-label="Link section information">
-                          <Info className="h-4 w-4 shrink-0" />
-                          Read me
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                  {/* Requested UX: remove "current voucher" preview card; keep only From Voucher spend-wise section. */}
                     </div>
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 gap-4">
-                <FormField control={form.control} name="narration" render={({ field }: any) => (<FormItem><FormLabel>Narration</FormLabel><FormControl><Textarea placeholder="e.g., Cash deposited to bank" {...field} /></FormControl><FormMessage /></FormItem>)}/>
-              </div>
+              {/* Narration moved into shared Attach+Narration container above (mobile below, desktop right). */}
             </div>
           </ScrollArea>
 

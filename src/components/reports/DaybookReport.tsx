@@ -432,6 +432,14 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                             </div>
                         </CardHeader>
                         <CardContent className={cn("pb-4", isMobile ? "px-2" : "px-4")}>
+                          {/* Mobile/APK: Daybook bank/cash summary ki horizontal lines ~60% patli — global Table `border-b-[3px]` override */}
+                          <div
+                            className={
+                              isMobile
+                                ? "[&_thead_tr]:!border-b-[1.2px] [&_tbody_tr]:!border-b-[1.2px]"
+                                : undefined
+                            }
+                          >
                            <Table>
                             <TableHeader><TableRow><TableHead className="font-bold">Account</TableHead><TableHead className="text-right font-bold">Yesterdays Balance</TableHead><TableHead className="text-right font-bold text-green-600">Todays In</TableHead><TableHead className="text-right font-bold text-red-600">Todays Out</TableHead><TableHead className="text-right font-bold">Todays Balance</TableHead></TableRow></TableHeader>
                             <TableBody>
@@ -487,9 +495,22 @@ export function DaybookReport({ onFullScreenToggle }: DaybookReportProps) {
                                         <TableCell className={cn("text-right", row.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(row.today)}</TableCell>
                                     </TableRow>
                                 ))}
-                                <TableRow className="font-bold border-t-4 border-foreground"><TableCell>Total</TableCell><TableCell className={cn("text-right", daybookSummary.total.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.yesterday)}</TableCell><TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.total.in, {noSuffix: true})}</TableCell><TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.total.out, {noSuffix: true})}</TableCell><TableCell className={cn("text-right", daybookSummary.total.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.today)}</TableCell></TableRow>
+                                <TableRow
+                                  className={cn(
+                                    "font-bold border-foreground",
+                                    /* Total row top divider: desktop moti line; mobile par ~60% patla */
+                                    isMobile ? "border-t-[1.6px]" : "border-t-4"
+                                  )}
+                                >
+                                  <TableCell>Total</TableCell>
+                                  <TableCell className={cn("text-right", daybookSummary.total.yesterday >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.yesterday)}</TableCell>
+                                  <TableCell className="text-right text-green-600">{formatCurrency(daybookSummary.total.in, {noSuffix: true})}</TableCell>
+                                  <TableCell className="text-right text-red-600">{formatCurrency(daybookSummary.total.out, {noSuffix: true})}</TableCell>
+                                  <TableCell className={cn("text-right", daybookSummary.total.today >= 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(daybookSummary.total.today)}</TableCell>
+                                </TableRow>
                             </TableBody>
                            </Table>
+                          </div>
                         </CardContent>
                     </Card>
                 )}

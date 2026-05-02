@@ -54,6 +54,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 
 import { firestore, storage } from "@/lib/firebase";
 import {
@@ -102,7 +103,9 @@ import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedEr
 import { loadJournalLedgerScopeSnapshot, type JournalScopedLedgerSnapshot } from "@/lib/journalLedgerScopeLoad";
 import { getAllocationTotal, hasPaymentLinks, OPENING_BALANCE_VOUCHER_ID, getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
-import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
+/** Copy chip → parent ko journal row index bhejna hai — runtime import na ho isliye sirf types AddVoucherDialog se. */
+import type { CopyMissingMasterOpts, CopyMasterDraftRequestPayload } from "@/components/vouchers/AddVoucherDialog";
 
 // Entity filter: left of Account; All = show all, else filter account list by entity type
 const ENTITY_OPTIONS = [
@@ -237,6 +240,12 @@ export function CreateJournalForm({
   initialFocusSide,
   /** Compare Side A/B: voucher jis company ka hai — header company se alag ho to account dropdown `useVouchers` se nahi banta. */
   ledgerScopeCompanyId,
+  copySaveTargetCompanyId,
+  copyMismatchCategories,
+  onCopyMissingCategory,
+  isCopyingMissingMasters = false,
+  copyMasterDraftRequest,
+  onRefreshCopyMismatch,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -250,6 +259,13 @@ export function CreateJournalForm({
   isApproving?: boolean;
   initialFocusSide?: "debit" | "credit" | null;
   ledgerScopeCompanyId?: string;
+  copySaveTargetCompanyId?: string;
+  copyMismatchCategories?: string[];
+  /** Copy chip: category ke saath journal line index — source voucher ki usi row ka master pick ho. */
+  onCopyMissingCategory?: (category: string, opts?: CopyMissingMasterOpts) => void;
+  isCopyingMissingMasters?: boolean;
+  copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
+  onRefreshCopyMismatch?: () => void | Promise<void>;
 }) {
   const isMounted = useRef(true);
 
@@ -262,16 +278,22 @@ export function CreateJournalForm({
   const { toast } = useToast();
   const { user, customUser } = useAuth();
   const { company: ctxCompany, companyId: ctxCompanyId, allCompanies } = useCompany();
+  // Copy-draft mode: journal master lists ko selected target company par hard-pin rakho.
+  const forcedLedgerScopeCompanyId = useMemo(
+    () => String(copySaveTargetCompanyId?.trim() || ledgerScopeCompanyId?.trim() || ""),
+    [copySaveTargetCompanyId, ledgerScopeCompanyId]
+  );
   /** Save + numbering: Compare me jis company ka voucher edit ho raha hai (header company se alag ho sakta hai). */
   const effectiveCompanyId = useMemo(
-    () => String(ledgerScopeCompanyId?.trim() || ctxCompanyId || ""),
-    [ledgerScopeCompanyId, ctxCompanyId]
+    // Copy-draft target selected ho to voucher number/account scope usi company par fix karo.
+    () => String(forcedLedgerScopeCompanyId || ctxCompanyId || ""),
+    [forcedLedgerScopeCompanyId, ctxCompanyId]
   );
   const effectiveCompany = useMemo(() => {
-    const sid = ledgerScopeCompanyId?.trim();
+    const sid = forcedLedgerScopeCompanyId;
     if (sid) return allCompanies.find((c) => c.id === sid) ?? ctxCompany ?? null;
     return ctxCompany ?? null;
-  }, [ledgerScopeCompanyId, allCompanies, ctxCompany]);
+  }, [forcedLedgerScopeCompanyId, allCompanies, ctxCompany]);
   const company = effectiveCompany;
   const companyId = effectiveCompanyId;
 
@@ -282,11 +304,12 @@ export function CreateJournalForm({
   /** Header company ≠ compare company: Firestore/SQLite se usi company ki ledger lists. */
   const [scopedLedger, setScopedLedger] = useState<JournalScopedLedgerSnapshot | null>(null);
   useEffect(() => {
-    const sid = ledgerScopeCompanyId?.trim();
-    if (!sid || sid === ctxCompanyId) {
+    const sid = forcedLedgerScopeCompanyId;
+    if (!sid) {
       setScopedLedger(null);
       return;
     }
+    // Copy-draft me sid===ctxCompanyId bhi ho sakta hai; tab bhi explicit snapshot load karke stale old-company lists avoid karo.
     let cancelled = false;
     void loadJournalLedgerScopeSnapshot(sid).then((snap) => {
       if (!cancelled) setScopedLedger(snap);
@@ -294,13 +317,38 @@ export function CreateJournalForm({
     return () => {
       cancelled = true;
     };
-  }, [ledgerScopeCompanyId, ctxCompanyId]);
+  }, [forcedLedgerScopeCompanyId]);
+  /**
+   * Copy-draft master save ke turant baad scoped ledger snapshot dubara fetch — naya party/account/tax dropdown me appear ho.
+   * Bina iske form.setValue accountId set karta hai par allAccountsWithEntity me entry nahi hone se Combobox label nahi dikhata.
+   */
+  const refreshScopedLedger = useCallback(async () => {
+    const sid = forcedLedgerScopeCompanyId;
+    if (!sid) return;
+    try {
+      const snap = await loadJournalLedgerScopeSnapshot(sid);
+      setScopedLedger(snap);
+    } catch {
+      /* ignore: race par form se manual select kar sakte hain */
+    }
+  }, [forcedLedgerScopeCompanyId]);
 
-  const pParties = scopedLedger?.processedPartiesForSelection ?? processedPartiesForSelection;
-  const pStaff = scopedLedger?.processedStaff ?? processedStaff;
-  const pAccounts = scopedLedger?.processedAccounts ?? processedAccounts;
-  const pExpense = scopedLedger?.expenseAccounts ?? expenseAccounts;
-  const pTaxes = scopedLedger?.processedTaxes ?? processedTaxes;
+  // Copy-draft target mode: scoped snapshot load se pehle old useVouchers fallback mat dikhao (stale previous-company options issue).
+  const pParties = copySaveTargetCompanyId
+    ? (scopedLedger?.processedPartiesForSelection ?? [])
+    : (scopedLedger?.processedPartiesForSelection ?? processedPartiesForSelection);
+  const pStaff = copySaveTargetCompanyId
+    ? (scopedLedger?.processedStaff ?? [])
+    : (scopedLedger?.processedStaff ?? processedStaff);
+  const pAccounts = copySaveTargetCompanyId
+    ? (scopedLedger?.processedAccounts ?? [])
+    : (scopedLedger?.processedAccounts ?? processedAccounts);
+  const pExpense = copySaveTargetCompanyId
+    ? (scopedLedger?.expenseAccounts ?? [])
+    : (scopedLedger?.expenseAccounts ?? expenseAccounts);
+  const pTaxes = copySaveTargetCompanyId
+    ? (scopedLedger?.processedTaxes ?? [])
+    : (scopedLedger?.processedTaxes ?? processedTaxes);
 
   const isMobile = useIsMobile();
 
@@ -344,8 +392,19 @@ export function CreateJournalForm({
   const [activeJournalLinkSide, setActiveJournalLinkSide] = useState<"debit" | "credit" | null>(null);
   /** Selected bill-wise card for select feel; jis card pe click kiya usi ka related amount row blink kare. */
   const [selectedBillWiseCard, setSelectedBillWiseCard] = useState<"debit" | "credit" | null>(null);
+  // Journal link cards hidden by default in add/new and non-linked edit; "Show Link" reveals them.
+  const [showLinkSections, setShowLinkSections] = useState(false);
   /** Tracks whether we already applied initial focus for current voucher so we don’t override user selection. */
   const initialFocusAppliedRef = useRef<string | null>(null);
+
+  const resetLinksOnCopyTargetChange = useCallback(() => {
+    setJournalAllocationsBySide({ debit: [], credit: [] });
+    initialJournalAllocationsRef.current = { debit: [], credit: [] };
+    setShowLinkSections(false);
+    setSelectedBillWiseCard(null);
+    setActiveJournalLinkSide(null);
+  }, []);
+  useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
 
   const isEditing = !!voucher;
   const isEditingAndConverting = voucher && voucher.type !== 'journal';
@@ -499,6 +558,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       fetchVoucherNumber();
     }
   }, [isEditing, isEditingAndConverting, fetchVoucherNumber, company]);
+  useEffect(() => {
+    // Copy-draft naya journal (id-less) me target company switch par voucher number ko us company ke latest sequence se resync karo.
+    if (!copySaveTargetCompanyId) return;
+    if (voucher?.id) return;
+    fetchVoucherNumber();
+  }, [copySaveTargetCompanyId, voucher?.id, fetchVoucherNumber]);
   // Keep a single label lookup so bill-wise card can show the exact account row user opened from.
   const accountLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -514,6 +579,26 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
   // Watch current lines once so bill-wise summary card can react instantly to journal edits.
   const watchedLines = useWatch({ control: form.control, name: "lines" });
+  /** Copy-draft: source account mismatch ho tab blank/invalid journal account lines par Copy chip dikhao. */
+  const copyDraftAccountHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
+  const hasSourceAccountMismatch = Boolean(
+    // Journal account picker mixed entity masters consume karta hai; in categories me mismatch bhi account-copy signal hai.
+    copyMismatchCategories?.includes("account") ||
+      copyMismatchCategories?.includes("party") ||
+      copyMismatchCategories?.includes("staff") ||
+      copyMismatchCategories?.includes("tax") ||
+      copyMismatchCategories?.includes("account_bank") ||
+      copyMismatchCategories?.includes("account_expense")
+  );
+  const journalLineNeedsCopyAccount = useCallback(
+    (index: number) => {
+      if (!copyDraftAccountHelpersEnabled || !hasSourceAccountMismatch) return false;
+      const selectedId = String(form.getValues(`lines.${index}.accountId`) || "");
+      if (!selectedId) return true;
+      return !allAccountsWithEntity.some((a) => String(a.value) === selectedId);
+    },
+    [copyDraftAccountHelpersEnabled, hasSourceAccountMismatch, form, allAccountsWithEntity]
+  );
   // Build fast lookups so journal bill-wise can support both Party and Staff account rows.
   const partyIdSet = useMemo(
     () => new Set((pParties || []).map((p: any) => String(p.id))),
@@ -1119,6 +1204,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       credit: resolve("credit"),
     };
   }, [journalBillWiseBySide, partyIdSet, pParties, staffIdSet, pStaff, accountLabelById]);
+  // Detect existing journal links so edit mode vouchers with links always show link cards.
+  const hasJournalBillWiseLinks = useMemo(
+    () => (["debit", "credit"] as const).some((side) =>
+      (journalBillWiseBySide[side]?.rows || []).some((r: any) => Number(r?.linkedOnCurrent ?? 0) > 0)
+    ),
+    [journalBillWiseBySide]
+  );
+  // Match payment forms behavior: add/new -> hidden until click, edit+links -> always visible.
+  const shouldShowJournalLinkSections = showLinkSections || (!!voucher?.id && hasJournalBillWiseLinks);
+  const shouldShowJournalLinkButton = !shouldShowJournalLinkSections;
+  useEffect(() => {
+    // Auto-open only when editing a voucher that already has bill-wise links.
+    if (voucher?.id && hasJournalBillWiseLinks) {
+      setShowLinkSections(true);
+      return;
+    }
+    // New/add form should start collapsed every time.
+    if (!voucher?.id) {
+      setShowLinkSections(false);
+    }
+  }, [voucher?.id, hasJournalBillWiseLinks]);
   // Open side-specific linking dialog so Debit card links to Credit vouchers and Credit card links to Debit vouchers.
   const handleJournalAddLinkClick = useCallback((side: "debit" | "credit") => {
     setSelectedBillWiseCard(side);
@@ -1153,7 +1259,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       e.preventDefault();
       void form.handleSubmit(
         async (data) => {
-          onVoucherAction?.("saved", options.saveAndNew);
           await processAndSaveRef.current?.(data, options.saveAndNew ?? false, options.approveAfterSave);
         },
         (errors) => {
@@ -1161,7 +1266,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       )(e);
     },
-    [form, onVoucherAction]
+    [form]
   );
   
   async function processAndSave(data: JournalFormValues, saveAndNew: boolean = false, approveAfterSave?: boolean) {
@@ -1421,6 +1526,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
 
         if (approveAfterSave && voucher?.id) onApprove?.();
+
+        onVoucherAction?.("saved", saveAndNew, savedDoc.id);
     } catch (error: any) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { id: toastId, description: error.message });
@@ -1602,6 +1709,35 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }, 100);
     }
   };
+  /** Journal line Copy category: row entity ke hisaab se parent copy helper ko correct master type bhejo. */
+  const getJournalCopyCategoryForLine = useCallback(
+    (index: number, lineEntityType?: string) => {
+      const et = String(lineEntityType || "").trim();
+      if (et === "party") return "party";
+      if (et === "staff") return "staff";
+      if (et === "tax") return "tax";
+      if (et === "expense") return "account_expense";
+      if (et === "account") return "account_bank";
+      const selectedId = String(form.getValues(`lines.${index}.accountId`) || "");
+      if (selectedId) {
+        const matched = allAccountsWithEntity.find((a) => String(a.value) === selectedId);
+        const mt = String(matched?.entityType || "").trim();
+        if (mt === "party") return "party";
+        if (mt === "staff") return "staff";
+        if (mt === "tax") return "tax";
+        if (mt === "expense") return "account_expense";
+        if (mt === "account") return "account_bank";
+      }
+      // Entity unknown: mismatch hints se best category choose karo.
+      if (copyMismatchCategories?.includes("account_bank")) return "account_bank";
+      if (copyMismatchCategories?.includes("account_expense")) return "account_expense";
+      if (copyMismatchCategories?.includes("party")) return "party";
+      if (copyMismatchCategories?.includes("staff")) return "staff";
+      if (copyMismatchCategories?.includes("tax")) return "tax";
+      return "account";
+    },
+    [form, allAccountsWithEntity, copyMismatchCategories]
+  );
 
   /** Journal line Account combobox: add-new-* → create dialog; warna account select + entity sync */
   const handleJournalLineAccountChange = (
@@ -1620,6 +1756,114 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const acc = allAccountsWithEntity.find((a) => a.value === value);
     if (acc?.entityType) form.setValue(`lines.${index}.entityType`, acc.entityType, { shouldDirty: true });
   };
+  /**
+   * Tab-switch (e.g. Contra→Journal→Contra) par form fresh mount hota hai.
+   * Parent ki state me bachi `copyMasterDraftRequest` se prefill dialog auto-open na ho —
+   * sirf user ke Copy chip click ke baad arrived REQUEST par hi dialog khule.
+   */
+  const hasInitializedCopyRequestRef = useRef(false);
+  /** Copy-draft request consumer (Journal): parent se source row payload aane par proper create dialog prefill kholo. */
+  useEffect(() => {
+    // First mount-time run skip karo — request agar pehle se set thi to bhi dialog na khole; future updates par hi react karo.
+    if (!hasInitializedCopyRequestRef.current) {
+      hasInitializedCopyRequestRef.current = true;
+      return;
+    }
+    if (!copyMasterDraftRequest) return;
+    const req = copyMasterDraftRequest;
+    /** Parent ne jo journal row Copy dabayi — async gap me galat row par save na lage. */
+    if (typeof req.applyTarget?.journalLineIndex === "number") {
+      setPendingCreateLineIndex(req.applyTarget.journalLineIndex);
+    }
+    const targetLabel = req.targetCompanyName || "company";
+    const payload = req.sourceRowPayload;
+    const sc = String(req.sourceCollection || "");
+    const nm = String(req.sourceName || "").trim();
+    // Copy-draft parity with Payment forms: source row payload mile to full prefill use karo (attachments सहित).
+    if (payload && sc === "parties") {
+      setIsCreatePartyOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-party-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Party prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    // Journal line expense entity ke liye source ledger row ka full payload open karo.
+    if (payload && sc === "expense_accounts") {
+      setIsCreateExpenseOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-expense-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Expense account prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "bank_accounts") {
+      setIsCreateAccountOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-bank-account-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Bank account prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "taxes") {
+      setIsCreateTaxOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-tax-from-row", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Tax prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (payload && sc === "staff") {
+      setIsCreateStaffOpen(true);
+      setTimeout(() => {
+        document.dispatchEvent(new CustomEvent("prefill-create-staff-full", { detail: { rowPayload: payload } }));
+      }, 90);
+      sonnerToast.message(`Staff prefilled from source -> save adds to "${targetLabel}".`);
+      return;
+    }
+    if (!nm) return;
+    switch (req.category) {
+      case "party":
+        setIsCreatePartyOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-party-name", { detail: nm })), 80);
+        sonnerToast.message(`Party prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "staff":
+        setIsCreateStaffOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-staff-name", { detail: nm })), 80);
+        sonnerToast.message(`Staff prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "tax":
+        setJournalTaxPrefillName(nm);
+        setIsCreateTaxOpen(true);
+        sonnerToast.message(`Tax prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "account_expense":
+        setIsCreateExpenseOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Expense account prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "account":
+        // Generic account copy chip ko source collection ke hisaab se bank vs expense create dialog me route karo.
+        if (sc === "expense_accounts") {
+          setIsCreateExpenseOpen(true);
+          setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-expense-account-name", { detail: nm })), 80);
+          sonnerToast.message(`Expense account prefilled -> save adds to "${targetLabel}".`);
+          return;
+        }
+        setIsCreateAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-bank-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Bank account prefilled -> save adds to "${targetLabel}".`);
+        return;
+      case "account_bank":
+        setIsCreateAccountOpen(true);
+        setTimeout(() => document.dispatchEvent(new CustomEvent("prefill-create-bank-account-name", { detail: nm })), 80);
+        sonnerToast.message(`Bank account prefilled -> save adds to "${targetLabel}".`);
+        return;
+      default:
+        break;
+    }
+  }, [copyMasterDraftRequest]);
 
   // Apply newly created account to the requested row to avoid extra debit rows being appended.
   const applyCreatedAccountToPendingRow = useCallback((id: string) => {
@@ -1679,7 +1923,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     const colCount = (hasPrefix ? 1 : 0) + 1 + (hasDateBS ? 1 : 0) + (hasDateAD ? 1 : 0);
                     return (
                       <>
-                        <div className="grid gap-[2px] w-full min-w-0 max-w-full" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
+                        {/* Journal header section (mobile): Voucher + Date gets dedicated sky ribbon tone. */}
+                        <div className="grid gap-[2px] w-full min-w-0 max-w-full rounded-lg border border-sky-300/80 bg-sky-50 p-2" style={{ gridTemplateColumns: `repeat(${colCount}, minmax(0, 1fr))` }}>
                           <FormField
                             control={form.control}
                             name="voucherNumber"
@@ -1757,7 +2002,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               ) : (
                 <>
                   {/* PC View: Voucher No. and Date */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:justify-end md:items-end">
+                  {/* Journal header section (desktop): Voucher + Date gets dedicated sky ribbon tone. */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:justify-end md:items-end rounded-lg border border-sky-300/80 bg-sky-50 p-3">
                     {/* Voucher No. */}
                     <FormField
                       control={form.control}
@@ -1832,7 +2078,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {isMobile ? (
                 <>
                   {/* Mobile: Journal Lines */}
-                  <div className="space-y-4 px-[2px]">
+                  {/* Journal entries section (mobile): rows grouped inside soft emerald ribbon container. */}
+                  <div className="space-y-4 px-[2px] rounded-lg border border-emerald-300/80 bg-emerald-50 p-2">
                     {fields.map((line, index) => {
                       const accountId = form.watch(`lines.${index}.accountId`);
                       const entityType = form.watch(`lines.${index}.entityType`) || "";
@@ -1848,8 +2095,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div
                           key={line.id}
                           className={cn(
-                            "flex flex-wrap gap-[2px] items-start border px-[2px] py-2 rounded-md",
-                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
+                            // Remove inner card chrome on each row; keep only outer section container styling.
+                            "flex flex-wrap gap-[2px] items-start px-[2px] py-2",
+                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60" : "bg-pink-50/60"),
                             selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
                           )}
                         >
@@ -1892,19 +2140,42 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lines.${index}.accountId`}
                             render={({ field }: any) => (
                               <FormItem className="flex-1 min-w-0 overflow-hidden">
-                                <div className="min-w-0 w-full overflow-hidden [&_button]:h-9 [&_button]:text-xs">
-                                  <Combobox
-                                    triggerClassName={cn(
-                                      "w-full min-w-0 h-9",
-                                      linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
-                                    )}
-                                    options={filteredAccounts}
-                                    value={field.value}
-                                    onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
-                                    placeholder="Select account"
-                                    addNewLabels={getJournalLineAddNewLabels(entityType)}
-                                    disabled={!isFormEditing || deleteDisabledWhenLinked}
-                                  />
+                                <div className="min-w-0 w-full flex items-center gap-1">
+                                  <div className="min-w-0 flex-1 overflow-hidden [&_button]:h-9 [&_button]:text-xs">
+                                    <Combobox
+                                      triggerClassName={cn(
+                                        "w-full min-w-0 h-9",
+                                        linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200"),
+                                        // Copy pending state: field ko force red rakho; account select hote hi condition false ho kar normal.
+                                        journalLineNeedsCopyAccount(index) && "!border-red-400 !bg-red-100/80 !text-red-700"
+                                      )}
+                                      options={filteredAccounts}
+                                      value={field.value}
+                                      onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
+                                      placeholder="Select account"
+                                      addNewLabels={getJournalLineAddNewLabels(entityType)}
+                                      disabled={!isFormEditing || deleteDisabledWhenLinked}
+                                    />
+                                  </div>
+                                  {journalLineNeedsCopyAccount(index) && (
+                                    // Mobile: duplicate red Account label hata kar Copy chip ko select-box line me fit rakho.
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                      onClick={() => {
+                                        setPendingCreateLineIndex(index);
+                                        // Same row index parent ko bhejo ta snapshot.lines[index].accountId hi prefer ho (Dr ≠ Cr mix na ho).
+                                        onCopyMissingCategory?.(getJournalCopyCategoryForLine(index, entityType), {
+                                          journalLineIndex: index,
+                                        });
+                                      }}
+                                      disabled={isCopyingMissingMasters}
+                                    >
+                                      {isCopyingMissingMasters ? "…" : "Copy"}
+                                    </Button>
+                                  )}
                                 </div>
                                 {balance !== undefined && (
                                   <div className={cn("text-[10px] font-semibold mt-1", balance >= 0 ? "text-green-600" : "text-red-600")}>
@@ -1982,15 +2253,15 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       );
                     })}
-                  </div>
-                  {/* Mobile: Totals only; add-row action intentionally removed for journal flow. */}
-                  <div className="flex flex-col gap-2 px-[2px]">
-                    <div className="flex gap-2">
-                      <div className="bg-green-100 px-3 py-2 rounded text-xs font-medium">
-                        Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
-                      </div>
-                      <div className="bg-red-100 px-3 py-2 rounded text-xs font-medium">
-                        Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                    {/* Mobile: totals ko isi outer journal section container ke andar hi rakho. */}
+                    <div className="flex flex-col gap-2 px-[2px] pt-1">
+                      <div className="flex gap-2 justify-end">
+                        <div className="bg-green-100 px-3 py-2 rounded text-xs font-medium">
+                          Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                        </div>
+                        <div className="bg-red-100 px-3 py-2 rounded text-xs font-medium">
+                          Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1998,7 +2269,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               ) : (
                 <>
                   {/* Desktop: Journal Lines */}
-                  <div className="space-y-4">
+                  {/* Journal entries section (desktop): rows grouped inside soft emerald ribbon container. */}
+                  <div className="space-y-4 rounded-lg border border-emerald-300/80 bg-emerald-50 p-3">
                     <div className="grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-end">
                       <FormLabel>Entity</FormLabel>
                       <FormLabel>Account</FormLabel>
@@ -2023,8 +2295,9 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <div
                           key={line.id}
                           className={cn(
-                            "grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-start border p-2 rounded-md",
-                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60 border-green-200" : "bg-pink-50/60 border-pink-200"),
+                            // Remove inner card chrome on each row; keep only outer section container styling.
+                            "grid grid-cols-[minmax(100px,1fr)_2fr_auto_auto_1fr_48px] gap-2 items-start p-2",
+                            linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50/60" : "bg-pink-50/60"),
                             selectedCardRelatedRowIndex === index && "animate-spend-wise-balance-blink"
                           )}
                         >
@@ -2067,18 +2340,42 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             name={`lines.${index}.accountId`}
                             render={({ field }: any) => (
                               <FormItem>
-                                <Combobox
-                                  triggerClassName={cn(
-                                    "h-9",
-                                    linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200")
+                                <div className="min-w-0 w-full flex items-center gap-1">
+                                  <div className="min-w-0 flex-1 overflow-hidden">
+                                    <Combobox
+                                      triggerClassName={cn(
+                                        "h-9 w-full min-w-0",
+                                        linkedPartyLineIndices.has(index) && (lineType === "debit" ? "bg-green-50 border-green-200" : "bg-pink-50 border-pink-200"),
+                                        // Copy pending state: desktop field bhi force red; select ke baad auto-normal.
+                                        journalLineNeedsCopyAccount(index) && "!border-red-400 !bg-red-100/80 !text-red-700"
+                                      )}
+                                      options={filteredAccounts}
+                                      value={field.value}
+                                      onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
+                                      placeholder="Select account"
+                                      addNewLabels={getJournalLineAddNewLabels(entityType)}
+                                      disabled={!isFormEditing || deleteDisabledWhenLinked}
+                                    />
+                                  </div>
+                                  {journalLineNeedsCopyAccount(index) && (
+                                    // Desktop: red row label ki jagah Copy chip ko account field ki same line me rakho.
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-8 shrink-0 rounded-full px-2 text-[10px] leading-none !border-red-500 !bg-red-100 !text-red-700 hover:!bg-red-200 hover:!text-red-800"
+                                        onClick={() => {
+                                          setPendingCreateLineIndex(index);
+                                          onCopyMissingCategory?.(getJournalCopyCategoryForLine(index, entityType), {
+                                            journalLineIndex: index,
+                                          });
+                                        }}
+                                      disabled={isCopyingMissingMasters}
+                                    >
+                                      {isCopyingMissingMasters ? "…" : "Copy"}
+                                    </Button>
                                   )}
-                                  options={filteredAccounts}
-                                  value={field.value}
-                                  onChange={(value, newName) => handleJournalLineAccountChange(index, field, value, newName)}
-                                  placeholder="Select account"
-                                  addNewLabels={getJournalLineAddNewLabels(entityType)}
-                                  disabled={!isFormEditing || deleteDisabledWhenLinked}
-                                />
+                                </div>
                                 {balance !== undefined && (
                                   <div className={cn("text-xs font-semibold mt-1", balance >= 0 ? "text-green-600" : "text-red-600")}>
                                     Bal: {formatCurrencyForPrint(balance, { showDrCr: true, noAnimation: true })}
@@ -2173,20 +2470,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         </div>
                       );
                     })}
-                  </div>
-
-                  {/* Desktop: Totals only; add-row action intentionally removed for journal flow. */}
-                  <div className="flex justify-end items-center mt-3 gap-4">
-                    <div className="bg-green-100 px-4 py-2 rounded text-sm font-medium">
-                      Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
-                    </div>
-                    <div className="bg-red-100 px-4 py-2 rounded text-sm font-medium">
-                      Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                    {/* Desktop: totals ko isi outer journal section container ke andar hi rakho. */}
+                    <div className="flex justify-end items-center mt-3 pt-1 gap-4">
+                      <div className="bg-green-100 px-4 py-2 rounded text-sm font-medium">
+                        Total Debit: {form.watch("lines").filter(l => l.type === "debit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                      </div>
+                      <div className="bg-red-100 px-4 py-2 rounded text-sm font-medium">
+                        Total Credit: {form.watch("lines").filter(l => l.type === "credit").reduce((sum, l) => sum + (Number(l.amount) || 0), 0).toFixed(2)}
+                      </div>
                     </div>
                   </div>
                 </>
               )}
               {/* File lines ke baad, link cards se pehle — pehle attach phir link; same UX as payment/contra */}
+              {/* Attachment + narration ko same ribbon tone do for section-wise visual consistency. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start min-w-0 rounded-lg border border-indigo-300/80 bg-indigo-50 p-3">
               <FormItem>
                 <FormLabel>Attach Files (Optional)</FormLabel>
                 {showPdfAsImageToggle && (
@@ -2247,23 +2545,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 control={form.control}
                 name="narration"
                 render={({ field }: any) => (
-                  <FormItem>
+                  <FormItem className="min-w-0">
                     <FormLabel>Overall Narration</FormLabel>
                     <FormControl>
-                      <Textarea placeholder="e.g. Salary expense for the month of Baisakh" {...field} disabled={!isFormEditing}/>
+                      {/* Overall narration: static dialog me bhi poora text — resize + scroll */}
+                      <Textarea
+                        placeholder="e.g. Salary expense for the month of Baisakh"
+                        {...field}
+                        disabled={!isFormEditing}
+                        className={cn(VOUCHER_NARRATION_TEXTAREA_CLASS)}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+              </div>
               {/* Link for bill wise: dono side se 5px inset taaki select ring dikhe. */}
               <div className="space-y-3 w-full max-w-full min-w-0 mb-[10px] px-[5px]">
-                  {(["debit", "credit"] as const).map((sideKey) => {
+                  {shouldShowJournalLinkButton && (
+                    <div className="pb-1">
+                      {/* One-click reveal keeps Journal form cleaner until user needs linking. */}
+                      <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkSections(true)}>Show Link</Button>
+                    </div>
+                  )}
+                  {shouldShowJournalLinkSections && (["debit", "credit"] as const).map((sideKey) => {
                     const sideData = journalBillWiseBySide[sideKey];
                     const sideLabel = sideKey === "debit" ? "debit" : "credit";
                     const sideAccountLabel = sideData.sideLine?.partyId ? (accountLabelById.get(sideData.sideLine.partyId) || "—") : "";
                     const isDebitCard = sideKey === "debit";
-                    const cardBg = isDebitCard ? "bg-green-50/40 border-green-200" : "bg-pink-50/40 border-pink-200";
+                    // Keep same block-wise color style: debit green tone, credit pink tone.
+                    const cardBg = isDebitCard ? "bg-green-50 border-green-300/80" : "bg-rose-50 border-rose-300/80";
+                    // Fail-safe colors: even if utility cache misses, debit/credit card tones remain visible.
+                    const cardStyle = isDebitCard
+                      ? { backgroundColor: "#f0fdf4", borderColor: "#86efac" }
+                      : { backgroundColor: "#fff1f2", borderColor: "#fda4af" };
                     const linkAccountBox = isDebitCard ? "border-green-200 bg-green-50/40 text-green-800" : "border-pink-200 bg-pink-50/40 text-pink-800";
                     return (
                       <div
@@ -2289,6 +2605,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           cardBg,
                           selectedBillWiseCard === sideKey && "ring-2 ring-primary/60 ring-offset-2 shadow-md"
                         )}
+                        style={cardStyle}
                       >
                         {/* Side label required by UX: show (debit)/(credit) directly in bill-wise title. */}
                         <div className="flex items-center gap-2 font-semibold border-b border-border/60 pb-2">
@@ -2559,18 +2876,22 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setActiveJournalLinkSide(null);
         }}
       />
-      <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
-      <CreateBankAccountDialog onAccountCreated={(id) => { setIsCreateAccountOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
-      <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); applyCreatedAccountToPendingRow(id); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]} />
+      {/*
+        Copy-draft master save ke baad: pehle row me id set, fir scoped ledger refresh (target company me naya master),
+        fir mismatch recount (red Copy chip auto-hide). Bina ledger refresh ke Combobox naye id ka label nahi dikhata.
+      */}
+      <CreatePartyDialog onPartyCreated={(id) => { setIsCreatePartyOpen(false); applyCreatedAccountToPendingRow(id); void refreshScopedLedger(); void onRefreshCopyMismatch?.(); }} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen} />
+      <CreateBankAccountDialog onAccountCreated={(id) => { setIsCreateAccountOpen(false); applyCreatedAccountToPendingRow(id); void refreshScopedLedger(); void onRefreshCopyMismatch?.(); }} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen} />
+      <CreateStaffDialog onStaffCreated={(id) => { setIsCreateStaffOpen(false); applyCreatedAccountToPendingRow(id); void refreshScopedLedger(); void onRefreshCopyMismatch?.(); }} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen} groups={[]} />
       <CreateExpenseAccountDialog
         defaultGroupType="expense"
-        onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); applyCreatedAccountToPendingRow(id); }}
+        onExpenseAccountCreated={(id) => { setIsCreateExpenseOpen(false); applyCreatedAccountToPendingRow(id); void refreshScopedLedger(); void onRefreshCopyMismatch?.(); }}
         isOpen={isCreateExpenseOpen}
         onOpenChange={setIsCreateExpenseOpen}
       />
       <CreateTaxDialog
         prefillTaxName={journalTaxPrefillName}
-        onTaxCreated={(id) => { setIsCreateTaxOpen(false); setJournalTaxPrefillName(""); applyCreatedAccountToPendingRow(id); }}
+        onTaxCreated={(id) => { setIsCreateTaxOpen(false); setJournalTaxPrefillName(""); applyCreatedAccountToPendingRow(id); void refreshScopedLedger(); void onRefreshCopyMismatch?.(); }}
         isOpen={isCreateTaxOpen}
         onOpenChange={(open) => {
           setIsCreateTaxOpen(open);

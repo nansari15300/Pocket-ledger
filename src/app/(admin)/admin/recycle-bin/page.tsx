@@ -19,6 +19,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { format } from "date-fns";
 import { useCompany } from "@/hooks/useCompany";
 import { deleteCompanyComplete, restoreCompany } from "@/lib/actions/deleteCompanyAction";
+import { adminPermanentDeleteCompanyOnServer } from "@/lib/adminRecycleBinApiClient";
 import { getRecycleBinConfig, setRecycleBinConfig, type RecycleBinConfig } from "@/lib/recycleBinConfig";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -49,6 +50,23 @@ export default function AdminRecycleBinPage() {
     const [userEmails, setUserEmails] = useState<Record<string, string>>({});
     /** users/{uid} se displayName — "Deleted by" ke liye (company delete karne wala user) */
     const [deletedByUserNamesMap, setDeletedByUserNamesMap] = useState<Record<string, string>>({});
+
+    /**
+     * Hidden tab/company permanent delete: pehle server Admin API se hard delete force karo.
+     * Fallback sirf tab jab server admin config unavailable ho (503), taaki true delete guarantee rahe.
+     */
+    const hardDeleteCompanyAsSuperAdmin = async (companyId: string): Promise<{ success: boolean; error?: string }> => {
+        if (!user) return { success: false, error: "Authentication required to delete." };
+        const serverRes = await adminPermanentDeleteCompanyOnServer({
+            companyId,
+            getIdToken: () => user.getIdToken(),
+        });
+        if (serverRes.ok) return { success: true };
+        if (serverRes.ok === false && serverRes.tryClientFallback) {
+            return deleteCompanyComplete(companyId, user.uid);
+        }
+        return { success: false, error: serverRes.ok === false ? (serverRes.error || "Server hard delete failed.") : "Server hard delete failed." };
+    };
 
     // Fetch user login emails for company owners (for super admin list)
     useEffect(() => {
@@ -213,7 +231,11 @@ export default function AdminRecycleBinPage() {
         (async () => {
             for (const item of toDelete) {
                 try {
-                    await deleteCompanyComplete(item.id, user.uid);
+                    // Auto cleanup (Hidden tab): direct server hard delete so item normal app me wapas na aaye.
+                    const result = await hardDeleteCompanyAsSuperAdmin(item.id);
+                    if (!result.success) {
+                        throw new Error(result.error || "Auto delete failed");
+                    }
                 } catch (e) {
                     console.warn("Auto-delete failed:", item.id, e);
                 }
@@ -292,8 +314,8 @@ export default function AdminRecycleBinPage() {
         setIsProcessing(true);
         try {
             if (item.isRootCollection) {
-                if (!user) throw new Error("Authentication required to delete.");
-                const result = await deleteCompanyComplete(item.id, user.uid);
+                // Hidden tab action: super-admin delete => server hard delete first.
+                const result = await hardDeleteCompanyAsSuperAdmin(item.id);
                 if (!result.success) {
                     throw new Error(result.error);
                 }
@@ -323,7 +345,8 @@ export default function AdminRecycleBinPage() {
 
         try {
             for (const item of deletedItems) {
-                const result = await deleteCompanyComplete(item.id, user.uid);
+                // Empty Bin from admin recycle-bin: each company ko server se hard delete karo.
+                const result = await hardDeleteCompanyAsSuperAdmin(item.id);
                 if (!result.success) {
                     toast({ variant: "destructive", title: "Error", description: result.error || "Failed to delete company." });
                     setIsProcessing(false);

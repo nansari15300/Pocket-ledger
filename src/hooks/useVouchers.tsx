@@ -29,8 +29,10 @@ import {
 } from "@/lib/firestoreToLocalCompanyPull";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded } from "@/lib/serverBackupEncryption";
+import { stripLocalMirrorMetaForUiRow } from "@/lib/localMirrorServerMeta";
 import { parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { getAllocatedByVoucherId, getAllocatedByVoucherIdFromPaymentOuts, getAllocatedByVoucherIdFromPurchase, getAllocatedByVoucherIdFromSale, getAllocatedByVoucherIdFromJournal, getOutgoingAllocatedToOpposite, getPaymentStatus as getPaymentStatusResult } from "@/lib/payment-allocation-utils";
+import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 
 /** Offline company: vouchers me `userId` aksar owner ka Firebase uid ya `local` — sirf `user.uid` match se shared user ko 0 rows. */
 function localCompanyRoleAllowsViewAll(role: string | undefined): boolean {
@@ -99,13 +101,26 @@ function sortDocsByDateField(data: any[], orderByField: string): any[] {
   return copy;
 }
 
+/** React/forms me SQLite-only mirror META leak na ho — runtime list state sirf strip. */
+function stripMirrorMetaForEntityListRow(row: any): any {
+  if (!row || typeof row !== "object") return row;
+  return stripLocalMirrorMetaForUiRow(row as Record<string, unknown>);
+}
+
+/** SQLite bootstrap / prefetch: Firestore-merge jaisi strip taaki META forms me na jaye. */
+function sqliteCachedRowsForSetter(cached: any[], orderByField?: string): any[] {
+  const base = orderByField ? sortDocsByDateField(cached, orderByField) : cached;
+  return base.map(stripMirrorMetaForEntityListRow);
+}
+
 /** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
 function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
   if (!cached.length) return prev;
   const map = new Map<string, any>(prev.map((v: any) => [v.id, v]));
   for (const v of cached) map.set(v.id, v);
   const merged = [...map.values()];
-  return orderByField ? sortDocsByDateField(merged, orderByField) : merged;
+  const sorted = orderByField ? sortDocsByDateField(merged, orderByField) : merged;
+  return sorted.map(stripMirrorMetaForEntityListRow);
 }
 
 type CloudBackedCompanyShape = {
@@ -155,6 +170,8 @@ const VoucherContext = createContext<VoucherContextType>({
 
 // Helper for generic state setters
 type StateSetter<T> = React.Dispatch<React.SetStateAction<T[]>>;
+/** Recycle Bin safety: isDeleted=true row app ke normal screens par kabhi na dikhe. */
+const isAliveDoc = (row: any) => row?.isDeleted !== true;
 
 export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const { companyId, company, clearCompanyId } = useCompany();
@@ -176,6 +193,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   // Apply View Own / View All Records: show only own vouchers when user doesn't have view_all_records
   const viewAllRecords = can("view_all_records");
   const vouchersForDisplay = useMemo(() => {
+    // Defensive guard: agar stale source se deleted voucher aa bhi gaya, view layer se hata do.
+    const activeVouchers = (vouchers || []).filter(isAliveDoc);
     if (!user?.uid) return [];
     const localUser =
       isLocalCompanySelected && companyId ? getLocalAuthUser(companyId) : null;
@@ -184,14 +203,14 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       isLocalCompanySelected &&
       !!localUser &&
       localCompanyRoleAllowsViewAll(localUser.role);
-    if (viewAllRecords || localStaffSeeAll) return vouchers;
+    if (viewAllRecords || localStaffSeeAll) return activeVouchers;
 
     // Local + viewer/data-entry: apni rows — userId local id / `local` / Firebase uid
     if (isLocalCompanySelected && localUser?.id) {
       const uid = String(user.uid);
       const lid = String(localUser.id);
       const lname = (localUser.username || "").toLowerCase().trim();
-      return vouchers.filter((v) => {
+      return activeVouchers.filter((v) => {
         const vid = v.userId != null ? String(v.userId) : "";
         if (vid === uid || vid === lid) return true;
         if (lname && vid.toLowerCase() === lname) return true;
@@ -200,7 +219,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       });
     }
 
-    return vouchers.filter((v) => v.userId === user.uid);
+    return activeVouchers.filter((v) => v.userId === user.uid);
   }, [vouchers, viewAllRecords, user?.uid, isLocalCompanySelected, companyId, localAuthEpoch]);
   
   const [parties, setParties] = useState<Party[]>([]);
@@ -387,7 +406,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
               .then((cached) => {
                 if (cancelled) return;
-                setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+                setter(sqliteCachedRowsForSetter(cached, orderByField));
               })
               .catch(() => {})
           )
@@ -414,7 +433,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
               .then((cached) => {
                 if (cancelled) return;
-                setter(orderByField ? sortDocsByDateField(cached, orderByField) : cached);
+                setter(sqliteCachedRowsForSetter(cached, orderByField));
               })
               .catch(() => {})
           )
@@ -473,7 +492,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 orderByField
               );
               if (!remoteData.length) continue;
-              setter(orderByField ? sortDocsByDateField(remoteData, orderByField) : remoteData);
+              setter(sqliteCachedRowsForSetter(remoteData, orderByField));
             } catch {
               /* onSnapshot neeche retry */
             }
@@ -544,7 +563,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 preferLocalSqliteWhenIdsConflict: preferLocal,
               });
             }
-            setter(dataForUi);
+            // Mirror META sirf SQLite purge/orphans ke liye — React voucher/party lists me nahin dikhao
+            setter(Array.isArray(dataForUi) ? dataForUi.map(stripMirrorMetaForEntityListRow) : dataForUi);
             // Local company mode: har snapshot ke baad SQLite cache update (offline + invoice relations).
             if (shouldUseLocalCompanyData && !isGroup) {
               const debounceKey = `${companyId}::${path}`;
@@ -569,6 +589,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             // PERMISSION_DENIED: Owner भए companyId clear नगर्ने (Settings लूप रोक्न; rules/auth timing को कारण पनि deny आउन सक्छ)।
             if (error?.code === 'permission-denied' || error?.code === 'PERMISSION_DENIED' || (error?.message && String(error.message).includes('permission'))) {
               console.warn(`[PERMISSION_DENIED TRACK] source=useVouchers path=companies/${companyId}/${path}`, { companyId, path, code: error?.code });
+              if (isLocalOnlyMode()) {
+                // Static/local mode: transient rules/auth race par company clear karne se app home redirect ho jata hai.
+                console.warn(`[Firestore] PERMISSION_DENIED in local mode for path: companies/${companyId}/${path}. Skipping clearCompanyId to keep current screen stable.`);
+                return;
+              }
               const co = companyRef.current;
               // company null hone par clear na karein – ownership check nahi ho sakta, Settings redirect loop avoid
               if (!co) {
@@ -577,6 +602,12 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               }
               const isOwner = co.ownerId === user?.uid || (!!co.ownerEmail && !!user?.email && co.ownerEmail.toLowerCase().trim() === user.email.toLowerCase().trim());
               if (!isOwner) {
+                if (shouldSuppressTransientCompanyClear()) {
+                  console.warn(
+                    `[Firestore] PERMISSION_DENIED (shared user): skip clearCompanyId during APK save shield — companies/${companyId}/${path}`
+                  );
+                  return;
+                }
                 console.warn(`[Firestore] PERMISSION_DENIED for path: companies/${companyId}/${path}. Clearing invalid company selection.`, { companyId, path });
                 try { clearCompanyId(); } catch (_) {}
               } else {
@@ -655,45 +686,51 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       listCompanyDocsFromBrowserDb(companyId, coll)
         .then((cached) => {
           if (!cached.length) return;
+          // Browser DB notify merge: deleted rows ko rehydrate hone se roko (sirf Recycle Bin me visible).
+          const aliveCached = (cached as any[]).filter(isAliveDoc);
           switch (coll) {
             case "vouchers":
-              setVouchers((prev) => mergeEntityListsById(prev, cached, "date"));
+              setVouchers((prev) =>
+                mergeEntityListsById(prev.filter(isAliveDoc), aliveCached, "date").filter(isAliveDoc)
+              );
               break;
             case "parties":
-              setParties((prev) => mergeEntityListsById(prev, cached));
+              setParties((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "staff":
-              setStaff((prev) => mergeEntityListsById(prev, cached));
+              setStaff((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "bank_accounts":
-              setAccounts((prev) => mergeEntityListsById(prev, cached));
+              setAccounts((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "taxes":
-              setTaxes((prev) => mergeEntityListsById(prev, cached));
+              setTaxes((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "expense_accounts":
-              setUnprocessedExpenseAccounts((prev) => mergeEntityListsById(prev, cached));
+              setUnprocessedExpenseAccounts((prev) =>
+                mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc)
+              );
               break;
             case "items":
-              setItems((prev) => mergeEntityListsById(prev, cached));
+              setItems((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "item_groups":
-              setItemGroups((prev) => mergeEntityListsById(prev, cached));
+              setItemGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "groups":
-              setGroups((prev) => mergeEntityListsById(prev, cached));
+              setGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "account_groups":
-              setAccountGroups((prev) => mergeEntityListsById(prev, cached));
+              setAccountGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "staff_groups":
-              setStaffGroups((prev) => mergeEntityListsById(prev, cached));
+              setStaffGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "tax_groups":
-              setTaxGroups((prev) => mergeEntityListsById(prev, cached));
+              setTaxGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             case "expense_groups":
-              setExpenseGroups((prev) => mergeEntityListsById(prev, cached));
+              setExpenseGroups((prev) => mergeEntityListsById(prev.filter(isAliveDoc), aliveCached).filter(isAliveDoc));
               break;
             default:
               break;
@@ -1386,7 +1423,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const value = useMemo(() => {
     const currentData = {
         vouchers: vouchersForDisplay,
-        vouchersAll: vouchers,
+        // `vouchersAll` bhi alive-only rakho; reports/status logic me deleted voucher leak na ho.
+        vouchersAll: vouchers.filter(isAliveDoc),
         loading,
         processedParties, 
         processedPartiesForSelection, 
@@ -1417,23 +1455,38 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     overdueTransactions, hasOverdueTransactions
   ]);
 
+  /** Jis company ka data last stable render me dikha (same-company refresh vs company switch alag karte hain). */
+  const lastStableDisplayCompanyIdRef = useRef<string | null>(null);
+
   // Update ref in useEffect to avoid accessing refs during render
   useEffect(() => {
     if (!loading) {
       previousData.current = value;
+      // Loading complete: ab is company ka snapshot “stable” maan sakte hain (nested dialog target change ke baad bhi).
+      lastStableDisplayCompanyIdRef.current = companyId ? String(companyId) : null;
     }
-  }, [loading, value]);
+  }, [loading, value, companyId]);
 
   // Use state to track the display value to avoid ref access during render
   const [displayValue, setDisplayValue] = useState(() => value);
 
   useEffect(() => {
     if (loading) {
-      setDisplayValue({ ...previousData.current, loading: true });
+      const sameCompany =
+        lastStableDisplayCompanyIdRef.current != null &&
+        companyId != null &&
+        String(lastStableDisplayCompanyIdRef.current) === String(companyId);
+      // Sirf same company par purana snapshot + loading: UI flicker kam. Company switch (e.g. voucher dialog target)
+      // par purani company ke vouchers mat dikhayo — bill-wise/spend-wise counts + forms galat company ke ho jate the.
+      if (sameCompany) {
+        setDisplayValue({ ...previousData.current, loading: true });
+      } else {
+        setDisplayValue(value);
+      }
     } else {
       setDisplayValue(value);
     }
-  }, [loading, value]);
+  }, [loading, value, companyId]);
 
   return (
     <VoucherContext.Provider value={displayValue}>

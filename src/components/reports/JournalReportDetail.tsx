@@ -17,6 +17,7 @@ import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 type JournalAccount = {
   id: string;
@@ -29,6 +30,7 @@ type JournalAccount = {
 
 export function JournalReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const {
     vouchers: allVouchers,
@@ -130,6 +132,14 @@ export function JournalReportDetail() {
   const REPORT_MEMORY_KEY = "reportJournalState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllCompanyVouchers(true);
+        setSelectedAccount(null);
+      }
+      return;
+    }
     if (accountsWithJournal.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -147,7 +157,7 @@ export function JournalReportDetail() {
       }
     } catch (_) {}
     setSelectedAccount(accountsWithJournal[0]);
-  }, [accountsWithJournal, isMobile]);
+  }, [accountsWithJournal, isMobile, searchParams]);
 
   const handleSelectAccount = useCallback((account: JournalAccount) => {
     setShowAllCompanyVouchers(false);

@@ -29,7 +29,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { auth } from "@/lib/firebase";
+import { auth, FIREBASE_WEB_OAUTH_CLIENT_ID } from "@/lib/firebase";
 import {
   REMEMBER_EMAIL_ENABLED_KEY,
   REMEMBER_EMAIL_KEY,
@@ -184,9 +184,14 @@ export function LoginForm() {
       // Native APK/WebView: Firebase web popup/redirect often gets stuck; use Capacitor native Google auth instead.
       if (Capacitor.isNativePlatform()) {
         const { GoogleAuth } = await import("@codetrix-studio/capacitor-google-auth");
-        const clientId = process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
+        // Env preferred (custom Firebase project); default matches android/app/google-services.json Web client so static export/APK me blank NEXT_PUBLIC_* par bhi native sign-in chale.
+        const clientId =
+          process.env.NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() || FIREBASE_WEB_OAUTH_CLIENT_ID;
         if (!clientId) {
-          throw new Error("NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID is missing");
+          // Message substring must match catch below so toast shows env setup hint (not a silent generic error).
+          throw new Error(
+            "NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID: Google Web client ID missing for native GoogleAuth.initialize",
+          );
         }
         await GoogleAuth.initialize({ clientId, scopes: ["profile", "email"], grantOfflineAccess: false });
         const nativeUser = await GoogleAuth.signIn();
@@ -221,14 +226,37 @@ export function LoginForm() {
       }
     } catch (error: any) {
       setIsGoogleLoading(false);
+      // Keep native plugin failure details visible (status code 10/7/12501 etc.) so APK issues become diagnosable on-device.
+      const rawCode = String(error?.code ?? error?.errorCode ?? "");
+      const rawMessage = String(error?.message ?? "");
+      const statusCodeMatch = rawMessage.match(/\b(10|7|12500|12501|12502)\b/);
+      const nativeStatusCode = rawCode || statusCodeMatch?.[1] || "";
       let description = "Could not start Google sign-in. Please try again.";
       if (error.code === "auth/operation-not-allowed") {
         description = "Google Sign-In is not enabled for this project. Enable it in Firebase Console > Authentication > Sign-in method.";
       } else if (error.code === "auth/popup-blocked") {
         description = "Popup was blocked. Please allow popups for this site or try again.";
-      } else if (error.message?.includes("NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID")) {
-        description = "Google client ID missing. Set NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID in .env.local for APK login.";
+      } else if (
+        error.message?.includes("NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID") ||
+        error.message?.includes("Google Web client ID missing")
+      ) {
+        // NEXT_PUBLIC_* bakes in at `next build` / build:static — .env.local alone does nothing until rebuild + cap copy.
+        description =
+          "Google client ID missing. Set NEXT_PUBLIC_GOOGLE_WEB_CLIENT_ID in .env.local, run build:static + cap copy, then rebuild APK. Remote WebView APK: set the same var on your host (e.g. Vercel) and redeploy.";
+      } else if (nativeStatusCode === "10") {
+        description = "Google Sign-In config mismatch (status 10). Firebase/Google Console me is APK ke SHA-1 and SHA-256 add karke naya google-services.json download karo.";
+      } else if (nativeStatusCode === "7") {
+        description = "Network error (status 7). Internet/VPN/firewall check karke dubara try karo.";
+      } else if (nativeStatusCode === "12501") {
+        description = "Google sign-in cancel hua (status 12501). Account chooser complete karke phir try karo.";
+      } else if (nativeStatusCode === "12500" || nativeStatusCode === "12502") {
+        description = "Google sign-in setup issue (status " + nativeStatusCode + "). Google provider + OAuth client + SHA fingerprints verify karo.";
       }
+      if (nativeStatusCode && !description.includes("status " + nativeStatusCode)) {
+        // Append machine-readable code to help quick support/debug screenshots.
+        description += ` (status ${nativeStatusCode})`;
+      }
+      console.error("Google sign-in native error details:", error);
       toast({
         variant: "destructive",
         title: "Google Sign-In Failed",

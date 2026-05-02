@@ -114,6 +114,15 @@ const rateEditableSettingsSchema = z.object({
 const voucherPrefixSelectionSchema = voucherEditableSettingsSchema.partial();
 
 const ROLES_WITH_VOUCHER_CREATE = ["data-entry", "accountant", "editor", "manager", "owner"] as const;
+
+/** Mukh spend-wise opposite voucher OFF hone par sab roles ke require-link bite false hon (Firestore + UI mismatch se bachaa). */
+function requirePaymentLinkAllRolesOff(): Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }> {
+  return ROLES_WITH_VOUCHER_CREATE.reduce(
+    (acc, r) => ({ ...acc, [r]: { payment_out: false, contra: false, direct_expense: false } }),
+    {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
+  );
+}
+
 const ROLE_LABELS: Record<string, string> = {
   "data-entry": "Data Entry",
   accountant: "Accountant",
@@ -205,10 +214,8 @@ export function VoucherSettings() {
         enableCrossCompanyLedgerCopy: false,
         spendWiseEnabled: false,
         spendWiseOppositeVoucherEditable: false,
-        requirePaymentLinkByRole: ROLES_WITH_VOUCHER_CREATE.reduce(
-          (acc, r) => ({ ...acc, [r]: { payment_out: true, contra: true, direct_expense: true } }),
-          {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
-        ),
+        // Spend-wise opposite voucher default OFF ⇒ role matrix bhi sab OFF — user ne bola by default sab band
+        requirePaymentLinkByRole: requirePaymentLinkAllRolesOff(),
         voucherHistoryEnabled: true,
         voucherHistoryLimit: 10,
         voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
@@ -255,14 +262,15 @@ export function VoucherSettings() {
         enableCrossCompanyLedgerCopy: (company as any).enableCrossCompanyLedgerCopy === true,
         spendWiseEnabled: (company as any).spendWiseEnabled === true,
         spendWiseOppositeVoucherEditable: (company as any).spendWiseOppositeVoucherEditable === true,
+        // Matrix Firestore se hamesha lao — main OFF sirf voucher par enforce band (Create* forms me); Save se granular choices na mitaao
         requirePaymentLinkByRole: (() => {
           const raw = (company as any).requirePaymentLinkByRole || {};
-          const defaultPerRole = { payment_out: true, contra: true, direct_expense: true };
+          const defaultPerRoleFalse = { payment_out: false, contra: false, direct_expense: false };
           return ROLES_WITH_VOUCHER_CREATE.reduce((acc, r) => {
             const v = raw[r];
-            if (typeof v === "boolean") acc[r] = { ...defaultPerRole, payment_out: v, contra: v, direct_expense: v };
-            else if (v && typeof v === "object") acc[r] = { ...defaultPerRole, ...v };
-            else acc[r] = { ...defaultPerRole };
+            if (typeof v === "boolean") acc[r] = { payment_out: v, contra: v, direct_expense: v };
+            else if (v && typeof v === "object") acc[r] = { ...defaultPerRoleFalse, ...v };
+            else acc[r] = { ...defaultPerRoleFalse };
             return acc;
           }, {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>);
         })(),
@@ -466,23 +474,13 @@ export function VoucherSettings() {
                             <div>
                               <FormLabel>Link for spend wise on opposite voucher (Payment In, Contra in, Direct Income)</FormLabel>
                               <FormDescription>
-                                Off: link section and all &quot;Require Payment In link&quot; toggles below are off. On: link section is editable and all require-link toggles turn on.
+                                Off: linking is inactive for users (saved per-role toggles stay stored). On: linking active per role vouchers below.
                               </FormDescription>
                             </div>
                             <FormControl>
                               <div className="flex items-center gap-2">
                                 <span className="text-sm text-muted-foreground">Off</span>
-                                <Switch
-                                  checked={field.value}
-                                  onCheckedChange={(checked) => {
-                                    field.onChange(checked);
-                                    const allSame = ROLES_WITH_VOUCHER_CREATE.reduce(
-                                      (acc, r) => ({ ...acc, [r]: { payment_out: checked, contra: checked, direct_expense: checked } }),
-                                      {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>
-                                    );
-                                    form.setValue("requirePaymentLinkByRole", allSame);
-                                  }}
-                                />
+                                <Switch checked={field.value} onCheckedChange={field.onChange} />
                                 <span className="text-sm text-muted-foreground">On</span>
                               </div>
                             </FormControl>
@@ -496,7 +494,9 @@ export function VoucherSettings() {
                       <FormDescription className="!mt-0">
                         When ON, that role must link to Payment In to save. When OFF, they can save without linking. Set per voucher: Payment Out, Contra, Direct Expense.
                       </FormDescription>
+                      {/* Master OFF: stored matrix form me rakho, Switch UI pe OFF dikhao (sirf disabled nahi lagna chahiye "ON"); master ON ⇒ asli checkbox */}
                       {ROLES_WITH_VOUCHER_CREATE.map((role) => {
+                        const oppoOn = form.watch("spendWiseOppositeVoucherEditable");
                         const byRole = form.watch("requirePaymentLinkByRole") || {} as Record<string, { payment_out: boolean; contra: boolean; direct_expense: boolean }>;
                         const row = byRole[role];
                         const payment_out = typeof row === "object" && row !== null ? row.payment_out === true : false;
@@ -519,19 +519,19 @@ export function VoucherSettings() {
                               <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
                                 <FormLabel className="font-normal text-sm cursor-pointer">Payment Out</FormLabel>
                                 <FormControl>
-                                  <Switch checked={payment_out} onCheckedChange={(v) => update("payment_out", v)} />
+                                  <Switch checked={oppoOn && payment_out} disabled={!oppoOn} onCheckedChange={(v) => update("payment_out", v)} />
                                 </FormControl>
                               </FormItem>
                               <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
                                 <FormLabel className="font-normal text-sm cursor-pointer">Contra</FormLabel>
                                 <FormControl>
-                                  <Switch checked={contra} onCheckedChange={(v) => update("contra", v)} />
+                                  <Switch checked={oppoOn && contra} disabled={!oppoOn} onCheckedChange={(v) => update("contra", v)} />
                                 </FormControl>
                               </FormItem>
                               <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
                                 <FormLabel className="font-normal text-sm cursor-pointer">Direct Expense</FormLabel>
                                 <FormControl>
-                                  <Switch checked={direct_expense} onCheckedChange={(v) => update("direct_expense", v)} />
+                                  <Switch checked={oppoOn && direct_expense} disabled={!oppoOn} onCheckedChange={(v) => update("direct_expense", v)} />
                                 </FormControl>
                               </FormItem>
                             </div>

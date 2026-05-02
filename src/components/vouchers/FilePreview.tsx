@@ -65,8 +65,8 @@ function pdfThumbCacheSet(key: string, blobUrl: string) {
 
 /** Tooltip/hover FilePreview jiska previewBox 600×700 hai — wahi layoutMaxEdge=700 cache key */
 const GALLERY_PDF_HOVER_THUMB_EDGE = 700;
-// Remote PDF blob fetch should fail quickly on APK/static when network/CORS is blocked.
-const PDF_REMOTE_FETCH_TIMEOUT_MS = 5_000;
+// APK/static: short fail — browser online: lamba wait (slow mobile + pdf.js) taaki preview blank na rahe.
+const PDF_REMOTE_FETCH_TIMEOUT_MS = isStaticAppBuild() || Capacitor.isNativePlatform() ? 5_000 : 25_000;
 
 /**
  * Gallery "Full preview" ON par current page ke PDF hovers ke liye pdf.js + pehla page pehle se cache me;
@@ -309,30 +309,29 @@ export function FilePreview({
         if (fileObject instanceof File) {
           pdfFile = fileObject;
         } else if (firebaseStoragePath && storage) {
-          // APK/static first: try URL fetch helper to avoid WebView getBlob hangs; SDK as last fallback.
-          const shouldPreferUrlFetch = isStaticAppBuild() || Capacitor.isNativePlatform();
-          if (shouldPreferUrlFetch && pdfUrl.startsWith("http")) {
-            const fromUrl = await tryGetBlobFromFirebaseStorageDownloadUrl(pdfUrl, signal);
-            if (fromUrl) {
-              pdfFile = fromUrl;
-            } else {
+          // Pehle signed URL → SDK+fetch helper (CORS + naya `*.firebasestorage.app` host); phir direct getBlob — sirf getBlob+5s pe web "online" preview fail hota tha.
+          let resolved: Blob | null = null;
+          if (pdfUrl.startsWith("http")) {
+            resolved = await tryGetBlobFromFirebaseStorageDownloadUrl(pdfUrl, signal);
+          }
+          if (!resolved) {
+            try {
               const storageRef = ref(storage, firebaseStoragePath);
-              pdfFile = await Promise.race([
+              resolved = await Promise.race([
                 getBlob(storageRef),
                 new Promise<never>((_, reject) =>
                   setTimeout(() => reject(new Error("Storage getBlob timeout")), PDF_REMOTE_FETCH_TIMEOUT_MS)
                 ),
               ]);
+            } catch {
+              resolved = null;
             }
-          } else {
-            const storageRef = ref(storage, firebaseStoragePath);
-            pdfFile = await Promise.race([
-              getBlob(storageRef),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error("Storage getBlob timeout")), PDF_REMOTE_FETCH_TIMEOUT_MS)
-              ),
-            ]);
           }
+          if (!resolved) {
+            setIsPdfLoading(false);
+            return;
+          }
+          pdfFile = resolved;
         } else if (pdfUrl.startsWith("blob:")) {
           const response = await fetch(pdfUrl, { signal });
           pdfFile = await response.blob();
@@ -464,6 +463,43 @@ export function FilePreview({
               resolvedType = "pdf";
             } else if (cleanUrl.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?|$)/)) {
               resolvedType = "image";
+            }
+          }
+          /** HTTPS link: URL se type na nikle (query-only, encoded path, non-.pdf path) — sniff se PDF/image branch */
+          if (resolvedType === "other" && /^https?:\/\//i.test(file)) {
+            try {
+              let probe: Blob | null = null;
+              try {
+                const r = await fetch(file, {
+                  mode: "cors",
+                  credentials: "omit",
+                  signal: controller.signal,
+                  headers: { Range: "bytes=0-16383" },
+                });
+                if ((r.ok || r.status === 206) && !controller.signal.aborted) {
+                  probe = await r.blob();
+                }
+              } catch {
+                /* Range/CORS — neeche pura blob */
+              }
+              if ((!probe || probe.size === 0) && !controller.signal.aborted) {
+                probe = await tryGetBlobFromFirebaseStorageDownloadUrl(file, controller.signal);
+              }
+              if ((!probe || probe.size === 0) && !controller.signal.aborted) {
+                probe = await fetchBlobWithTimeout(file, PDF_REMOTE_FETCH_TIMEOUT_MS, controller.signal);
+              }
+              if (probe && probe.size > 0 && !controller.signal.aborted) {
+                const kind = await sniffBlobKindForPreview(probe);
+                if (kind === "pdf") {
+                  resolvedType = "pdf";
+                } else if (kind === "image") {
+                  resolvedType = "image";
+                  /* Range/sniff blob poora JPEG na ho — Next/Image ke liye seedha remote URL */
+                  resolvedUrl = file;
+                }
+              }
+            } catch {
+              /* preview niche PDF path try nahi karega */
             }
           }
         }

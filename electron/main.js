@@ -1,7 +1,21 @@
-const { app, BrowserWindow, BrowserView, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  BrowserView,
+  Menu,
+  ipcMain,
+  dialog,
+  nativeImage,
+} = require("electron");
 const path = require("path");
 const http = require("http");
 const handler = require("serve-handler");
+
+/** Windows taskbar / Start menu grouping — `electron.app.*` default ID par Electron atom icon dikhta hai; `package.json` build.appId se match hona chahiye. */
+const WINDOWS_APP_USER_MODEL_ID = "com.pocketledger.desktop";
+if (process.platform === "win32") {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
 
 let staticServer = null;
 let staticServerPort = null;
@@ -9,6 +23,10 @@ const windowTabs = new Map();
 const PRINT_MODE_ACTUAL = "actual";
 const PRINT_MODE_FIT_WIDTH = "fit-width";
 const PRINT_MODE_FIT_PAGE = "fit-page";
+/** Tab strip height (px) — merged title row (Win/Linux) ya classic macOS strip */
+const TAB_STRIP_HEIGHT = 40;
+/** Win/Linux: frameless window — "Pocket Ledger (N tabs)" + tabs + 10px + minimize/max/close ek hi row */
+const USE_MERGED_TITLEBAR = process.platform === "win32" || process.platform === "linux";
 
 // Same asset as Next public/app-icon.png; copied into asar root via electron/package.json files.
 function getIconPath() {
@@ -16,6 +34,16 @@ function getIconPath() {
     return path.join(__dirname, "app-icon.png");
   }
   return path.join(__dirname, "..", "public", "app-icon.png");
+}
+
+/** BrowserWindow + Windows shell ke liye NativeImage — khali ho to path string fallback. */
+function getWindowIcon() {
+  try {
+    const p = getIconPath();
+    const img = nativeImage.createFromPath(p);
+    if (!img.isEmpty()) return img;
+  } catch (_) {}
+  return getIconPath();
 }
 
 // Keep a single source of truth for dev/prod behavior.
@@ -119,11 +147,40 @@ function getFocusedTabContents(win) {
   return state.tabs[state.activeIndex]?.webContents ?? null;
 }
 
+/** BrowserView tab reload — native `{ role: "reload" }` galat webContents (khali window) par lagta tha */
+function reloadActiveTab(win, ignoreCache) {
+  const wc = getFocusedTabContents(win);
+  if (!wc || wc.isDestroyed()) return;
+  if (ignoreCache) wc.reloadIgnoringCache();
+  else wc.reload();
+}
+
+/** View menu / IPC: quick-actions ribbon localStorage toggle — renderer `pl-desktop-quick-actions-toggle` sunta hai */
+function toggleQuickActionsRibbonInActiveTab(win) {
+  const wc = getFocusedTabContents(win);
+  if (!wc || wc.isDestroyed()) return;
+  const script = `(function(){try{var k='pl-desktop-header-quick-actions-collapsed';if(localStorage.getItem(k)==='1')localStorage.removeItem(k);else localStorage.setItem(k,'1');window.dispatchEvent(new Event('pl-desktop-quick-actions-toggle'));}catch(e){}})();`;
+  wc.executeJavaScript(script, true).catch(() => {});
+}
+
 function updateWindowTitle(win) {
   const state = windowTabs.get(win.id);
   const count = state?.tabs.length ?? 0;
-  // Keep title explicit so users can tell tab count while using desktop multi-tab flow.
-  win.setTitle(count > 1 ? `Pocket Ledger (${count} tabs)` : "Pocket Ledger");
+  // Merged title bar: OS caption short rakho — poori string tab strip me `#titleBarLabel` par (duplicate na ho).
+  if (USE_MERGED_TITLEBAR) {
+    win.setTitle("Pocket Ledger");
+  } else {
+    win.setTitle(count > 1 ? `Pocket Ledger (${count} tabs)` : "Pocket Ledger");
+  }
+}
+
+/** Strip me maximize icon □ / ❐ sync — frameless Win/Linux */
+function sendWindowMaxState(win) {
+  const state = windowTabs.get(win.id);
+  if (!state?.stripView?.webContents || state.stripView.webContents.isDestroyed()) return;
+  try {
+    state.stripView.webContents.send("window-max-state", { maximized: win.isMaximized() });
+  } catch (_) {}
 }
 
 function getWindowPrintMode(win) {
@@ -144,25 +201,150 @@ function getPrintScaleFactor(mode) {
   return 0.8; // fit-page default keeps both width + height safer on most A4/Letter previews.
 }
 
-function updateActiveTabBounds(win) {
+/**
+ * Electron multi-tab: jo BrowserView baad me `addBrowserView` hota hai wo upar paint hota hai.
+ * Tab content ko switch pe baad me add karte hain — strip neeche chala jata hai / dikhta hi nahi.
+ * Bounds ke baad strip ko dubara add karke hamesha top par lao taaki alag tab strip dikhe.
+ */
+function raiseTabStripToTop(win) {
   const state = windowTabs.get(win.id);
-  if (!state || state.activeIndex < 0) return;
-  const activeView = state.tabs[state.activeIndex];
-  if (!activeView || win.isDestroyed()) return;
-  // Use content size (not screen bounds) so BrowserView always fills client area in normal + maximized modes.
+  if (!state?.stripView || state.stripView.webContents.isDestroyed()) return;
+  try {
+    win.removeBrowserView(state.stripView);
+    win.addBrowserView(state.stripView);
+  } catch (_) {}
+}
+
+/** Strip + active tab content dono ka bounds — tab strip upar, app neeche */
+function updateBrowserViewBounds(win) {
+  const state = windowTabs.get(win.id);
+  if (!state || win.isDestroyed()) return;
   const [contentWidth, contentHeight] = win.getContentSize();
-  activeView.setBounds({ x: 0, y: 0, width: contentWidth, height: contentHeight });
-  activeView.setAutoResize({ width: true, height: true });
+  const sh = TAB_STRIP_HEIGHT;
+  if (state.stripView && !state.stripView.webContents.isDestroyed()) {
+    state.stripView.setBounds({ x: 0, y: 0, width: contentWidth, height: sh });
+  }
+  if (state.activeIndex >= 0 && state.tabs[state.activeIndex]) {
+    const activeView = state.tabs[state.activeIndex];
+    if (!activeView.webContents.isDestroyed()) {
+      const innerH = Math.max(0, contentHeight - sh);
+      activeView.setBounds({ x: 0, y: sh, width: contentWidth, height: innerH });
+    }
+  }
+  raiseTabStripToTop(win);
+}
+
+/** IPC sender → BrowserWindow (strip = BrowserView webContents; direct `fromWebContents` aksar null). */
+function windowFromStripSender(sender) {
+  let w = BrowserWindow.fromWebContents(sender);
+  if (w) return w;
+  try {
+    const sid = sender?.id;
+    if (sid == null) return null;
+    for (const cand of BrowserWindow.getAllWindows()) {
+      const state = windowTabs.get(cand.id);
+      if (state?.stripView?.webContents?.id === sid) return cand;
+    }
+  } catch (_) {}
+  return null;
+}
+
+/** + tab / switch: kabhi strip IPC window resolve na kare (focus page par hai) — focused ya single window fallback */
+function resolveWindowForTabStripIpc(sender) {
+  const direct = windowFromStripSender(sender);
+  if (direct && !direct.isDestroyed()) return direct;
+  const fw = BrowserWindow.getFocusedWindow();
+  if (fw && !fw.isDestroyed()) return fw;
+  const all = BrowserWindow.getAllWindows().filter((b) => !b.isDestroyed());
+  if (all.length === 1) return all[0];
+  return null;
+}
+
+/** Tab titles / active state + title bar label (merged chrome) → strip UI */
+function pushTabStripState(win) {
+  const state = windowTabs.get(win.id);
+  if (!state?.stripView?.webContents || state.stripView.webContents.isDestroyed()) return;
+  const tabs = state.tabs.map((view, index) => ({
+    title: view.webContents.getTitle() || `Tab ${index + 1}`,
+    index,
+    active: index === state.activeIndex,
+  }));
+  const n = tabs.length;
+  const titleBarLabel = n > 1 ? `Pocket Ledger (${n} tabs)` : "Pocket Ledger";
+  try {
+    state.stripView.webContents.send("tabs-update", { tabs, titleBarLabel });
+  } catch (_) {}
+}
+
+async function createTabStrip(win) {
+  const state = windowTabs.get(win.id);
+  if (!state || state.stripView) return;
+  const stripView = new BrowserView({
+    webPreferences: {
+      preload: path.join(__dirname, "tab-strip-preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  state.stripView = stripView;
+  await stripView.webContents.loadFile(path.join(__dirname, "tab-strip.html"));
+  win.addBrowserView(stripView);
+  stripView.webContents.on("did-finish-load", () => pushTabStripState(win));
 }
 
 function switchToTab(win, index) {
   const state = windowTabs.get(win.id);
   if (!state || state.tabs.length === 0) return;
   if (index < 0 || index >= state.tabs.length) return;
+
+  const prevIndex = state.activeIndex;
+  const prev = prevIndex >= 0 ? state.tabs[prevIndex] : null;
   state.activeIndex = index;
-  win.setBrowserView(state.tabs[index]);
-  updateActiveTabBounds(win);
+  const next = state.tabs[index];
+
+  if (prev && prev !== next) {
+    try {
+      win.removeBrowserView(prev);
+    } catch (_) {}
+  }
+  try {
+    win.addBrowserView(next);
+  } catch (_) {}
+
+  updateBrowserViewBounds(win);
   updateWindowTitle(win);
+  pushTabStripState(win);
+}
+
+/** Kisi bhi index ki tab band — Chrome jaisa active / neighbour logic */
+function closeTabAt(win, closeIndex) {
+  const state = windowTabs.get(win.id);
+  if (!state || closeIndex < 0 || closeIndex >= state.tabs.length) return;
+
+  const oldActive = state.activeIndex;
+  const removed = state.tabs[closeIndex];
+  try {
+    win.removeBrowserView(removed);
+  } catch (_) {}
+  if (removed?.webContents && !removed.webContents.isDestroyed()) {
+    removed.webContents.destroy();
+  }
+  state.tabs.splice(closeIndex, 1);
+
+  if (state.tabs.length === 0) {
+    win.close();
+    return;
+  }
+
+  let nextIndex;
+  if (oldActive === closeIndex) {
+    nextIndex = Math.min(closeIndex, state.tabs.length - 1);
+  } else if (closeIndex < oldActive) {
+    nextIndex = oldActive - 1;
+  } else {
+    nextIndex = oldActive;
+  }
+  switchToTab(win, nextIndex);
 }
 
 function closeCurrentTab(win) {
@@ -171,17 +353,7 @@ function closeCurrentTab(win) {
     win.close();
     return;
   }
-  const index = state.activeIndex;
-  const [removed] = state.tabs.splice(index, 1);
-  if (removed?.webContents && !removed.webContents.isDestroyed()) {
-    removed.webContents.destroy();
-  }
-  if (state.tabs.length === 0) {
-    win.close();
-    return;
-  }
-  const nextIndex = Math.max(0, index - 1);
-  switchToTab(win, nextIndex);
+  closeTabAt(win, state.activeIndex);
 }
 
 function nextTab(win) {
@@ -220,7 +392,7 @@ async function openNewTab(win) {
     if (input.key === "-" || input.code === "Minus") {
       event.preventDefault();
       adjustZoom(view.webContents, -0.1);
-      updateActiveTabBounds(win);
+      updateBrowserViewBounds(win);
       return;
     }
     if (
@@ -231,15 +403,18 @@ async function openNewTab(win) {
     ) {
       event.preventDefault();
       adjustZoom(view.webContents, 0.1);
-      updateActiveTabBounds(win);
+      updateBrowserViewBounds(win);
       return;
     }
     if (input.key === "0" || input.code === "Digit0" || input.code === "Numpad0") {
       event.preventDefault();
       view.webContents.setZoomFactor(1);
-      updateActiveTabBounds(win);
+      updateBrowserViewBounds(win);
     }
   });
+
+  view.webContents.on("page-title-updated", () => pushTabStripState(win));
+  view.webContents.on("did-finish-load", () => pushTabStripState(win));
 
   const state = windowTabs.get(win.id);
   if (!state) return;
@@ -269,6 +444,28 @@ function printCurrentTab(win) {
 
 function buildAppMenu() {
   const template = [
+    // Menubar par "Refresh" hamesha dikhe — active BrowserView par reload (multi-tab); Ctrl+R yahi se
+    {
+      label: "Refresh",
+      submenu: [
+        {
+          label: "Reload",
+          accelerator: "CmdOrCtrl+R",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow ?? BrowserWindow.getFocusedWindow();
+            if (win) reloadActiveTab(win, false);
+          },
+        },
+        {
+          label: "Force Reload",
+          accelerator: "CmdOrCtrl+Shift+R",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow ?? BrowserWindow.getFocusedWindow();
+            if (win) reloadActiveTab(win, true);
+          },
+        },
+      ],
+    },
     {
       label: "File",
       submenu: [
@@ -345,8 +542,15 @@ function buildAppMenu() {
     {
       label: "View",
       submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
+        {
+          label: "Toggle quick actions ribbon",
+          accelerator: "CmdOrCtrl+Shift+H",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow ?? BrowserWindow.getFocusedWindow();
+            if (win) toggleQuickActionsRibbonInActiveTab(win);
+          },
+        },
+        { type: "separator" },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -373,8 +577,50 @@ function buildAppMenu() {
         { role: "togglefullscreen" },
       ],
     },
-    { label: "Window", submenu: [{ role: "minimize" }, { role: "close" }] },
-    { role: "help", submenu: [] },
+    {
+      label: "Window",
+      submenu: [
+        {
+          label: "Next Tab",
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) nextTab(win);
+          },
+        },
+        {
+          label: "Previous Tab",
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow();
+            if (win) previousTab(win);
+          },
+        },
+        { type: "separator" },
+        { role: "minimize" },
+        { role: "close" },
+      ],
+    },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Multi-tab shortcuts…",
+          click: async () => {
+            const win = BrowserWindow.getFocusedWindow();
+            await dialog.showMessageBox(win ?? undefined, {
+              type: "info",
+              title: "Pocket Ledger — Tabs",
+              message: USE_MERGED_TITLEBAR
+                ? "Title + tabs ek hi upari row me hain (☰ = menu, Alt bhi). Window buttons dahine."
+                : "Dark tab strip menu bar ke turant neeche.",
+              detail:
+                "Ctrl+T — New tab\nCtrl+W — Close tab\nCtrl+Tab — Next tab\nCtrl+Shift+Tab — Previous tab\n\n" +
+                (USE_MERGED_TITLEBAR ? "Alt — menu bar dikhao/j chhupao.\n\n" : "") +
+                "File → New Tab / View → Next Tab.",
+            });
+          },
+        },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -383,30 +629,96 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    icon: getIconPath(),
+    icon: getWindowIcon(),
+    frame: !USE_MERGED_TITLEBAR,
+    autoHideMenuBar: USE_MERGED_TITLEBAR,
   });
-  // Initialize per-window tab state; each window manages its own tab stack.
-  windowTabs.set(win.id, { tabs: [], activeIndex: -1, printMode: PRINT_MODE_FIT_PAGE });
+  // Initialize per-window tab state; each window manages its own tab stack (+ stripView baad me).
+  windowTabs.set(win.id, { tabs: [], activeIndex: -1, printMode: PRINT_MODE_FIT_PAGE, stripView: null });
   // Sync BrowserView bounds across all desktop window state changes.
-  win.on("resize", () => updateActiveTabBounds(win));
-  win.on("maximize", () => updateActiveTabBounds(win));
-  win.on("unmaximize", () => updateActiveTabBounds(win));
-  win.on("enter-full-screen", () => updateActiveTabBounds(win));
-  win.on("leave-full-screen", () => updateActiveTabBounds(win));
-  win.on("show", () => updateActiveTabBounds(win));
+  win.on("resize", () => updateBrowserViewBounds(win));
+  win.on("maximize", () => {
+    updateBrowserViewBounds(win);
+    sendWindowMaxState(win);
+  });
+  win.on("unmaximize", () => {
+    updateBrowserViewBounds(win);
+    sendWindowMaxState(win);
+  });
+  win.on("enter-full-screen", () => updateBrowserViewBounds(win));
+  win.on("leave-full-screen", () => updateBrowserViewBounds(win));
+  win.on("show", () => updateBrowserViewBounds(win));
   win.on("closed", () => {
     const state = windowTabs.get(win.id);
     if (state) {
+      if (state.stripView?.webContents && !state.stripView.webContents.isDestroyed()) {
+        state.stripView.webContents.destroy();
+      }
       for (const tab of state.tabs) {
         if (!tab.webContents.isDestroyed()) tab.webContents.destroy();
       }
     }
     windowTabs.delete(win.id);
   });
+  await createTabStrip(win);
   await openNewTab(win);
+  sendWindowMaxState(win);
 }
 
 app.whenReady().then(async () => {
+  ipcMain.handle("window-chrome-action", async (event, action) => {
+    const win =
+      resolveWindowForTabStripIpc(event.sender) || BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+    try {
+      if (action === "minimize") win.minimize();
+      else if (action === "maximize-toggle") {
+        if (win.isMaximized()) win.unmaximize();
+        else win.maximize();
+        sendWindowMaxState(win);
+      } else if (action === "close") win.close();
+      else return { ok: false, error: "bad-action" };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.handle("show-app-menu", async (event) => {
+    const win =
+      resolveWindowForTabStripIpc(event.sender) || BrowserWindow.fromWebContents(event.sender);
+    const menu = Menu.getApplicationMenu();
+    if (!menu || !win || win.isDestroyed()) return { ok: false };
+    try {
+      menu.popup({ window: win });
+      return { ok: true };
+    } catch (_) {
+      return { ok: false };
+    }
+  });
+
+  ipcMain.handle("tab-strip-action", async (event, msg) => {
+    const win = resolveWindowForTabStripIpc(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+    try {
+      if (msg?.action === "switch" && typeof msg.index === "number") {
+        switchToTab(win, msg.index);
+        return { ok: true };
+      }
+      if (msg?.action === "new") {
+        await openNewTab(win);
+        return { ok: true };
+      }
+      if (msg?.action === "close" && typeof msg.index === "number") {
+        closeTabAt(win, msg.index);
+        return { ok: true };
+      }
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+    return { ok: false, error: "bad-action" };
+  });
+
   buildAppMenu();
   await createWindow();
   app.on("activate", async () => {

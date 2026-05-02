@@ -47,6 +47,13 @@ type ComboboxProps = {
   popoverModal?: boolean;
   /** Khulte hi filter input par focus (Note form / lambe lists). */
   autoFocusSearchOnOpen?: boolean;
+  /** Lamba selected label: truncate ke bajay trigger me horizontal scroll (voucher line grid). */
+  triggerLabelScrollable?: boolean;
+  /**
+   * Trigger text ka minimum width (`ch`): grid/flex me `min-w-0` se Unit jaise fields 2 letter tak squeeze ho rahe the —
+   * yahan ~N character worth width + `truncate` se uske baad ellipsis.
+   */
+  triggerLabelMinCh?: number;
   /** Optional: cap visible filtered options (useful for mobile dropdown performance/clarity). */
   maxVisibleOptions?: number;
 };
@@ -69,6 +76,8 @@ export function Combobox({
   contentWidthMode = "trigger",
   popoverModal = true,
   autoFocusSearchOnOpen = false,
+  triggerLabelScrollable = false,
+  triggerLabelMinCh,
   maxVisibleOptions,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
@@ -167,6 +176,9 @@ export function Combobox({
     );
   };
 
+  const hasLabelMinCh = typeof triggerLabelMinCh === "number" && triggerLabelMinCh > 0;
+  const labelMinCh = hasLabelMinCh ? triggerLabelMinCh! : null;
+
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (!next) setSearch("");
@@ -180,14 +192,50 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className={cn("w-full min-w-0 max-w-full justify-between h-9 overflow-hidden", triggerClassName)}
+          className={cn(
+            // overflow label wrapper par; button par nahi — warna ChevronsUpDown clip (Unit = lamba minWidth).
+            "w-full max-w-full justify-between gap-0.5 h-9 px-2",
+            labelMinCh == null ? "min-w-0" : "",
+            triggerLabelScrollable ? "overflow-x-auto" : "overflow-visible",
+            triggerClassName
+          )}
+          style={
+            labelMinCh != null
+              ? { minWidth: `calc(${labelMinCh}ch + 1.75rem)` }
+              : undefined
+          }
           disabled={disabled}
         >
-          <span className="truncate flex items-center gap-2 min-w-0 flex-1">
+          <span
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-1",
+              triggerLabelScrollable
+                ? "max-w-full overflow-x-auto"
+                : "max-w-[calc(100%-1.75rem)] overflow-hidden"
+            )}
+            style={
+              labelMinCh != null
+                ? { minWidth: `${labelMinCh}ch` }
+                : undefined
+            }
+          >
             {!isMultiSelect && (options.find((o) => o.value === value))?.isSpecial && <Crown className="h-4 w-4 shrink-0 text-amber-500" />}
-            <span className="truncate">{displayValue()}</span>
+            <span
+              className={cn(
+                "block flex-1 max-w-full text-left",
+                labelMinCh == null ? "min-w-0" : "",
+                triggerLabelScrollable ? "overflow-x-auto whitespace-nowrap" : "truncate"
+              )}
+              style={
+                labelMinCh != null
+                  ? { minWidth: `${labelMinCh}ch` }
+                  : undefined
+              }
+            >
+              {displayValue()}
+            </span>
           </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50 mr-0.5" aria-hidden />
         </Button>
       </PopoverTrigger>
       <PopoverContent

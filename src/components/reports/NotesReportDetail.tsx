@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useSearchParams } from "next/navigation";
 
 type NotedEntity = {
     id: string;
@@ -76,6 +77,7 @@ function NotedEntityList({ entities, selectedEntity, onSelectEntity, searchTerm 
 
 export function NotesReportDetail() {
   const isMobile = useIsMobile();
+  const searchParams = useSearchParams();
   const { formatCurrency } = useDate();
   const { companyId } = useCompany();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties } = useVouchers();
@@ -214,6 +216,14 @@ export function NotesReportDetail() {
   const REPORT_MEMORY_KEY = "reportNotesState";
 
   useEffect(() => {
+    if (searchParams.get("allVouchers") === "1") {
+      if (!hasAutoSelected.current) {
+        hasAutoSelected.current = true;
+        setShowAllNotes(true);
+        setSelectedEntity(null);
+      }
+      return;
+    }
     if (notedEntities.length === 0) return;
     if (hasAutoSelected.current) return;
     hasAutoSelected.current = true;
@@ -231,7 +241,7 @@ export function NotesReportDetail() {
       }
     } catch (_) {}
     setSelectedEntity(notedEntities[0]);
-  }, [notedEntities, isMobile]);
+  }, [notedEntities, isMobile, searchParams]);
 
   const handleSelectEntity = useCallback((entity: NotedEntity) => {
     setShowAllNotes(false);
