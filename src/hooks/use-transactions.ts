@@ -1136,6 +1136,34 @@ export function useTransactions(
             return true;
         };
 
+        /** Har row par pura `vouchers` scan = O(rows×vouchers) — bill-wise linked status + sums par UI freeze fix; ek hi pass me indexes. */
+        const voucherById = new Map<string, any>((vouchers as any[]).map((v) => [String(v?.id ?? ""), v]));
+        const allocEdgesByTargetId = new Map<string, Array<{ src: any; alloc: unknown }>>();
+        const spendWisePayOutsByLinkedReceiptId = new Map<string, any[]>();
+        for (const v of vouchers as any[]) {
+          const vid = String(v?.id ?? "");
+          if (vid) voucherById.set(vid, v);
+
+          const allocs = (v.allocations as { voucherId?: string }[] | undefined) ?? [];
+          for (const alloc of allocs) {
+            const tid = alloc?.voucherId;
+            if (tid === undefined || tid === null || String(tid).trim() === "") continue;
+            const tk = String(tid);
+            const edges = allocEdgesByTargetId.get(tk);
+            const edge = { src: v, alloc };
+            if (edges) edges.push(edge);
+            else allocEdgesByTargetId.set(tk, [edge]);
+          }
+
+          const linkedInIds = (v.linkedPaymentInIds as string[] | undefined) ?? [];
+          for (const rid of linkedInIds) {
+            const rk = String(rid);
+            const arr = spendWisePayOutsByLinkedReceiptId.get(rk);
+            if (arr) arr.push(v);
+            else spendWisePayOutsByLinkedReceiptId.set(rk, [v]);
+          }
+        }
+
         const withBalance = transactionsToDisplay
             .map(t => {
                 const amounts = getTransactionAmounts(t, context, entity, stockView, entityList, processedTaxes);
@@ -1350,32 +1378,31 @@ export function useTransactions(
                 );
                 if ((isBillWiseContext || context === 'account' || context === 'tax' || context === 'tax_group' || context === 'expense' || staffShowLinkDetails) && (paymentStatus != null || t.type === 'sale' || t.type === 'purchase' || t.type === 'payment_in' || t.type === 'payment_out' || t.type === 'direct_income' || t.type === 'direct_expense' || t.type === 'journal')) {
                     if (t.type === 'sale' || t.type === 'purchase') {
-                        // Journal bhi link kar sakta hai sale/purchase se; PUR row pe "from JRNL" dikhana.
                         const payTypes = t.type === 'sale' ? ['payment_in', 'direct_income', 'purchase', 'purchase_service', 'journal'] : ['payment_out', 'direct_expense', 'sale', 'sale_service', 'journal'];
                         const partyId = String((t as any).partyId ?? '');
-                        vouchers.forEach((v: any) => {
-                            if (!payTypes.includes(v.type)) return;
+                        /** Ek source voucher se multiple allocations same target ko push na duplice kare — pehle `some()` jaisa ek no per source */
+                        const seenSrcForLinkedFrom = new Set<string>();
+                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                            if (!payTypes.includes(v.type)) continue;
                             if (entityIdForLinks && partyId) {
                                 if (v.type === 'journal') {
                                     const touchesParty = String((v as any).partyId ?? '') === partyId ||
                                         (Array.isArray((v as any).entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? '') === partyId));
-                                    if (!touchesParty) return;
-                                } else if (String((v as any).partyId ?? '') !== partyId) return;
+                                    if (!touchesParty) continue;
+                                } else if (String((v as any).partyId ?? '') !== partyId) continue;
                             }
-                            const allocs = (v.allocations as { voucherId: string; amount: number }[] | undefined) || [];
-                            if (allocs.some((a: any) => a.voucherId === t.id)) {
-                                const no = v.voucherNumber ?? v.voucher_number ?? '';
-                                if (no) linkedFromVoucherNos.push(no);
-                            }
-                        });
+                            if (seenSrcForLinkedFrom.has(String(v.id ?? ""))) continue;
+                            seenSrcForLinkedFrom.add(String(v.id ?? ""));
+                            const no = v.voucherNumber ?? v.voucher_number ?? '';
+                            if (no) linkedFromVoucherNos.push(no);
+                        }
                         if (Number((t as any).openingBalanceAllocated) > 0) {
                             linkedFromVoucherNos.push("Opening Balance");
                         }
-                        // Outgoing: we allocated to opposite type (e.g. Purchase→Sale from Sale form). Show "to X" on opposite voucher.
                         const allocs = (t.allocations as { voucherId: string; amount: number }[] | undefined) || [];
                         allocs.forEach((a: any) => {
                             if (!a.voucherId) return;
-                            const target = vouchers.find((v: any) => v.id === a.voucherId);
+                            const target = voucherById.get(String(a.voucherId));
                             if (!target) return;
                             const oppTypes = t.type === 'sale' ? ['purchase', 'purchase_service'] : ['sale', 'sale_service'];
                             if (!oppTypes.includes(target.type)) return;
@@ -1384,30 +1411,27 @@ export function useTransactions(
                         });
                         // Do NOT set linkedToVoucherNos = [myNo] when no outgoing — avoids self-ref "to Sale Inv - 003"
                     } else if (t.type === 'journal' && t.subType === 'add_salary') {
-                        // Add Salary: only real incoming links should show here; never point the row to its own voucher number.
-                        vouchers.forEach((v: any) => {
-                            if (v.type !== 'payment_out' && v.type !== 'direct_expense') return;
-                            const allocs = (v.allocations as { voucherId: string; amount: number }[] | undefined) || [];
-                            if (allocs.some((a: any) => a.voucherId === t.id)) {
-                                const no = v.voucherNumber ?? v.voucher_number ?? '';
-                                if (no) linkedFromVoucherNos.push(no);
-                            }
-                        });
+                        /** Payment out/expense edges → salary voucher id (`allocEdgesByTargetId`). */
+                        const seenSalarySources = new Set<string>();
+                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                            if (v.type !== 'payment_out' && v.type !== 'direct_expense') continue;
+                            if (seenSalarySources.has(String(v.id ?? ""))) continue;
+                            seenSalarySources.add(String(v.id ?? ""));
+                            const no = v.voucherNumber ?? v.voucher_number ?? '';
+                            if (no) linkedFromVoucherNos.push(no);
+                        }
                         // When salary is linked from Opening Balance, show OB as the source instead of a fake self-link.
                         if (Number((t as any).openingBalanceAllocated) > 0) {
                             linkedFromVoucherNos.push("Opening Balance");
                         }
                     } else if (t.type === 'journal') {
-                        // Normal Journal: show both incoming (from other vouchers) and outgoing (this journal allocations) links in row status.
-                        vouchers.forEach((v: any) => {
-                            if (v.id === t.id) return;
-                            // Entity-scoped filter: only include incoming links relevant to current party/staff/account ledger row.
-                            if (!isVoucherForCurrentEntity(v)) return;
-                            const allocs = (v.allocations as { voucherId: string; amount: number }[] | undefined) || [];
-                            if (!allocs.some((a: any) => a.voucherId === t.id)) return;
+                        /** Incoming journal links: sirf wo sources jinke allocation edge is row id ko point karte hain */
+                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                            if (v.id === t.id) continue;
+                            if (!isVoucherForCurrentEntity(v)) continue;
                             const no = v.voucherNumber ?? v.voucher_number ?? '';
                             if (no && !linkedFromVoucherNos.includes(no)) linkedFromVoucherNos.push(no);
-                        });
+                        }
                         const ownAllocs = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
                         const journalAmountDr = Number(amounts.debit) || 0;
                         ownAllocs.forEach((a: any) => {
@@ -1419,20 +1443,16 @@ export function useTransactions(
                                 if (!linkedToVoucherNos.includes("Opening Balance")) linkedToVoucherNos.push("Opening Balance");
                                 return;
                             }
-                            const target = vouchers.find((v: any) => v.id === a.voucherId);
+                            const target = voucherById.get(String(a.voucherId));
                             if (target && !isVoucherForCurrentEntity(target)) return;
                             const no = target?.voucherNumber ?? target?.voucher_number ?? '';
                             if (no && !linkedToVoucherNos.includes(no)) linkedToVoucherNos.push(no);
                         });
                         // Bill-wise compute for normal journal: reduce by incoming (others→journal) and outgoing (journal→others) allocations.
-                        const incomingAllocated = vouchers.reduce((sum: number, v: any) => {
+                        const incomingAllocated = (allocEdgesByTargetId.get(String(t.id)) ?? []).reduce((sum: number, { src: v, alloc }) => {
                             if (v.id === t.id) return sum;
                             if (!isVoucherForCurrentEntity(v)) return sum;
-                            const allocs = (v.allocations as { voucherId: string; amount: number }[] | undefined) || [];
-                            const linkedHere = allocs
-                                .filter((a: any) => a.voucherId === t.id)
-                                .reduce((s: number, a: any) => s + (Number(a?.amount) || 0), 0);
-                            return sum + linkedHere;
+                            return sum + getAllocationTotal(alloc as any);
                         }, 0);
                         const ownAllocsForEntity = (t.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
                         const outgoingAllocated = (() => {
@@ -1460,18 +1480,15 @@ export function useTransactions(
                         const allocs = (t.allocations as { voucherId: string; amount: number }[] | undefined) || [];
                         // "From" side for bill-wise status: journal→payment only (not spend-wise linkedPaymentInIds below).
                         const linkedFromVoucherNosBillWise: string[] = [];
-                        // Incoming: journal se RCPT/PYMT link hone par "from JRNL" dikhana; bill-wise view mein bhi.
-                        vouchers.forEach((v: any) => {
-                            if (v.type !== 'journal') return;
-                            if (!isVoucherForCurrentEntity(v)) return;
-                            const vAllocs = (v.allocations as { voucherId: string; amount: number; linkedAccountId?: string }[] | undefined) || [];
-                            if (!vAllocs.some((a: any) => a.voucherId === t.id)) return;
+                        for (const { src: v } of allocEdgesByTargetId.get(String(t.id)) ?? []) {
+                            if (v.type !== 'journal') continue;
+                            if (!isVoucherForCurrentEntity(v)) continue;
                             const no = v.voucherNumber ?? v.voucher_number ?? '';
                             if (no && !linkedFromVoucherNos.includes(no)) {
                                 linkedFromVoucherNos.push(no);
                                 linkedFromVoucherNosBillWise.push(no);
                             }
-                        });
+                        }
                         // Bill-wise only: allocations (sale/purchase/salary/OB) — for party/staff/group billwise view we show only these in status.
                         const linkedToVoucherNosBillWise: string[] = [];
                         allocs.forEach((a: any) => {
@@ -1479,7 +1496,7 @@ export function useTransactions(
                                 linkedToVoucherNos.push("Opening Balance");
                                 linkedToVoucherNosBillWise.push("Opening Balance");
                             } else {
-                                const target = vouchers.find((v: any) => v.id === a.voucherId);
+                                const target = voucherById.get(String(a.voucherId));
                                 const no = target?.voucherNumber ?? target?.voucher_number ?? '';
                                 if (no) {
                                     linkedToVoucherNos.push(no);
@@ -1489,17 +1506,15 @@ export function useTransactions(
                         });
                         // Spend-wise: Payment In ↔ Payment Out / Contra. Do not add to BillWise — party/staff billwise status shows only bill-wise link.
                         if (t.type === 'payment_in' || t.type === 'direct_income') {
-                            vouchers.forEach((v: any) => {
-                                if (v.type !== 'payment_out' && v.type !== 'direct_expense' && v.type !== 'contra') return;
-                                const ids = (v.linkedPaymentInIds as string[] | undefined) || [];
-                                if (!ids.includes(t.id)) return;
+                            for (const v of spendWisePayOutsByLinkedReceiptId.get(String(t.id)) ?? []) {
+                                if (v.type !== 'payment_out' && v.type !== 'direct_expense' && v.type !== 'contra') continue;
                                 const no = v.voucherNumber ?? v.voucher_number ?? '';
                                 if (no && !linkedToVoucherNos.includes(no)) linkedToVoucherNos.push(no);
-                            });
+                            }
                         } else {
                             const ids = (t.linkedPaymentInIds as string[] | undefined) || [];
                             ids.forEach((id: string) => {
-                                const v = vouchers.find((x: any) => x.id === id);
+                                const v = voucherById.get(String(id));
                                 const no = v?.voucherNumber ?? v?.voucher_number ?? '';
                                 if (no && !linkedFromVoucherNos.includes(no)) linkedFromVoucherNos.push(no);
                             });

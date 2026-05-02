@@ -5,6 +5,7 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 import { Providers } from './providers';
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { PocketSerwistProvider } from "@/components/serwist/PocketSerwistProvider";
 
 /** CDN fonts hata kar bundle + `swap` — pehla load par 20s+ jaisi block kam (slow Google Fonts / dns) */
 const fontInter = Inter({
@@ -20,8 +21,14 @@ const fontSpaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
+  applicationName: 'Pocket Ledger',
   title: 'Pocket Ledger',
   description: 'Modern Accounting Software',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Pocket Ledger',
+  },
   // Browser tab / bookmark / PWA: same asset as Electron `public/app-icon.png` (EXE icon)
   icons: {
     icon: [{ url: '/app-icon.png', type: 'image/png' }],
@@ -49,9 +56,11 @@ export default function RootLayout({
         <meta name="theme-color" content="#f1f5f9" />
       </head>
       <body className="font-body antialiased">
-        <Providers>
-          {children}
-        </Providers>
+        <PocketSerwistProvider>
+          <Providers>
+            {children}
+          </Providers>
+        </PocketSerwistProvider>
         <Toaster />
         <SonnerToaster />
       </body>

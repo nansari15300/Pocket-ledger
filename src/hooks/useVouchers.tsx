@@ -113,6 +113,155 @@ function sqliteCachedRowsForSetter(cached: any[], orderByField?: string): any[] 
   return base.map(stripMirrorMetaForEntityListRow);
 }
 
+/** Firestore `where('…','in', …)` discrete values cap — pura `users` scan ki jagah chunk queries. */
+const FIRESTORE_UID_IN_CHUNK = 30;
+
+/**
+ * Ledger masters already hook state me ho to voucher-linked ids ko direct map se naam do;
+ * sequential `getDoc` per voucher id (400+ rows) Chrome hang / "Page Unresponsive" trigger karta tha — plan limits se unrelated.
+ */
+function buildJournalLinkedEntityNameLookup(
+  parties: Party[],
+  staff: Staff[],
+  accounts: Account[],
+  taxes: Tax[],
+  expenseAccounts: ExpenseAccount[],
+  items: Item[]
+): Map<string, string> {
+  const m = new Map<string, string>();
+  const put = (id: unknown, nm: unknown) => {
+    if (id == null || id === "") return;
+    const name = typeof nm === "string" ? nm.trim() : "";
+    if (!name || name === "Unknown" || name === "N/A") return;
+    m.set(String(id), name);
+  };
+  parties.forEach((p) => put(p?.id, p?.name));
+  staff.forEach((s) => put(s?.id, s?.name));
+  accounts.forEach((a) => put(a?.id, (a as Account)?.accountName));
+  taxes.forEach((t) => put(t?.id, t?.name));
+  expenseAccounts.forEach((e) => put(e?.id, e?.name));
+  items.forEach((it) => put(it?.id, it?.name));
+  return m;
+}
+
+/** User doc snapshot → voucher “User column” text; email prefix heuristic raw-uid avoidance. */
+function displayNameFromUserFirestoreDoc(data: Record<string, unknown> | undefined, docId: string): string | null {
+  if (!data) return null;
+  const uid = (data.uid as string) || docId;
+  if (!uid) return null;
+  const email = typeof data.email === "string" ? data.email : "";
+  const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
+  const raw = (data.displayName || data.name || emailPrefix || null) as string | null;
+  if (!raw || raw === "Unknown" || raw === "N/A") return null;
+  const isUIDPattern =
+    raw.length > 15 && /^[a-zA-Z0-9_-]+$/.test(raw) && !raw.includes("@") && !raw.includes(" ");
+  const name = isUIDPattern && emailPrefix ? emailPrefix : raw;
+  return name || null;
+}
+
+/**
+ * Bulk uid → display name WITHOUT `getDocs(collection(users))` (poor scalability + freezes UI on company load).
+ */
+async function batchFetchUserDisplayNamesFromFirestore(uidList: string[], shouldAbort: () => boolean): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const uniq = [...new Set(uidList.map((u) => String(u || "").trim()).filter(Boolean))];
+  if (!uniq.length) return out;
+  for (let i = 0; i < uniq.length; i += FIRESTORE_UID_IN_CHUNK) {
+    if (shouldAbort()) return out;
+    const chunk = uniq.slice(i, i + FIRESTORE_UID_IN_CHUNK);
+    try {
+      const q = query(collection(firestore, "users"), where("uid", "in", chunk));
+      const snap = await getDocs(q);
+      snap.docs.forEach((docSnap) => {
+        const nm = displayNameFromUserFirestoreDoc(docSnap.data() as Record<string, unknown>, docSnap.id);
+        if (!nm) return;
+        const data = docSnap.data() as { uid?: string };
+        const u = typeof data.uid === "string" && data.uid.trim() ? data.uid : docSnap.id;
+        if ((out[u] || "") !== nm) out[u] = nm;
+      });
+    } catch {
+      /* rights / offline — per-uid fallback neeche */
+    }
+  }
+  const stale = uniq.filter((u) => !out[u]);
+  /** Chunked `where('uid','in',…)` baad fallback — parallel sirf UID scope (whole `users` scan nahi). */
+  const USER_UID_FETCH_PARALLEL = 12;
+  for (let j = 0; j < stale.length; j += USER_UID_FETCH_PARALLEL) {
+    if (shouldAbort()) return out;
+    const slice = stale.slice(j, j + USER_UID_FETCH_PARALLEL);
+    await Promise.all(
+      slice.map(async (uid) => {
+        try {
+          const dq = query(collection(firestore, "users"), where("uid", "==", uid));
+          const ds = await getDocs(dq);
+          let data = ds.docs[0]?.data() as Record<string, unknown> | undefined;
+          if (!data) {
+            const legacy = await getDoc(doc(firestore, "users", uid));
+            if (legacy.exists()) data = legacy.data() as Record<string, unknown>;
+          }
+          const nm = displayNameFromUserFirestoreDoc(data, uid);
+          if (nm && (out[uid] || "") !== nm) out[uid] = nm;
+        } catch {
+          /* skip */
+        }
+      })
+    );
+  }
+  return out;
+}
+
+/**
+ * Parties / … ke baad jo ids bachen — cloud mode me bounded parallel Firestore probe (sirf zaroorat par).
+ */
+async function resolveJournalAccountFirestoreParallel(
+  companyDocId: string,
+  ids: string[],
+  shouldAbort: () => boolean,
+  concurrency: number
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (!companyDocId || !ids.length) return out;
+
+  async function probeOne(accountId: string): Promise<{ id: string; name: string } | null> {
+    const collectionsToSearch = ["parties", "bank_accounts", "staff", "items", "expense_accounts", "taxes", "users"] as const;
+    const nameFields = ["name", "accountName", "name", "name", "name", "name", "displayName"] as const;
+    for (let i = 0; i < collectionsToSearch.length; i++) {
+      const collectionName = collectionsToSearch[i];
+      const nameField = nameFields[i];
+      try {
+        if (collectionName === "users") {
+          const dq = query(collection(firestore, "users"), where("uid", "==", accountId));
+          const snap = await getDocs(dq);
+          const d = snap.docs[0]?.data() as Record<string, unknown> | undefined;
+          if (d && d[nameField] != null && String(d[nameField]).trim()) {
+            return { id: accountId, name: String(d[nameField]).trim() };
+          }
+        } else {
+          const docRef = doc(firestore, `companies/${companyDocId}/${collectionName}`, accountId);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const name = docSnap.data()?.[nameField] as string | undefined;
+            if (name && String(name).trim()) return { id: accountId, name: String(name).trim() };
+          }
+        }
+      } catch {
+        /* next collection */
+      }
+    }
+    return { id: accountId, name: "Unknown Account" };
+  }
+
+  for (let k = 0; k < ids.length; k += concurrency) {
+    if (shouldAbort()) return out;
+    const slice = ids.slice(k, k + concurrency);
+    const settled = await Promise.all(slice.map((id) => probeOne(id)));
+    for (const row of settled) {
+      if (row && row.name && row.name !== "Unknown Account") out[row.id] = row.name;
+    }
+  }
+  return out;
+}
+
 /** Parties/items/… — local cache merge; optional date sort sirf vouchers ke liye. */
 function mergeEntityListsById(prev: any[], cached: any[], orderByField?: string): any[] {
   if (!cached.length) return prev;
@@ -236,6 +385,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const [expenseGroups, setExpenseGroups] = useState<ExpenseGroup[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const [journalAccountNames, setJournalAccountNames] = useState<Record<string, string>>({});
+  /** Stale-deps se effect storm na ho: async name fetch closure me fresh cache (plan limits unrelated hang fix). */
+  const journalAccountNamesRef = useRef<Record<string, string>>({});
+  journalAccountNamesRef.current = journalAccountNames;
+  const userNamesRef = useRef<Record<string, string>>({});
+  userNamesRef.current = userNames;
   /** Firestore snapshot → SQLite batch mirror debounce (static); unmount pe clear. */
   const mirrorSnapshotTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const lastCompanyIdRef = useRef<string | null>(null);
@@ -254,9 +408,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     setAccountGroups([]);
     setStaffGroups([]);
     setTaxGroups([]);
-    setExpenseGroups([]);
-    setJournalAccountNames({});
-    setLoading(true);
+      setExpenseGroups([]);
+      setJournalAccountNames({});
+      setUserNames({});
+      setLoading(true);
     lastCompanyIdRef.current = companyId ?? null;
   }, [companyId]);
 
@@ -741,68 +896,71 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
     return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
   }, [companyId, company?.storageOption]);
-  
-  const fetchAccountName = useCallback(async (accountId: string): Promise<string> => {
-    if (!companyId || !accountId) return 'Unknown Account';
-    
-    // Check local state cache first
-    if (journalAccountNames[accountId]) return journalAccountNames[accountId];
 
-    const collectionsToSearch = ['parties', 'bank_accounts', 'staff', 'items', 'expense_accounts', 'taxes', 'users'];
-    const nameFields = ['name', 'accountName', 'name', 'name', 'name', 'name', 'displayName'];
-
-    for (let i = 0; i < collectionsToSearch.length; i++) {
-        const collectionName = collectionsToSearch[i];
-        const nameField = nameFields[i];
-        try {
-            if (isLocalCompanySelected) {
-              // Local-only mode: avoid Firestore reads in helper lookup.
-              return "Unknown Account";
-            }
-            if (collectionName === 'users') {
-                // User doc ID may be name_uid; look up by uid field
-                const q = query(collection(firestore, 'users'), where('uid', '==', accountId));
-                const snap = await getDocs(q);
-                const d = snap.docs[0]?.data();
-                if (d) return d[nameField] || 'Unknown';
-            } else {
-                const docRef = doc(firestore, `companies/${companyId}/${collectionName}`, accountId);
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const name = docSnap.data()?.[nameField] || 'Unknown';
-                    return name;
-                }
-            }
-        } catch (error) {}
-    }
-    
-    return 'Unknown Account';
-}, [companyId, journalAccountNames, isLocalCompanySelected]);
-
-
+  /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */
   useEffect(() => {
-    const fetchAllNames = async () => {
-        if (!vouchersForDisplay.length) return;
+    if (!vouchersForDisplay.length) return;
 
+    let cancelled = false;
+    const debounceMs = vouchersForDisplay.length > 120 ? 450 : 200;
+    const timer = window.setTimeout(() => {
+      void (async () => {
         const idsToFetch = new Set<string>();
         const userIdsToFetch = new Set<string>();
-        
-        vouchersForDisplay.forEach(v => {
-            if (v.userId) userIdsToFetch.add(v.userId);
-            const accountFields = ['partyId', 'accountId', 'fromAccountId', 'toAccountId', 'staffId', 'taxAccountId', 'incomeAccountId', 'expenseAccountId'];
-            accountFields.forEach(field => {
-                if (v[field]) idsToFetch.add(v[field]);
-            });
-            (v.entries || []).forEach((e: any) => { if (e.accountId) idsToFetch.add(e.accountId) });
+
+        vouchersForDisplay.forEach((v) => {
+          if (v.userId) userIdsToFetch.add(v.userId);
+          const accountFields = [
+            "partyId",
+            "accountId",
+            "fromAccountId",
+            "toAccountId",
+            "staffId",
+            "taxAccountId",
+            "incomeAccountId",
+            "expenseAccountId",
+          ];
+          accountFields.forEach((field) => {
+            if (v[field]) idsToFetch.add(v[field]);
+          });
+          (v.entries || []).forEach((e: any) => {
+            if (e.accountId) idsToFetch.add(e.accountId);
+          });
         });
 
         const newAccountNames: Record<string, string> = {};
-        for (const id of Array.from(idsToFetch)) {
-            if (!journalAccountNames[id]) {
-                newAccountNames[id] = await fetchAccountName(id);
-            }
+        const masterLookup = buildJournalLinkedEntityNameLookup(
+          parties,
+          staff,
+          accounts,
+          taxes,
+          unprocessedExpenseAccounts,
+          items
+        );
+        const journalSnapshot = journalAccountNamesRef.current;
+
+        for (const id of idsToFetch) {
+          if (!id) continue;
+          const sid = String(id);
+          if (journalSnapshot[sid]) continue;
+          const fromMaster = masterLookup.get(sid);
+          if (fromMaster) newAccountNames[sid] = fromMaster;
         }
-        
+
+        const firestoreAccountIds = [...idsToFetch]
+          .map((id) => String(id))
+          .filter((sid) => sid && !journalSnapshot[sid] && !newAccountNames[sid]);
+
+        if (!cancelled && !isLocalCompanySelected && companyId && firestoreAccountIds.length) {
+          const fromFs = await resolveJournalAccountFirestoreParallel(
+            companyId,
+            firestoreAccountIds,
+            () => cancelled,
+            12
+          );
+          Object.assign(newAccountNames, fromFs);
+        }
+
         const newUserNames: Record<string, string> = {};
         const localUserNameById: Record<string, string> = {};
         const localSessionUser = isLocalCompanySelected && companyId ? getLocalAuthUser(companyId) : null;
@@ -810,30 +968,29 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           (localSessionUser?.displayName || localSessionUser?.username || "").trim() ||
           (((company as any)?.adminUsername as string) || "").trim() ||
           "Admin";
-        // Common local IDs fallback: many local vouchers may store `local`/`local_guest_user`.
+
         localUserNameById["local"] = localSessionDisplayName;
         localUserNameById["local_guest_user"] = localSessionDisplayName;
         if (localSessionUser?.id) localUserNameById[String(localSessionUser.id)] = localSessionDisplayName;
         if (localSessionUser?.username) localUserNameById[String(localSessionUser.username)] = localSessionDisplayName;
-        // First, learn names directly from vouchers themselves (works even when users query is restricted).
+
+        const nameSnapshot = userNamesRef.current;
         vouchersForDisplay.forEach((v: any) => {
-            const uid = v?.userId;
-            let fromVoucher = v?.userDisplayName || v?.userName || null;
-            // Local placeholder names ko human display name se replace karo.
-            if (fromVoucher && String(fromVoucher).toLowerCase().trim() === "local") {
-              fromVoucher = localSessionDisplayName;
+          const uid = v?.userId;
+          let fromVoucher = v?.userDisplayName || v?.userName || null;
+          if (fromVoucher && String(fromVoucher).toLowerCase().trim() === "local") {
+            fromVoucher = localSessionDisplayName;
+          }
+          if (!uid || !fromVoucher) return;
+          if (fromVoucher !== "Unknown" && fromVoucher !== "N/A") {
+            if ((nameSnapshot[uid] || "") !== fromVoucher) {
+              newUserNames[uid] = fromVoucher;
             }
-            if (!uid || !fromVoucher) return;
-            if (fromVoucher !== "Unknown" && fromVoucher !== "N/A") {
-                if ((userNames[uid] || "") !== fromVoucher) {
-                    newUserNames[uid] = fromVoucher;
-                }
-            }
+          }
         });
 
         if (isLocalCompanySelected && companyId) {
           try {
-            // Company users ab SQLite `localCompanyUsers` se — local Node API (3001) optional.
             const localDoc = await getLocalCompanyById(companyId);
             const localUsers = parseLocalCompanyUserRows(
               (localDoc as { localCompanyUsers?: unknown } | null)?.localCompanyUsers
@@ -845,131 +1002,97 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               if (u.username) localUserNameById[String(u.username)] = display;
             });
           } catch {
-            // Non-blocking: voucher grid me naam fallback chain se aayega.
-          }
-        }
-
-        // Bulk preload user names once (more reliable for shared users than per-uid queries).
-        const bulkUserNameByUid: Record<string, string> = {};
-        if (!isLocalCompanySelected) {
-          try {
-              const allUsersSnap = await getDocs(collection(firestore, "users"));
-              allUsersSnap.docs.forEach((d) => {
-                  const data = d.data() as any;
-                  const uid = (data?.uid as string) || d.id;
-                  const email = typeof data?.email === "string" ? data.email : "";
-                  const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-                  const name = data?.displayName || data?.name || emailPrefix || null;
-                  if (uid && name && name !== "Unknown" && name !== "N/A") {
-                      bulkUserNameByUid[uid] = name;
-                  }
-              });
-          } catch {
-              // ignore; fallback paths below still run
+            // Non-blocking: voucher grid naam fallback chain se bhar sakta hai.
           }
         }
 
         const currentUserName = user ? (customUser?.displayName || user.displayName || user.email || "You") : "";
-        for (const uid of Array.from(userIdsToFetch)) {
-            // Refetch if missing, Unknown, or N/A
-            if ((!userNames[uid] || userNames[uid] === "Unknown" || userNames[uid] === "N/A") && !newUserNames[uid]) {
-                if (bulkUserNameByUid[uid]) {
-                    if ((userNames[uid] || "") !== bulkUserNameByUid[uid]) {
-                        newUserNames[uid] = bulkUserNameByUid[uid];
-                    }
-                    continue;
-                }
-                if (uid === user?.uid && currentUserName) {
-                    if ((userNames[uid] || "") !== currentUserName) {
-                        newUserNames[uid] = currentUserName;
-                    }
-                    continue;
-                }
-                // Local company users: resolve by local user id/username map so User column doesn't show N/A.
-                if (localUserNameById[uid]) {
-                    const resolved = localUserNameById[uid];
-                    if ((userNames[uid] || "") !== resolved) {
-                        newUserNames[uid] = resolved;
-                    }
-                    continue;
-                }
-                // Company metadata fallback (works for shared users without global users query access).
-                const ownerEmail = (company as any)?.ownerEmail as string | undefined;
-                const ownerPrefix = ownerEmail?.includes("@") ? ownerEmail.split("@")[0] : "";
-                if (uid === (company as any)?.ownerId && ownerPrefix) {
-                    if ((userNames[uid] || "") !== ownerPrefix) {
-                        newUserNames[uid] = ownerPrefix;
-                    }
-                    continue;
-                }
-                const sharedUser = ((company as any)?.sharedWith || []).find((su: any) => su?.uid === uid);
-                if (sharedUser?.name) {
-                    const sharedName = String(sharedUser.name);
-                    if ((userNames[uid] || "") !== sharedName) {
-                        newUserNames[uid] = sharedName;
-                    }
-                    continue;
-                }
-                try {
-                    if (isLocalCompanySelected) {
-                      continue;
-                    }
-                    // User doc ID may be name_uid (e.g. manishshah46_AaCbiR708nhGe28Ltf217YZzpNv1), so query by uid field first
-                    const q = query(collection(firestore, "users"), where("uid", "==", uid));
-                    const snap = await getDocs(q);
-                    let data = snap.docs[0]?.data();
-                    
-                    if (!data) {
-                        // Fallback: doc ID might be uid (legacy)
-                        const docSnap = await getDoc(doc(firestore, "users", uid));
-                        if (docSnap.exists()) {
-                            data = docSnap.data();
-                        }
-                        // Do NOT load entire users collection per-uid (causes hang in production)
-                    }
-                    
-                    const displayName = data?.displayName;
-                    const email = typeof data?.email === "string" ? data.email : "";
-                    const emailPrefix = email.includes("@") ? email.split("@")[0] : "";
-                    let userName = displayName || data?.name || emailPrefix || null;
 
-                    // If detected value still looks like raw UID, use email prefix if possible.
-                    if (userName) {
-                        const isUIDPattern = userName.length > 15 && /^[a-zA-Z0-9_-]+$/.test(userName) && !userName.includes("@") && !userName.includes(" ");
-                        if (isUIDPattern && emailPrefix) {
-                            userName = emailPrefix;
-                        }
-                    }
+        for (const uid of userIdsToFetch) {
+          if (!uid) continue;
+          if (newUserNames[uid]) continue;
+          const existingUn = nameSnapshot[uid] || "";
+          if (existingUn && existingUn !== "Unknown" && existingUn !== "N/A") continue;
 
-                    if (userName && userName !== "Unknown" && userName !== "N/A" && (userNames[uid] || "") !== userName) {
-                        newUserNames[uid] = userName;
-                    }
-                } catch (e) {
-                    // On error, don't store anything - let local fetch handle it
-                }
-            }
+          if (uid === user?.uid && currentUserName) {
+            if (existingUn !== currentUserName) newUserNames[uid] = currentUserName;
+            continue;
+          }
+          if (localUserNameById[uid]) {
+            const resolved = localUserNameById[uid];
+            if (existingUn !== resolved) newUserNames[uid] = resolved;
+            continue;
+          }
+
+          const ownerEmail = (company as any)?.ownerEmail as string | undefined;
+          const ownerPrefix = ownerEmail?.includes("@") ? ownerEmail.split("@")[0] : "";
+          if (uid === (company as any)?.ownerId && ownerPrefix) {
+            if (existingUn !== ownerPrefix) newUserNames[uid] = ownerPrefix;
+            continue;
+          }
+
+          const sharedUser = ((company as any)?.sharedWith || []).find((su: any) => su?.uid === uid);
+          if (sharedUser?.name) {
+            const sharedName = String(sharedUser.name);
+            if (existingUn !== sharedName) newUserNames[uid] = sharedName;
+            continue;
+          }
         }
+
+        const uidsNeedingFirestore = [...userIdsToFetch].filter((uid) => {
+          if (!uid || isLocalCompanySelected || cancelled) return false;
+          if (newUserNames[uid]) return false;
+          const ex = nameSnapshot[uid] || "";
+          return !ex || ex === "Unknown" || ex === "N/A";
+        });
+
+        if (uidsNeedingFirestore.length && !cancelled) {
+          const bulkFetched = await batchFetchUserDisplayNamesFromFirestore(uidsNeedingFirestore, () => cancelled);
+          for (const [uidKey, nm] of Object.entries(bulkFetched)) {
+            if (!nm || nm === "Unknown" || nm === "N/A") continue;
+            if ((nameSnapshot[uidKey] || "") !== nm) newUserNames[uidKey] = nm;
+          }
+        }
+
+        if (cancelled) return;
 
         if (Object.keys(newAccountNames).length > 0) {
-            setJournalAccountNames(prev => ({ ...prev, ...newAccountNames }));
+          setJournalAccountNames((prev) => ({ ...prev, ...newAccountNames }));
         }
         if (Object.keys(newUserNames).length > 0) {
-            setUserNames(prev => {
-                let changed = false;
-                const next = { ...prev };
-                for (const [uid, name] of Object.entries(newUserNames)) {
-                    if ((next[uid] || "") !== name) {
-                        next[uid] = name;
-                        changed = true;
-                    }
-                }
-                return changed ? next : prev;
-            });
+          setUserNames((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const [uid, name] of Object.entries(newUserNames)) {
+              if ((next[uid] || "") !== name) {
+                next[uid] = name;
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
         }
-    };
+      })();
+    }, debounceMs);
 
-    fetchAllNames();
-}, [vouchersForDisplay, fetchAccountName, journalAccountNames, userNames, company, user, customUser]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    vouchersForDisplay,
+    parties,
+    staff,
+    accounts,
+    taxes,
+    unprocessedExpenseAccounts,
+    items,
+    companyId,
+    isLocalCompanySelected,
+    company,
+    user,
+    customUser,
+  ]);
 
 
   // --- Optimization: Calculate Aggregates ONCE ---

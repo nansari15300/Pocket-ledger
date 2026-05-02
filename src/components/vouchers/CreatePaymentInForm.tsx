@@ -33,6 +33,7 @@ import { useDate } from "@/hooks/useDate";
 import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 import BsDatePicker from "../ui/BsDatePicker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
@@ -1324,115 +1325,143 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (voucherType === "payment_in" && Array.isArray(sanitizedData.allocations)) {
           initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
         }
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEdit) {
+        const approveBanner = !!(approveAfterSave && savedDoc?.id);
+        if (approveBanner) {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            isEdit ? "Receipt updated and approved." : "Receipt saved and approved."
+          );
+        } else {
+          replaceVoucherSaveLoadingWithShortSuccess(
+            toastId,
+            "Receipt Recorded!",
+            `Voucher #${data.voucherNumber} has been ${isEdit ? "updated" : "created"}.`
+          );
+        }
+        setIsLoading(false);
+
+        const postSaveTail = async () => {
+          if (approveBanner && !isEdit && savedDoc?.id) {
             await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
           }
-          sonnerToast.success(isEdit ? "Receipt updated and approved." : "Receipt saved and approved.", { id: toastId });
-        } else {
-          sonnerToast.success("Receipt Recorded!", { id: toastId, description: `Voucher #${data.voucherNumber} has been ${isEdit ? 'updated' : 'created'}.` });
-        }
-        if (companyId && company) {
-          const vid = docId ?? voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const changes = getChangedFieldLabels(
-              { amount: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId, partyId: oldV?.partyId, staffId: oldV?.staffId },
-              { amount: data.amount, narration: data.narration, date: data.date, voucherNumber: data.voucherNumber, accountId: data.accountId, partyId: data.partyId, staffId: data.staffId },
-              [
-                { key: "amount", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "accountId", label: "Account" },
-                { key: "partyId", label: "Party" },
-                { key: "staffId", label: "Staff" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: data.voucherNumber,
-              voucherType: voucherType,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(cleanAmount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: data.voucherNumber,
-              voucherType: voucherType,
-              amount: cleanAmount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
+          if (companyId && company) {
+            const vid = docId ?? voucher?.id;
+            if (isEdit) {
+              const oldV = voucher as any;
+              const changes = getChangedFieldLabels(
+                { amount: oldV?.total ?? oldV?.amount, narration: oldV?.narration, date: oldV?.date?.toDate?.() ?? oldV?.date, voucherNumber: oldV?.voucherNumber, accountId: oldV?.accountId, partyId: oldV?.partyId, staffId: oldV?.staffId },
+                { amount: data.amount, narration: data.narration, date: data.date, voucherNumber: data.voucherNumber, accountId: data.accountId, partyId: data.partyId, staffId: data.staffId },
+                [
+                  { key: "amount", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "accountId", label: "Account" },
+                  { key: "partyId", label: "Party" },
+                  { key: "staffId", label: "Staff" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: data.voucherNumber,
+                voucherType: voucherType,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(cleanAmount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: data.voucherNumber,
+                voucherType: voucherType,
+                amount: cleanAmount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
           }
-        }
 
-        if (print && docId && company) {
-          // openPrintDirect + in-app preview (mobile/static) — purana receipt URL WebView ma PDF seedha kholta tha
-          const payeeLabel =
-            data.payeeType === "party"
-              ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
-              : data.payeeType === "staff"
-                ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
-                : data.payeeType === "tax"
-                  ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
-                  : data.payeeType === "income"
-                    ? expenseAccounts.find((e) => e.id === data.incomeAccountId)?.name ?? "—"
-                    : data.payeeName?.trim() || "—";
-          const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
-          try {
-            await printPaymentVoucherReceipt({
-              company: {
-                name: company.name,
-                pan: company.pan,
-                phone: company.phone,
-                address: company.address,
-                decimalPlaces: company.decimalPlaces,
-                showDrCr: company.showDrCr,
-                showCurrencySymbol: company.showCurrencySymbol,
-                logoUrl: company.logoUrl,
-              },
-              dateSystem,
-              formatDate,
-              formatDateBS,
-              formatCurrencyForPrint,
-              voucherId: docId,
-              voucherType,
-              date: data.date instanceof Date ? data.date : new Date(data.date),
-              voucherNumber: data.voucherNumber,
-              amount: cleanAmount,
-              narration: data.narration,
-              payeeLabel,
-              accountLabel,
-            });
-          } catch (printErr) {
-            console.error(printErr);
-            sonnerToast.error("Print preview failed", {
-              description: printErr instanceof Error ? printErr.message : "Please try again.",
-            });
+          if (print && docId && company) {
+            const payeeLabel =
+              data.payeeType === "party"
+                ? processedParties.find((p) => p.id === data.partyId)?.name ?? "—"
+                : data.payeeType === "staff"
+                  ? processedStaff.find((s) => s.id === data.staffId)?.name ?? "—"
+                  : data.payeeType === "tax"
+                    ? processedTaxes.find((t) => t.id === data.taxAccountId)?.name ?? "—"
+                    : data.payeeType === "income"
+                      ? expenseAccounts.find((e) => e.id === data.incomeAccountId)?.name ?? "—"
+                      : data.payeeName?.trim() || "—";
+            const accountLabel = processedAccounts.find((a) => a.id === data.accountId)?.accountName ?? "—";
+            try {
+              await printPaymentVoucherReceipt({
+                company: {
+                  name: company.name,
+                  pan: company.pan,
+                  phone: company.phone,
+                  address: company.address,
+                  decimalPlaces: company.decimalPlaces,
+                  showDrCr: company.showDrCr,
+                  showCurrencySymbol: company.showCurrencySymbol,
+                  logoUrl: company.logoUrl,
+                },
+                dateSystem,
+                formatDate,
+                formatDateBS,
+                formatCurrencyForPrint,
+                voucherId: docId,
+                voucherType,
+                date: data.date instanceof Date ? data.date : new Date(data.date),
+                voucherNumber: data.voucherNumber,
+                amount: cleanAmount,
+                narration: data.narration,
+                payeeLabel,
+                accountLabel,
+              });
+            } catch (printErr) {
+              console.error(printErr);
+              sonnerToast.error("Print preview failed", {
+                description: printErr instanceof Error ? printErr.message : "Please try again.",
+                duration: 4500,
+              });
+            }
           }
-        }
 
-        if (saveAndNew) {
+          if (saveAndNew) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
             setAllocations([]);
             await fetchVoucherNumber();
+          }
+
+          if (approveAfterSave && voucher?.id) onSuccess?.();
+          else if (!approveAfterSave) onSuccess?.();
+
+          if (saveAndNew) {
+            onVoucherAction?.("saved", true, docId ?? undefined);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId ?? undefined);
+          void postSaveTail().catch((err) => {
+            console.error("[CreatePaymentInForm] post-save tail", err);
+            sonnerToast.error("Receipt saved — finishing steps pending", {
+              description: err instanceof Error ? err.message : "Alerts or print may still run.",
+              duration: 4500,
+            });
+          });
+          return;
         }
 
-        if (approveAfterSave && voucher?.id) onSuccess?.();
-        else if (!approveAfterSave) onSuccess?.();
+        await postSaveTail();
 
-        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
-  
     } catch (error) {
       if (error instanceof PermissionDeniedError) {
         sonnerToast.error("Permission Denied", { id: toastId, description: error.message });

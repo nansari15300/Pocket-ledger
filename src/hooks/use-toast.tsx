@@ -13,8 +13,8 @@ import type {
 const TOAST_LIMIT = 1
 /** Default auto-dismiss for neutral / success-style toasts (matches Sonner). */
 const TOAST_DEFAULT_DURATION_MS = 1000
-/** Destructive errors stay longer so users can read them. */
-const TOAST_DESTRUCTIVE_DURATION_MS = 5000
+/** Errors: readable window; baaki success/info 1s ke around (company switch parity). */
+const TOAST_DESTRUCTIVE_DURATION_MS = 2500
 
 type ToasterToast = Omit<ToastProps, "title" | "description"> & {
   id: string

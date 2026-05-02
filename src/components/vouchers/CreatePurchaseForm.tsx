@@ -40,6 +40,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1073,99 +1074,113 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             throw new Error("Failed to save voucher and get ID.");
         }
 
-        // Apply pending bill-wise link allocations (from Link payment dialog DONE — local only until Save)
-        if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
-          const partyIdForLink = data.partyId ?? form.getValues("partyId");
-          if (partyIdForLink) {
-            const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
-            const showOBRow = (Number(partyForOb?.openingBalance ?? 0) > 0);
-            try {
-              await applyAdvancesAllocationsToServer({
-                companyId,
-                mode: "purchase",
-                targetVoucherId: docId,
-                targetPartyId: partyIdForLink,
-                balanceKind: "all",
-                linkedAmounts: pendingLinkAllocations,
-                vouchers,
-                showOBRow,
-              });
-              if (isMounted.current) setPendingLinkAllocations(null);
-            } catch (e) {
-              console.error(e);
-              sonnerToast.error("Purchase saved but linking advances failed.");
+        const successDescription =
+          approveAfterSave && savedDoc?.id
+            ? isEditForApprove
+              ? "Purchase updated and approved."
+              : "Purchase saved and approved."
+            : "Purchase bill saved successfully.";
+        replaceVoucherSaveLoadingWithShortSuccess(toastId, "Success", successDescription);
+        if (isMounted.current) setIsLoading(false);
+
+        const postSaveTail = async () => {
+          if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
+            const partyIdForLink = data.partyId ?? form.getValues("partyId");
+            if (partyIdForLink) {
+              const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
+              const showOBRow = Number(partyForOb?.openingBalance ?? 0) > 0;
+              try {
+                await applyAdvancesAllocationsToServer({
+                  companyId,
+                  mode: "purchase",
+                  targetVoucherId: docId,
+                  targetPartyId: partyIdForLink,
+                  balanceKind: "all",
+                  linkedAmounts: pendingLinkAllocations,
+                  vouchers,
+                  showOBRow,
+                });
+                if (isMounted.current) setPendingLinkAllocations(null);
+              } catch (e) {
+                console.error(e);
+                sonnerToast.error("Purchase saved but linking advances failed.", { duration: 4500 });
+              }
             }
           }
-        }
-
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEditForApprove) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+          if (approveAfterSave && savedDoc?.id) {
+            if (!isEditForApprove) {
+              await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+            }
           }
-          sonnerToast.success("Success", { id: toastId, description: isEditForApprove ? "Purchase updated and approved." : "Purchase saved and approved." });
-        } else {
-          sonnerToast.success("Success", {
-            id: toastId,
-            description: "Purchase bill saved successfully.",
-          });
-        }
-
-        // Company triggerSync hata: save ke baad registry reload se poora layout hilta tha; vouchers BUMP/snapshot se update.
-        if (companyId && company) {
-          const isEdit = !!voucher?.id;
-          const amount = Number((finalData as any).total) || 0;
-          const vid = docId ?? voucher?.id;
-          if (isEdit) {
-            const oldV = voucher as any;
-            const newV = finalData as any;
-            const changes = getChangedFieldLabels(
-              { total: oldV?.total, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, partyId: oldV?.partyId },
-              { total: newV?.total, narration: newV?.narration, date: newV?.date, voucherNumber: newV?.voucherNumber, partyId: newV?.partyId },
-              [
-                { key: "total", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "partyId", label: "Party" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: finalData.voucherNumber,
-              voucherType: "purchase",
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(amount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: finalData.voucherNumber,
-              voucherType: "purchase",
-              amount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
+          if (companyId && company) {
+            const isEditHist = !!voucher?.id;
+            const amount = Number((finalData as any).total) || 0;
+            const vid = docId ?? voucher?.id;
+            if (isEditHist) {
+              const oldV = voucher as any;
+              const newV = finalData as any;
+              const changes = getChangedFieldLabels(
+                { total: oldV?.total, narration: oldV?.narration, date: oldV?.date, voucherNumber: oldV?.voucherNumber, partyId: oldV?.partyId },
+                { total: newV?.total, narration: newV?.narration, date: newV?.date, voucherNumber: newV?.voucherNumber, partyId: newV?.partyId },
+                [
+                  { key: "total", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "partyId", label: "Party" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: finalData.voucherNumber,
+                voucherType: "purchase",
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(amount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: finalData.voucherNumber,
+                voucherType: "purchase",
+                amount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
           }
-        }
-        
-        if (print && docId) {
+          if (print && docId) {
             window.open(`/sale/invoice/${docId}`, "_blank");
-        }
-
-        if (saveAndNew && isMounted.current) {
+          }
+          if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
+          }
+          if (saveAndNew && isMounted.current) {
+            onVoucherAction?.("saved", true, docId ?? undefined);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId ?? undefined);
+          void postSaveTail().catch((err) => {
+            console.error("[CreatePurchaseForm] post-save tail", err);
+            sonnerToast.error("Saved — background sync issue", {
+              description: err instanceof Error ? err.message : "Advances/link or alerts may finish late.",
+              duration: 4500,
+            });
+          });
+          return docId;
         }
 
-        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
+        await postSaveTail();
         return docId;
 
       } catch (error) {

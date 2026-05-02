@@ -702,7 +702,13 @@ export default function BillingPage() {
   const getFeatureValue = (plan: Plan, key: EntitlementKey): { text: string; enabled: boolean } => {
     const value = plan.entitlements[key];
 
-    if (key === "dailyVoucherLimit" || key === "monthlyVoucherLimit") {
+    // Online + Local column dono me `0` = Unlimited (billing table — admin PlanDetails placeholders ke saath align).
+    if (
+      key === "dailyVoucherLimit" ||
+      key === "monthlyVoucherLimit" ||
+      key === "dailyVoucherLimitLocal" ||
+      key === "monthlyVoucherLimitLocal"
+    ) {
       const enabled = value !== 0;
       const text = value === 0 ? "Unlimited" : String(value);
       return { text, enabled: true };

@@ -1,9 +1,23 @@
 import type { NextConfig } from "next";
 import path from "path";
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import withSerwistInit from "@serwist/next";
 
 const isStaticBuild = process.env.STATIC_BUILD === "1";
 
-const nextConfig: NextConfig = {
+/** `/~offline` precache busting — git nahi ho to UUID (Firebase CI safe). */
+function serwistOfflineRevision(): string {
+  try {
+    const out = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf-8" });
+    if (out.status === 0 && out.stdout?.trim()) return out.stdout.trim();
+  } catch {
+    /* noop */
+  }
+  return randomUUID();
+}
+
+const baseConfig: NextConfig = {
   // Next.js 16: default `next build` Turbopack use karta hai; yahan intentional `webpack()` (pdfjs-dist, aliases).
   // Prod / Firebase App Hosting: `package.json` me `next build --webpack` — warna Turbopack + webpack config = build fail.
   // Dev me React 18 Strict Mode effect 2× run karta hai — kuch navigation side-effects zyada dikhte hain.
@@ -42,4 +56,13 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Hosted PWA (pocket-ledger.com + remote URL Capacitor): Serwist precache/runtime cache.
+// `npm run build:static` / Capacitor bundled `webDir`: STATIC_BUILD — SW inject skip (duplicate/unstable with file/APK bundle).
+const withSerwist = withSerwistInit({
+  swSrc: "src/app/sw.ts",
+  swDest: "public/sw.js",
+  disable: isStaticBuild,
+  additionalPrecacheEntries: [{ url: "/~offline", revision: serwistOfflineRevision() }],
+});
+
+export default isStaticBuild ? baseConfig : withSerwist(baseConfig);

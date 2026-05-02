@@ -87,25 +87,38 @@ function toJsDateFromVoucherField(value: unknown): Date | null {
   return null;
 }
 
+/** Har save par `app_settings/plans` read throttle — voucher create latency kam (Firestore round-trip reuse). */
+const mergedPlanEntitlementsCache = new Map<PlanId, { entitlements: Entitlements; cachedAtMs: number }>();
+const MERGED_PLAN_ENTITLEMENTS_TTL_MS = 90_000;
+
 /** Admin `app_settings/plans` + default bundle — sirf entitlements (voucher limit checks). */
 async function mergePlanEntitlementsForId(planId: PlanId): Promise<Entitlements> {
+  const now = Date.now();
+  const hit = mergedPlanEntitlementsCache.get(planId);
+  if (hit && now - hit.cachedAtMs < MERGED_PLAN_ENTITLEMENTS_TTL_MS) return hit.entitlements;
+
   const defaultPlan = getPlan(planId);
+  let merged: Entitlements = defaultPlan.entitlements;
   try {
     const plansSnap = await getDoc(doc(firestore, "app_settings", "plans"));
     if (plansSnap.exists()) {
       const plansData = plansSnap.data();
       const fromFs = plansData[planId] as { entitlements?: Partial<Entitlements> } | undefined;
       if (fromFs && typeof fromFs === "object") {
-        return { ...defaultPlan.entitlements, ...(fromFs.entitlements || {}) };
+        merged = { ...defaultPlan.entitlements, ...(fromFs.entitlements || {}) };
+        mergedPlanEntitlementsCache.set(planId, { entitlements: merged, cachedAtMs: now });
+        return merged;
       }
-      // Doc hai lekin tier missing — bundled default (purana behaviour).
-      return defaultPlan.entitlements;
+      mergedPlanEntitlementsCache.set(planId, { entitlements: merged, cachedAtMs: now });
+      return merged;
     }
   } catch {
     /* Firestore fail → niche cached catalog */
   }
   const rec = readCachedPlansRecord() ?? defaultPlansRecordFallback();
-  return getPlanFromPlans(rec, planId).entitlements;
+  merged = getPlanFromPlans(rec, planId).entitlements;
+  mergedPlanEntitlementsCache.set(planId, { entitlements: merged, cachedAtMs: now });
+  return merged;
 }
 
 /** APK/static save path: Firestore plan reads slow ho sakte hain, so local/cached plan se limit check karo. */
@@ -139,6 +152,10 @@ function countLocalMirrorVouchersInRange(
     let dt: Date | null = null;
     if (raw instanceof Timestamp) dt = raw.toDate();
     else if (raw instanceof Date) dt = raw;
+    else if (typeof raw === "string" && raw.trim()) {
+      const d = new Date(raw);
+      dt = !Number.isNaN(d.getTime()) ? d : null;
+    }
     else if (raw && typeof raw === "object" && "toDate" in raw && typeof (raw as { toDate?: () => Date }).toDate === "function") {
       try {
         dt = (raw as { toDate: () => Date }).toDate();
@@ -149,6 +166,78 @@ function countLocalMirrorVouchersInRange(
     if (!dt || Number.isNaN(dt.getTime())) return false;
     return dt >= start && dt <= end;
   }).length;
+}
+
+/**
+ * Naya voucher: din/mahine cap — SQLite mirror (`forBackupMerge`) se ginti pehle, taaki roz Firestore query na ho.
+ * Pure cloud company + SQLite khali ⇒ purana Firestore range query fallback (truth server-side).
+ */
+async function enforceDailyMonthlyVoucherQuotaForCreate(
+  companyId: string,
+  dailyLimit: number,
+  monthlyLimit: number,
+  storageOptionIsLocal: boolean
+): Promise<void> {
+  if (dailyLimit <= 0 && monthlyLimit <= 0) return;
+  const now = new Date();
+  const collPath = `companies/${companyId}/vouchers`;
+  // `forBackupMerge`: local-first + APK + cloud user jiske paas restore/prefetch cache ho — bina iske web online par rows [] rehti hain.
+  const mirrorRows = await listCompanyDocsFromBrowserDb(companyId, "vouchers", { forBackupMerge: true });
+  const countFromSqlite =
+    isLocalOnlyMode() || storageOptionIsLocal || mirrorRows.length > 0;
+
+  if (countFromSqlite) {
+    if (dailyLimit > 0) {
+      const n = countLocalMirrorVouchersInRange(mirrorRows, startOfDay(now), endOfDay(now));
+      if (n >= dailyLimit) {
+        const err = new Error(
+          `Daily voucher limit reached (${dailyLimit}). Upgrade your plan for more.`
+        ) as Error & { isVoucherLimit?: boolean };
+        err.isVoucherLimit = true;
+        throw err;
+      }
+    }
+    if (monthlyLimit > 0) {
+      const n = countLocalMirrorVouchersInRange(mirrorRows, startOfMonth(now), endOfMonth(now));
+      if (n >= monthlyLimit) {
+        const err = new Error(
+          `Monthly voucher limit reached (${monthlyLimit}). Upgrade your plan for more.`
+        ) as Error & { isVoucherLimit?: boolean };
+        err.isVoucherLimit = true;
+        throw err;
+      }
+    }
+    return;
+  }
+
+  if (dailyLimit > 0) {
+    const todayStart = Timestamp.fromDate(startOfDay(now));
+    const todayEnd = Timestamp.fromDate(endOfDay(now));
+    const dailySnap = await getDocs(
+      query(collection(firestore, collPath), where("date", ">=", todayStart), where("date", "<=", todayEnd))
+    );
+    if (dailySnap.size >= dailyLimit) {
+      const err = new Error(
+        `Daily voucher limit reached (${dailyLimit}). Upgrade your plan for more.`
+      ) as Error & { isVoucherLimit?: boolean };
+      err.isVoucherLimit = true;
+      throw err;
+    }
+  }
+  if (monthlyLimit > 0) {
+    const monthStart = Timestamp.fromDate(startOfMonth(now));
+    const monthEnd = Timestamp.fromDate(endOfMonth(now));
+    const monthlySnap = await getDocs(
+      query(collection(firestore, collPath), where("date", ">=", monthStart), where("date", "<=", monthEnd))
+    );
+    if (monthlySnap.size >= monthlyLimit) {
+      const err = new Error(
+        `Monthly voucher limit reached (${monthlyLimit}). Upgrade your plan for more.`
+      ) as Error & { isVoucherLimit?: boolean };
+      err.isVoucherLimit = true;
+      throw err;
+    }
+  }
 }
 
 export async function patchVoucherFields(
@@ -333,32 +422,8 @@ async function saveVoucherOfflineLocalCreate(
   const useLocalLim = companyStorageIsLocal(storageOption);
   const dailyLimitOff = numericEntitlement(mergedEnt, "dailyVoucherLimit", useLocalLim);
   const monthlyLimitOff = numericEntitlement(mergedEnt, "monthlyVoucherLimit", useLocalLim);
-  // Dono caps unlimited (0) hon to poori vouchers list mat khinchein — pehle har create par SQLite full scan hota tha (slow feel).
-  const existingVouchers =
-    dailyLimitOff > 0 || monthlyLimitOff > 0
-      ? await listCompanyDocsFromBrowserDb(companyId, "vouchers")
-      : [];
-  const now = new Date();
-  if (dailyLimitOff > 0) {
-    const n = countLocalMirrorVouchersInRange(existingVouchers, startOfDay(now), endOfDay(now));
-    if (n >= dailyLimitOff) {
-      const err = new Error(`Daily voucher limit reached (${dailyLimitOff}). Upgrade your plan for more.`) as Error & {
-        isVoucherLimit?: boolean;
-      };
-      err.isVoucherLimit = true;
-      throw err;
-    }
-  }
-  if (monthlyLimitOff > 0) {
-    const n = countLocalMirrorVouchersInRange(existingVouchers, startOfMonth(now), endOfMonth(now));
-    if (n >= monthlyLimitOff) {
-      const err = new Error(`Monthly voucher limit reached (${monthlyLimitOff}). Upgrade your plan for more.`) as Error & {
-        isVoucherLimit?: boolean;
-      };
-      err.isVoucherLimit = true;
-      throw err;
-    }
-  }
+  // Offline create: SQLite `forBackupMerge` list + shared helper — server query tab hi jab mirror bilkul khali aur pure-cloud ho.
+  await enforceDailyMonthlyVoucherQuotaForCreate(companyId, dailyLimitOff, monthlyLimitOff, useLocalLim);
   // Local-first mode me ID generation Firestore dependent nahi hona chahiye.
   const trimmed = preGeneratedVoucherId && String(preGeneratedVoucherId).trim();
   const newId = trimmed || generateLocalVoucherIdForCreate();
@@ -373,7 +438,8 @@ async function saveVoucherOfflineLocalCreate(
   } catch {
     historyEnabled = false;
   }
-  // `now` upar limit window ke liye bana — history row mein wahi moment reuse (doosra `const now` duplicate error deta tha).
+  // History snapshot: readable `Date` for change log (`nowTs` Firebase server-style alag field).
+  const now = new Date();
   const nowTs = Timestamp.now();
   const initialHistory = historyEnabled
     ? [
@@ -496,38 +562,8 @@ export async function saveVoucher(
     const storageIsLocal = companyStorageIsLocal(companyData?.storageOption as string | undefined);
     const dailyLimit = numericEntitlement(mergedEntitlements, "dailyVoucherLimit", storageIsLocal);
     const monthlyLimit = numericEntitlement(mergedEntitlements, "monthlyVoucherLimit", storageIsLocal);
-    if (dailyLimit > 0) {
-      const todayStart = Timestamp.fromDate(startOfDay(new Date()));
-      const todayEnd = Timestamp.fromDate(endOfDay(new Date()));
-      const dailySnap = await getDocs(
-        query(
-          collection(firestore, voucherPath),
-          where("date", ">=", todayStart),
-          where("date", "<=", todayEnd)
-        )
-      );
-      if (dailySnap.size >= dailyLimit) {
-        const err = new Error(`Daily voucher limit reached (${dailyLimit}). Upgrade your plan for more.`) as Error & { isVoucherLimit?: boolean };
-        err.isVoucherLimit = true;
-        throw err;
-      }
-    }
-    if (monthlyLimit > 0) {
-      const monthStart = Timestamp.fromDate(startOfMonth(new Date()));
-      const monthEnd = Timestamp.fromDate(endOfMonth(new Date()));
-      const monthlySnap = await getDocs(
-        query(
-          collection(firestore, voucherPath),
-          where("date", ">=", monthStart),
-          where("date", "<=", monthEnd)
-        )
-      );
-      if (monthlySnap.size >= monthlyLimit) {
-        const err = new Error(`Monthly voucher limit reached (${monthlyLimit}). Upgrade your plan for more.`) as Error & { isVoucherLimit?: boolean };
-        err.isVoucherLimit = true;
-        throw err;
-      }
-    }
+    // Pehle browser SQLite mirror; roz `getDocs` range query sirf mirror khali pure-cloud branch mein (`enforce*` ke andar).
+    await enforceDailyMonthlyVoucherQuotaForCreate(companyId, dailyLimit, monthlyLimit, storageIsLocal);
     const authUser = auth.currentUser;
     const creatorDisplayName =
       authUser?.displayName ||

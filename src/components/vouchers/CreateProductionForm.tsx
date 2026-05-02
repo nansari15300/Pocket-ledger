@@ -625,49 +625,63 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
-      toast({ title: isEditing ? "Production order updated" : "Production order created", description: "Successfully saved." });
-      if (companyId && company) {
-        const amount = Number(voucherData.total ?? voucherData.totalCost) || 0;
-        const voucherNumber = data.productionNumber ?? voucher?.productionNumber ?? "";
-        const vid = result?.id ?? voucher?.id;
-        if (isEditing) {
-          const oldV = voucher as any;
-          const changes = getChangedFieldLabels(
-            { date: oldV?.date?.toDate?.() ?? oldV?.date, productionNumber: oldV?.productionNumber, narration: oldV?.narration, totalCost: oldV?.totalCost, total: oldV?.total ?? oldV?.totalOutput },
-            { date: voucherData.date, productionNumber: voucherData.productionNumber ?? data.productionNumber, narration: voucherData.narration, totalCost: voucherData.totalCost, total: voucherData.total ?? voucherData.totalOutput },
-            [
-              { key: "date", label: "Date" },
-              { key: "productionNumber", label: "Production number" },
-              { key: "narration", label: "Narration" },
-              { key: "totalCost", label: "Total cost" },
-              { key: "total", label: "Total output" },
-            ]
-          );
-          await sendTransactionAlert(companyId, company, {
-            kind: "edited",
-            voucherId: vid,
-            voucherNumber,
-            voucherType: "production",
-            performedByUserId: user?.uid,
-            performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-            performedByEmail: user?.email ?? undefined,
-            changes: changes.length > 0 ? changes : undefined,
-          });
-        } else if (isAmountOverOneLakh(amount)) {
-          await sendTransactionAlert(companyId, company, {
-            kind: "large_amount",
-            voucherId: vid,
-            voucherNumber,
-            voucherType: "production",
-            amount,
-            performedByUserId: user?.uid,
-            performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-            performedByEmail: user?.email ?? undefined,
-          });
-        }
-      }
+      toast({
+        title: isEditing ? "Production order updated" : "Production order created",
+        description: "Successfully saved.",
+        // Global snappy toast — same rhythm as voucher Sonner (~1s).
+        duration: 1000,
+      });
+      setIsLoading(false);
 
-      onVoucherAction?.('saved', false, result.id || undefined);
+      const savedIdForAlert = result?.id ?? voucher?.id;
+      onVoucherAction?.("saved", false, result.id || undefined);
+
+      // Alerts / Firebase side-effects background — dialog turant band (core `saveVoucher` poora ho chuka).
+      void (async () => {
+        if (!companyId || !company || !savedIdForAlert) return;
+        try {
+          const amount = Number(voucherData.total ?? voucherData.totalCost) || 0;
+          const voucherNumber = data.productionNumber ?? voucher?.productionNumber ?? "";
+          const vid = savedIdForAlert;
+          if (isEditing) {
+            const oldV = voucher as any;
+            const changes = getChangedFieldLabels(
+              { date: oldV?.date?.toDate?.() ?? oldV?.date, productionNumber: oldV?.productionNumber, narration: oldV?.narration, totalCost: oldV?.totalCost, total: oldV?.total ?? oldV?.totalOutput },
+              { date: voucherData.date, productionNumber: voucherData.productionNumber ?? data.productionNumber, narration: voucherData.narration, totalCost: voucherData.totalCost, total: voucherData.total ?? voucherData.totalOutput },
+              [
+                { key: "date", label: "Date" },
+                { key: "productionNumber", label: "Production number" },
+                { key: "narration", label: "Narration" },
+                { key: "totalCost", label: "Total cost" },
+                { key: "total", label: "Total output" },
+              ]
+            );
+            await sendTransactionAlert(companyId, company, {
+              kind: "edited",
+              voucherId: vid,
+              voucherNumber,
+              voucherType: "production",
+              performedByUserId: user?.uid,
+              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+              performedByEmail: user?.email ?? undefined,
+              changes: changes.length > 0 ? changes : undefined,
+            });
+          } else if (isAmountOverOneLakh(amount)) {
+            await sendTransactionAlert(companyId, company, {
+              kind: "large_amount",
+              voucherId: vid,
+              voucherNumber,
+              voucherType: "production",
+              amount,
+              performedByUserId: user?.uid,
+              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+              performedByEmail: user?.email ?? undefined,
+            });
+          }
+        } catch (e) {
+          console.warn("[CreateProductionForm] transaction alert tail", e);
+        }
+      })();
 
       if (approveAfterSaveRef.current) {
         approveAfterSaveRef.current = false;

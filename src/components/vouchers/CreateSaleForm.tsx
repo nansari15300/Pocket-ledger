@@ -40,6 +40,7 @@ import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, A
 import { cn } from "@/lib/utils";
 import { format, startOfDay } from "date-fns";
 import { toast as sonnerToast } from "sonner";
+import { replaceVoucherSaveLoadingWithShortSuccess } from "@/lib/voucherSaveUi";
 
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -1080,97 +1081,112 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             throw new Error("Failed to save voucher and get ID.");
         }
 
-        // Apply pending bill-wise link allocations (from Link payment dialog DONE — local only until Save)
-        if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
-          const partyIdForLink = data.partyId ?? form.getValues("partyId");
-          if (partyIdForLink) {
-            const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
-            const showOBRow = (Number(partyForOb?.openingBalance ?? 0) < 0);
-            try {
-              await applyAdvancesAllocationsToServer({
-                companyId,
-                mode: "sale",
-                targetVoucherId: docId,
-                targetPartyId: partyIdForLink,
-                balanceKind: "all",
-                linkedAmounts: pendingLinkAllocations,
-                vouchers,
-                showOBRow,
-              });
-              if (isMounted.current) setPendingLinkAllocations(null);
-            } catch (e) {
-              console.error(e);
-              sonnerToast.error("Sale saved but linking advances failed.");
+        const successDescription =
+          approveAfterSave && savedDoc?.id
+            ? isEditForApprove
+              ? "Sale updated and approved."
+              : "Sale saved and approved."
+            : "Sale invoice saved successfully.";
+        replaceVoucherSaveLoadingWithShortSuccess(toastId, "Success", successDescription);
+        if (isMounted.current) setIsLoading(false);
+
+        // Baaki linkage / alerts / print background — Save & Close par dialog turant band (Firestore row already persisted).
+        const postSaveTail = async () => {
+          if (pendingLinkAllocations && companyId && docId && vouchers?.length) {
+            const partyIdForLink = data.partyId ?? form.getValues("partyId");
+            if (partyIdForLink) {
+              const partyForOb = processedParties.find((p) => p.id === partyIdForLink);
+              const showOBRow = Number(partyForOb?.openingBalance ?? 0) < 0;
+              try {
+                await applyAdvancesAllocationsToServer({
+                  companyId,
+                  mode: "sale",
+                  targetVoucherId: docId,
+                  targetPartyId: partyIdForLink,
+                  balanceKind: "all",
+                  linkedAmounts: pendingLinkAllocations,
+                  vouchers,
+                  showOBRow,
+                });
+                if (isMounted.current) setPendingLinkAllocations(null);
+              } catch (e) {
+                console.error(e);
+                sonnerToast.error("Sale saved but linking advances failed.", { duration: 4500 });
+              }
             }
           }
-        }
-
-        if (approveAfterSave && savedDoc?.id) {
-          if (!isEditForApprove) {
-            await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+          if (approveAfterSave && savedDoc?.id) {
+            if (!isEditForApprove) {
+              await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
+            }
           }
-          sonnerToast.success("Success", { id: toastId, description: isEditForApprove ? "Sale updated and approved." : "Sale saved and approved." });
-        } else {
-          sonnerToast.success("Success", {
-            id: toastId,
-            description: "Sale invoice saved successfully.",
-          });
-        }
-
-        // Company triggerSync hata: save ke baad registry reload se poora layout hilta tha; vouchers BUMP/snapshot se update.
-        if (companyId && company) {
-          const isEdit = !!voucher?.id;
-          const amount = Number((finalData as any).total) || 0;
-          const vid = docId ?? voucher?.id;
-          if (isEdit) {
-            const changes = getChangedFieldLabels(
-              { ...voucher, date: voucher?.date, total: (voucher as any)?.total, narration: (voucher as any)?.narration, voucherNumber: (voucher as any)?.voucherNumber, partyId: (voucher as any)?.partyId },
-              { ...finalData, date: (finalData as any).date, total: (finalData as any).total, narration: (finalData as any).narration, voucherNumber: (finalData as any).voucherNumber, partyId: (finalData as any).partyId },
-              [
-                { key: "total", label: "Amount" },
-                { key: "narration", label: "Narration" },
-                { key: "date", label: "Date" },
-                { key: "voucherNumber", label: "Voucher number" },
-                { key: "partyId", label: "Party" },
-              ]
-            );
-            await sendTransactionAlert(companyId, company, {
-              kind: "edited",
-              voucherId: vid,
-              voucherNumber: finalData.voucherNumber,
-              voucherType: "sale",
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-              changes: changes.length > 0 ? changes : undefined,
-            });
-          } else if (isAmountOverOneLakh(amount)) {
-            await sendTransactionAlert(companyId, company, {
-              kind: "large_amount",
-              voucherId: vid,
-              voucherNumber: finalData.voucherNumber,
-              voucherType: "sale",
-              amount,
-              performedByUserId: user?.uid,
-              performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-              performedByEmail: user?.email ?? undefined,
-            });
+          if (companyId && company) {
+            const isEditHist = !!voucher?.id;
+            const amount = Number((finalData as any).total) || 0;
+            const vid = docId ?? voucher?.id;
+            if (isEditHist) {
+              const changes = getChangedFieldLabels(
+                { ...voucher, date: voucher?.date, total: (voucher as any)?.total, narration: (voucher as any)?.narration, voucherNumber: (voucher as any)?.voucherNumber, partyId: (voucher as any)?.partyId },
+                { ...finalData, date: (finalData as any).date, total: (finalData as any).total, narration: (finalData as any).narration, voucherNumber: (finalData as any).voucherNumber, partyId: (finalData as any).partyId },
+                [
+                  { key: "total", label: "Amount" },
+                  { key: "narration", label: "Narration" },
+                  { key: "date", label: "Date" },
+                  { key: "voucherNumber", label: "Voucher number" },
+                  { key: "partyId", label: "Party" },
+                ]
+              );
+              await sendTransactionAlert(companyId, company, {
+                kind: "edited",
+                voucherId: vid,
+                voucherNumber: finalData.voucherNumber,
+                voucherType: "sale",
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+                changes: changes.length > 0 ? changes : undefined,
+              });
+            } else if (isAmountOverOneLakh(amount)) {
+              await sendTransactionAlert(companyId, company, {
+                kind: "large_amount",
+                voucherId: vid,
+                voucherNumber: finalData.voucherNumber,
+                voucherType: "sale",
+                amount,
+                performedByUserId: user?.uid,
+                performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
+                performedByEmail: user?.email ?? undefined,
+              });
+            }
           }
-        }
-        
-        if (print && docId) {
+          if (print && docId) {
             window.open(`/sale/invoice/${docId}`, "_blank");
-        }
-
-        if (saveAndNew && isMounted.current) {
+          }
+          if (saveAndNew && isMounted.current) {
             form.reset(getInitialFormValues());
             setFiles([]);
             setSavePdfAsImage(false);
             setSavedVoucherId(null);
             await fetchVoucherNumber();
+          }
+          if (saveAndNew && isMounted.current) {
+            onVoucherAction?.("saved", true, docId ?? undefined);
+          }
+        };
+
+        if (!saveAndNew) {
+          onVoucherAction?.("saved", false, docId ?? undefined);
+          void postSaveTail().catch((err) => {
+            console.error("[CreateSaleForm] post-save tail", err);
+            sonnerToast.error("Saved — background sync issue", {
+              description: err instanceof Error ? err.message : "Advances/link or alerts may finish late.",
+              duration: 4500,
+            });
+          });
+          return docId;
         }
 
-        onVoucherAction?.("saved", saveAndNew, docId ?? undefined);
+        await postSaveTail();
         return docId;
 
       } catch (error) {

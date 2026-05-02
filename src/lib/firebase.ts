@@ -1,7 +1,7 @@
 
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signOut as firebaseAuthSignOut, type Auth } from 'firebase/auth';
-import { disableNetwork, enableNetwork, getFirestore } from 'firebase/firestore';
+import { disableNetwork, enableNetwork, getFirestore, initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
@@ -143,7 +143,29 @@ if (typeof window !== 'undefined') {
     { capture: true }
   );
 }
-const firestore = getFirestore(app);
+/**
+ * WebChannel `Listen/channel` par kabhi-kabhi **400 Unknown SID** (stale session) — zyada parallel snapshots / tab sleep par.
+ * `experimentalAutoDetectLongPolling` WebChannel fail hone par XMLHttpRequest transport use kar sakta hai; company-specific "freeze + Firestore URL error" isse kam ho sakti hai (data corrupt hone ki zarurat nahi).
+ */
+function initFirestoreInstance() {
+  if (typeof window === 'undefined') {
+    return getFirestore(app);
+  }
+  const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
+  try {
+    return initializeFirestore(app, {
+      /** Agar avi bhi Listen/channel 400 dikhe: `.env.local` me `NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING=1` + restart. */
+      ...(forceLongPolling
+        ? { experimentalForceLongPolling: true as const }
+        : { experimentalAutoDetectLongPolling: true as const }),
+    });
+  } catch {
+    // HMR / dobara import: Firestore already started — purana singleton wapas lo.
+    return getFirestore(app);
+  }
+}
+
+const firestore = initFirestoreInstance();
 const storage = getStorage(app);
 
 /**

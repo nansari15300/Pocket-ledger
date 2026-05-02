@@ -20,7 +20,10 @@
 # static build temp
 .build-static-bak/
 
-# Electron EXE build
+# Serwist PWA generated service worker(s)
+/public/sw*.js
+/public/sw*.js.map
+/public/swe-worker*
 /electron/node_modules/
 /electron/dist/
 
