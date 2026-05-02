@@ -1,7 +1,11 @@
 /**
  * Offline / mirror race: SQLite kabhi Basic ho jati hai jab Firestore par plan Pro hai —
  * billing + server sync ke baad yahan planId + expiry cache se normalizeLocalCompany overlay karta hai.
+ *
+ * **`resolveEffectivePlanIdForVoucherQuota`**: SQLite + yahi cache — vouchers save limit check UI jaisi plan tier use kare.
  */
+import { higherPlanByTier, type PlanId } from "@/config/plans";
+
 const PREFIX_TOKEN = "pocket-ledger:companyPlan:";
 
 export type CompanyPlanLocalCacheEntry = {
@@ -55,4 +59,55 @@ export function readCompanyPlanLocalCache(companyId: string): CompanyPlanLocalCa
   } catch {
     return null;
   }
+}
+
+/**
+ * `useCompany` `normalizeLocalCompany` jaisa planId tier — vouchers daily/month quota offline/online ek hi Paid tier dekhe,
+ * kyunki SQLite mirror kabhi Stripe/server sync ke pehle "basic" reh sakti hai.
+ */
+export function resolveEffectivePlanIdForVoucherQuota(
+  companyId: string,
+  sqliteRow: { planId?: string | null; planExpiryMs?: unknown } | null
+): PlanId {
+  let planId = (sqliteRow?.planId && String(sqliteRow.planId).trim()) || "basic";
+  const sqliteMs =
+    typeof sqliteRow?.planExpiryMs === "number" && Number.isFinite(sqliteRow.planExpiryMs)
+      ? sqliteRow.planExpiryMs
+      : null;
+  const cached = readCompanyPlanLocalCache(companyId.trim());
+  if (cached) {
+    const cp = String(cached.planId || "").trim() || "basic";
+    const sqliteBasic = planId === "basic";
+    const cachePaid = cp !== "basic";
+    const expBetter = sqliteMs == null || cached.planExpiryMs > sqliteMs;
+    if (cachePaid && (sqliteBasic || expBetter)) {
+      planId = cp;
+    }
+  }
+  const out = (planId || "basic") as PlanId;
+  return out ?? "basic";
+}
+
+type PlanRowHint = { planId?: string | null; planExpiryMs?: unknown };
+
+/**
+ * Online voucher save: Firestore company doc + SQLite registry dono — phir `resolveEffectivePlanIdForVoucherQuota` (Stripe cache overlay).
+ * Sirf Firestore se `planId` → Basic (5) cap jab actual tier mirror me pro-plus ho.
+ */
+export function resolvePlanIdForVoucherEnforcement(
+  companyId: string,
+  sqliteRow: PlanRowHint | null,
+  firestoreRow: PlanRowHint | null
+): PlanId {
+  const mergedTier = higherPlanByTier(firestoreRow?.planId, sqliteRow?.planId);
+  const sqlMs =
+    typeof sqliteRow?.planExpiryMs === "number" && Number.isFinite(sqliteRow.planExpiryMs)
+      ? sqliteRow.planExpiryMs
+      : null;
+  const fsMs =
+    typeof firestoreRow?.planExpiryMs === "number" && Number.isFinite(firestoreRow.planExpiryMs)
+      ? firestoreRow.planExpiryMs
+      : null;
+  const mergedMs = sqlMs != null && fsMs != null ? Math.max(sqlMs, fsMs) : sqlMs ?? fsMs;
+  return resolveEffectivePlanIdForVoucherQuota(companyId, { planId: mergedTier, planExpiryMs: mergedMs });
 }

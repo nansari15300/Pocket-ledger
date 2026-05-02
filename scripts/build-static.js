@@ -123,6 +123,17 @@ try {
     }
   }
 
+  try {
+    // Production entitlements mirror: pocket-ledger.com (ya env) se plans JSON — static APK/Electron offline billing
+    execSync("node scripts/fetch-plans-seed-static.cjs", {
+      cwd: root,
+      stdio: "inherit",
+      env: { ...process.env },
+    });
+  } catch (e) {
+    console.warn("[build-static] plans-seed step non-fatal:", e && e.message ? e.message : e);
+  }
+
   execSync("node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack", {
     cwd: root,
     stdio: "inherit",

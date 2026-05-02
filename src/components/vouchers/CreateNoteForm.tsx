@@ -46,7 +46,7 @@ import { Calendar } from "../ui/calendar";
 import { format, startOfDay } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -687,11 +687,7 @@ export function CreateNoteForm({
     setIsLoading(true);
     try {
       // Local/offline compatible delete: hard delete ke badle recycle-bin mark.
-      await patchVoucherFields(companyId, voucher.id, {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-        deletedBy: user.uid,
-      });
+      await softDeleteVoucherMoveToRecycleBin(companyId, voucher.id, user.uid);
       sonnerToast.success("Note moved to bin.");
       onVoucherAction?.("cancelled");
     } catch (err) {

@@ -57,7 +57,7 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -79,7 +79,6 @@ import {
   addDoc,
   serverTimestamp,
   doc,
-  updateDoc,
   onSnapshot,
   Timestamp,
 } from "firebase/firestore";
@@ -1072,7 +1071,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
                 await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                     isDeleted: true,
-                    deletedAt: serverTimestamp(),
+                    deletedAt: voucherRecycleBinDeletedAt(),
                     convertedToType: 'sale',
                     convertedToVoucherNumber: finalData.voucherNumber,
                 });
@@ -1247,14 +1246,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     setIsLoading(true);
     try {
-      await updateDoc(
-        doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId),
-        {
-          isDeleted: true,
-          deletedAt: serverTimestamp(),
-          deletedBy: user?.uid || '',
-        }
-      );
+      await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
       toast({
         title: "Voucher Moved to Bin",
         description: "The sale invoice has been moved to the recycle bin.",

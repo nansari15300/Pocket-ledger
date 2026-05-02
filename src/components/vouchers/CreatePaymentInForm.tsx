@@ -49,7 +49,7 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, updateVoucherSpendWiseLinks, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -1271,7 +1271,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               // Local-only mode me bhi converted voucher ko recycle-bin mark karna zaroori hai.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
-                deletedAt: serverTimestamp(),
+                deletedAt: voucherRecycleBinDeletedAt(),
                 convertedToType: voucherType,
                 convertedToVoucherNumber: sanitizedData.voucherNumber,
               });
@@ -1516,11 +1516,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
     try {
         // Delete action local-first path me bhi voucher ko bin me move kare.
-        await patchVoucherFields(companyId, savedVoucherId, {
-            isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || '',
-        });
+        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
     } catch (error) {

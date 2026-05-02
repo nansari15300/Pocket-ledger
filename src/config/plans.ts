@@ -9,6 +9,22 @@ export function planTierIndex(planId?: string | null): number {
   return i >= 0 ? i : 0;
 }
 
+/**
+ * Voucher quota / entitlements: Firestore `companies` kabhi purana `basic` chipkata hai jab SQLite mirror + UI `pro-plus` ho chuke hon —
+ * dono source me se zyada paid tier lo.
+ */
+export function higherPlanByTier(
+  firestorePlanId?: string | null,
+  sqliteOrOtherPlanId?: string | null
+): PlanId {
+  const a = String(firestorePlanId || "").trim() as PlanId;
+  const b = String(sqliteOrOtherPlanId || "").trim() as PlanId;
+  const ia = planTierIndex(a);
+  const ib = planTierIndex(b);
+  const pick = ib > ia ? b || "basic" : a || b || "basic";
+  return (PLAN_TIER_ORDER.includes(pick as PlanId) ? pick : "basic") as PlanId;
+}
+
 /** Next paid SKU above current (e.g. advance → pro). Null if already on top paid tier. */
 export function getNextPaidUpgrade(fromPlanId?: string | null): PlanId | null {
   const cur = planTierIndex(fromPlanId);
@@ -336,6 +352,8 @@ export function companyStorageIsLocal(storageOption?: string | null): boolean {
 
 /**
  * Read plan cap for cloud vs SQLite-first company. Local key missing (old Firestore) → use online value.
+ * Voucher day/month caps: aksar sirf Firestore/UI me `dailyVoucherLimit` bump hota aur `dailyVoucherLimitLocal` default 25 chipka rehta —
+ * SQLite-first company par dono finite hon to Math.max taaki unintended Basic cap na lage.
  */
 export function numericEntitlement(
   entitlements: Partial<Entitlements> | undefined,
@@ -346,7 +364,20 @@ export function numericEntitlement(
   if (useLocalLimit) {
     const lk = LOCAL_NUMERIC_ENTITLEMENT_KEY[baseKey];
     const lv = e[lk];
-    if (typeof lv === "number" && Number.isFinite(lv)) return lv;
+    const bv = e[baseKey];
+    const isVoucherQuota = baseKey === "dailyVoucherLimit" || baseKey === "monthlyVoucherLimit";
+    const localN = typeof lv === "number" && Number.isFinite(lv) ? lv : null;
+    const baseN = typeof bv === "number" && Number.isFinite(bv) ? bv : null;
+    if (isVoucherQuota) {
+      // Plans me `0` = unlimited cap for that bucket
+      if (localN != null && localN <= 0) return 0;
+      if (baseN != null && baseN <= 0) return 0;
+      if (localN != null && baseN != null) return Math.max(localN, baseN);
+      if (localN != null) return localN;
+      if (baseN != null) return baseN;
+      return 0;
+    }
+    if (localN != null) return localN;
   }
   const v = e[baseKey];
   return typeof v === "number" && Number.isFinite(v) ? v : 0;

@@ -21,7 +21,7 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -713,7 +713,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       // Local/offline compatible delete: production voucher ko recycle bin me move karo.
       await patchVoucherFields(companyId, voucher.id, {
         isDeleted: true,
-        deletedAt: serverTimestamp(),
+        deletedAt: voucherRecycleBinDeletedAt(),
         deletedBy: user?.uid || "",
       });
       toast({ title: "Moved to Bin", description: "Production order moved to recycle bin." });

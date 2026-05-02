@@ -1,10 +1,35 @@
 "use client";
 
-import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp, addDoc, query, orderBy } from "firebase/firestore";
+import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp, query, orderBy, writeBatch } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 
 const DEVICE_ID_KEY = "pocket_ledger_device_id";
+/** `localStorage` wipe par bhi UUID wapas mile — sirf ek hi jagah rakhe to duplicate Firestore `/devices/{id}` docs kam */
+const DEVICE_ID_COOKIE = "pl_did_v1";
 const KICKED_STORAGE_PREFIX = "pl_kicked_";
+
+function readDeviceIdFromCookie(): string {
+  if (typeof document === "undefined") return "";
+  try {
+    const m = document.cookie.match(new RegExp(`(?:^|;\\s*)${DEVICE_ID_COOKIE}=([^;]*)`));
+    const raw = m?.[1] ? decodeURIComponent(m[1]).trim() : "";
+    return raw.length >= 8 ? raw : "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDeviceIdCookie(id: string): void {
+  if (typeof document === "undefined" || !id) return;
+  try {
+    const maxAgeSec = 10 * 365 * 24 * 60 * 60;
+    const isHttps = typeof location !== "undefined" && location.protocol === "https:";
+    const securePart = isHttps ? ";Secure" : "";
+    document.cookie = `${DEVICE_ID_COOKIE}=${encodeURIComponent(id)};path=/;max-age=${maxAgeSec};SameSite=Lax${securePart}`;
+  } catch {
+    /* strict mode / iframe — ignore */
+  }
+}
 
 export function getWasKicked(companyId: string): boolean {
   if (typeof window === "undefined") return false;
@@ -55,11 +80,30 @@ export function getDeviceLabel(): string {
 
 function getOrCreateDeviceId(): string {
   if (typeof window === "undefined") return "";
-  let id = localStorage.getItem(DEVICE_ID_KEY);
+  let id = (localStorage.getItem(DEVICE_ID_KEY) || "").trim();
+  /** Sirf LS clear hone par hi naya slot — cookie me purana UUID ho to wahi restore (duplicate "Chrome Windows" rows kam). */
+  if (!id) {
+    const fromCookie = readDeviceIdFromCookie();
+    if (fromCookie) {
+      id = fromCookie;
+      try {
+        localStorage.setItem(DEVICE_ID_KEY, id);
+      } catch {
+        /* LS full / blocked — cookie se hi age badhenge */
+      }
+    }
+  }
   if (!id) {
     id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `dev_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-    localStorage.setItem(DEVICE_ID_KEY, id);
+    try {
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    } catch {
+      /* ignore */
+    }
+    writeDeviceIdCookie(id);
+    return id;
   }
+  if (readDeviceIdFromCookie() !== id) writeDeviceIdCookie(id);
   return id;
 }
 
@@ -190,29 +234,63 @@ export async function replaceMyOtherDevicesAndRegister(companyId: string, userId
   });
 }
 
+/** Ek device ko kick/remove karte waqt Firestore payloads — batch API ke liye */
+export type KickOutDeviceInput = {
+  id: string;
+  userId: string;
+  deviceType?: "mobile" | "desktop";
+  deviceLabel?: string;
+};
+
+/** Har device par 2 ops (history set + devices delete); 500 limit se niche chunk — UI hang kam, ek trim */
+const FIRESTORE_BATCH_MAX_OPS = 450;
+
 /**
- * Add one device_history entry when a device is removed/kicked from the synced list. History only on remove.
+ * Ek ya zyada devices: history rows + deletes ek hi (ya chunked) writeBatch me; company doc ek baar; trim ek baar.
+ * Pehle har kick par alag addDoc + trim tha → jaldi hang; ab bulk kick realistic.
+ */
+export async function kickOutDevicesBatch(companyId: string, devices: KickOutDeviceInput[]): Promise<void> {
+  if (devices.length === 0) return;
+  const companySnap = await getDoc(doc(firestore, "companies", companyId));
+  const maxHistory = companySnap.data()?.deviceHistoryLimit;
+  const maxEntries = typeof maxHistory === "number" && maxHistory >= 1 ? Math.min(1000, maxHistory) : 0;
+  const historyCol = collection(firestore, "companies", companyId, "device_history");
+  const devicesCol = collection(firestore, "companies", companyId, "devices");
+  const perDeviceOps = 2;
+  const chunkSize = Math.max(1, Math.floor(FIRESTORE_BATCH_MAX_OPS / perDeviceOps));
+
+  for (let i = 0; i < devices.length; i += chunkSize) {
+    const slice = devices.slice(i, i + chunkSize);
+    const batch = writeBatch(firestore);
+    for (const device of slice) {
+      const deviceType = device.deviceType ?? "desktop";
+      const histRef = doc(historyCol);
+      batch.set(histRef, {
+        deviceId: device.id,
+        userId: device.userId,
+        lastActive: serverTimestamp(),
+        deviceType,
+        ...(device.deviceLabel ? { deviceLabel: device.deviceLabel } : {}),
+        createdAt: serverTimestamp(),
+      });
+      batch.delete(doc(devicesCol, device.id));
+    }
+    await batch.commit();
+  }
+  if (maxEntries > 0) await trimDeviceHistoryToLimit(companyId, maxEntries);
+}
+
+/**
+ * Back-compat: ek device — ab bhi ek hi code path (batch) taaki callers hang na karein
  */
 export async function addDeviceHistoryEntryWhenRemoved(
   companyId: string,
-  device: { id: string; userId: string; deviceType?: "mobile" | "desktop"; deviceLabel?: string }
+  device: KickOutDeviceInput
 ): Promise<void> {
   try {
-    const deviceType = device.deviceType ?? "desktop";
-    await addDoc(collection(firestore, "companies", companyId, "device_history"), {
-      deviceId: device.id,
-      userId: device.userId,
-      lastActive: serverTimestamp(),
-      deviceType,
-      ...(device.deviceLabel ? { deviceLabel: device.deviceLabel } : {}),
-      createdAt: serverTimestamp(),
-    });
-    const companySnap = await getDoc(doc(firestore, "companies", companyId));
-    const maxHistory = companySnap.data()?.deviceHistoryLimit;
-    const maxEntries = typeof maxHistory === "number" && maxHistory >= 1 ? Math.min(1000, maxHistory) : 0;
-    if (maxEntries > 0) await trimDeviceHistoryToLimit(companyId, maxEntries);
+    await kickOutDevicesBatch(companyId, [device]);
   } catch {
-    // non-blocking
+    // non-blocking callers ke liye
   }
 }
 
@@ -226,7 +304,12 @@ export async function trimDeviceHistoryToLimit(companyId: string, maxEntries: nu
   if (snap.size <= maxEntries) return;
   const toDeleteCount = snap.size - maxEntries;
   const toDelete = snap.docs.slice(0, toDeleteCount);
-  for (const d of toDelete) await deleteDoc(d.ref);
+  // Sequential delete bahut dheere; batch se trim bhi responsive
+  for (let i = 0; i < toDelete.length; i += FIRESTORE_BATCH_MAX_OPS) {
+    const batch = writeBatch(firestore);
+    toDelete.slice(i, i + FIRESTORE_BATCH_MAX_OPS).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
 }
 
 /**
@@ -251,10 +334,12 @@ export async function enforceDeviceLimitByPlan(companyId: string, maxDevices: nu
   });
   withTime.sort((a, b) => a.lastActiveMs - b.lastActiveMs); // oldest first
   const toRemove = withTime.slice(0, withTime.length - maxDevices);
-  for (const dev of toRemove) {
-    await addDeviceHistoryEntryWhenRemoved(companyId, { id: dev.id, userId: dev.userId, deviceType: dev.deviceType, deviceLabel: dev.deviceLabel });
-    await deleteDoc(doc(firestore, "companies", companyId, "devices", dev.id));
-  }
+  if (toRemove.length === 0) return;
+  // N baar trim + sequential delete ki jagah ek batch pipeline
+  await kickOutDevicesBatch(
+    companyId,
+    toRemove.map((dev) => ({ id: dev.id, userId: dev.userId, deviceType: dev.deviceType, deviceLabel: dev.deviceLabel }))
+  );
 }
 
 /**

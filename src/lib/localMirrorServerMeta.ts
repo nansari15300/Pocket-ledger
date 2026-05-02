@@ -7,6 +7,12 @@
  */
 export const LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY = "__mirrorBackedByFirestore" as const;
 
+/**
+ * Sirf SQLite + outbox — Firestore kabhi persist mat (`flushVoucherOutbox` hatata hai).
+ * Sync‑3 offline create lineage: conflicting merge / diagnostics ke liye device pe first persist epoch.
+ */
+export const PL_CLIENT_OFFLINE_FIRST_PERSIST_MS = "__plOfflineFirstPersistMs" as const;
+
 /** Firestore se aaya hua row SQLite mirror me — server orphan purge ke liye pehchan. */
 export function stampLocalMirrorBackedByFirestore<T extends Record<string, unknown>>(row: T): T {
   return { ...row, [LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY]: true } as T;
@@ -16,11 +22,11 @@ export function isLocalMirrorMarkedServerBacked(doc: Record<string, unknown> | u
   return doc?.[LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY] === true;
 }
 
-/** React state / forms — internal mirror meta user payload me mat dikhao. */
+/** React state / forms — internal mirror meta + offline debug keys user payload me mat dikhao. */
 export function stripLocalMirrorMetaForUiRow<T extends Record<string, unknown>>(row: T): T {
   if (!row || typeof row !== "object") return row;
-  if (!(LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY in row)) return row;
-  // Computed delete: mirror meta UI / save payloads se hatao — Firestore kabhi na bhejo.
-  const { [LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY]: _drop, ...rest } = row as T & Record<string, unknown>;
+  if (!(LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY in row) && !(PL_CLIENT_OFFLINE_FIRST_PERSIST_MS in row)) return row;
+  const x = row as T & Record<string, unknown>;
+  const { [LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY]: _m, [PL_CLIENT_OFFLINE_FIRST_PERSIST_MS]: _p, ...rest } = x;
   return rest as T;
 }

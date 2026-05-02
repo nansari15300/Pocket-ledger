@@ -56,13 +56,16 @@ const baseConfig: NextConfig = {
   },
 };
 
-// Hosted PWA (pocket-ledger.com + remote URL Capacitor): Serwist precache/runtime cache.
-// `npm run build:static` / Capacitor bundled `webDir`: STATIC_BUILD — SW inject skip (duplicate/unstable with file/APK bundle).
+// Hosted/static PWA: Serwist `npm run build` + `npm run build:static` dono (`out/` deploy / APK-packaged `webDir`).
+// STATIC_BUILD par `trailingSlash: true` — precache slash +slash-less dono (~offline SPA fallback stable).
 const withSerwist = withSerwistInit({
   swSrc: "src/app/sw.ts",
   swDest: "public/sw.js",
-  disable: isStaticBuild,
-  additionalPrecacheEntries: [{ url: "/~offline", revision: serwistOfflineRevision() }],
+  disable: false,
+  additionalPrecacheEntries: [
+    { url: "/~offline", revision: serwistOfflineRevision() },
+    ...(isStaticBuild ? [{ url: "/~offline/", revision: serwistOfflineRevision() }] : []),
+  ],
 });
 
-export default isStaticBuild ? baseConfig : withSerwist(baseConfig);
+export default withSerwist(baseConfig);

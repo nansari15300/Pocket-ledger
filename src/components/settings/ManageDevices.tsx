@@ -36,7 +36,9 @@ import {
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { getOrCreateDeviceId, removeThisDevice, trimDeviceHistoryToLimit, addDeviceHistoryEntryWhenRemoved } from "@/lib/deviceLimitClient";
+import { Checkbox } from "@/components/ui/checkbox";
+// batch kick = turant-feel optimistic UI + Firestore writes ek hi burst me — pehle N× trim hang karta tha
+import { getOrCreateDeviceId, removeThisDevice, trimDeviceHistoryToLimit, kickOutDevicesBatch } from "@/lib/deviceLimitClient";
 import { useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -86,8 +88,15 @@ export function ManageDevices() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [userNames, setUserNames] = useState<Record<string, string>>(() => ({ ...userNamesCache }));
   const [loading, setLoading] = useState(true);
-  const [kickingId, setKickingId] = useState<string | null>(null);
+  /** Firestore commit ke daur selective kick buttons band */
+  const [kickInFlight, setKickInFlight] = useState(false);
+  /** Sirf toolbar “Kick selected” spinner — ek-off kick par toolbar spin na ho */
+  const [bulkKickBusy, setBulkKickBusy] = useState(false);
+  /** Turant rows hataane ke liye local set — authoritative list ab bhi Firestore snapshot */
+  const [optimisticRemovedIds, setOptimisticRemovedIds] = useState<Set<string>>(() => new Set());
+  const [selectedKickIds, setSelectedKickIds] = useState<Set<string>>(() => new Set());
   const [confirmKick, setConfirmKick] = useState<DeviceRow | null>(null);
+  const [confirmBulkKick, setConfirmBulkKick] = useState(false);
   const [updatingMultiDevice, setUpdatingMultiDevice] = useState(false);
   const [removingThisDevice, setRemovingThisDevice] = useState(false);
   const currentDeviceId = typeof window !== "undefined" ? getOrCreateDeviceId() : "";
@@ -201,6 +210,44 @@ export function ManageDevices() {
     });
   }, [devices, ownerId, currentDeviceId]);
 
+  // Snapshot + optimistic filtered table + bulk tick target list
+  const visibleSortedDevices = useMemo(
+    () => sortedDevices.filter((d) => !optimisticRemovedIds.has(d.id)),
+    [sortedDevices, optimisticRemovedIds]
+  );
+  const kickableVisibleIds = useMemo(
+    () => visibleSortedDevices.filter((d) => d.id !== currentDeviceId).map((d) => d.id),
+    [visibleSortedDevices, currentDeviceId]
+  );
+  const kickableIdsKey = useMemo(() => kickableVisibleIds.join(","), [kickableVisibleIds]);
+
+  /** Server row delete hone par stale optimistic id hataao */
+  useEffect(() => {
+    setOptimisticRemovedIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of prev) {
+        if (!devices.some((d) => d.id === id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [devices]);
+
+  /** Kickable list shrink (refresh / optimistic) → tick state invalid IDs saaf */
+  useEffect(() => {
+    const allowed = new Set(kickableVisibleIds);
+    setSelectedKickIds((prev) => {
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (allowed.has(id)) next.add(id);
+      });
+      return next.size === prev.size && [...prev].every((x) => next.has(x)) ? prev : next;
+    });
+  }, [kickableIdsKey]);
+
   const userIdsKey = useMemo(
     () => [...new Set([...devices.map((d) => d.userId), ...deviceHistory.map((h) => h.userId)].filter(Boolean))].sort().join(","),
     [devices, deviceHistory]
@@ -259,30 +306,50 @@ export function ManageDevices() {
     }
   };
 
-  /** Firestore history+delete lambi chain — dialog turant band, spinner row par; server sync background (SQLite outbox abhi sirf local-only mode me) */
-  const handleKickOut = (device: DeviceRow) => {
-    if (!companyId) return;
+  /** Ek / zyada rows: optimistic hide + ek batch trim — UI freeze kam */
+  const confirmAndKickDevices = (rows: DeviceRow[]) => {
+    if (!companyId || rows.length === 0) return;
     setConfirmKick(null);
-    setKickingId(device.id);
+    setConfirmBulkKick(false);
+    const ids = rows.map((r) => r.id);
+    setOptimisticRemovedIds((prev) => new Set([...prev, ...ids]));
+    setSelectedKickIds((prev) => {
+      const n = new Set(prev);
+      ids.forEach((id) => n.delete(id));
+      return n;
+    });
+    setKickInFlight(true);
+    if (rows.length > 1) setBulkKickBusy(true);
     void (async () => {
       try {
-        await addDeviceHistoryEntryWhenRemoved(companyId, {
-          id: device.id,
-          userId: device.userId,
-          deviceType: device.deviceType,
-          deviceLabel: device.deviceLabel,
-        });
-        await deleteDoc(doc(firestore, "companies", companyId, "devices", device.id));
+        await kickOutDevicesBatch(
+          companyId,
+          rows.map((r) => ({
+            id: r.id,
+            userId: r.userId,
+            deviceType: r.deviceType,
+            deviceLabel: r.deviceLabel,
+          }))
+        );
         refreshDeviceCheck();
         toast({
-          title: "Device removed",
-          description: "That device will see slot full and can switch company or remove that device.",
+          title: rows.length > 1 ? "Devices removed" : "Device removed",
+          description:
+            rows.length > 1
+              ? `${rows.length} slot(s) freed. Those sessions will hit the limit or need sign-in again.`
+              : "That device will see slot full and can switch company or remove that device.",
         });
       } catch (e: unknown) {
+        setOptimisticRemovedIds((prev) => {
+          const n = new Set(prev);
+          ids.forEach((id) => n.delete(id));
+          return n;
+        });
         const msg = e instanceof Error ? e.message : "Failed to remove device";
         toast({ title: "Error", description: msg, variant: "destructive" });
       } finally {
-        setKickingId(null);
+        setKickInFlight(false);
+        setBulkKickBusy(false);
       }
     })();
   };
@@ -400,6 +467,16 @@ export function ManageDevices() {
     );
   }
 
+  // Header checkbox state: all kickable / partial / none selected
+  const bulkHeadCheckboxChecked: boolean | "indeterminate" =
+    kickableVisibleIds.length === 0
+      ? false
+      : kickableVisibleIds.every((id) => selectedKickIds.has(id))
+        ? true
+        : kickableVisibleIds.some((id) => selectedKickIds.has(id))
+          ? "indeterminate"
+          : false;
+
   return (
     <div className="space-y-8">
       <Card>
@@ -412,7 +489,7 @@ export function ManageDevices() {
           </div>
           <CardDescription>
             {/* Always show selected company device count, including local single-device mode. */}
-            Devices for selected company. Count: {devices.length} / {maxDevices}. Remove a device to free a slot (e.g. for another device to sign in).
+            Devices for selected company. Count: {visibleSortedDevices.length} / {maxDevices}. Tick rows and “Kick selected” for bulk remove; removes feel instant locally.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -430,16 +507,47 @@ export function ManageDevices() {
               disabled={updatingMultiDevice}
             />
           </div>
+          {!loading && visibleSortedDevices.length > 0 && kickableVisibleIds.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={selectedKickIds.size === 0 || kickInFlight}
+                onClick={() => setConfirmBulkKick(true)}
+              >
+                {bulkKickBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <span className={bulkKickBusy ? "ml-2" : ""}>
+                  Kick selected ({selectedKickIds.size})
+                </span>
+              </Button>
+            </div>
+          ) : null}
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : devices.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4">No devices registered yet.</p>
+          ) : visibleSortedDevices.length === 0 && optimisticRemovedIds.size > 0 ? (
+            <p className="text-sm text-muted-foreground py-4 flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Syncing removals…
+            </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[48px] pt-2">
+                    <Checkbox
+                      checked={bulkHeadCheckboxChecked}
+                      disabled={kickInFlight || kickableVisibleIds.length === 0}
+                      onCheckedChange={(c) => {
+                        if (c === true) setSelectedKickIds(new Set(kickableVisibleIds));
+                        else setSelectedKickIds(new Set());
+                      }}
+                      aria-label="Select all devices you can kick"
+                    />
+                  </TableHead>
                   <TableHead>Device</TableHead>
                   <TableHead>User name</TableHead>
                   <TableHead>Last active</TableHead>
@@ -448,7 +556,7 @@ export function ManageDevices() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedDevices.map((device) => {
+                {visibleSortedDevices.map((device) => {
                   const isAdmin = device.userId === ownerId;
                   const displayName = isAdmin ? "Admin" : (userNames[device.userId] ?? "—");
                   const isUid = !isAdmin && (displayName === device.userId || /^[a-zA-Z0-9]{20,32}$/.test(displayName));
@@ -458,6 +566,25 @@ export function ManageDevices() {
                     key={device.id}
                     className={isThisDevice ? "cursor-default pointer-events-none" : undefined}
                   >
+                    <TableCell className="w-[48px] pointer-events-auto align-middle">
+                      {isThisDevice ? (
+                        <span className="inline-block w-4" aria-hidden />
+                      ) : (
+                        <Checkbox
+                          checked={selectedKickIds.has(device.id)}
+                          disabled={kickInFlight}
+                          onCheckedChange={(c) => {
+                            setSelectedKickIds((prev) => {
+                              const n = new Set(prev);
+                              if (c) n.add(device.id);
+                              else n.delete(device.id);
+                              return n;
+                            });
+                          }}
+                          aria-label={`Select device ${device.id.slice(-6)} for bulk kick`}
+                        />
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm" title={device.id}>
                       {displayDeviceLabel(device.deviceLabel, device.deviceType)}
                     </TableCell>
@@ -485,7 +612,7 @@ export function ManageDevices() {
                             size="sm"
                             className="text-destructive hover:text-destructive hover:bg-destructive/10"
                             onClick={handleRemoveThisDevice}
-                            disabled={removingThisDevice}
+                            disabled={removingThisDevice || kickInFlight}
                           >
                             {removingThisDevice ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                             <span className="ml-1">Remove</span>
@@ -496,9 +623,9 @@ export function ManageDevices() {
                             size="sm"
                             className="text-destructive hover:text-destructive hover:bg-destructive/10"
                             onClick={() => setConfirmKick(device)}
-                            disabled={!!kickingId}
+                            disabled={kickInFlight}
                           >
-                            {kickingId === device.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            <Trash2 className="h-4 w-4" />
                             <span className="ml-1">Kick out</span>
                           </Button>
                         )}
@@ -603,22 +730,57 @@ export function ManageDevices() {
         </CardContent>
       </Card>
 
-      <AlertDialog open={!!confirmKick} onOpenChange={(open) => !open && setConfirmKick(null)}>
+      {/* Kick in-flight par dialog accidental close band — UX clear */}
+      <AlertDialog open={!!confirmKick} onOpenChange={(open) => { if (!open && !kickInFlight) setConfirmKick(null); }}>
         <AlertDialogContent>
           <AlertDialogTitle>Remove this device?</AlertDialogTitle>
           <AlertDialogDescription>
             This will sign out the device from this company. The user can sign in again from that device if the plan allows. Device: ...{confirmKick?.id.slice(-8)}.
           </AlertDialogDescription>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={kickInFlight}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={kickInFlight}
               onClick={(e) => {
                 e.preventDefault();
-                if (confirmKick) handleKickOut(confirmKick);
+                const row = confirmKick;
+                if (row) confirmAndKickDevices([row]);
               }}
             >
               Kick out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Multi tick ke baad ek hi Firestore batch — bulk confirm */}
+      <AlertDialog
+        open={confirmBulkKick}
+        onOpenChange={(open) => {
+          if (!open && !kickInFlight) setConfirmBulkKick(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Kick selected devices?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Removes {selectedKickIds.size} device slot(s). Those sessions lose this company until they connect again within plan limits.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={kickInFlight}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={kickInFlight || selectedKickIds.size === 0}
+              onClick={(e) => {
+                e.preventDefault();
+                const ids = [...selectedKickIds];
+                const rows = visibleSortedDevices.filter((d) => ids.includes(d.id));
+                if (rows.length) confirmAndKickDevices(rows);
+              }}
+            >
+              Kick {selectedKickIds.size} device(s)
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

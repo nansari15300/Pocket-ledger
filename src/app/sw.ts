@@ -2,7 +2,7 @@
 /**
  * Serwist service worker: precache + `defaultCache` (Next RSC/static runtime).
  * Live site / PWA + Capacitor remote-URL WebView: pehli online visit ke baad shell offline available.
- * `STATIC_BUILD=1` (bundled APK export) par `next.config` se Serwist disable — yahan build include nahi hota.
+ * `STATIC_BUILD=1` export bhi SW bundle karta — `out/` HTTPS host ya Capacitor `webDir` PWA shells precache ho.
  */
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";

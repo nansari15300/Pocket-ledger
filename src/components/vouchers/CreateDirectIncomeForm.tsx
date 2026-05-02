@@ -47,7 +47,7 @@ import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import { BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -443,7 +443,7 @@ export function CreatePaymentInForm({
               // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
-                deletedAt: serverTimestamp(),
+                deletedAt: voucherRecycleBinDeletedAt(),
                 convertedToType: voucherType,
                 convertedToVoucherNumber: submissionData.voucherNumber,
               });
@@ -526,11 +526,7 @@ export function CreatePaymentInForm({
     setIsLoading(true);
     try {
       // Local/offline compatible delete: voucher ko bin me move karo instead of hard delete.
-      await patchVoucherFields(companyId, savedVoucherId, {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-        deletedBy: user?.uid || "",
-      });
+      await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
       toast({ title: "Voucher Moved to Bin", description: "The voucher has been moved to recycle bin." });
       onVoucherUpdated?.();
     } catch (error) {

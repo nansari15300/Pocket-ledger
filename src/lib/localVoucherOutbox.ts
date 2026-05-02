@@ -2,7 +2,8 @@
 
 /**
  * Static build: Firestore fail hone par company subcollection writes queue + online aate hi flush.
- * Voucher se start hua tha; ab generic `company_docs` collections (parties/groups/...) bhi support.
+ * Voucher tombstone (Sync-2 pilot): outbox update/create payloads — hard deleteDoc tab nahi;
+ * recycler = isDeleted + deletedAt + deletedBy (softDeleteVoucherMoveToRecycleBin / voucherRecycleBinDeletedAt).
  */
 
 import {
@@ -27,6 +28,7 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { mirrorVoucherDocToBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getLocalCompanyById, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
+import { PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 import {
   PL_ENCRYPTED_IV_FIELD,
   PL_ENCRYPTED_PAYLOAD_FIELD,
@@ -303,6 +305,9 @@ export async function flushVoucherOutbox(): Promise<{ ok: number; failed: number
         continue;
       }
       const data = outboxJsonParse(row.payload);
+      if (row.collection_name === "vouchers" && typeof data === "object" && data && PL_CLIENT_OFFLINE_FIRST_PERSIST_MS in data) {
+        delete (data as Record<string, unknown>)[PL_CLIENT_OFFLINE_FIRST_PERSIST_MS];
+      }
       // Purani outbox rows / corrupt `date` — Firestore pe flush se pehle bhar do taaki statement sahi rahe.
       if (row.collection_name === "vouchers") coerceVoucherDocumentDate(data as Record<string, unknown>);
       const { id: _docIdField, ...docFields } = data;

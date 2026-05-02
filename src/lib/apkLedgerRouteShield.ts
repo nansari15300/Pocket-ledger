@@ -1,17 +1,19 @@
 "use client";
 
 /**
- * Capacitor APK: async Firestore/SQLite ke daur `usePathname()` stale `/dashboard` ho jata hai;
+ * Capacitor APK + packaged Electron: async Firestore/SQLite ke daur `usePathname()` stale `/dashboard` ho jata hai;
  * modal close par `router.replace(stale pathname)` poori screen udha deta hai (`modalUrlSync.ts` comments).
  * Ye module write se *turant pehle* live `window.location` session me lock karti hai + layout par guard extend trigger.
  * `pl_apk_ledger_shield_until_ms`: save ke baad chhoti khidki — `clearCompanyId`/`/company` race rokhti hai (`useCompany`/listener delay se zyada).
  */
 
+import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { persistPlModalParentQuery } from "@/lib/modalUrlSync";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { isDashboardRedirectGuardActive } from "@/lib/protectFromUnwantedDashboardRedirect";
+import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 
 /** Save/approve outbox-window: SQLite list recovery `clearCompanyId` se lambi — milliseconds from `Date.now()` */
 const PL_LEDGER_SHIELD_UNTIL_KEY = "pl_apk_ledger_shield_until_ms";
@@ -21,14 +23,23 @@ const LEDGER_SHIELD_HOLD_MS = 26_000;
 export const PL_APK_LEDGER_WRITE_ARM_EVENT = "pl_apk_ledger_write_arm";
 
 export function apkLedgerRouteShieldEligible(): boolean {
-  return typeof window !== "undefined" && isStaticAppBuild() && isCapacitorNativeApp();
+  if (typeof window === "undefined" || !isStaticAppBuild()) return false;
+  // Electron .exe desktop + Capacitor — path/company glitch se `/company`; browser static mobile niche `matchMedia`.
+  return isCapacitorNativeApp() || isElectronDesktopApp();
 }
 
 /**
  * Narrow mobile browser (Capacitor nahi): static PWA race kabhi‑kabhi waheen — snapshot cheap hai.
  */
 function staticMobileNarrowBrowser(): boolean {
-  if (typeof window === "undefined" || !isStaticAppBuild() || isCapacitorNativeApp()) return false;
+  if (
+    typeof window === "undefined" ||
+    !isStaticAppBuild() ||
+    isCapacitorNativeApp() ||
+    isElectronDesktopApp()
+  ) {
+    return false;
+  }
   return typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
 }
 
@@ -95,4 +106,9 @@ export function beginApkLedgerAsyncWriteShield(opts?: { pinCompanyId?: string | 
   snapshotApkLedgerUrlBeforeAsyncWrite();
   pinCompanyIdIfAny(opts?.pinCompanyId ?? "");
   notifyApkLedgerAsyncWriteStarted();
+  // P3 correlate: voucher save/arm vs `listRecovery:*` timestamps (debug flag off = no-op)
+  plDbgCompanyRecovery("ledgerShield:beginApkLedgerAsyncWriteShield", {
+    snapshotEligible: shouldSnapshotLedgerUrlBeforeWrite(),
+    pinCompanyId: String(opts?.pinCompanyId ?? "").trim().slice(0, 24) || null,
+  });
 }

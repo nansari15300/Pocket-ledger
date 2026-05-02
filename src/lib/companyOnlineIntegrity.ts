@@ -5,6 +5,7 @@ import { firestore } from "@/lib/firebase";
 import { demoteCompanyToLocal } from "@/lib/companyDemote";
 import type { LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { listLocalCompanies, removeLocalCompanyById } from "@/lib/localCompanyStore";
+import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 
 /** Current user company ka owner hai ya nahi (shared vs My companies split). */
 export function isCurrentUserOwnerOfCompanyRow(
@@ -27,20 +28,33 @@ export type ReconcileOnlineMirrorsResult = {
   changed: boolean;
   /** Shared / non-owner rows purged from SQLite (hard delete / no access). */
   removedIds: string[];
-  /** Owner online row demoted to local (doc missing / permission). */
+  /** Owner online row: permission_denied pe demote — network error pe kuch nahi. */
   demotedIds: string[];
 };
 
 /**
- * Har local company row ko server se cross-check:
- * - **Shared (non-owner)**: Firestore me `companies/{id}` hona chahiye — nahi to stale mirror (storage local/firebase kuch bhi) SQLite se delete.
- * - **Owner + pure local** (`storageOption: local`): server doc zaroori nahi — skip.
- * - **Owner + online** (firebase/drive): doc gayab → local bucket me demote.
+ * Company registry ghosts / shared revoke — **`useCompany`** auth mount par periodic `reconcileOnlineMirrorsWithServer`.
+ *
+ * | Row category | Firestore read | Exists | Missing doc | Catch `permission-denied` | Catch `unavailable` etc. |
+ * |--------------|----------------|--------|------------|---------------------------|--------------------------|
+ * | Owner + `storageOption: local` pure | _(skip)_ | — | — | — | — |
+ * | Shared (non-owner) | `companies/{id}` | Keep row | **`removeLocalCompanyById`** (ghost) | **Remove** — access revoked | **No-op** (offline; avoid false purge) |
+ * | Owner + online mirror | `getDoc` same | Keep | **Remove** — server company hard-deleted | **`demoteCompanyToLocal`** — rules handover/revoke | **No-op** — network flaky |
+ *
+ * **`removedIds`**: SQLite hard-delete (shared ghost ya owner phantom).
+ * **`demotedIds`**: owner-only online row jo demote hue (data preserve, local bucket).
+ *
+ * Offline-first note: **`unhandled` errors ≠ missing** — silently ignore taaki airplane mode par poori company ud na jaye.
  */
 export async function reconcileOnlineMirrorsWithServer(user: {
   uid: string;
   email: string | null;
 }): Promise<ReconcileOnlineMirrorsResult> {
+  // Airplane / no route: Firestore reads misleading ho sakti hain — registry cleanup sirf tab jab network label online ho (navigator jhoot bol sakta hai lekin APK flight mode me zyatar safe skip).
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return { changed: false, removedIds: [], demotedIds: [] };
+  }
+
   const rows = await listLocalCompanies();
   const removedIds: string[] = [];
   const demotedIds: string[] = [];
@@ -80,11 +94,10 @@ export async function reconcileOnlineMirrorsWithServer(user: {
     try {
       const snap = await getDoc(doc(firestore, "companies", id));
       if (snap.exists()) continue;
-      const did = await demoteCompanyToLocal(id, "server_missing");
-      if (did) {
-        changed = true;
-        demotedIds.push(id);
-      }
+      // Doc delete ho chuka hai (Console / admin) → purani demote sirf bucket badalti thi — user ko “local move” glitch; full SQLite wipe
+      await removeLocalCompanyById(id, { firebaseUid: user.uid });
+      removedIds.push(id);
+      changed = true;
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       if (code === "permission-denied" || code === "PERMISSION_DENIED") {
@@ -96,6 +109,13 @@ export async function reconcileOnlineMirrorsWithServer(user: {
       }
     }
   }
+
+  plDbgCompanyRecovery("sync1:reconcileOnlineMirrors:done", {
+    registryRowsSeen: rows.length,
+    removedIds: [...removedIds],
+    demotedIds: [...demotedIds],
+    changed,
+  });
 
   return { changed, removedIds, demotedIds };
 }

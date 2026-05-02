@@ -40,7 +40,15 @@ import { FilePreview } from "../vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields } from "@/lib/voucherActionsClient";
+import {
+  saveVoucher,
+  isVoucherLimitError,
+  approveVoucherWithHistory,
+  patchVoucherFields,
+  softDeleteVoucherMoveToRecycleBin,
+  voucherRecycleBinDeletedAt,
+  updateVoucherSpendWiseLinks,
+} from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 /** Copy chip → From vs To source account alag — sirf types (runtime circular avoid). */
@@ -60,7 +68,6 @@ import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPayme
 import { LinkPaymentOutToPaymentInDialog } from "@/components/vouchers/LinkPaymentOutToPaymentInDialog";
 import { LinkSectionInfoDialog } from "@/components/vouchers/LinkSectionInfoDialog";
 import { allocatePaymentInAmounts } from "@/lib/paymentInAllocation";
-import { updateVoucherSpendWiseLinks } from "@/lib/voucherActionsClient";
 import { getOpeningBalanceBaseAmount, SPEND_WISE_OPENING_BALANCE_ID } from "@/lib/spendWiseOpeningBalance";
 
 const fileSchema = z.object({
@@ -993,7 +1000,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
-                deletedAt: serverTimestamp(),
+                deletedAt: voucherRecycleBinDeletedAt(),
                 convertedToType: 'contra',
                 convertedToVoucherNumber: submissionData.voucherNumber,
               });
@@ -1152,11 +1159,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
     try {
         // Delete action local-first helper ke through run karo.
-        await patchVoucherFields(companyId, savedVoucherId, {
-            isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || '',
-        });
+        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
     } catch (error) {

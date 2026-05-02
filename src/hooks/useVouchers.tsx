@@ -16,6 +16,7 @@ import type { Item, ItemGroup } from "@/components/items/types";
 import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import {
   BROWSER_DB_COLLECTION_BUMP,
   listCompanyDocsFromBrowserDb,
@@ -602,40 +603,15 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       void loadSqliteChunk(secondary);
     }
 
-    // ४. कम्पनी को Firestore doc अस्तित्वमा छ कि छैन जाँच गर्ने (नभए rules ले subcollection deny गर्छ — यहीले permission error रोक्छ)
+    // Hybrid Firestore ↔ SQLite — native/APK bundled: wifi off par bhi snapshots bind (snapshot error → SQLite merge niche).
     const unsubRef = { current: [] as (() => void)[] };
 
-    // `companyRef` naam React useRef se clash — TDZ / shadow; Firestore root doc alag naam
     const companyRootDocRef = doc(firestore, "companies", fsCompanyId);
-    // Server बाट मात्र जाँच गर्ने (cache ले नयाँ company नभए पनि true दिएर listener लगाउन रोक्न)
-    getDocFromServer(companyRootDocRef).then((snap) => {
+
+    /** `firestoreRemotePullAttempt`: root server verify ke baad hi Firestore→SQLite ek baar pull; offline native par false */
+    const bindHybridFirestoreToCompany = (opts: { firestoreRemotePullAttempt: boolean }) => {
       if (cancelled) return;
-      if (!snap.exists()) {
-        console.log("Company doc not in Firestore yet... skipping listeners.");
-        setLoading(false);
-        // Web: nayi / galat selection — khali. Static: turant SQLite prefetch UI pe hai, use mat tododo
-        if (!shouldUseLocalCompanyData) {
-          resetAllStates();
-        }
-        return;
-      }
-      const data = snap.data();
-      const docOwnerId = data?.ownerId ?? '';
-      const docOwnerEmail = (data?.ownerEmail ?? '').toString().toLowerCase().trim();
-      const userEmail = (user?.email ?? '').toLowerCase().trim();
-      const sharedEmails: string[] = (data?.sharedWithEmails ?? []).map((e: string) => String(e).toLowerCase().trim());
-      const isOwner = docOwnerId === user?.uid || docOwnerEmail === userEmail;
-      const isShared = userEmail && sharedEmails.includes(userEmail);
-      if (!isOwner && !isShared) {
-        console.log("Company doc owner mismatch or not shared with user... skipping listeners.");
-        setLoading(false);
-        if (!shouldUseLocalCompanyData) {
-          resetAllStates();
-        }
-        return;
-      }
-      // Doc mil gaya + access OK: ek baar Firestore → SQLite pull (`firestoreToLocalCompanyPull`) + React state
-      if (shouldUseLocalCompanyData) {
+      if (opts.firestoreRemotePullAttempt && shouldUseLocalCompanyData) {
         void (async () => {
           for (const { path, setter, orderByField } of collectionsToPrefetch) {
             try {
@@ -654,13 +630,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           }
         })();
       }
-      // Hybrid local-first: SQLite bootstrap already cleared `loading` — avoid stale `vouchers` closure forcing spinner again.
       if (!shouldUseLocalCompanyData && vouchers.length === 0) setLoading(true);
 
-      // Auth token लाई Firestore Listen request मा लग्न अलि ढिला (PERMISSION_DENIED कम गर्न)
       const attachListeners = () => {
         if (cancelled) return;
-      // Using explicit types for config to avoid @ts-ignore
       const collectionsToFetch: { 
         path: string; 
         setter: StateSetter<any>; 
@@ -708,24 +681,19 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 return dateA.getTime() - dateB.getTime();
               });
             }
-            // Firestore snapshot + SQLite extras (upload se pehle / cloud mode me bhi) — `merge` andar forBackupMerge use karti hai
             let dataForUi = data;
             if (!isGroup) {
-              // `storageOption: local` + authoritativeCompanyId: same id par remote purana na jeete (restore ke baad dashboard adhura na rahe)
               const preferLocal =
                 String(companyRef.current?.storageOption || "").toLowerCase() === "local";
               dataForUi = await mergeRemoteSnapshotWithLocalOnlyDocs(companyId, path, data, orderByField, {
                 preferLocalSqliteWhenIdsConflict: preferLocal,
               });
             }
-            // Mirror META sirf SQLite purge/orphans ke liye — React voucher/party lists me nahin dikhao
             setter(Array.isArray(dataForUi) ? dataForUi.map(stripMirrorMetaForEntityListRow) : dataForUi);
-            // Local company mode: har snapshot ke baad SQLite cache update (offline + invoice relations).
             if (shouldUseLocalCompanyData && !isGroup) {
               const debounceKey = `${companyId}::${path}`;
               clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
               mirrorSnapshotTimersRef.current[debounceKey] = setTimeout(() => {
-                // Raw Firestore `data` mirror kiya to restore SQLite overwrite ho sakta tha — UI jaisa merged list mirror karo
                 void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi);
               }, 500);
             }
@@ -741,16 +709,13 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 .catch(() => {});
               return;
             }
-            // PERMISSION_DENIED: Owner भए companyId clear नगर्ने (Settings लूप रोक्न; rules/auth timing को कारण पनि deny आउन सक्छ)।
             if (error?.code === 'permission-denied' || error?.code === 'PERMISSION_DENIED' || (error?.message && String(error.message).includes('permission'))) {
               console.warn(`[PERMISSION_DENIED TRACK] source=useVouchers path=companies/${companyId}/${path}`, { companyId, path, code: error?.code });
               if (isLocalOnlyMode()) {
-                // Static/local mode: transient rules/auth race par company clear karne se app home redirect ho jata hai.
                 console.warn(`[Firestore] PERMISSION_DENIED in local mode for path: companies/${companyId}/${path}. Skipping clearCompanyId to keep current screen stable.`);
                 return;
               }
               const co = companyRef.current;
-              // company null hone par clear na karein – ownership check nahi ho sakta, Settings redirect loop avoid
               if (!co) {
                 console.warn(`[Firestore] PERMISSION_DENIED but company not loaded yet – skipping clear to avoid Settings redirect.`);
                 return;
@@ -780,7 +745,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       });
       unsubRef.current = unsubscribers;
 
-      // Browser SQLite prefetch: local-first + uploaded-to-cloud (global cloud mode me bhi merge ke liye cache chahiye)
       const coPrefetch = companyRef.current;
       const prefetchFromSqlite =
         shouldUseLocalCompanyData ||
@@ -790,7 +754,6 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           listCompanyDocsFromBrowserDb(companyId, p, { forBackupMerge: true })
             .then((cached) => {
               if (cancelled || !cached.length) return;
-              // Stale SQLite prefetch puri list replace na kare: soft-deleted rows wapas na aayein (party delete UI fix).
               const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
               setCol((prev) => {
                 const merged = mergeEntityListsById(prev, obf ? sortDocsByDateField(alive, obf) : alive, obf);
@@ -816,10 +779,78 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       );
       Promise.all(initialFetches).then(() => { if (!cancelled) setLoading(false); });
       };
-      // Local-first: SQLite already on screen — attach listeners quickly. Web-only: delay reduces PERMISSION_DENIED on first load.
       const firestoreListenDelayMs = shouldUseLocalCompanyData ? 0 : 600;
       setTimeout(attachListeners, firestoreListenDelayMs);
-    }).catch(() => { if (!cancelled) setLoading(false); });
+    };
+
+    // Airplane / cold wifi off: `firebase` storage company ko bhi pehle mirror hydrate —
+    // warna sirf UI; `getDocFromServer` fail → niche catch tak bind kabhi lagta hi nahi tha (masters khali).
+    const hydrateFromMirrorWhenOffline =
+      typeof navigator !== "undefined" && navigator.onLine === false;
+
+    if (hydrateFromMirrorWhenOffline) {
+      bindHybridFirestoreToCompany({
+        firestoreRemotePullAttempt: shouldUseLocalCompanyData,
+      });
+    } else {
+      getDocFromServer(companyRootDocRef)
+        .then((snap) => {
+          if (cancelled) return;
+          if (!snap.exists()) {
+            console.log("Company doc not in Firestore yet... skipping listeners.");
+            setLoading(false);
+            if (!shouldUseLocalCompanyData) {
+              resetAllStates();
+            }
+            return;
+          }
+          const data = snap.data();
+          const docOwnerId = data?.ownerId ?? "";
+          const docOwnerEmail = (data?.ownerEmail ?? "").toString().toLowerCase().trim();
+          const userEmail = (user?.email ?? "").toLowerCase().trim();
+          const sharedEmails: string[] = (data?.sharedWithEmails ?? []).map((e: string) =>
+            String(e).toLowerCase().trim()
+          );
+          const isOwner = docOwnerId === user?.uid || docOwnerEmail === userEmail;
+          const isShared = userEmail && sharedEmails.includes(userEmail);
+          if (!isOwner && !isShared) {
+            console.log(
+              "Company doc owner mismatch or not shared with user... skipping listeners."
+            );
+            setLoading(false);
+            if (!shouldUseLocalCompanyData) {
+              resetAllStates();
+            }
+            return;
+          }
+          bindHybridFirestoreToCompany({
+            firestoreRemotePullAttempt: shouldUseLocalCompanyData,
+          });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          const ec = typeof err === "object" && err !== null ? (err as { code?: string }).code : "";
+          const msg =
+            typeof err === "object" && err !== null ? String((err as Error).message || "") : "";
+          const networkLike =
+            (typeof navigator !== "undefined" && navigator.onLine === false) ||
+            ec === "unavailable" ||
+            ec === "deadline-exceeded" ||
+            ec === "failed-precondition" ||
+            msg.toLowerCase().includes("network") ||
+            msg.toLowerCase().includes("failed to fetch");
+
+          // APK local company + stale build path (purana guard) + reachable-Firestore-fail mirrors
+          if (networkLike || (shouldUseLocalCompanyData && isStaticAppBuild())) {
+            bindHybridFirestoreToCompany({
+              firestoreRemotePullAttempt: networkLike ? false : shouldUseLocalCompanyData,
+            });
+            return;
+          }
+          // Non-network rejection: bind mat karo; spinner band
+          setLoading(false);
+        });
+    }
 
     return () => {
       cancelled = true;

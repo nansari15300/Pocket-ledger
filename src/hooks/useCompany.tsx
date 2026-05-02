@@ -36,6 +36,7 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
+import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 
 
 export type DisplaySettings = {
@@ -502,6 +503,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, []);
   
   const clearCompanyId = useCallback(() => {
+    const err = new Error();
+    const st = typeof err.stack === "string" ? err.stack.split("\n").slice(1, 10).join(" | ") : "";
+    plDbgCompanyRecovery("clearCompanyId", { stackHint: st });
     // Clear both tab override and global fallback when user leaves/deletes the active company.
     clearSelectedCompanyId();
     setCompanyIdState(null);
@@ -633,7 +637,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             cloudMirrorAllowedIds = null;
           }
         }
-        if (cloudMirrorAllowedIds !== null && user?.uid && user.email) {
+        // **APK airplane / flaky net:** Firestore query kabhi-success + `docs: []` de sakta hai cache miss par — khali Set = sab ids "ghost" ⇒ pura registry wipe (“no company”). Sirf tab purge jab kam se kam ek server id pakka mile.
+        if (
+          cloudMirrorAllowedIds !== null &&
+          cloudMirrorAllowedIds.size > 0 &&
+          user?.uid &&
+          user.email
+        ) {
           const locals = await listLocalCompanies({ includeDeleted: true });
           for (const row of locals) {
             const id = row.id;
@@ -650,9 +660,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           .map((c) => normalizeLocalCompany(c as unknown as Company))
           .filter(isCompanyVisibleInMainApp);
         await Promise.all(normalizedLocalCompanies.map((c) => upsertLocalCompany(c as any)));
-        setAllCompanies(
-          filterSharedOnlyCompaniesForSuperAdminInMainApp(normalizedLocalCompanies, user, isSuperAdminUser, pathname)
+        const filteredLocals = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+          normalizedLocalCompanies,
+          user,
+          isSuperAdminUser,
+          pathname
         );
+        plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:setList", {
+          mode: opts.mode,
+          count: filteredLocals.length,
+          idsSample: filteredLocals.slice(0, 8).map((c) => c.id),
+          liveCompanyId: companyIdLiveRef.current,
+          ledgerShield: shouldSuppressTransientCompanyClear(),
+        });
+        setAllCompanies(filteredLocals);
         const liveId = companyIdLiveRef.current;
         if (!liveId) {
           setCompany(null);
@@ -662,7 +683,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const norm = selected ? normalizeLocalCompany(selected as unknown as Company) : null;
         if (!norm || !isCompanyVisibleInMainApp(norm)) {
           // Save/outbox: SQLite read null — pehle clear mat karo (`shouldSuppress…` me ledger shield ~26s)
-          if (shouldSuppressTransientCompanyClear()) return;
+          if (shouldSuppressTransientCompanyClear()) {
+            plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:selectedInvisible:shieldHold", {
+              liveId,
+              ledgerShield: true,
+            });
+            return;
+          }
+          plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:selectedInvisible:clearAndPush", {
+            liveId,
+            hasNormRow: Boolean(norm),
+          });
           clearCompanyId();
           const p = normalizeAppPath(pathname ?? "");
           if (!pathExemptFromAutoSelectCompanyPush(p)) {
@@ -772,9 +803,19 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const normalizedLocalCompanies = rawLocals
           .map((c) => normalizeLocalCompany(c as unknown as Company))
           .filter(isCompanyVisibleInMainApp);
-        setAllCompanies(
-          filterSharedOnlyCompaniesForSuperAdminInMainApp(normalizedLocalCompanies, user, isSuperAdminUser, pathname)
+        const filteredFast = filterSharedOnlyCompaniesForSuperAdminInMainApp(
+          normalizedLocalCompanies,
+          user,
+          isSuperAdminUser,
+          pathname
         );
+        plDbgCompanyRecovery("localOnlyRegistry:SQLite:setList", {
+          count: filteredFast.length,
+          idsSample: filteredFast.slice(0, 8).map((c) => c.id),
+          liveCompanyId: companyIdLiveRef.current,
+          ledgerShield: shouldSuppressTransientCompanyClear(),
+        });
+        setAllCompanies(filteredFast);
 
         if (!companyId) {
           setCompany(null);
@@ -922,6 +963,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       isSuperAdminUser,
       pathname
     );
+    plDbgCompanyRecovery("handleSnapshotUpdate:setList", {
+      mergedCount: mergedCompanies.length,
+      idsSample: mergedCompanies.slice(0, 12).map((c) => c.id),
+      liveCompanyId: companyIdLiveRef.current,
+      selectedVisibleInMerged: (() => {
+        const id = companyIdLiveRef.current;
+        if (!id) return null;
+        const row = mergedCompanies.find((c) => c.id === id);
+        return row ? isCompanyVisibleInMainApp(row) : false;
+      })(),
+      ledgerShield: shouldSuppressTransientCompanyClear(),
+    });
     // Sync engine: persist all online-category companies to local DB on every server snapshot update.
     const onlineCompanies = mergedCompanies.filter(
       (c) => ((c.storageOption || "firebase") as string).toLowerCase() !== "local"
@@ -1077,6 +1130,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           if (cancelled || merged.id !== companyIdLiveRef.current) return;
 
           setCompany(merged);
+          plDbgCompanyRecovery("activeCompanyDoc:listRowMerge", {
+            companyId: merged.id,
+            isDeleted: merged.isDeleted === true,
+            movedToRecycle: merged.movedToAdminRecycleAt != null,
+          });
           setAllCompanies((prev) => {
             const i = prev.findIndex((c) => c.id === merged.id);
             if (i < 0) return prev;
@@ -1114,7 +1172,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       });
       if (cancelled) return;
       if (selectedAtStart && result.removedIds.includes(selectedAtStart)) {
-        if (shouldSuppressTransientCompanyClear()) return;
+        if (shouldSuppressTransientCompanyClear()) {
+          plDbgCompanyRecovery("reconcileOnline:selectedRemoved:shieldHold", { selectedAtStart });
+          return;
+        }
+        plDbgCompanyRecovery("reconcileOnline:selectedRemoved:clear+pushCompany", { selectedAtStart });
         clearCompanyId();
         router.push("/company");
       }
@@ -1133,6 +1195,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const companyFromList = allCompanies.find((c) => c.id === companyId);
+    plDbgCompanyRecovery("listRecovery:tick", {
+      companyId,
+      listLen: allCompanies.length,
+      inList: Boolean(companyFromList),
+      listRowMainVisible: companyFromList ? isCompanyVisibleInMainApp(companyFromList) : null,
+      loading,
+      ledgerShield: shouldSuppressTransientCompanyClear(),
+    });
     if (companyFromList && isCompanyVisibleInMainApp(companyFromList)) {
       setCompany(companyFromList);
       listRecoverySyncForIdRef.current = null;
@@ -1140,6 +1210,13 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
     if (companyFromList && !isCompanyVisibleInMainApp(companyFromList)) {
       // Safety: hidden/deleted company stale list me ho to selection turant clear karo (mobile + desktop same behavior).
+      // APK/static: voucher save ke baad list merge pe `isCompanyVisibleInMainApp` ek beat ke liye false ho sakta hai — shield window me clear mat karo (niche SQLite path jaisa).
+      if (shouldSuppressTransientCompanyClear()) {
+        plDbgCompanyRecovery("listRecovery:listRowNotMainVisible:deferPulse", { companyId });
+        setTimeout(() => setLoadingPulse((p) => p + 1), 400);
+        return;
+      }
+      plDbgCompanyRecovery("listRecovery:listRowNotMainVisible:clear", { companyId });
       setCompany(null);
       listRecoverySyncForIdRef.current = null;
       clearCompanyId();
@@ -1167,6 +1244,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         } catch {
           localRow = null;
           if (attempt === 2) {
+            plDbgCompanyRecovery("listRecovery:getLocalBusy:skipClear", { companyId });
             console.warn(
               "[useCompany] getLocalCompanyById failed after retries (likely DB busy); skip clearCompanyId to avoid wrong /company redirect."
             );
@@ -1180,16 +1258,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (!isCompanyVisibleInMainApp(normalized)) {
           // SQLite recovery path: admin-hidden/deleted row ko list me dobara merge mat karo.
           if (shouldSuppressTransientCompanyClear()) {
+            plDbgCompanyRecovery("listRecovery:sqliteNotMainVisible:deferPulse", { companyId });
             setTimeout(() => setLoadingPulse((p) => p + 1), 400);
             return;
           }
+          plDbgCompanyRecovery("listRecovery:sqliteNotMainVisible:clear", { companyId });
           setCompany(null);
           listRecoverySyncForIdRef.current = null;
           clearCompanyId();
           return;
         }
+        plDbgCompanyRecovery("listRecovery:sqliteMergeIntoList", { companyId });
         setCompany(normalized);
-        // Dropdown / selector `allCompanies` se aata hai — row list me merge karo taaki local company "gayab" na lage.
         setAllCompanies((prev) => {
           if (prev.some((c) => c.id === companyId)) return prev;
           return [...prev, normalized];
@@ -1200,9 +1280,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       console.log("Company not found in user's list, clearing local state.");
       if (shouldSuppressTransientCompanyClear()) {
+        plDbgCompanyRecovery("listRecovery:notInSqlite:deferPulse", { companyId });
         setTimeout(() => setLoadingPulse((p) => p + 1), 450);
         return;
       }
+      plDbgCompanyRecovery("listRecovery:notInSqlite:clear", { companyId });
       clearCompanyId();
     })();
 
@@ -1257,7 +1339,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     const live = normalizeAppPath(getBrowserPathname());
                     if (shouldSkipMissingCompanyRedirect(live, live)) return;
                     // APK save / ledger shield: storage flush + ~26s race me `/company` mat kholo.
-                    if (shouldSuppressTransientCompanyClear()) return;
+                    if (shouldSuppressTransientCompanyClear()) {
+                      plDbgCompanyRecovery("redirectNoStoredCompany:shieldHold", {});
+                      return;
+                    }
+                    plDbgCompanyRecovery("redirectNoStoredCompany:push.company", { live });
                     router.push("/company");
                 }, REDIRECT_DELAY_MS);
                 return () => clearTimeout(id);
@@ -1268,7 +1354,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             const live = normalizeAppPath(getBrowserPathname());
             if (!shouldSkipMissingCompanyRedirect(pathTrim, live)) {
                 // Fallback catch path me bhi guard respect karo taaki transient read-error se save ke turant baad `/company` na khule.
-                if (shouldSuppressTransientCompanyClear()) return;
+                if (shouldSuppressTransientCompanyClear()) {
+                  plDbgCompanyRecovery("redirectNoStoredCompany:catch:shieldHold", {});
+                  return;
+                }
+                plDbgCompanyRecovery("redirectNoStoredCompany:catch:push.company", { live });
                 router.push("/company");
             }
         }

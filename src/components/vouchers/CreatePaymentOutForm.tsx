@@ -52,7 +52,7 @@ import { CreateExpenseAccountDialog } from "../expenses/CreateExpenseAccountDial
 import type { ExpenseAccount } from "../expenses/types";
 import { Checkbox } from "../ui/checkbox";
 import type { DateRange } from "@/components/ui/ad-calendar";
-import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, syncBillWiseAllocationsToTargetVouchers, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
@@ -1253,7 +1253,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               // Conversion ke baad original voucher ko local/offline me bhi recycle-bin mark karo.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
-                deletedAt: serverTimestamp(),
+                deletedAt: voucherRecycleBinDeletedAt(),
                 convertedToType: voucherType,
                 convertedToVoucherNumber: sanitizedData.voucherNumber,
               });
@@ -1446,11 +1446,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
     try {
         // Move-to-bin operation local-first helper ke through run karo.
-        await patchVoucherFields(companyId, savedVoucherId, {
-            isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || '',
-        });
+        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherId, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled', false, savedVoucherId);
     } catch (error) {

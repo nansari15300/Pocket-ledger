@@ -54,7 +54,7 @@ import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
-import { saveVoucher, isVoucherLimitError, patchVoucherFields } from "@/lib/voucherActionsClient";
+import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
@@ -1506,7 +1506,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
               // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
               await patchVoucherFields(companyId, originalVoucherIdToDelete, {
                 isDeleted: true,
-                deletedAt: serverTimestamp(),
+                deletedAt: voucherRecycleBinDeletedAt(),
                 convertedToType: 'journal',
                 convertedToVoucherNumber: submissionData.voucherNumber,
               });
@@ -1626,11 +1626,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
     setIsLoading(true);
     try {
         // Delete action local-first helper ke through run karo.
-        await patchVoucherFields(companyId, savedVoucherIdRef, {
-            isDeleted: true,
-            deletedAt: serverTimestamp(),
-            deletedBy: user?.uid || '',
-        });
+        await softDeleteVoucherMoveToRecycleBin(companyId, savedVoucherIdRef, user?.uid || "");
         toast({ title: "Voucher Moved to Bin" });
         onVoucherAction?.('cancelled');
     } catch (error) {
