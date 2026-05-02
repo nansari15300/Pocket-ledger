@@ -4,6 +4,8 @@ import path from "path";
 const isStaticBuild = process.env.STATIC_BUILD === "1";
 
 const nextConfig: NextConfig = {
+  // Next.js 16: default `next build` Turbopack use karta hai; yahan intentional `webpack()` (pdfjs-dist, aliases).
+  // Prod / Firebase App Hosting: `package.json` me `next build --webpack` — warna Turbopack + webpack config = build fail.
   // Dev me React 18 Strict Mode effect 2× run karta hai — kuch navigation side-effects zyada dikhte hain.
   // Production build par iska asar nahi; sirf `next dev` behaviour.
   reactStrictMode: false,
