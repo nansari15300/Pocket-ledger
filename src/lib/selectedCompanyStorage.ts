@@ -1,5 +1,7 @@
 "use client";
 
+import { isPlNavRedirectDebugEnabled, plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
+
 const GLOBAL_COMPANY_ID_KEY = "companyId";
 const TAB_COMPANY_ID_KEY = "pl_tab_companyId_v1";
 
@@ -38,6 +40,14 @@ export function writeSelectedCompanyId(companyId: string): void {
     else window.localStorage.removeItem(GLOBAL_COMPANY_ID_KEY);
   } catch {
     /* ignore */
+  }
+  // APK trace: dekho kab session/local wipe ho raha hai (race vs voucher save).
+  if (isPlNavRedirectDebugEnabled()) {
+    plNavDbg("selectedCompanyStorage.writeSelectedCompanyId", {
+      hint: clean ? plNavDbgIdHint(clean) : "CLEARED",
+      sessionKey: TAB_COMPANY_ID_KEY,
+      globalKey: GLOBAL_COMPANY_ID_KEY,
+    });
   }
 }
 

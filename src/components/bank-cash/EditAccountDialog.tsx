@@ -39,7 +39,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useRouter } from "next/navigation";
 import { IS_STATIC_APK } from "@/lib/staticMobileFullscreenDialog";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
@@ -55,6 +57,8 @@ import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { EntityOpeningBalanceNarrationField } from "@/components/common/EntityProfileDocumentsNarrationFields";
 import { cnMasterEntityDialogContent, masterEntityDialogHeaderClassName } from "@/lib/masterEntityDialogClasses";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
+import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
+import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 
 /** CreateBankAccountDialog jaisa: combobox value `ungrouped_account` jab account Ungrouped bucket mein ho (null / empty legacy). */
 function normalizeBankAccountEditGroupId(groupId: string | null | undefined): string {
@@ -101,6 +105,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const processedAccountGroupsRef = useRef(processedAccountGroups);
   processedAccountGroupsRef.current = processedAccountGroups;
   const { dateSystem } = useDate();
+  const router = useRouter();
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = controlledIsOpen ?? internalIsOpen;
   const setIsOpen = useCallback((open: boolean) => {
@@ -124,6 +129,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const isMobile = useIsMobile();
   const staticMobileFullscreen = IS_STATIC_APK && isMobile;
+  /** Desktop bank detail (`/bank-cash/[id]`): persist+guard — mobile variant `openModalInUrl` already persiste karta hai */
+  useEffect(() => {
+    if (!isOpen || !isStaticAppBuild()) return;
+    persistLedgerModalParentFromBrowser();
+  }, [isOpen]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
@@ -258,7 +268,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     const accountRefSnap = account;
 
     void (async () => {
-      // APK ledger URL + company pin: save/async turant baad stale router `/dashboard`/company picker jump rokho.
+      // Static ledger: wide desktop guard (voucher jaisa) + company pin — save async ke baad `/dashboard`/picker jump
+      if (isStaticAppBuild()) {
+        armDashboardRedirectGuard(router, { isMobile: isMobile || isStaticAppBuild() });
+      }
       beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
       const toastId = sonnerToast.loading("Updating account...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
@@ -430,6 +443,10 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
     
     setIsLoading(true);
     try {
+        if (isStaticAppBuild()) {
+          armDashboardRedirectGuard(router, { isMobile: isMobile || isStaticAppBuild() });
+          beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
+        }
         await updateDoc(doc(firestore, `companies/${companyId}/bank_accounts`, account.id), {
             isDeleted: true,
             deletedAt: serverTimestamp()

@@ -44,7 +44,11 @@ import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
+import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
+import { plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 
 type VoucherType = "sale" | "purchase" | "payment_in" | "payment_out" | "contra" | "direct_income" | "direct_expense" | "journal" | "note" | "add_salary" | "production";
 
@@ -853,7 +857,7 @@ function VoucherDialogContent({
                 })}
               </SelectContent>
             </Select>
-            {/* Company header: sirf Save & Copy To ke baad copied draft me — navin Add/Edit me hide. */}
+            {/* Company header: Save & Copy To draft target, ya APK plain add/edit (shell company switch). */}
             {showHeaderCompanySelector && (
             <Select value={targetCompanyId || ""} onValueChange={(v) => onTargetCompanyChange?.(v)}>
               {/* Company selector: mobile par item-section jaisa soft green tone for visual consistency. */}
@@ -969,6 +973,13 @@ export function AddVoucherDialog(props: any) {
   const { vouchers } = useVouchers();
   const isMobile = useIsMobile();
   const isDesktop = !isMobile;
+  // Static export: FAB + party/bank *desktop* ledger par modal khulte hi URL session me — save/approve/dashboard-guard ko restore anchor mile
+  useEffect(() => {
+    if (!isOpen || !isStaticAppBuild()) return;
+    persistLedgerModalParentFromBrowser();
+  }, [isOpen]);
+  /** Wide desktop static me bhi polling-restore — `armDashboardRedirectGuard` ka `explicit` surrogate */
+  const ledgerModalGuardWide = useMemo(() => isMobile || isStaticAppBuild(), [isMobile]);
   const [historyVoucher, setHistoryVoucher] = useState<any>(null);
   const [isApproving, setIsApproving] = useState(false);
   // Dialog-scope company selector: global sidebar company ko change kiye bina target save/copy company control karta hai.
@@ -1000,6 +1011,37 @@ export function AddVoucherDialog(props: any) {
   const [historyBlocksEdit, setHistoryBlocksEdit] = useState(false);
   /** When sale/purchase form has pending link changes (e.g. user unlinked in dialog), form reports effective state so we enable edit locally. */
   const [effectiveHasLinksFromForm, setEffectiveHasLinksFromForm] = useState<boolean | null>(null);
+
+  /**
+   * Capacitor plain add/edit: nested `CompanyContext` override hatao — sidebar `companyId` aur form save target align rahein;
+   * SQLite list recovery race par galat `clearCompanyId` + `/company` kam (Electron/web jaisa nested rehne do).
+   */
+  const apkLedgerPinsShellCompanyContext = useMemo(() => {
+    if (!isCapacitorNativeApp()) return false;
+    if (postCopyNewFormSeed) return false;
+    const eid = editCompanyId?.trim();
+    const ctx = String(ctxCompanyId || "").trim();
+    if (eid && eid !== ctx) return false;
+    return true;
+  }, [postCopyNewFormSeed, editCompanyId, ctxCompanyId]);
+
+  /** Header company Select: copy-draft = sirf targetCompanyId; APK shell = global setCompanyId + storage pin. */
+  const handleLedgerHeaderCompanyChange = useCallback(
+    (v: string) => {
+      if (postCopyNewFormSeed) {
+        setTargetCompanyId(v);
+        return;
+      }
+      if (apkLedgerPinsShellCompanyContext) {
+        writeSelectedCompanyId(v);
+        setCompanyId(v);
+        setTargetCompanyId(v);
+        return;
+      }
+      setTargetCompanyId(v);
+    },
+    [postCopyNewFormSeed, apkLedgerPinsShellCompanyContext, setCompanyId]
+  );
 
   /** VoucherDialogContent tab switch par call — stale link flags hatao (file upload dubara chale). */
   const clearEffectiveLinksOnTabChange = useCallback(() => {
@@ -1461,7 +1503,11 @@ export function AddVoucherDialog(props: any) {
     // Copied-draft par approve sirf source saved doc ke liye — chrome me id nahi dikhate, yahan bhi guard.
     if (!cid || !effectiveVoucher?.id || postCopyNewFormSeed || isApproving || !user?.uid) return;
     // APK/mobile: kuch parent / global effect approve ke baad silently `/dashboard` push kar deta hai — guard poll + restore (native ~8s).
-    armDashboardRedirectGuard(router, { isMobile });
+    armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+    plNavDbg("AddVoucherDialog.handleApprove.start", {
+      cidHint: plNavDbgIdHint(cid),
+      voucherId: effectiveVoucher?.id,
+    });
     setIsApproving(true);
     try {
       // Pehle hi persist: await ke dauran SQLite/outbox busy ho to bhi readSelectedCompanyId empty na ho, /company push na ho.
@@ -1507,6 +1553,7 @@ export function AddVoucherDialog(props: any) {
     props.onVoucherAction,
     onOpenChange,
     isMobile,
+    ledgerModalGuardWide,
     router,
   ]);
 
@@ -1761,10 +1808,33 @@ export function AddVoucherDialog(props: any) {
   ) => {
     const skipDialogCloseForSaveCopy = skipCloseAfterSaveForCopyRef.current && status === "saved";
 
-    // Static APK + mobile: Save / Save & Print / Save & Approve sab parent `onVoucherAction` ke baad
-    // kabhi `/dashboard` push kar dete the (close ke pehle hi). Guard ko parent callback se PEHLE arm karo (native ~8s SQLite flush).
+    // Static ledger (mobile + desktop wide): SQLite flush ke baad `/dashboard` push — guard pehle arm (native ~8s window).
     if (status === "saved") {
-      armDashboardRedirectGuard(router, { isMobile });
+      plNavDbg("AddVoucherDialog.handleAction.saved.armGuard", {
+        ledgerModalWide: ledgerModalGuardWide,
+        pinCapacitorShell: apkLedgerPinsShellCompanyContext,
+        hint: plNavDbgIdHint(companyId),
+      });
+      armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
+    }
+
+    // Capacitor plain voucher: sidebar company + SQLite selection pin — list recovery transient null se `/company` avoid.
+    if (
+      status === "saved" &&
+      isCapacitorNativeApp() &&
+      apkLedgerPinsShellCompanyContext &&
+      !skipDialogCloseForSaveCopy
+    ) {
+      const pinId = String(targetCompanyIdRef.current || companyId || "").trim();
+      if (pinId) {
+        plNavDbg("AddVoucherDialog.handleAction.saved.pinCompanyShield", {
+          hint: plNavDbgIdHint(pinId),
+          apkLedgerPinsShellCompanyContext,
+        });
+        writeSelectedCompanyId(pinId);
+        setCompanyId(pinId);
+        beginApkLedgerAsyncWriteShield({ pinCompanyId: pinId });
+      }
     }
 
     // १. सेभ भएको बेला मात्र सर्भरबाट फाइल डिलिट गर्ने
@@ -1817,7 +1887,17 @@ export function AddVoucherDialog(props: any) {
     if (!keepDialogAsNew && !skipDialogCloseForSaveCopy) {
       onOpenChange?.(false);
     }
-  }, [onOpenChange, companyId, defaultVoucherData?.unassignedFile?.id, props, voucher?.id, router, isMobile]);
+  }, [
+    onOpenChange,
+    companyId,
+    defaultVoucherData?.unassignedFile?.id,
+    props,
+    voucher?.id,
+    router,
+    ledgerModalGuardWide,
+    apkLedgerPinsShellCompanyContext,
+    setCompanyId,
+  ]);
 
   // Mobile: header padding + title + banners jitna chhota ho sake (zyada form space); desktop: purana drag header.
   const headerBlock = (
@@ -1854,9 +1934,8 @@ export function AddVoucherDialog(props: any) {
             </p>
           </div>
           <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
-            {postCopyNewFormSeed && (
-              // Desktop header company: sirf copied-draft (Save & Copy To); navin Add/Edit me hide.
-              <Select value={targetCompanyId || ""} onValueChange={(v) => setTargetCompanyId(v)}>
+            {(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext) && (
+              <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                 <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                   <SelectValue placeholder="Company" />
                 </SelectTrigger>
@@ -1903,8 +1982,8 @@ export function AddVoucherDialog(props: any) {
           )}
           {isDesktop && (
             <div className="ml-auto flex shrink-0 items-center gap-[10px]">
-              {postCopyNewFormSeed && (
-                <Select value={targetCompanyId || ""} onValueChange={(v) => setTargetCompanyId(v)}>
+              {(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext) && (
+                <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                   {/* Company selector: desktop par item-section tone match (soft green ribbon family). */}
                   <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                     <SelectValue placeholder="Company" />
@@ -1958,11 +2037,11 @@ export function AddVoucherDialog(props: any) {
   const voucherAttachmentFallbackValue =
     companyId && effectiveVoucher?.id ? { companyId, voucherId: String(effectiveVoucher.id) } : null;
 
-  // Dialog-scope CompanyContext override: dropdown se chuni hui target company sirf dialog ke andar `companyId`/`company`
-  // ko shift karti hai. Outer page (pages, sidebar, header) apni original company me hi rehta hai — save target sirf
-  // forms ke liye target company hota hai. Save complete hone par dialog band hota hai aur user back to same page
-  // par same previous company ke saath rehta hai.
+  // Dialog-scope CompanyContext override: copy/compare me target alag ho sakta hai. Capacitor plain add/edit: shell context direct use.
   const overriddenCompanyContextValue = useMemo(() => {
+    if (apkLedgerPinsShellCompanyContext) {
+      return outerCompanyContext;
+    }
     const targetCompanyDoc =
       allCompanies.find((c) => c.id === (targetCompanyId || "")) ?? ctxCompany ?? null;
     return {
@@ -1970,7 +2049,7 @@ export function AddVoucherDialog(props: any) {
       companyId: targetCompanyId || outerCompanyContext.companyId,
       company: targetCompanyDoc,
     };
-  }, [outerCompanyContext, targetCompanyId, allCompanies, ctxCompany]);
+  }, [apkLedgerPinsShellCompanyContext, outerCompanyContext, targetCompanyId, allCompanies, ctxCompany]);
 
   const bodyBlock = (
     <>
@@ -2005,9 +2084,9 @@ export function AddVoucherDialog(props: any) {
           onClearEffectiveLinksOnTabChange={clearEffectiveLinksOnTabChange}
           targetCompanyId={targetCompanyId}
           targetCompanyOptions={allCompanies.map((c) => ({ id: c.id, name: c.name }))}
-          onTargetCompanyChange={setTargetCompanyId}
+          onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={copyDraftSeedVersion}
-          showHeaderCompanySelector={!!postCopyNewFormSeed}
+          showHeaderCompanySelector={Boolean(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext)}
           copySaveTargetCompanyId={postCopyNewFormSeed ? (targetCompanyId || undefined) : undefined}
           copyMismatchCategories={postCopyNewFormSeed ? copyMismatchCategories : undefined}
           // Party/staff/tax/item/account sab: pehle prefilled Create dialog — direct Firestore clone nahi (user save se pehle edit mile).
@@ -2038,17 +2117,19 @@ export function AddVoucherDialog(props: any) {
   );
 
   /**
-   * APK mobile: voucher dialog close par `/dashboard` redirect guard — polling window restore (native ~8s).
-   * Desktop / web par no-op (`isStaticAppBuild`).
+   * Static export: ledger page (party/bank/FAB) — save/approve/close ke baad galat `/dashboard` restore; dev server par no-op (guard early exit).
    */
   const handleDialogOpenChange = useCallback(
     (open: boolean) => {
       if (!open) {
-        armDashboardRedirectGuard(router, { isMobile });
+        plNavDbg("AddVoucherDialog.onClose (dialog root)", {
+          ledgerModalWide: ledgerModalGuardWide,
+        });
+        armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
       }
       onOpenChange?.(open);
     },
-    [onOpenChange, router, isMobile]
+    [onOpenChange, router, ledgerModalGuardWide]
   );
 
   return (

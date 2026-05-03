@@ -37,6 +37,7 @@ import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySu
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
+import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 
 
 export type DisplaySettings = {
@@ -506,6 +507,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const err = new Error();
     const st = typeof err.stack === "string" ? err.stack.split("\n").slice(1, 10).join(" | ") : "";
     plDbgCompanyRecovery("clearCompanyId", { stackHint: st });
+    plNavDbgCritical("useCompany.clearCompanyId", { stackHint: st.slice(0, 400) });
     // Clear both tab override and global fallback when user leaves/deletes the active company.
     clearSelectedCompanyId();
     setCompanyIdState(null);
@@ -514,6 +516,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const setCompanyId = useCallback((newCompanyId: string) => {
+    // Debug: APK par save ke baad company switch race — hr set dikhao (flag ON par only).
+    plNavDbg("useCompany.setCompanyId", { hint: plNavDbgIdHint(newCompanyId), len: String(newCompanyId || "").length });
     // Save per-tab selection as well as last-login fallback for new app launches.
     writeSelectedCompanyId(newCompanyId);
     setCompanyIdState(newCompanyId);
@@ -697,7 +701,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           clearCompanyId();
           const p = normalizeAppPath(pathname ?? "");
           if (!pathExemptFromAutoSelectCompanyPush(p)) {
-            // APK save/approve window: transient companyId null par forced `/company` push skip; guard active hote hi current screen preserve.
+            plNavDbgCritical("useCompany.router.push./company [performLocalRegistry]", {
+              pathname: p,
+              liveIdHint: String(liveId || "").slice(0, 8),
+            });
             router.push("/company");
           }
           return;
@@ -1174,9 +1181,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       if (selectedAtStart && result.removedIds.includes(selectedAtStart)) {
         if (shouldSuppressTransientCompanyClear()) {
           plDbgCompanyRecovery("reconcileOnline:selectedRemoved:shieldHold", { selectedAtStart });
+          plNavDbg("useCompany.reconcileOnline:shieldHold skip clear", { selectedAtStart });
           return;
         }
         plDbgCompanyRecovery("reconcileOnline:selectedRemoved:clear+pushCompany", { selectedAtStart });
+        plNavDbgCritical("useCompany.router.push./company [reconcileOnlineMirrors]", { selectedAtStart });
         clearCompanyId();
         router.push("/company");
       }
@@ -1302,6 +1311,10 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     if (pathExemptFromAutoSelectCompanyPush(livePath)) return;
     // Fallback auto-select: companyId race me missing rahe to tab-click ka wait na ho.
     setCompanyId(allCompanies[0].id);
+    plNavDbg("useCompany.autoSelectFirstCompany (companyId was null)", {
+      firstHint: plNavDbgIdHint(allCompanies[0].id),
+      listLen: allCompanies.length,
+    });
   }, [companyId, allCompanies, setCompanyId, user, loading, authLoading]);
 
   useEffect(() => {
@@ -1330,9 +1343,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             if (!stored) {
                 // Static/Capacitor: IndexedDB + Firestore slow — localStorage/sync ke liye zyada grace
                 const REDIRECT_DELAY_MS = 1400;
+                plNavDbg("useCompany.scheduleMissingCompanyRedirect", {
+                  pathname: winPath,
+                  delayMs: REDIRECT_DELAY_MS,
+                  shieldActive: shouldSuppressTransientCompanyClear(),
+                });
                 const id = setTimeout(() => {
                     const again = readSelectedCompanyId();
                     if (again) {
+                        plNavDbg("useCompany.redirectTimer:storedReappeared", { hint: plNavDbgIdHint(again) });
                         setCompanyIdState(again);
                         return;
                     }
@@ -1341,9 +1360,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     // APK save / ledger shield: storage flush + ~26s race me `/company` mat kholo.
                     if (shouldSuppressTransientCompanyClear()) {
                       plDbgCompanyRecovery("redirectNoStoredCompany:shieldHold", {});
+                      plNavDbg("useCompany.router.push./company TIMER BLOCKED shield", { live });
                       return;
                     }
                     plDbgCompanyRecovery("redirectNoStoredCompany:push.company", { live });
+                    plNavDbgCritical("useCompany.router.push./company [missingCompanyId delayed]", {
+                      live,
+                      delayMs: REDIRECT_DELAY_MS,
+                    });
                     router.push("/company");
                 }, REDIRECT_DELAY_MS);
                 return () => clearTimeout(id);
@@ -1358,7 +1382,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                   plDbgCompanyRecovery("redirectNoStoredCompany:catch:shieldHold", {});
                   return;
                 }
-                plDbgCompanyRecovery("redirectNoStoredCompany:catch:push.company", { live });
+                plNavDbgCritical("useCompany.router.push./company [missingCompany catch path]", { live });
                 router.push("/company");
             }
         }

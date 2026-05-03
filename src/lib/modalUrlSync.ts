@@ -122,6 +122,15 @@ export function persistPlModalParentQuery(fallbackFromNextHook: string): void {
   }
 }
 
+/**
+ * Party/Bank/detail ledger (desktop bhi): voucher/master dialog se *pehle* call karo.
+ * Pehle sirf mobile `openModalInUrl` persist karta tha — wide desktop par save/approve ke baad guard ko target URL nahi milta `/dashboard` jump.
+ */
+export function persistLedgerModalParentFromBrowser(): void {
+  if (typeof window === "undefined") return;
+  persistPlModalParentQuery(window.location.search.replace(/^\?/, ""));
+}
+
 /** `raw` me jo keys missing hain, backup se add — APK par approve ke baad `selected=` bachane ke liye */
 export function applyPlModalParentQueryBackup(rawMergedNoLeadingQuestion: string): string {
   try {

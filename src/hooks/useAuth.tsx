@@ -16,6 +16,20 @@ import { getLocalAuthUser } from "@/lib/localApiClient";
 import { restoreRememberedLocalCompanyForFastBoot } from "@/lib/postAuthCompanyRoute";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
+/** PWA offline: `await getDoc`/`getDocs` indefinitely hang sakta hai — pehle `onSnapshot` laga ke UI unblock (Firestore persistence + yaz fire-and-forget). */
+async function firebaseReadWithDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T | undefined>((_, reject) =>
+        setTimeout(() => reject(new Error("pl_firebase_read_deadline")), ms),
+      ),
+    ]);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Sign-out / token revoke ke turant baad user-doc listeners `permission-denied` dete hain — expected, noise mat bhejo.
  * Real issue tab hi log karo jab yahi session ab bhi `auth.currentUser` ho.
@@ -156,6 +170,9 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
       const email = (firebaseUser.email || "").trim();
       (async () => {
         try {
+          /** Airplane / captive portal: network reads cap — `await setDoc` offline resolve nahi hota, isliye neeche writes `void` */
+          const looksOffline = typeof navigator !== "undefined" && !navigator.onLine;
+          const fetchCapMs = looksOffline ? 3200 : 22_000;
           const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "user";
           const userDocIdByName = `${slugify(displayName)}_${firebaseUser.uid}`;
           let userDocRef = doc(firestore, "users", userDocIdByName);
@@ -163,13 +180,19 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             // Prefer direct doc reads first (more rules-friendly than list query).
             let existingByEmail: any = null;
             try {
-              const uidSnap = await getDoc(doc(firestore, "users", firebaseUser.uid));
-              if (uidSnap.exists()) {
+              const uidSnap = await firebaseReadWithDeadline(
+                getDoc(doc(firestore, "users", firebaseUser.uid)),
+                fetchCapMs,
+              );
+              if (uidSnap?.exists()) {
                 existingByEmail = uidSnap;
               } else {
                 try {
-                  const slugSnap = await getDoc(doc(firestore, "users", userDocIdByName));
-                  if (slugSnap.exists()) existingByEmail = slugSnap;
+                  const slugSnap = await firebaseReadWithDeadline(
+                    getDoc(doc(firestore, "users", userDocIdByName)),
+                    fetchCapMs,
+                  );
+                  if (slugSnap?.exists()) existingByEmail = slugSnap;
                 } catch (error) {
                   if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
                     logFirestorePermissionDenied({
@@ -193,13 +216,13 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             }
 
             // Fallback: email query for legacy docs with random IDs. If denied, continue without failing auth.
-            if (!existingByEmail) {
+            if (!existingByEmail && !looksOffline) {
               try {
                 const q = query(collection(firestore, "users"), where("email", "==", firebaseUser.email));
-                const snapshot = await getDocs(q);
+                const snapshot = await firebaseReadWithDeadline(getDocs(q), fetchCapMs);
                 existingByEmail =
-                  snapshot.docs.find((d) => d.id === firebaseUser.uid || d.id === userDocIdByName) ??
-                  snapshot.docs[0] ??
+                  snapshot?.docs.find((d) => d.id === firebaseUser.uid || d.id === userDocIdByName) ??
+                  snapshot?.docs[0] ??
                   null;
               } catch (error) {
                 if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
@@ -216,61 +239,73 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             if (existingByEmail) {
               userDocRef = doc(firestore, "users", existingByEmail.id);
               if (existingByEmail.id !== firebaseUser.uid && existingByEmail.id !== userDocIdByName) {
-                await updateDoc(userDocRef, {
+                void updateDoc(userDocRef, {
                   uid: firebaseUser.uid,
                   id: firebaseUser.uid,
                   lastLogin: serverTimestamp(),
-                });
-                try {
-                  const companiesSnap = await getDocs(
-                    query(collection(firestore, "companies"), where("ownerId", "==", existingByEmail.id))
-                  );
-                  if (!companiesSnap.empty) {
+                }).catch(() => {});
+                void (async () => {
+                  try {
+                    const companiesSnap = await firebaseReadWithDeadline(
+                      getDocs(
+                        query(collection(firestore, "companies"), where("ownerId", "==", existingByEmail.id)),
+                      ),
+                      fetchCapMs,
+                    );
+                    if (!companiesSnap || companiesSnap.empty) return;
                     const batch = writeBatch(firestore);
                     companiesSnap.docs.forEach((d) => {
                       batch.update(doc(firestore, "companies", d.id), { ownerId: firebaseUser.uid });
                     });
-                    await batch.commit();
+                    void batch.commit().catch(() => {});
+                  } catch (error) {
+                    if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                      logFirestorePermissionDenied({
+                        page: "auth_bootstrap",
+                        operation: "list",
+                        path: "companies?where=ownerId(legacy-migration)",
+                        error,
+                      });
+                    }
                   }
-                } catch (error) {
-                  if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
-                    logFirestorePermissionDenied({
-                      page: "auth_bootstrap",
-                      operation: "list",
-                      path: "companies?where=ownerId(legacy-migration)",
-                      error,
-                    });
-                  }
-                }
+                })();
               }
             } else {
-              await setDoc(userDocRef, {
+              void setDoc(
+                userDocRef,
+                {
+                  id: firebaseUser.uid,
+                  uid: firebaseUser.uid,
+                  email: firebaseUser.email,
+                  displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+                  photoURL: firebaseUser.photoURL,
+                  role: firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User",
+                  companyId: null,
+                  isActive: true,
+                  createdAt: serverTimestamp(),
+                  lastLogin: serverTimestamp(),
+                },
+                { merge: true },
+              ).catch(() => {});
+            }
+          } else {
+            userDocRef = doc(firestore, "users", userDocIdByName);
+            void setDoc(
+              userDocRef,
+              {
                 id: firebaseUser.uid,
                 uid: firebaseUser.uid,
-                email: firebaseUser.email,
-                displayName: firebaseUser.displayName || firebaseUser.email?.split("@")[0],
+                email: null,
+                displayName: firebaseUser.displayName,
                 photoURL: firebaseUser.photoURL,
-                role: firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User",
+                role: "User",
                 companyId: null,
                 isActive: true,
                 createdAt: serverTimestamp(),
                 lastLogin: serverTimestamp(),
-              }, { merge: true });
-            }
-          } else {
-            userDocRef = doc(firestore, "users", userDocIdByName);
-            await setDoc(userDocRef, {
-              id: firebaseUser.uid,
-              uid: firebaseUser.uid,
-              email: null,
-              displayName: firebaseUser.displayName,
-              photoURL: firebaseUser.photoURL,
-              role: "User",
-              companyId: null,
-              isActive: true,
-              createdAt: serverTimestamp(),
-              lastLogin: serverTimestamp(),
-            }, { merge: true });
+              },
+              { merge: true },
+            ).catch(() => {});
           }
           if (unsubUserDocRef.current) unsubUserDocRef.current();
           unsubUserDocRef.current = onSnapshot(userDocRef, (docSnap) => {
@@ -363,6 +398,19 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                 return prevUser;
               }
               return newCustomUser;
+            });
+          } else {
+            /** Offline / deadlines: snapshot empty ho to spinner infinite na rahe — local SQLite/PWA routes `customUser` bina crash na ho */
+            const displayFallback = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
+            setCustomUser({
+              id: firebaseUser.uid,
+              uid: firebaseUser.uid,
+              userDocId: firebaseUser.uid,
+              displayName: displayFallback,
+              email: firebaseUser.email || "",
+              role: (firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User") as Role,
+              companyId: null,
+              isActive: true,
             });
           }
           setLoading(false);

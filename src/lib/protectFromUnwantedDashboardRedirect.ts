@@ -15,6 +15,7 @@ import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { readPersistedModalParentHref } from "@/lib/modalUrlSync";
+import { plNavDbg } from "@/lib/plNavRedirectDebug";
 
 const SESSION_PROTECT_UNTIL_KEY = "pl_voucher_approve_protect_until";
 const SESSION_PROTECT_TARGET_KEY = "pl_voucher_approve_protect_target";
@@ -32,6 +33,8 @@ const guard: GuardState = {
   targetHref: "",
   popstateListener: null,
 };
+/** Spam rokho: fallback par atke hue interval me har 100ms ek hi log na bhar de */
+let lastDashboardGuardRestoreLogAt = 0;
 
 /** Static APK race me ye 2 fallback routes par galat jump dikha tha; guard in dono par restore karega. */
 function isUnexpectedFallbackRedirectPath(path: string): boolean {
@@ -105,8 +108,18 @@ export function armDashboardRedirectGuard(
     typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
   const explicit = options?.isMobile;
   // Tablet APK landscape: `useIsMobile` false + width >767 — pehle guard skip ho jata tha; native flag se sab APK par arm.
-  if (explicit === false && !nativeApk) return;
-  if (!nativeApk && !narrowViewport && explicit !== true) return;
+  if (explicit === false && !nativeApk) {
+    plNavDbg("dashboardGuard.armSkipped.viewportRule", { nativeApk, explicitMobile: explicit });
+    return;
+  }
+  if (!nativeApk && !narrowViewport && explicit !== true) {
+    plNavDbg("dashboardGuard.armSkipped.notNarrowExplicit", {
+      narrowViewport,
+      explicitMobile: explicit,
+      nativeApk,
+    });
+    return;
+  }
 
   // APK par SQLite/outbox flush zyada slow ho sakta hai — thoda lamba window taaki late redirect bhi pakde
   const defaultDurationMs = nativeApk ? 8000 : 5000;
@@ -122,7 +135,13 @@ export function armDashboardRedirectGuard(
     }
   }
   // Ab bhi fallback/home: restore ke liye koi ledger URL nahi — guard skip.
-  if (isUnexpectedFallbackRedirectPath(snapshotPath) || snapshotPath === "/") return;
+  if (isUnexpectedFallbackRedirectPath(snapshotPath) || snapshotPath === "/") {
+    plNavDbg("dashboardGuard.armSkipped.snapshotIsFallbackNoBackup", {
+      snapshotPath,
+      persistedFallback: snapshotHref.slice(0, 120),
+    });
+    return;
+  }
 
   const durationMs = Math.max(500, options?.durationMs ?? defaultDurationMs);
   const newEndsAt = Date.now() + durationMs;
@@ -141,6 +160,11 @@ export function armDashboardRedirectGuard(
 
   guard.targetHref = snapshotHref;
   guard.endsAt = newEndsAt;
+  plNavDbg("dashboardGuard.armed", {
+    targetHref: snapshotHref.slice(0, 160),
+    durationMs,
+    nativeApk,
+  });
   try {
     sessionStorage.setItem(SESSION_PROTECT_UNTIL_KEY, String(guard.endsAt));
     sessionStorage.setItem(SESSION_PROTECT_TARGET_KEY, snapshotHref);
@@ -156,6 +180,14 @@ export function armDashboardRedirectGuard(
     if (!guard.targetHref) return;
     if (isUnexpectedFallbackRedirectPath(normalizePath(guard.targetHref.split("?")[0] || "/"))) return;
     try {
+      const now = Date.now();
+      if (now - lastDashboardGuardRestoreLogAt > 2400) {
+        lastDashboardGuardRestoreLogAt = now;
+        plNavDbg("dashboardGuard.router.replaceExecuting", {
+          sawPath: nowPath,
+          to: guard.targetHref.slice(0, 160),
+        });
+      }
       window.history.replaceState(window.history.state ?? null, "", guard.targetHref);
     } catch {
       /* ignore */

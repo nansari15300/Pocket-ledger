@@ -1,46 +1,110 @@
-cd "D:\Static Build Project"
-
-
-===== Dev (browser) =====
-1st — npm install                    (sirf pehli baar / deps change ke baad)
-2nd — npm run dev
-
-
-===== Production Next (Node server, static/PWA bundle nahi) =====
-1st — npm install
-2nd — npm run build
-3rd — npm run start
-
-
-===== PWA / static website (Serwist + .\out\) =====
-1st — npm install                    (zarurat ho tab)
-2nd — npm run build:static           (.\out\ folder banega)
-3rd — .\out\ deploy karo HTTPS par (Netlify/Cloudflare/VPS/waghaira) ya local test ke liye project root se: npx serve out  — browser root URL kholo.
-      (Prod install / SW stable = HTTPS ya localhost; file:// avoid karo.)
-(Optional agar tiers seed chaho build time — PLANS_SEED_URL / PLANS_SEED_FILE set karke dubara step 2.)
-
-
-===== Android APK =====
-1st — npm run build:static
-2nd — npm run cap:sync               (ya sirf web bundle: npm run cap:copy:android)
-3rd — android folder: .\gradlew.bat assembleDebug    (release ke liye assembleRelease)
-
-
-===== iOS =====
-1st — npm run build:static
-2nd — npm run cap:copy:ios
-3rd — Xcode se open karke Run / Archive
-
-
-===== Desktop Windows (.exe) =====
-1st — npm run build:static
-2nd — npm run electron:build:win
-
-
-===== Desktop Linux =====
-1st — npm run build:static
-2nd — npm run electron:build:linux
-
-
-===== Sab ek baar me (static + cap android/ios copy + Electron win+linux) =====
-1st — npm run build:static:all       (ye hi poore chain ko chalata hai — alag steps manually nahi)
+cd "D:\Static Build Project"
+
+
+
+
+
+===== Dev (browser) =====
+
+1st — npm install                    (sirf pehli baar / deps change ke baad)
+
+2nd — npm run dev
+
+
+
+
+
+===== Production Next (Node server, static/PWA bundle nahi) =====
+
+1st — npm install
+
+2nd — npm run build
+
+3rd — npm run start
+
+
+
+
+
+===== PWA / static website (Serwist + .\out\) =====
+
+1st — npm install                    (zarurat ho tab)
+
+2nd — npm run build:static           (.\out\ folder banega)
+
+3rd — .\out\ deploy karo HTTPS par (Netlify/Cloudflare/VPS/waghaira) ya local test ke liye project root se: npx serve out  — browser root URL kholo.
+
+      (Prod install / SW stable = HTTPS ya localhost; file:// avoid karo.)
+
+(Optional agar tiers seed chaho build time — PLANS_SEED_URL / PLANS_SEED_FILE set karke dubara step 2.)
+
+
+
+
+
+===== Android — remote WebView (site HTTPS par deploy; APK sirf shell, kam rebuild) =====
+
+Har web change ke baad sirf pocket-ledger.com deploy karo — APK dubara banane ki zarurat nahi jab tak native plugins na badlo.
+
+1st — .\out\ ko HTTPS deploy (roz wala workflow)
+
+2nd — npm run cap:sync:remote
+      (alg URL: npm run cap:sync:remote -- https://staging.pocket-ledger.com)
+      Ya PowerShell:
+      $env:CAP_USE_REMOTE_WEB = "1"
+      $env:CAP_REMOTE_WEB_URL = "https://pocket-ledger.com"
+      npx cap sync android
+
+3rd — Gradle: .\android\gradlew.bat assembleDebug  (sirf ek baar ya native change par)
+
+Bundled/offline APK wapas: env hata kar `npm run cap:sync` + `npm run build:static` (default `capacitor.config` phir sirf `out` use karta hai)
+
+
+===== Android APK (bundled out — offline / store jaisa) =====
+
+1st — npm run build:static
+
+2nd — npm run cap:sync               (ya sirf web bundle: npm run cap:copy:android)
+
+3rd — android folder: .\gradlew.bat assembleDebug    (release ke liye assembleRelease)
+
+
+
+
+
+===== iOS =====
+
+1st — npm run build:static
+
+2nd — npm run cap:copy:ios
+
+3rd — Xcode se open karke Run / Archive
+
+
+
+
+
+===== Desktop Windows (.exe) =====
+
+1st — npm run build:static
+
+2nd — npm run electron:build:win
+
+
+
+
+
+===== Desktop Linux =====
+
+1st — npm run build:static
+
+2nd — npm run electron:build:linux
+
+
+
+
+
+===== Sab ek baar me (static + cap android/ios copy + Electron win+linux) =====
+
+1st — npm run build:static:all       (ye hi poore chain ko chalata hai — alag steps manually nahi)
+

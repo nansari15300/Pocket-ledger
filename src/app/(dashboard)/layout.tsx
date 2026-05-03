@@ -37,6 +37,8 @@ import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRed
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
+// APK par `[PL-NAV]` traces screen pe — adb/browser ki zarurat kam (flags: `plNavRedirectDebug.ts` header)
+import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -768,6 +770,8 @@ export default function DashboardLayout({
         <DashboardProvider>
           {/* Global file + avatar hover preview — header pill se ON/OFF (AttachmentHoverPortal). */}
           <FileHoverPreviewProvider>
+            {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
+            <PlNavDebugOnDeviceOverlay />
             <LayoutContent>{children}</LayoutContent>
           </FileHoverPreviewProvider>
         </DashboardProvider>

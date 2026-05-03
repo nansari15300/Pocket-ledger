@@ -1,7 +1,14 @@
 
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signOut as firebaseAuthSignOut, type Auth } from 'firebase/auth';
-import { disableNetwork, enableNetwork, getFirestore, initializeFirestore } from 'firebase/firestore';
+import {
+  disableNetwork,
+  enableNetwork,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
@@ -146,6 +153,8 @@ if (typeof window !== 'undefined') {
 /**
  * WebChannel `Listen/channel` par kabhi-kabhi **400 Unknown SID** (stale session) — zyada parallel snapshots / tab sleep par.
  * `experimentalAutoDetectLongPolling` WebChannel fail hone par XMLHttpRequest transport use kar sakta hai; company-specific "freeze + Firestore URL error" isse kam ho sakti hai (data corrupt hone ki zarurat nahi).
+ *
+ * **PWA/offline:** default Firestore cache memory-only hai; IndexedDB persistence se pehli online visits ke docs `onSnapshot`/`getDoc` APK/PWA airplane mode me usable rehte (`useAuth` bootstrap `await setDoc` bina bhi snapshot chalu).
  */
 function initFirestoreInstance() {
   if (typeof window === 'undefined') {
@@ -154,6 +163,10 @@ function initFirestoreInstance() {
   const forceLongPolling = process.env.NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING === '1';
   try {
     return initializeFirestore(app, {
+      /** Hosted web + installed PWA: multi-tab IndexedDB taaki installs / SQLite-local companies Firestore reads cache share karen */
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
       /** Agar avi bhi Listen/channel 400 dikhe: `.env.local` me `NEXT_PUBLIC_FIRESTORE_FORCE_LONG_POLLING=1` + restart. */
       ...(forceLongPolling
         ? { experimentalForceLongPolling: true as const }
