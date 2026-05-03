@@ -67,6 +67,7 @@ import {
 import { hasAnySelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
@@ -882,16 +883,39 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
     return () => { cancelled = true; };
   }, [sharedOwnerIdsKey]);
 
+  // APK/iOS shell: lambi naam strip header ko bhar leta — naam title/aria-label; trigger par sirf building icon.
+  const [apkCompanyTriggerIconOnly, setApkCompanyTriggerIconOnly] = useState(false);
+  useEffect(() => setApkCompanyTriggerIconOnly(isCapacitorNativeApp()), []);
+
+  const companyTriggerLabel =
+    activeCompany?.name.trim() ||
+    (!companies?.length ? "No company — add one" : "Select company");
+
   return (
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="h-9 max-w-[240px] justify-between" data-theme-header="company-selector">
-            <div className="flex min-w-0 items-center gap-2">
+          <Button
+            variant="outline"
+            className={cn(
+              "h-9",
+              apkCompanyTriggerIconOnly ? "w-9 shrink-0 p-0 justify-center" : "max-w-[240px] justify-between"
+            )}
+            data-theme-header="company-selector"
+            title={apkCompanyTriggerIconOnly ? companyTriggerLabel : undefined}
+            aria-label={apkCompanyTriggerIconOnly ? `Company: ${companyTriggerLabel}` : undefined}
+          >
+            {apkCompanyTriggerIconOnly ? (
               <Building2 className="h-4 w-4 shrink-0" />
-              <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>
-            </div>
-            <ChevronDown className="ml-2 h-4 w-4 shrink-0" />
+            ) : (
+              <>
+                <div className="flex min-w-0 items-center gap-2">
+                  <Building2 className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>
+                </div>
+                <ChevronDown className="ml-2 h-4 w-4 shrink-0" />
+              </>
+            )}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>

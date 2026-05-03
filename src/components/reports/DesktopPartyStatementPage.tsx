@@ -13,11 +13,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import AdCalendar from "@/components/ui/ad-calendar";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, Layers, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, ChevronDown, File, Printer, BarChart2, X } from "lucide-react";
 import type { Party, Group } from "@/components/party/types";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -52,6 +54,8 @@ import { LineChart, Line, ResponsiveContainer } from "recharts";
 import { doc, getDoc } from 'firebase/firestore';
 import { firestore } from "@/lib/firebase";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 
 // Summary card outside page so it only re-renders when amount/title/color change (data change), not on parent re-renders (e.g. userNames)
 const ReportSummaryCard = React.memo(function ReportSummaryCard({ title, amount, color }: { title: string; amount: number; color: string }) {
@@ -95,7 +99,7 @@ export default function DesktopPartyStatementPage() {
     const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
     const [userNames, setUserNames] = useState<Record<string, string>>({});
     const fetchedUidsRef = useRef<Set<string>>(new Set());
-    
+
     const pageTitle = selectedGroup ? 'Party Group Report' : 'Party Report';
 
     const fetchUserName = useCallback(async (userId: string): Promise<string> => {
@@ -232,13 +236,13 @@ export default function DesktopPartyStatementPage() {
         openingBalanceLinkedVoucherNos,
     } = useTransactions(activeEntity as any, activeContext, dateRange);
 
-    // Same as Party Details: when no date filter show last 10 only; when filter applied show all in range
+    // Desktop: no date filter par last 10. Mobile + pager: pura processed list taaki Showing / Trxn Of sahi ho.
     const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
     const reportDisplayTransactions = useMemo(() => {
-        if (hasDateFilter) return processedTransactions;
+        if (hasDateFilter || isMobile) return processedTransactions;
         if (processedTransactions.length <= 10) return processedTransactions;
         return processedTransactions.slice(-10);
-    }, [processedTransactions, hasDateFilter]);
+    }, [processedTransactions, hasDateFilter, isMobile]);
 
     const filteredReportTransactions = useMemo(() => {
         if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -251,7 +255,24 @@ export default function DesktopPartyStatementPage() {
             return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
         });
     }, [reportDisplayTransactions, transactionSearch]);
-    
+
+    const partyStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${balanceMode}`;
+    const {
+        pagingMeta: partyStatementMobilePaging,
+        pagerPage: partyReportPagerPage,
+        setPagerPage: setPartyReportPagerPage,
+        rowsPerPage: partyReportRowsPerPage,
+        setRowsPerPage: setPartyReportRowsPerPage,
+    } = useStatementReportMobilePaging({
+        filteredRows: filteredReportTransactions,
+        isMobile,
+        openingBalanceForPeriod,
+        periodDr,
+        periodCr,
+        closingBalance,
+        resetKey: partyStatementMobilePagingKey,
+    });
+
     const { summaryData, chartData } = useMemo(() => {
         const emptyData = {
           summaryData: { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 },
@@ -260,11 +281,19 @@ export default function DesktopPartyStatementPage() {
         if (!activeEntity) return emptyData;
         const entityVouchers = processedTransactions;
 
+        const payIn = entityVouchers.filter((v) => v.type === "payment_in").reduce((sum, v) => sum + (v.amount || 0), 0);
+        const payOut = entityVouchers.filter((v) => v.type === "payment_out").reduce((sum, v) => sum + (v.amount || 0), 0);
+        // JRNL/Contra: table row debit/credit (party account hisaab se) Money In→Cr, Money Out→Dr.
+        const { moneyIn: moneyInMerged, moneyOut: moneyOutMerged } = mergePaymentAndLedgerJournalContraFlows(
+          payIn,
+          payOut,
+          entityVouchers
+        );
         const summary = {
             sales: entityVouchers.filter(v => v.type === 'sale').reduce((sum, v) => sum + (v.total || 0), 0),
             purchases: entityVouchers.filter(v => v.type === 'purchase').reduce((sum, v) => sum + (v.total || 0), 0),
-            moneyIn: entityVouchers.filter(v => v.type === 'payment_in').reduce((sum, v) => sum + (v.amount || 0), 0),
-            moneyOut: entityVouchers.filter(v => v.type === 'payment_out').reduce((sum, v) => sum + (v.amount || 0), 0),
+            moneyIn: moneyInMerged,
+            moneyOut: moneyOutMerged,
         }
         
         const generateChartData = (type: 'sale' | 'purchase' | 'payment_in' | 'payment_out') => {
@@ -384,7 +413,8 @@ export default function DesktopPartyStatementPage() {
     
 
     const dateRangeLabel = useMemo(() => {
-        if (!hasDateFilter) return "Last 10 Txns";
+        // Party Details mobile row-2: bina date filter = "All Time" (na ki "Last 10 Txns") — user request / unified master UX.
+        if (!hasDateFilter) return "All Time";
         const from = dateRange!.from!;
         const to = dateRange!.to || from;
         const fromAD = format(from, "LLL dd, y");
@@ -421,11 +451,11 @@ export default function DesktopPartyStatementPage() {
     return (
         <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
              <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-                 {/* Row 1: Back | Title | Showing X of Y voucher(s) */}
+                 {/* Row 1: Party Details jaisa — title · naam (balance tone) · daen par entity avatar; "Showing x of y" hata. */}
                  <div className="flex items-center gap-2 min-w-0">
                     <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}><ArrowLeft className="h-4 w-4" /></Button>
                     <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+                      <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
                       {activeEntity?.name ? (
                         <>
                           <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -440,11 +470,20 @@ export default function DesktopPartyStatementPage() {
                         </>
                       ) : null}
                     </div>
-                    <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-                        Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
-                    </span>
+                    {activeEntity?.name ? (
+                      <div className="flex-shrink-0" aria-hidden>
+                        <ReportStatementHeaderAvatar
+                          kind={selectedParty ? "party" : "group"}
+                          displayName={activeEntity.name}
+                          fileUrl={selectedParty?.fileUrl}
+                          isSystemEntity={Boolean(
+                            selectedParty && (selectedParty as Party & { isSystemAccount?: boolean }).isSystemAccount
+                          )}
+                        />
+                      </div>
+                    ) : null}
                  </div>
-                 {/* Row 2: Date range label (All Time or range) + reset icon when filtered */}
+                 {/* Row 2: centered "All Time" / date range — Party Details sub-row jaisa */}
                  <div className="flex justify-center items-center gap-2">
                     <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
                     {hasDateFilter && (
@@ -582,14 +621,15 @@ export default function DesktopPartyStatementPage() {
                             ))}
                         </div>
 
-                        <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+                        <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+                        <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:px-0" data-floating-button-scroll>
                             {isMobile ? (
-                                <div className="pb-24">
+                                <div className="pb-4">
                                     <TransactionsTable
-                                        transactions={filteredReportTransactions}
+                                        transactions={partyStatementMobilePaging.pageTransactions}
                                         context={activeContext}
                                         contextId={activeEntity?.id}
-                                        openingBalance={openingBalanceForPeriod}
+                                        openingBalance={partyStatementMobilePaging.openingForPage}
                                         openingBalanceOutstanding={openingBalanceOutstanding}
                                         openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                                         userNames={userNames}
@@ -599,6 +639,9 @@ export default function DesktopPartyStatementPage() {
                                         forceBalanceMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
                                         groupEntityType={activeContext === "group" ? "party" : undefined}
                                         visibleColumns={balanceMode === "bill_wise" ? { status: true } : undefined}
+                                        periodDr={partyStatementMobilePaging.periodDrForPage}
+                                        periodCr={partyStatementMobilePaging.periodCrForPage}
+                                        closingBalance={partyStatementMobilePaging.closingForPage}
                                         openingBalanceSearch={
                                             <Input
                                                 placeholder="Search..."
@@ -631,6 +674,27 @@ export default function DesktopPartyStatementPage() {
                                             onChange={(e) => setTransactionSearch(e.target.value)}
                                             className="h-8 w-32 max-w-[140px] text-sm"
                                         />
+                                    }
+                                />
+                            )}
+                        </div>
+                            {isMobile && view === "list" && (
+                                <MobileTransactionsPager
+                                    // PartyDetails jaisa `mb-12`: fixed footer + Add New FAB pager ke neeche overlap na kare — "pager kahan hai" UX.
+                                    className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                                    currentPage={partyReportPagerPage}
+                                    totalItems={filteredReportTransactions.length}
+                                    rowsPerPage={partyReportRowsPerPage}
+                                    onPageChange={setPartyReportPagerPage}
+                                    onRowsPerPageChange={(n) => {
+                                        setPartyReportRowsPerPage(n);
+                                        setPartyReportPagerPage(1);
+                                    }}
+                                    edgeCounts={
+                                        partyStatementMobilePaging.edges.before > 0 ||
+                                        partyStatementMobilePaging.edges.after > 0
+                                          ? partyStatementMobilePaging.edges
+                                          : undefined
                                     }
                                 />
                             )}

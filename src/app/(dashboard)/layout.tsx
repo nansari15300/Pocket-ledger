@@ -16,7 +16,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import { useToast } from "@/hooks/use-toast";
-import { MobileFloatingButton } from "@/components/layout/MobileFloatingButton";
+import { MobileFloatingButton, ReportsMobileReportListFab } from "@/components/layout/MobileFloatingButton";
 import { CompanyDemotedBanner } from "@/components/company/CompanyDemotedBanner";
 import { PlanAuthoritativeSyncBanner } from "@/components/company/PlanAuthoritativeSyncBanner";
 import { FileHoverPreviewProvider } from "@/contexts/FileHoverPreviewContext";
@@ -36,6 +36,8 @@ import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/dev
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 // APK par `[PL-NAV]` traces screen pe — adb/browser ki zarurat kam (flags: `plNavRedirectDebug.ts` header)
 import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
@@ -56,6 +58,18 @@ import {
 function signOutWithLoginCleanup() {
   pruneRememberedLoginEmailIfDisabled();
   return signOutWithFirestoreTeardown(auth);
+}
+
+/** APK + online company: sirf offline par chhota strip — view-only reminder (EXE path me render nahi hota). */
+function ApkCloudOfflineViewBanner() {
+  const { company } = useCompany();
+  const online = useNavigatorOnline();
+  if (!apkCloudCompanyOfflineViewOnly(company, online)) return null;
+  return (
+    <div className="border-b border-border/60 bg-amber-500/15 py-1.5 text-center text-[11px] font-medium text-amber-950 dark:text-amber-100 sm:text-xs">
+      Offline — view only. Full edit when you are back online.
+    </div>
+  );
 }
 
 function DeviceLimitBanner() {
@@ -664,7 +678,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     }, [pathname]);
     useMarkMessagesDelivered();
 
-    // Static + Capacitor (phone/tablet APK) + narrow static PWA: save ke baad Next pathname `/dashboard`/company glitch — voucherActionsClient aur master dialogs custom event + yahan capture submit.
+    // Bundled **static** + native / narrow mobile, **ya native remote-WebView** (live site NEXT_PUBLIC_STATIC_BUILD=0): submit/guard latch.
     useEffect(() => {
       if (typeof window === "undefined") return;
       const narrowStaticMobile =
@@ -672,7 +686,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
         typeof window.matchMedia === "function" &&
         window.matchMedia("(max-width: 767px)").matches;
       const nativeCap = isCapacitorNativeApp();
-      if (!(isStaticAppBuild() && (nativeCap || narrowStaticMobile || isMobile))) return;
+      if (!(nativeCap || (isStaticAppBuild() && (narrowStaticMobile || isMobile)))) return;
 
       const handleSubmit = () => {
         const livePath = (window.location.pathname.replace(/\/+$/, "") || "/").toLowerCase();
@@ -737,6 +751,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <AppHeader />
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
+                      <ApkCloudOfflineViewBanner />
                       <DashboardMainWithEdgeSwipe
                         className={cn(
                           "flex-1 min-h-0",
@@ -748,6 +763,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                         {children}
                       </DashboardMainWithEdgeSwipe>
                       <MobileFloatingButton />
+                      {/* Mobile reports detail: PanelRight sheet trigger — footer daen */}
+                      <ReportsMobileReportListFab />
                     </div>
                     <DeviceLimitOverlay />
                   </div>

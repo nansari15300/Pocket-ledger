@@ -129,7 +129,7 @@ function filterByPermission<T extends { permission?: Permission; permissionAny?:
 
 const ENTITY_IDS = ['party', 'bank-cash', 'staff', 'tax', 'items', 'incomes'] as const;
 
-/** Sidebar ke pehle chrome-card ke liye: party/tax/bank… core navigation */
+/** Primary nav list ke andar order: pehle yeh ids (dashboard→incomes), phir baaki menu items */
 const CORE_NAV_IDS = new Set<string>([
   "dashboard",
   "party",
@@ -430,11 +430,11 @@ export function AppSidebar() {
     return filterByPermission(byFeature, can);
   }, [featureConfig, can]);
 
-  const { coreMenuItems, catalogMenuItems } = React.useMemo(() => {
+  // CORE_NAV_IDS pehle wale 'Main' block order; baaki items uske peeche — ab dono ek hi emerald card me
+  const combinedDashboardNavItems = React.useMemo(() => {
     const core = visibleMenuItems.filter((i) => CORE_NAV_IDS.has(i.id));
-    // Gallery, Items, Reports, etc. yahi "More" (emerald) card me — CORE_NAV_IDS me sirf main rail
     const catalog = visibleMenuItems.filter((i) => !CORE_NAV_IDS.has(i.id));
-    return { coreMenuItems: core, catalogMenuItems: catalog };
+    return [...core, ...catalog];
   }, [visibleMenuItems]);
 
   // Hide Billing & Plans for shared company access — only owner buys / upgrades subscription.
@@ -453,7 +453,7 @@ export function AppSidebar() {
     return filterByPermission(byFeature, can);
   }, [featureConfig, customUser, can, company]);
 
-  /** Ek nav row — core / catalog dono cards reuse (dashboard-style list) */
+  /** Ek nav row — merged primary list + pehle jaisa pending badge / Reports pill */
   function renderMainNavRow(item: MenuItem) {
     const pendingCount = ENTITY_IDS.includes(item.id as (typeof ENTITY_IDS)[number])
       ? (pendingCountByEntity[item.id] ?? 0)
@@ -580,42 +580,21 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
 
-      <SidebarContent className="min-h-0 flex-1">
+      {/* SidebarContent: flex-col + overflow-hidden — Account/Profile neeche pin; lambi nav upar scroll; default overflow-y-auto yahan suppressed */}
+      <SidebarContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {loadingFeatures ? (
-          <div className="flex h-full items-center justify-center">
+          <div className="flex h-full flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin" />
           </div>
         ) : (
-          <div className="flex h-full min-h-0 flex-col gap-0.5">
-            {/* User request: Main group ko pink tone card me dikhana */}
-            <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full shrink-0 p-2">
-              {isOpen ? (
-                <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Main</p>
-              ) : null}
-              <SidebarMenu className="gap-0.5 py-1">{coreMenuItems.map(renderMainNavRow)}</SidebarMenu>
-            </div>
-
-            {(catalogMenuItems.length > 0 || showAdminNavLink) && (
-              <div
-                className={cn(
-                  "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex w-full min-h-0 flex-1 flex-col overflow-hidden p-2",
-                  /* Sheet menu me jagah kam: sirf More block andar scroll — Main + Account sticky feel */
-                  isMobile && "max-h-[min(52vh,380px)]"
-                )}
-              >
-                {isOpen ? (
-                  <p className="mb-1 shrink-0 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    More
-                  </p>
-                ) : null}
-                <div
-                  className={cn(
-                    "min-h-0 flex-1 overflow-x-hidden",
-                    isMobile ? "overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]" : "overflow-y-auto"
-                  )}
-                >
+          <>
+            {/* flex-1: bachi hui sidebar height — mint nav yahi andar scroll (footer hamesha dikhayi de) */}
+            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-y-contain [-webkit-overflow-scrolling:touch]">
+              {/* User request: Main + More ek hi mint/emerald chrome card — do alag pink/green boxes nahi */}
+              {(combinedDashboardNavItems.length > 0 || showAdminNavLink) && (
+                <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full shrink-0 p-2">
                   <SidebarMenu className="gap-0.5 py-1">
-                    {catalogMenuItems.map(renderMainNavRow)}
+                    {combinedDashboardNavItems.map(renderMainNavRow)}
                     {showAdminNavLink && (
                       <SidebarMenuItem>
                         <Link href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
@@ -632,11 +611,11 @@ export function AppSidebar() {
                     )}
                   </SidebarMenu>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            {/* Account/profile bottom cluster: More flex hone par bhi yeh screen ke niche aligned rahein */}
-            <div className="mt-auto flex flex-col gap-0.5">
+            {/* User request: Account + profile ko viewport ke sidebar bottom par chipkana */}
+            <div className="mt-auto flex shrink-0 flex-col gap-0.5">
               <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-amber w-full shrink-0 p-2">
                 {isOpen ? (
                   <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
@@ -646,7 +625,7 @@ export function AppSidebar() {
               {/* User request: profile/user card ko green tone me dikhana */}
               <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full shrink-0 overflow-hidden p-0">{userProfileSection}</div>
             </div>
-          </div>
+          </>
         )}
       </SidebarContent>
     </Sidebar>

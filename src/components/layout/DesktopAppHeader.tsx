@@ -25,7 +25,6 @@ import {
   LogOut,
   Monitor,
   FileText,
-  PanelRight,
   Settings,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -74,7 +73,6 @@ import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { cn } from "@/lib/utils";
-import { useReportList } from "@/contexts/ReportListContext";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
@@ -141,30 +139,6 @@ function ScreenControls() {
   );
 }
 
-function ReportListButton() {
-  const pathname = usePathname();
-  const searchParams = useLocationSearchParams();
-  const { setReportListOpen } = useReportList();
-  const isMobile = useIsMobile();
-  // Only show report list icon on main Reports page ($/reports), not on entity-specific report pages
-  // (party-statement, bank-statement, staff-statement, tax-statement, item-statement, expense-statement, etc.)
-  const isReportListPage = pathname === "/reports" || pathname === "/reports/";
-  // Detail khule tab hi icon — list-only par header halka
-  const reportSelected = Boolean(searchParams.get("report"));
-  if (!isReportListPage || !isMobile || !reportSelected) return null;
-  return (
-    <Button
-      variant="outline"
-      size="icon"
-      onClick={() => setReportListOpen(true)}
-      title="Open report list"
-      aria-label="Open report list"
-      className="bg-background shadow-sm flex-shrink-0 h-9 w-9"
-    >
-      <PanelRight className="h-4 w-4" />
-    </Button>
-  );
-}
 
 function AddNewButtonOnReportPage() {
   const pathname = usePathname();
@@ -1328,13 +1302,8 @@ export function DesktopAppHeader() {
     // The prop is still required by CompanyActions but can be a no-op.
   };
 
-  /** Mobile: ek hi row + horizontal scroll; Sync ledger / hover switch / fullscreen yahan se hata */
+  /** Mobile: lambi toolbar — expand/chevron hata kar horizontal swipe scroll (footer toggle bhi hataya user ne) */
   const headerIsMobile = useIsMobile();
-  // Mobile header arrow toggle state: compact single-row vs expanded wrapped controls.
-  const [mobileHeaderExpanded, setMobileHeaderExpanded] = useState(false);
-  // Expanded mobile header: auto-collapse on tap. Use **click** in bubble (not pointerdown + capture) so
-  // the control (Report, company, etc.) runs first; then we collapse. Toggle is excluded.
-  const mobileHeaderRootRef = useRef<HTMLElement | null>(null);
 
   /** Electron `.exe`: pink header ki quick-action strip (Add Sale…) hide/show — localStorage + View menu sync */
   const isElectronDesk = isElectronDesktopApp();
@@ -1371,113 +1340,82 @@ export function DesktopAppHeader() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!headerIsMobile || !mobileHeaderExpanded) return;
-    const handleDocumentClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (target instanceof Element && target.closest("[data-mobile-header-expand-toggle='true']")) return;
-      setMobileHeaderExpanded(false);
-    };
-    document.addEventListener("click", handleDocumentClick, false);
-    return () => document.removeEventListener("click", handleDocumentClick, false);
-  }, [headerIsMobile, mobileHeaderExpanded]);
-
   return (
-    <header ref={mobileHeaderRootRef} className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-0.5 py-0.5">
+    <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-0.5 py-0.5">
       {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
       {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
       {/* User request: header container ko pink tone me dikhana */}
       <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full min-w-0 p-2">
-        <div
-          className={cn(
-            "flex items-center gap-2 w-full min-w-0",
-            headerIsMobile ? (mobileHeaderExpanded ? "items-start" : "flex-nowrap") : "flex-wrap"
-          )}
-        >
+        {headerIsMobile ? (
           <div
             className={cn(
-              "flex items-center gap-2 min-w-0",
-              headerIsMobile
-                ? mobileHeaderExpanded
-                  ? "flex-1 flex-wrap overflow-visible"
-                  : "flex-1 overflow-hidden"
-                : "flex-shrink-0"
+              // Mobile: expand/chevron hataya — saari cheezen ek hi horizontal strip me swipe
+              "flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden",
+              "[-webkit-overflow-scrolling:touch] overscroll-x-contain touch-pan-x",
+              "pb-0.5 [scrollbar-width:thin]",
+              "[&>*]:flex-shrink-0"
             )}
           >
             <SidebarTrigger />
-            {isElectronDesk && !headerIsMobile ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 flex-shrink-0"
-                onClick={toggleElectronQuickActionsRibbon}
-                title={
-                  quickActionsCollapsed
-                    ? "Show quick actions (Add Sale, Payment…)"
-                    : "Hide quick actions ribbon"
-                }
-                aria-label={
-                  quickActionsCollapsed ? "Show quick actions ribbon" : "Hide quick actions ribbon"
-                }
-              >
-                {quickActionsCollapsed ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronUp className="h-4 w-4" />
-                )}
-              </Button>
-            ) : null}
             {loading ? (
-              <div className="h-8 w-32 animate-pulse rounded-md bg-background/60" />
+              <div className="h-8 w-32 shrink-0 animate-pulse rounded-md bg-background/60" />
             ) : (
               <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
             )}
             <DateSystemSwitcher />
-            {headerIsMobile ? (
-              <>
-                <MobileReportButtonsOnly />
-                <ReportListButton />
-              </>
-            ) : null}
+            <MobileReportButtonsOnly />
+            <AddNewButtonOnReportPage />
+            <UserProfileButton />
           </div>
-
-          {!(isElectronDesk && quickActionsCollapsed) ? <HeaderActions /> : null}
-
-          {/* Desktop alignment anchor: purane header ki tarah right tools ko edge par dhakelna */}
-          {!headerIsMobile ? <div className="grow-[9999] shrink-0 h-0 w-0 basis-0" /> : null}
-
-          <div className="flex items-center gap-2 flex-shrink-0 min-w-0 ml-auto">
-            {headerIsMobile ? (
-              <>
+        ) : (
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-shrink-0 items-center gap-2">
+              <SidebarTrigger />
+              {isElectronDesk ? (
                 <Button
                   type="button"
                   variant="outline"
                   size="icon"
                   className="h-9 w-9 flex-shrink-0"
-                  data-mobile-header-expand-toggle="true"
-                  onClick={() => setMobileHeaderExpanded((prev) => !prev)}
-                  title={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
-                  aria-label={mobileHeaderExpanded ? "Collapse header controls" : "Expand header controls"}
+                  onClick={toggleElectronQuickActionsRibbon}
+                  title={
+                    quickActionsCollapsed
+                      ? "Show quick actions (Add Sale, Payment…)"
+                      : "Hide quick actions ribbon"
+                  }
+                  aria-label={
+                    quickActionsCollapsed ? "Show quick actions ribbon" : "Hide quick actions ribbon"
+                  }
                 >
-                  {mobileHeaderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  {quickActionsCollapsed ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronUp className="h-4 w-4" />
+                  )}
                 </Button>
-                <UserProfileButton />
-              </>
-            ) : null}
-            <AddNewButtonOnReportPage />
-            {!headerIsMobile && (
-              <>
-                <UserProfileButton />
-                <ReportListButton />
-                <CopyLedgerHeaderButton />
-                <GlobalFileHoverPreviewSwitch />
-                <ScreenControls />
-              </>
-            )}
+              ) : null}
+              {loading ? (
+                <div className="h-8 w-32 animate-pulse rounded-md bg-background/60" />
+              ) : (
+                <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
+              )}
+              <DateSystemSwitcher />
+            </div>
+
+            {!(isElectronDesk && quickActionsCollapsed) ? <HeaderActions /> : null}
+
+            <div className="h-0 w-0 grow-[9999] shrink-0 basis-0" />
+
+            <div className="flex min-w-0 flex-shrink-0 items-center gap-2">
+              {/* Desktop: pehle Add New (mobile pe stripe me profile ke pehle) — purani daen-cluster order */}
+              <AddNewButtonOnReportPage />
+              <UserProfileButton />
+              <CopyLedgerHeaderButton />
+              <GlobalFileHoverPreviewSwitch />
+              <ScreenControls />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </header>
   );

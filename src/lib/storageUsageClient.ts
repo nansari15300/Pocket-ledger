@@ -7,6 +7,7 @@ import { numericEntitlement, companyStorageIsLocal, type PlanId } from "@/config
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
 import { isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 const BYTES_PER_GB = 1e9;
 
@@ -15,13 +16,32 @@ export type UsageDelta = {
   storageBytes?: number;
 };
 
+/** `getDoc` Android WebView / flaky WAN par kai minute pend ho sakta; limit check fast fail (0 usage) rakho */
+const COMPANY_USAGE_FIRESTORE_MS = 4500;
+
 export async function getCompanyUsage(
   companyId: string
 ): Promise<{ attachmentsUsedBytes: number; storageUsedBytes: number }> {
+  // JS `online` kabhi misleading — phir bhi seedha stall avoid.
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
+  }
+  // Static/APK SQLite-first: usage counter cloud pe zaroori nahi; Firestore pend se "Creating account…" mat chipkado.
+  if (isLocalOnlyMode()) {
+    return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
+  }
   // Offline / local-only company: Firestore read throw kare to voucher+file save poora fail ho jata tha — limit check ke liye 0 maan lo.
   try {
     const ref = doc(firestore, "companies", companyId);
-    const snap = await getDoc(ref);
+    const snap = await Promise.race([
+      getDoc(ref),
+      new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error("getCompanyUsage-timeout")), COMPANY_USAGE_FIRESTORE_MS)
+      ),
+    ]);
+    if (!snap || !snap.exists()) {
+      return { attachmentsUsedBytes: 0, storageUsedBytes: 0 };
+    }
     const data = snap.data();
     return {
       attachmentsUsedBytes: Number(data?.attachmentsUsedBytes ?? 0),

@@ -16,6 +16,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
+import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { Group } from "@/components/party/types";
 import { isSystemGroupName } from "@/lib/system-group-names";
@@ -286,15 +292,23 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
                 </FormItem>
               )}
             />
-             <DialogFooter className="pt-4">
+            <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                    <Button type="button" variant="ghost" className="h-9 text-sm px-4 rounded-md">Cancel</Button>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>Cancel</Button>
                 </DialogClose>
-                <Button type="button" variant="outline" onClick={form.handleSubmit(data => onSubmit(data, true))} disabled={isLoading} className="h-9 text-sm px-4 rounded-md">
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                    onClick={form.handleSubmit(data => onSubmit(data, true))}
+                    disabled={isLoading}
+                  >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
-                </Button>
-                <Button type="submit" disabled={isLoading || !companyId} className="h-9 text-sm px-4 rounded-md">
+                  </Button>
+                </div>
+                <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Group
                 </Button>

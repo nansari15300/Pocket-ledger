@@ -45,6 +45,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { format } from "date-fns";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
@@ -52,7 +57,7 @@ import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
-import { BTN_DIALOG_CANCEL_CLASS } from "@/components/vouchers/voucherButtonStyles";
+
 
 function createLocalEntityId(prefix: string): string {
   const rand =
@@ -738,19 +743,33 @@ export function CreateTaxForm({
             />
         </div>
         </div>
-        <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-2 border-t border-border/80 bg-background/95 py-3">
-           {/* Cancel — pink pill (`BTN_DIALOG_CANCEL_CLASS`), Save & New / primary ke saath height match */}
-           <Button type="button" className={BTN_DIALOG_CANCEL_CLASS} onClick={() => onCloseDialogRequest?.()} disabled={isLoading}>
-                Cancel
+        {/* Same row masters create footer — slate Cancel pill */}
+        <div className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+          <Button
+            type="button"
+            variant="ghost"
+            className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}
+            onClick={() => onCloseDialogRequest?.()}
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
+          <div className="flex min-w-0 flex-1 justify-center px-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+              onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
+              disabled={isLoading}
+            >
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save & New
             </Button>
-           <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
-                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Save & New
-            </Button>
-            <Button type="submit" disabled={isLoading || !companyId}>
+          </div>
+          <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Tax
-            </Button>
+          </Button>
         </div>
       </form>
     </Form>

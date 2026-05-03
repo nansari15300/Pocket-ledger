@@ -61,11 +61,18 @@ function ReportsPageContent() {
     return reports.filter((r) => !r.countryOnly);
   }, [company?.country]);
 
+  /** Purana bookmark `?report=accounts-statement` → Bank Statement (list me Account Summary hata diya). */
+  const normalizeReportSearchParam = useCallback((id: string | null) => {
+    if (!id) return null;
+    if (id === "accounts-statement") return "bank-statement";
+    return id;
+  }, []);
+
   // Restore selection from URL on load/refresh (so refresh keeps you on the details page)
   const hasRestoredFromUrl = React.useRef(false);
   useEffect(() => {
     if (loading || reportsForCompany.length === 0 || hasRestoredFromUrl.current) return;
-    const reportIdFromUrl = searchParams.get("report");
+    const reportIdFromUrl = normalizeReportSearchParam(searchParams.get("report"));
     if (reportIdFromUrl) {
       const found = reportsForCompany.find((r) => r.id === reportIdFromUrl);
       if (found) {
@@ -74,7 +81,7 @@ function ReportsPageContent() {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRestoredFromUrl ref prevents re-restore
-  }, [loading, reportsForCompany, searchParams]);
+  }, [loading, reportsForCompany, searchParams, normalizeReportSearchParam]);
 
   // Sync selection to URL when it changes (enables refresh to persist)
   const setSelectedReportWithUrl = useCallback(
@@ -94,7 +101,7 @@ function ReportsPageContent() {
   );
 
   // This hook now manages selection memory and auto-selection (disable auto-select on mobile - show list full page first)
-  // urlSelectedId: when URL has report param, use it so refresh keeps you on the same page (Day Book, Account Summary, etc.)
+  // urlSelectedId: refresh par URL precedence; legacy `accounts-statement` ko bank-statement map (`normalizeReportSearchParam`)
   usePageMemory<Report>(
     "reportsPageState",
     "list",
@@ -104,7 +111,7 @@ function ReportsPageContent() {
     reportsForCompany,
     loading,
     isMobile,
-    searchParams.get("report")
+    normalizeReportSearchParam(searchParams.get("report"))
   );
 
   const { reportListOpen, setReportListOpen } = useReportList();
@@ -160,7 +167,8 @@ function ReportsPageContent() {
 
   const detailView = (
     selectedReport ? (
-      <ReportDetails report={selectedReport} />
+      /* key={id}: dubara render par purana search/filter state recycle na ho — SPA me report swap same component-type */
+      <ReportDetails key={selectedReport.id} report={selectedReport} />
     ) : (
       <div className="flex items-center justify-center h-full text-muted-foreground">
         Select a report to view details

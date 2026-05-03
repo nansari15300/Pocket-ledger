@@ -69,7 +69,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
-import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -671,13 +670,6 @@ export function ExpenseAccountDetails({
                     {formatCurrency(closingBalance, { showDrCr: true })}
                   </div>
                 </div>
-                {account.id !== "all" && (
-                  <EntityLedgerOpeningHints
-                    masterOpening={masterExpenseOpening}
-                    periodOpeningBroughtForward={openingBalanceForPeriod}
-                    hasDateFilter={hasLedgerDateFilter}
-                  />
-                )}
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -777,6 +769,10 @@ export function ExpenseAccountDetails({
               context="expense"
               contextId={account.id}
               openingBalance={desktopPageLedgerStats.openingForPage}
+              booksOpeningBalance={masterExpenseOpening}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={currentPage === 1}
+              openingBalancePeriodStartDate={dateRange?.from}
               openingBalanceNarration={account.openingBalanceNarration}
               openingBalanceAttachmentUrls={account.documentFileUrls}
               openingBalanceDate={(account as any).openingBalanceDate}
@@ -997,6 +993,10 @@ export function ExpenseAccountDetails({
                   context="expense"
                   contextId={account.id}
                   openingBalance={mobilePageLedgerStats.openingForPage}
+                  booksOpeningBalance={masterExpenseOpening}
+                  ledgerDateFilterActive={hasLedgerDateFilter}
+                  ledgerShowBookOpeningRow={currentPage === 1}
+                  openingBalancePeriodStartDate={dateRange?.from}
                   openingBalanceNarration={account.openingBalanceNarration}
                   openingBalanceAttachmentUrls={account.documentFileUrls}
                   openingBalanceDate={(account as any).openingBalanceDate}

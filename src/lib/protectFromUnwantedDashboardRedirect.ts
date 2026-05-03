@@ -92,7 +92,7 @@ export function isDashboardRedirectGuardActive(): boolean {
 
 /**
  * Voucher approve / dialog-close / submit-save ke turant pehle bulaya jata hai.
- * - Static APK + mobile par effective; web/desktop par no-op (pure overhead avoid).
+ * - Native Capacitor (bundled ya **remote-WebView**) + static desktop/mobile (`build:static`); web remote bundle par bhi **native APK** shield chale.
  * - ~5s (web static) / ~8s (native APK, slower flush) tak har 100ms pathname check;
  *   unexpected `/dashboard` ya `/company` jump mile to snapshot restore.
  * - Caller ke pas current router instance ho — `router.replace()` se Next.js routing state bhi sync.
@@ -102,8 +102,8 @@ export function armDashboardRedirectGuard(
   options?: { durationMs?: number; isMobile?: boolean }
 ): void {
   if (typeof window === "undefined") return;
-  if (!isStaticAppBuild()) return;
   const nativeApk = isCapacitorNativeApp();
+  if (!isStaticAppBuild() && !nativeApk) return;
   const narrowViewport =
     typeof window.matchMedia === "function" && window.matchMedia("(max-width: 767px)").matches;
   const explicit = options?.isMobile;

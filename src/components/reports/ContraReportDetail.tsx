@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { AccountDetails } from "@/components/account/AccountDetails";
 import { AccountList } from "@/components/bank-cash/AccountList";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 import type { Account } from "@/components/bank-cash/types";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
@@ -14,14 +15,12 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 
 export function ContraReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatCurrencyForPrint } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedAccounts, userNames } = useVouchers();
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -126,69 +125,60 @@ export function ContraReportDetail() {
   if (isMobile) {
     if (currentAccount) {
       return (
-        <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => { setSelectedAccount(null); setShowAllCompanyVouchers(false); }}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <span className="font-semibold truncate">{(currentAccount as any).accountName || currentAccount.id}</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <AccountDetails
-              account={currentAccount as any}
-              allAccounts={processedAccounts}
-              transactions={currentTransactions}
-              onAccountUpdated={() => {}}
-              onAccountDeleted={() => { setSelectedAccount(null); setShowAllCompanyVouchers(false); }}
-              onShowAll={() => setShowAllCompanyVouchers(true)}
-              dateRange={dateRange}
-              onDateRangeChange={setDateRange}
-              isAllVouchersView={showAllCompanyVouchers}
-              userNames={userNames}
-            />
-          </div>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          {/* Sticky Party-style chrome + Print/Excel/Date – header AccountDetails ke andar (duplicate top bar hataya). */}
+          <AccountDetails
+            account={currentAccount as any}
+            allAccounts={processedAccounts}
+            transactions={currentTransactions}
+            onAccountUpdated={() => {}}
+            onAccountDeleted={() => {
+              setSelectedAccount(null);
+              setShowAllCompanyVouchers(false);
+            }}
+            onShowAll={() => setShowAllCompanyVouchers(true)}
+            dateRange={dateRange}
+            onDateRangeChange={setDateRange}
+            isAllVouchersView={showAllCompanyVouchers}
+            userNames={userNames}
+            onBack={() => {
+              setSelectedAccount(null);
+              setShowAllCompanyVouchers(false);
+            }}
+            mobileFooterVariant="report"
+            mobileReportStickyTitle="Contra"
+          />
         </div>
       );
     }
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="p-4 border-b space-y-3 flex-shrink-0">
-          <h2 className="text-lg font-bold font-headline">Contra</h2>
+      <ReportRegisterMobileListChrome
+        title="Contra"
+        actionSlot={
           <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="contra">
             <PermissionButton permission="create_records" className="w-full">
               <PlusCircle className="mr-2 h-4 w-4" /> Create Contra Entry
             </PermissionButton>
           </AddVoucherDialog>
-          <Card className="p-3 text-center">
-            <p className="text-xs text-muted-foreground">Total Transferred</p>
-            <p className="text-xl font-bold text-blue-600">
-              {formatCurrency(totalContra, { noSuffix: true })}
-            </p>
-          </Card>
-        </div>
-        <div className="p-3 border-b flex-shrink-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search accounts..."
-              className="pl-9"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-          <h3 className="text-sm font-semibold">Accounts ({filteredAccounts.length})</h3>
-        </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <AccountList
-            accounts={filteredAccounts}
-            onSelectAccount={handleSelectAccount}
-            selectedAccount={selectedAccount}
-            searchTerm={searchTerm}
-          />
-        </div>
-      </div>
+        }
+        summary={{
+          label: "Total Transferred",
+          // Mobile chrome expects string totals; desktop card still uses `formatCurrency` (ReactNode)
+          amountText: formatCurrencyForPrint(totalContra, { noSuffix: true }),
+          amountClassName: "text-blue-600",
+        }}
+        searchPlaceholder="Search accounts..."
+        searchValue={searchTerm}
+        onSearchChange={setSearchTerm}
+        listSectionTitle={`Accounts (${filteredAccounts.length})`}
+      >
+        <AccountList
+          accounts={filteredAccounts}
+          onSelectAccount={handleSelectAccount}
+          selectedAccount={selectedAccount}
+          searchTerm={searchTerm}
+        />
+      </ReportRegisterMobileListChrome>
     );
   }
 

@@ -14,6 +14,9 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import AdCalendar from "@/components/ui/ad-calendar";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -226,11 +229,12 @@ export default function DesktopExpenseStatementPage() {
   );
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
+  // Mobile: full list for MobileTransactionsPager; desktop no date = last 10.
   const reportDisplayTransactions = useMemo(() => {
-    if (hasDateFilter) return processedTransactions;
+    if (hasDateFilter || isMobile) return processedTransactions;
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
-  }, [processedTransactions, hasDateFilter]);
+  }, [processedTransactions, hasDateFilter, isMobile]);
 
   const filteredReportTransactions = useMemo(() => {
     if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -243,6 +247,24 @@ export default function DesktopExpenseStatementPage() {
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
   }, [reportDisplayTransactions, transactionSearch]);
+
+  // In/Exp account ya group switch / filter / search par pager reset.
+  const expenseStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}`;
+  const {
+    pagingMeta: expenseStatementMobilePaging,
+    pagerPage: expenseReportPagerPage,
+    setPagerPage: setExpenseReportPagerPage,
+    rowsPerPage: expenseReportRowsPerPage,
+    setRowsPerPage: setExpenseReportRowsPerPage,
+  } = useStatementReportMobilePaging({
+    filteredRows: filteredReportTransactions,
+    isMobile,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    resetKey: expenseStatementMobilePagingKey,
+  });
 
   const { summaryData, chartData } = useMemo(() => {
     const emptyData = {
@@ -400,7 +422,8 @@ export default function DesktopExpenseStatementPage() {
   };
 
   const dateRangeLabel = useMemo(() => {
-    if (!hasDateFilter) return "Last 10 Txns";
+    // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
+    if (!hasDateFilter) return "All Time";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -459,7 +482,7 @@ export default function DesktopExpenseStatementPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
             {activeEntity?.name ? (
               <>
                 <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -474,9 +497,19 @@ export default function DesktopExpenseStatementPage() {
               </>
             ) : null}
           </div>
-          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
-          </span>
+          {activeEntity?.name ? (
+            <div className="flex-shrink-0" aria-hidden>
+              {selectedAccount ? (
+                <ReportStatementHeaderAvatar
+                  kind="expense"
+                  displayName={activeEntity.name}
+                  fileUrl={selectedAccount.fileUrl}
+                />
+              ) : (
+                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-center items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -631,12 +664,33 @@ export default function DesktopExpenseStatementPage() {
               ))}
             </div>
 
-            <div
-              className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0"
-              data-floating-button-scroll
-            >
-              {isMobile ? (
-                <div className="pb-24">
+            <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+              <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
+                {isMobile ? (
+                  <div className="pb-4">
+                    <TransactionsTable
+                      transactions={expenseStatementMobilePaging.pageTransactions}
+                      context={activeContext}
+                      contextId={activeEntity?.id}
+                      openingBalance={expenseStatementMobilePaging.openingForPage}
+                      userNames={userNames}
+                      journalAccountNames={journalAccountNames}
+                      onRowClick={handleEditVoucher}
+                      openingBalanceLabel="Opening"
+                      periodDr={expenseStatementMobilePaging.periodDrForPage}
+                      periodCr={expenseStatementMobilePaging.periodCrForPage}
+                      closingBalance={expenseStatementMobilePaging.closingForPage}
+                      openingBalanceSearch={
+                        <Input
+                          placeholder="Search..."
+                          value={transactionSearch}
+                          onChange={(e) => setTransactionSearch(e.target.value)}
+                          className="h-8 w-32 max-w-[140px] text-sm"
+                        />
+                      }
+                    />
+                  </div>
+                ) : (
                   <TransactionsTable
                     transactions={filteredReportTransactions}
                     context={activeContext}
@@ -655,24 +709,24 @@ export default function DesktopExpenseStatementPage() {
                       />
                     }
                   />
-                </div>
-              ) : (
-                <TransactionsTable
-                  transactions={filteredReportTransactions}
-                  context={activeContext}
-                  contextId={activeEntity?.id}
-                  openingBalance={openingBalanceForPeriod}
-                  userNames={userNames}
-                  journalAccountNames={journalAccountNames}
-                  onRowClick={handleEditVoucher}
-                  openingBalanceLabel="Opening"
-                  openingBalanceSearch={
-                    <Input
-                      placeholder="Search..."
-                      value={transactionSearch}
-                      onChange={(e) => setTransactionSearch(e.target.value)}
-                      className="h-8 w-32 max-w-[140px] text-sm"
-                    />
+                )}
+              </div>
+              {/* Fixed footer + FAB ke upar jagah — Party report pager (~mb-12). */}
+              {isMobile && view === "list" && (
+                <MobileTransactionsPager
+                  className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                  currentPage={expenseReportPagerPage}
+                  totalItems={filteredReportTransactions.length}
+                  rowsPerPage={expenseReportRowsPerPage}
+                  onPageChange={setExpenseReportPagerPage}
+                  onRowsPerPageChange={(n) => {
+                    setExpenseReportRowsPerPage(n);
+                    setExpenseReportPagerPage(1);
+                  }}
+                  edgeCounts={
+                    expenseStatementMobilePaging.edges.before > 0 || expenseStatementMobilePaging.edges.after > 0
+                      ? expenseStatementMobilePaging.edges
+                      : undefined
                   }
                 />
               )}

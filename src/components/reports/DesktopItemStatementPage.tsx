@@ -14,6 +14,9 @@ import type { Item, ItemGroup } from "@/components/items/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -278,11 +281,12 @@ export default function DesktopItemStatementPage() {
   );
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
+  // Mobile: full tx list for tail pager; desktop all-time = last 10 rows.
   const reportDisplayTransactions = useMemo(() => {
-    if (hasDateFilter) return processedTransactions;
+    if (hasDateFilter || isMobile) return processedTransactions;
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
-  }, [processedTransactions, hasDateFilter]);
+  }, [processedTransactions, hasDateFilter, isMobile]);
 
   const filteredReportTransactions = useMemo(() => {
     if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -295,6 +299,24 @@ export default function DesktopItemStatementPage() {
       return vno.includes(q) || narr.includes(q) || type.includes(q) || amount.includes(q);
     });
   }, [reportDisplayTransactions, transactionSearch]);
+
+  // Qty/amount toggle ya unit badle to row shape change — pager page 1 (Party hook resetKey).
+  const itemStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${reportStockViewForTx}|${effectiveDisplayUnit ?? ""}`;
+  const {
+    pagingMeta: itemStatementMobilePaging,
+    pagerPage: itemReportPagerPage,
+    setPagerPage: setItemReportPagerPage,
+    rowsPerPage: itemReportRowsPerPage,
+    setRowsPerPage: setItemReportRowsPerPage,
+  } = useStatementReportMobilePaging({
+    filteredRows: filteredReportTransactions,
+    isMobile,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    resetKey: itemStatementMobilePagingKey,
+  });
 
   const summaryCards = useMemo(() => {
     const salesAmount = processedTransactions.filter((v) => v.type === "sale").reduce((s, v) => s + (v.total || 0), 0);
@@ -309,7 +331,8 @@ export default function DesktopItemStatementPage() {
   }, [closingBalance, processedTransactions]);
 
   const dateRangeLabel = useMemo(() => {
-    if (!hasDateFilter) return "Last 10 Txns";
+    // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
+    if (!hasDateFilter) return "All Time";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -452,7 +475,7 @@ export default function DesktopItemStatementPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
             {activeEntity?.name ? (
               <>
                 <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -467,9 +490,19 @@ export default function DesktopItemStatementPage() {
               </>
             ) : null}
           </div>
-          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
-          </span>
+          {activeEntity?.name ? (
+            <div className="flex-shrink-0" aria-hidden>
+              {selectedItem ? (
+                <ReportStatementHeaderAvatar
+                  kind="item"
+                  displayName={activeEntity.name}
+                  fileUrl={selectedItem.fileUrls?.[0]}
+                />
+              ) : (
+                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-center items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -657,14 +690,15 @@ export default function DesktopItemStatementPage() {
                 );
               })}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
               {isMobile ? (
-                <div className="pb-24">
+                <div className="pb-4">
                   <TransactionsTable
-                    transactions={filteredReportTransactions}
+                    transactions={itemStatementMobilePaging.pageTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={itemStatementMobilePaging.openingForPage}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     accountNames={{}}
@@ -673,6 +707,9 @@ export default function DesktopItemStatementPage() {
                     item={selectedItem || undefined}
                     onRowClick={handleEditVoucher}
                     openingBalanceLabel="Opening"
+                    periodDr={itemStatementMobilePaging.periodDrForPage}
+                    periodCr={itemStatementMobilePaging.periodCrForPage}
+                    closingBalance={itemStatementMobilePaging.closingForPage}
                     openingBalanceSearch={
                       <Input
                         placeholder="Search..."
@@ -707,6 +744,26 @@ export default function DesktopItemStatementPage() {
                   }
                 />
               )}
+            </div>
+            {/* mb-12: overlap avoid with fixed footer / FAB */}
+            {isMobile && view === "list" && (
+              <MobileTransactionsPager
+                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                currentPage={itemReportPagerPage}
+                totalItems={filteredReportTransactions.length}
+                rowsPerPage={itemReportRowsPerPage}
+                onPageChange={setItemReportPagerPage}
+                onRowsPerPageChange={(n) => {
+                  setItemReportRowsPerPage(n);
+                  setItemReportPagerPage(1);
+                }}
+                edgeCounts={
+                  itemStatementMobilePaging.edges.before > 0 || itemStatementMobilePaging.edges.after > 0
+                    ? itemStatementMobilePaging.edges
+                    : undefined
+                }
+              />
+            )}
             </div>
           </>
         )}

@@ -65,7 +65,11 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { BTN_DIALOG_CANCEL_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import {
   fetchRemoteUrlAsFile,
   partyPrefillPartsFromPartyRow,
@@ -948,18 +952,32 @@ export function CreatePartyForm({
         />
 
         </div>
-        <div className="mt-0 flex shrink-0 flex-wrap justify-end gap-4 border-t border-border/80 bg-background/95 py-3">
-          {/* Cancel — dialog band (parent `onCloseDialogRequest`); bina submit */}
-          <Button type="button" className={BTN_DIALOG_CANCEL_CLASS} onClick={() => onCloseDialogRequest?.()} disabled={isLoading}>
+        {/* EditPartyDialog jaisa ek hi row: Cancel (gray pill) • Save & New beechn • CreateParty daaen — pehle wrap + pink Cancel tha */}
+        <div className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+          <Button
+            type="button"
+            variant="ghost"
+            className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}
+            onClick={() => onCloseDialogRequest?.()}
+            disabled={isLoading}
+          >
             Cancel
           </Button>
-          {onPartyCreated && (
-            <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
+          <div className="flex min-w-0 flex-1 justify-center px-1">
+            {onPartyCreated ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
+                disabled={isLoading}
+              >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
-            </Button>
-          )}
-          <Button type="submit" className="w-full sm:w-auto" disabled={isLoading}>
+              </Button>
+            ) : null}
+          </div>
+          <Button type="submit" className="shrink-0" disabled={isLoading}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Party
           </Button>

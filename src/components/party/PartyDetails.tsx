@@ -62,7 +62,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
-import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { CreateNoteForm } from "@/components/vouchers/CreateNoteForm";
@@ -860,14 +859,6 @@ export function PartyDetails({
             <p className={cn("text-2xl font-bold text-center", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
               {balanceLabel} {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
             </p>
-            {party.id !== "all" && (
-              <EntityLedgerOpeningHints
-                className="text-center mt-1"
-                masterOpening={masterPartyOpening}
-                periodOpeningBroughtForward={openingBalanceForPeriod}
-                hasDateFilter={hasLedgerDateFilter}
-              />
-            )}
           </div>
           {/* Dropdown + Edit icon + Search - same size (equal width & height) */}
           <div className="p-2 border-b flex-shrink-0">
@@ -920,6 +911,7 @@ export function PartyDetails({
           >
             <div className="pb-2">
             {/* Unapproved (`isApproved` !== true): pink row tint — TransactionsTable default highlightPendingApproval */}
+            {/* Book/Dated opening pills table row me; subtitle "Books opening" hata diya */}
             <TransactionsTable
               transactions={mobileTransactions}
               context="party"
@@ -931,6 +923,9 @@ export function PartyDetails({
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={currentPage === 1}
+              openingBalancePeriodStartDate={dateRange?.from}
               openingBalanceActions={undefined}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
@@ -1231,13 +1226,6 @@ export function PartyDetails({
                     {formatCurrency(closingBalance, { showDrCr: true })}
                   </div>
                 </div>
-                {party.id !== "all" && (
-                  <EntityLedgerOpeningHints
-                    masterOpening={masterPartyOpening}
-                    periodOpeningBroughtForward={openingBalanceForPeriod}
-                    hasDateFilter={hasLedgerDateFilter}
-                  />
-                )}
               </div>
             </div>
             {/* Part 2: date range, Add Note, print — single line, no wrap; on small screens this row is below */}
@@ -1355,6 +1343,7 @@ export function PartyDetails({
         {/* Party docs sirf table Opening row File column + Edit party dialog — yahan duplicate thumbnail strip nahi */}
         <div className={cn("flex-1 flex flex-col min-h-0", balanceMode === "bill_wise" ? "min-w-0" : "overflow-x-auto scrollbar-slim-dim")}>
           <div className="py-4 flex-1 flex flex-col min-h-0 min-w-0">
+            {/* Book/Dated opening table row pills; header books line removed */}
             <TransactionsTable
               transactions={paginatedTransactions}
               context="party"
@@ -1366,6 +1355,9 @@ export function PartyDetails({
               openingBalanceNarration={party.openingBalanceNarration}
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={currentPage === 1}
+              openingBalancePeriodStartDate={dateRange?.from}
               openingBalanceActions={
                 party.id !== "all" && !(party as any).isSystemAccount ? (
                   <EditPartyDialog

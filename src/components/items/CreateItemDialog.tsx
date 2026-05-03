@@ -42,13 +42,13 @@ import { Textarea } from "../ui/textarea";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
-} from "../ui/alert-dialog";
-
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   cnMasterEntityDialogContent,
@@ -98,7 +98,8 @@ import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -203,6 +204,12 @@ export function CreateItemDialog({
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   /** Documents: plan PDF/images — avatar se alag */
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
@@ -392,7 +399,7 @@ export function CreateItemDialog({
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    if (isLocalOnlyMode()) {
+    if (localSqlMirror) {
       // Local-only mode: use in-memory processed collections instead of Firestore listeners.
       setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
       setTaxes((processedTaxes as unknown as Tax[]) || []);
@@ -417,7 +424,7 @@ export function CreateItemDialog({
         unsubGroups();
         unsubTaxes();
     };
-  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, localSqlMirror]);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const inputFile = e.target.files?.[0];
@@ -526,6 +533,10 @@ export function CreateItemDialog({
 
   function handleFormSubmit(e: React.FormEvent, options: { saveAndNew?: boolean } = {}) {
     e.preventDefault();
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
     void (async () => {
       const isValid = await form.trigger();
       if (!isValid) {
@@ -551,7 +562,7 @@ export function CreateItemDialog({
     setIsLoading(true);
 
     try {
-      if (isLocalOnlyMode()) {
+      if (localSqlMirror) {
         // Local-only mode: save item in browser DB and queue backup sync.
         const localId = createLocalEntityId("item");
         let localFileUrls: string[] = [];
@@ -1311,18 +1322,28 @@ const capitalizeFirstLetter = (str: string) => {
               />
 
             </div>
-              <DialogFooter className="mt-0 shrink-0 border-t border-border/80 bg-background/95 py-3">
-                  <DialogClose asChild>
-                      <Button type="button" variant="ghost">Cancel</Button>
-                  </DialogClose>
-                  <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+                <DialogClose asChild>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                    onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
+                    disabled={isLoading || apkOfflineViewOnly}
+                  >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save &amp; New
                   </Button>
-                  <Button type="submit" disabled={isLoading || !companyId}>
-                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Create Item
-                  </Button>
+                </div>
+                <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Create Item
+                </Button>
               </DialogFooter>
             </form>
           </Form>

@@ -55,6 +55,11 @@ import usePermissions from "@/hooks/usePermissions";
 import { Combobox } from "../ui/combobox";
 import { useDate } from "@/hooks/useDate";
 import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   cnMasterEntityDialogContent,
@@ -1024,15 +1029,25 @@ export function CreateBankAccountDialog({
                 />
             </div>
 
-                <DialogFooter className="mt-0 shrink-0 border-t border-border/80 bg-background/95 py-3">
+                <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                   <DialogClose asChild>
-                    <Button variant="ghost">Cancel</Button>
+                    <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                      Cancel
+                    </Button>
                   </DialogClose>
-                    <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save & New
-                  </Button>
-                  <Button type="submit" disabled={isLoading || !companyId}>
+                  <div className="flex min-w-0 flex-1 justify-center px-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                      onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
+                      disabled={isLoading}
+                    >
+                      {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Save & New
+                    </Button>
+                  </div>
+                  <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Account
                   </Button>

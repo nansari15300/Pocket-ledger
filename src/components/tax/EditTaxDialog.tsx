@@ -32,6 +32,11 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import type { Tax, TaxGroup } from "@/components/tax/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import { Combobox } from "../ui/combobox";
@@ -53,7 +58,8 @@ import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useVouchers } from "@/hooks/useVouchers";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
@@ -84,6 +90,12 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { user } = useAuth();
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   const isMobile = useIsMobile();
@@ -141,7 +153,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    if (isLocalOnlyMode()) {
+    if (localSqlMirror) {
       // Local mode me group list local vouchers hook se hydrate karo; Firestore listener avoid karo.
       setGroups((processedTaxGroups as TaxGroup[]) || []);
       return;
@@ -158,17 +170,23 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     });
     
     return () => unsubscribe();
-  }, [isOpen, companyId, toast, processedTaxGroups]);
+  }, [isOpen, companyId, toast, processedTaxGroups, localSqlMirror]);
 
   function onSubmit(values: FormValues): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
 
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const taxRefSnap = tax;
+
+    setIsOpen(false); // Dialog instant close; uploads + Firestore in background chunk below
 
     void (async () => {
       beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
@@ -216,7 +234,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
               documentFiles: needNewDocsUpload ? newDocFiles : [],
             });
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!isLocalOnlyMode()) {
+          if (!localSqlMirror) {
             st = await runRemote();
           } else if (typeof navigator !== "undefined" && navigator.onLine) {
             try {
@@ -246,7 +264,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           openingBalanceNarration: narrationClean,
         };
 
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "taxes", taxRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: taxRefSnap.id,
@@ -262,7 +280,6 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
           await enqueueCompanyDocOutbox(companyId, "taxes", "update", taxRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onTaxUpdated();
-          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Tax Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -286,7 +303,6 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
         }
 
         onTaxUpdated();
-        setIsOpen(false);
         sonnerToast.success("Tax Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating tax:", error);
@@ -305,6 +321,11 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This tax ledger has transactions and cannot be deleted." });
       setIsDeleteDialogOpen(false);
@@ -312,7 +333,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     }
     setIsLoading(true);
     try {
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           // Local mode me delete ko recycle-bin flag ke saath local DB + outbox me queue karo.
           const localDoc = {
             ...(tax as any),
@@ -587,33 +608,43 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                   detailLabel="tax"
                 />
             </div>
-              <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
+                  </Button>
                 </DialogClose>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0}>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setIsDeleteDialogOpen(true)}
-                          disabled={hasTransactions}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {hasTransactions && (
-                      <TooltipContent>
-                        <p>Cannot delete a tax ledger with existing transactions.</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={hasTransactions || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {hasTransactions && (
+                        <TooltipContent>
+                          <p>Cannot delete a tax ledger with existing transactions.</p>
+                        </TooltipContent>
+                      )}
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
               </DialogFooter>
@@ -632,8 +663,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
+                <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
                     Move to Bin
                 </AlertDialogAction>
             </AlertDialogFooter>

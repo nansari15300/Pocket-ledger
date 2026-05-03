@@ -123,6 +123,9 @@ function shouldSkipPlanServerSyncDueToStaticExportWithoutApi(): boolean {
   return !origin;
 }
 
+/** Plan sync POST: flaky dev server / billing proxy par 5xx ya TCP reset — bounded retry. */
+const PLAN_SYNC_FETCH_MAX_ATTEMPTS = 3;
+
 export async function syncCompanyPlanFromServer(opts: {
   /** Firestore `companies/{id}` */
   firebaseCompanyId: string;
@@ -160,12 +163,20 @@ export async function syncCompanyPlanFromServer(opts: {
     body: JSON.stringify({ companyId: firebaseCompanyId, localCompanyId }),
   };
 
-  let res: Response;
-  try {
-    res = await fetchWithTimeout(primaryUrl, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
-  } catch (e: unknown) {
-    const aborted = typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
-    return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
+  /** Transient failures (ECONNRESET, aborted compile) pe dubara POST; deterministic errors (401/403) pe break. */
+  let res!: Response;
+  for (let attempt = 1; attempt <= PLAN_SYNC_FETCH_MAX_ATTEMPTS; attempt++) {
+    try {
+      res = await fetchWithTimeout(primaryUrl, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
+      if (res.status < 500 || attempt === PLAN_SYNC_FETCH_MAX_ATTEMPTS) break;
+    } catch (e: unknown) {
+      const aborted =
+        typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
+      if (attempt === PLAN_SYNC_FETCH_MAX_ATTEMPTS) {
+        return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
+      }
+    }
+    await new Promise((r) => setTimeout(r, 280 * attempt));
   }
 
   // NEXT_PUBLIC_BILLING_API_ORIGIN galat host par ho to 404 — dev me API yahin Next par ho to same-origin dobara try karo

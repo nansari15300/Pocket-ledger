@@ -70,12 +70,7 @@ export const reports: Report[] = [
     description: "A chronological record of all daily transactions.",
     category: "Accounting",
   },
-  {
-    id: "accounts-statement",
-    name: "Account Summary",
-    description: "View all accounts and account groups in a tree structure.",
-    category: "Bank/Cash",
-  },
+  /* Account Summary (accounts-statement) list se hata — Bank Statement hi bank/cash flow cover karta hai. */
   // Direct statement routes: keep list parity with "Report" buttons from entity details pages.
   {
     id: "party-statement",

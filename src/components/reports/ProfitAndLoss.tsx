@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowUpDown, Search, Loader2, ChevronDown, ChevronRight, ChevronUp, Printer } from "lucide-react";
+import { ArrowUpDown, Search, Loader2, ChevronDown, ChevronRight, ChevronUp, Printer, ArrowLeft } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -41,6 +41,9 @@ import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
 import { startOfDay, endOfDay } from "date-fns";
 import { useTransactions } from "@/hooks/use-transactions";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
+import { useReportPage } from "@/contexts/ReportPageContext";
+import { useRouter } from "next/navigation";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 
 /**
  * TYPES
@@ -280,7 +283,18 @@ export function ProfitAndLossPage({
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [mobileFilter, setMobileFilter] = useState<ProfitLossMobileFilter>("default");
   const [isFooterCalendarOpen, setIsFooterCalendarOpen] = useState(false);
-  
+  /** Mobile main table: party-report jaisa pager — detail dialog `rowsPerPage` se alag taaki dono conflict na karein. */
+  const [plMobileMainPage, setPlMobileMainPage] = useState(1);
+  const [plMobileMainRowsPerPage, setPlMobileMainRowsPerPage] = useState(20);
+
+  const router = useRouter();
+  const { onBackToReportList } = useReportPage();
+
+  React.useEffect(() => {
+    /* `ReportDetails` ab key se remount karta hai; yeh company/variant switch defence (same report id edge) */
+    setQuery("");
+  }, [reportVariant, companyId]);
+
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const activeRangeLabel = useMemo(() => {
     // Date label should follow selected system: AD / BS / Both.
@@ -643,6 +657,36 @@ export function ProfitAndLossPage({
     
     return sortItems(filteredData);
   }, [profitLossData, query, sortDesc, entityFilter, isMobile, mobileFilter, reportVariant]);
+
+  /** Party pager semantics: slice list ke tail se taaki MobileTransactionsPager Prev/Next Party Report jaisa lagein. */
+  const filteredMainPaged = useMemo(() => {
+    const total = filtered.length;
+    if (!isMobile || plMobileMainRowsPerPage <= 0) return filtered;
+    const totalPagesLocal = Math.max(1, Math.ceil(total / plMobileMainRowsPerPage));
+    const safePage = Math.min(Math.max(1, plMobileMainPage), totalPagesLocal);
+    const end = total - (safePage - 1) * plMobileMainRowsPerPage;
+    const start = Math.max(0, end - plMobileMainRowsPerPage);
+    return filtered.slice(start, Math.max(start, end));
+  }, [filtered, isMobile, plMobileMainPage, plMobileMainRowsPerPage]);
+
+  const plMobilePagerEdges = useMemo(() => {
+    const total = filtered.length;
+    if (!isMobile || plMobileMainRowsPerPage <= 0) return { before: 0, after: 0 };
+    const totalPagesLocal = Math.max(1, Math.ceil(total / plMobileMainRowsPerPage));
+    const safePage = Math.min(Math.max(1, plMobileMainPage), totalPagesLocal);
+    const end = total - (safePage - 1) * plMobileMainRowsPerPage;
+    const start = Math.max(0, end - plMobileMainRowsPerPage);
+    return { before: start, after: total - end };
+  }, [filtered.length, isMobile, plMobileMainPage, plMobileMainRowsPerPage]);
+
+  React.useEffect(() => {
+    setPlMobileMainPage(1);
+  }, [query, entityFilter, mobileFilter, dateRange?.from?.getTime(), dateRange?.to?.getTime(), reportVariant]);
+
+  React.useEffect(() => {
+    const tp = Math.max(1, plMobileMainRowsPerPage <= 0 ? 1 : Math.ceil(filtered.length / plMobileMainRowsPerPage));
+    if (plMobileMainPage > tp) setPlMobileMainPage(tp);
+  }, [filtered.length, plMobileMainRowsPerPage, plMobileMainPage]);
   
   // Calculate totals from filtered data (variant-aware for Dr/Cr/P&L summaries).
   const totals = useMemo(() => {
@@ -821,27 +865,117 @@ export function ProfitAndLossPage({
     }, true);
   };
 
+  const mobileChromeTitle =
+    reportVariant === "party-wise" ? "Party Report" : reportVariant === "bill-wise" ? "Bill Report" : "Profit & Loss";
+
+  /** Reports list (`ReportPageProvider`) par back = list pe; standalone route par router.back(). */
+  const handlePlMobileBack = () => {
+    if (onBackToReportList) onBackToReportList();
+    else router.back();
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
   return (
-    <div className="pb-[72px] p-0.5 w-full h-full overflow-hidden flex flex-col">
+    <div
+      className={cn(
+        "w-full h-full overflow-hidden flex flex-col",
+        isMobile ? "min-h-0 pb-0" : "pb-[72px] p-0.5"
+      )}
+    >
       <div className="p-0 min-h-0 flex-1 flex flex-col gap-[5px]">
-        {/* Keep report title at page top in a single, screen-fit row for mobile + desktop. */}
+        {isMobile ? (
+          <>
+            {/* Party Report jaisa mobile chrome — list se Reports pe wapas + title + subtitle count. */}
+            <div className="flex-shrink-0 border-b bg-background px-2 py-1.5 space-y-1.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  onClick={handlePlMobileBack}
+                  aria-label="Back"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                <h1 className="shrink-0 text-base font-bold text-muted-foreground">{mobileChromeTitle}</h1>
+                <span className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-foreground" title={reportLabel}>
+                  {reportLabel ?? " "}
+                </span>
+              </div>
+              <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+                Showing {filteredMainPaged.length} of {filtered.length}{" "}
+                {reportVariant === "bill-wise" ? "bill(s)" : reportVariant === "party-wise" ? "party row(s)" : "row(s)"}
+              </div>
+              <div className="flex items-center justify-center gap-2 px-1">
+                <span className="text-xs font-medium text-muted-foreground truncate text-center">{activeRangeLabel}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 text-[10px] font-semibold"
+                  onClick={() => {
+                    const { start, end } = getFiscalRangeForCountry(company?.country || "Nepal");
+                    setDateRange({ from: startOfDay(start), to: endOfDay(end) });
+                  }}
+                >
+                  FY
+                </Button>
+              </div>
+              <div className="flex items-stretch gap-2">
+                {reportVariant === "income-exp" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0 px-2 text-xs"
+                    onClick={isAllExpanded ? collapseAll : expandAll}
+                  >
+                    {isAllExpanded ? (
+                      <>
+                        <ChevronUp className="h-3 w-3" />
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-3 w-3" />
+                      </>
+                    )}
+                  </Button>
+                )}
+                <div className="relative flex-1 min-w-0">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none z-10" />
+                  <Input
+                    placeholder={
+                      reportVariant === "party-wise"
+                        ? "Search party..."
+                        : reportVariant === "bill-wise"
+                          ? "Search bill no..."
+                          : "Search account or group..."
+                    }
+                    className="h-9 pl-8 text-sm w-full min-w-0"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
         <div className="w-[98%] mx-auto pt-1">
-          {/* Ribbon-style title strip: keep heading + selected variant together in one highlighted band. */}
+          {/* Ribbon-style title strip (desktop): keep heading + variant badge */}
           <div className="flex items-center gap-2 min-w-0 rounded-md border border-indigo-300/70 bg-gradient-to-r from-indigo-50 via-white to-violet-100/70 px-2 py-1 dark:from-indigo-950/30 dark:via-card dark:to-violet-900/20">
-            {/* Slightly reduce heading size (~2%) so full title fits on mobile. */}
             <h1 className="text-[1.22rem] sm:text-[1.96rem] font-semibold truncate">Profit &amp; Loss Statement</h1>
             {reportLabel ? (
-              // Keep report variant badge ribbon-like for consistency with summary card accents.
               <span className="rounded-full border border-orange-400/70 bg-gradient-to-r from-orange-50 to-amber-100 px-2 py-0.5 text-[11px] sm:text-xs font-semibold text-orange-700 whitespace-nowrap shrink-0 dark:from-orange-950/30 dark:to-amber-900/30">
                 {reportLabel}
               </span>
             ) : null}
           </div>
         </div>
+        )}
         {/* Keep summary area almost full-width (98%) for mobile and desktop fit. */}
         <div className="w-[98%] mx-auto space-y-[5px]">
           <div className="grid grid-cols-2 gap-[5px]">
@@ -902,7 +1036,8 @@ export function ProfitAndLossPage({
 
         {/* Remove extra outer card shell; keep only inner content panel for wider list area. */}
         <div className="flex-1 min-h-0 flex flex-col">
-            {reportVariant === "income-exp" ? (
+            {!isMobile &&
+              (reportVariant === "income-exp" ? (
               // Party-wise / Bill-wise request: hide filter-toolbar; keep it only on income-exp view.
               <div className={cn("flex items-center gap-2 py-3 px-4")}>
                 <div className={cn("flex items-center gap-2 w-full min-w-0")}>
@@ -949,7 +1084,8 @@ export function ProfitAndLossPage({
                   />
                 </div>
               </div>
-            )}
+            ))}
+            {/* `!isMobile && (` ke liye dubara `)` — warna JSX parse "Expected '</', got '}'". */}
 
             {/* Wider inner panel: reduce side margins so table area uses more horizontal space. */}
             <div className={cn("rounded-lg border flex-1 flex flex-col min-h-0 mx-2", isMobile && "overflow-x-hidden")}>
@@ -998,7 +1134,7 @@ export function ProfitAndLossPage({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map((row) => (
+                    {(isMobile ? filteredMainPaged : filtered).map((row) => (
                       <GroupRow
                         key={row.id}
                         row={row}
@@ -1030,10 +1166,24 @@ export function ProfitAndLossPage({
                   </TableBody>
                 </Table>
               </div>
+              {isMobile && (
+                <MobileTransactionsPager
+                  className="flex-shrink-0 border-t bg-background"
+                  currentPage={plMobileMainPage}
+                  totalItems={filtered.length}
+                  rowsPerPage={plMobileMainRowsPerPage}
+                  onPageChange={setPlMobileMainPage}
+                  onRowsPerPageChange={(n) => {
+                    setPlMobileMainRowsPerPage(n);
+                    setPlMobileMainPage(1);
+                  }}
+                  edgeCounts={plMobilePagerEdges.before > 0 || plMobilePagerEdges.after > 0 ? plMobilePagerEdges : undefined}
+                />
+              )}
               </div>
             </div>
 
-            <div className={cn("mt-auto", isMobile && "pb-12")}>
+            <div className={cn("mt-auto", isMobile && "pb-28")}>
               {isMobile ? (
               <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur px-2 py-1.5">
                 {/* Mobile footer filters: align with account-list style across all 3 variants. */}
@@ -1244,6 +1394,7 @@ export function ProfitAndLossPage({
               )}
             </div>
             
+            {!isMobile && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Per page:</span>
               <Select
@@ -1265,17 +1416,43 @@ export function ProfitAndLossPage({
                 </SelectContent>
               </Select>
             </div>
+            )}
           </div>
           
           <div className={cn("flex-1 min-h-0 overflow-y-auto", isMobile ? "overflow-x-hidden px-0.5" : "overflow-x-auto px-1")}>
             {activeRow && (() => {
-              const totalPages = rowsPerPage > 0 ? Math.ceil((detailTransactions?.length || 0) / rowsPerPage) : 1;
-              const paginatedTransactions = rowsPerPage > 0
-                ? (detailTransactions || []).slice(
-                    (currentPage - 1) * rowsPerPage,
-                    currentPage * rowsPerPage
-                  )
-                : (detailTransactions || []);
+              const list = detailTransactions || [];
+              const totalPages = rowsPerPage > 0 ? Math.ceil(list.length / rowsPerPage) : 1;
+              /** Desktop: classical forward slice. Mobile dialog: Party Report jaisa tail-side window + pager Prev/Next. */
+              let paginatedTransactions = list;
+              let pageOpeningBalance = reportVariant === "income-exp" ? openingBalanceForAccount ?? 0 : 0;
+              if (rowsPerPage > 0) {
+                if (isMobile) {
+                  const totalPagesLoc = Math.max(1, Math.ceil(list.length / rowsPerPage));
+                  const safePage = Math.min(Math.max(1, currentPage), totalPagesLoc);
+                  const end = list.length - (safePage - 1) * rowsPerPage;
+                  const start = Math.max(0, end - rowsPerPage);
+                  paginatedTransactions = list.slice(start, Math.max(start, end));
+                  const prevTx = start > 0 ? list[start - 1] : null;
+                  const prevBalRaw =
+                    prevTx != null
+                      ? (typeof prevTx.balance === "number"
+                          ? prevTx.balance
+                          : typeof prevTx.runningBalance === "number"
+                            ? prevTx.runningBalance
+                            : undefined)
+                      : undefined;
+                  if (typeof prevBalRaw === "number" && !Number.isNaN(prevBalRaw)) {
+                    pageOpeningBalance = prevBalRaw;
+                  }
+                } else {
+                  paginatedTransactions = list.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+                }
+              }
+
+              const pageDr = paginatedTransactions.reduce((sum: number, t: any) => sum + (Number(t?.debit) || 0), 0);
+              const pageCr = paginatedTransactions.reduce((sum: number, t: any) => sum + (Number(t?.credit) || 0), 0);
+
               const detailContext = reportVariant === "income-exp" ? "expense" : (activeRow.detailContext || "daybook");
               const detailContextId = reportVariant === "income-exp" ? activeRow.accountId : activeRow.detailContextId;
               
@@ -1283,18 +1460,54 @@ export function ProfitAndLossPage({
                 <>
                   {/* Mobile fit: avoid intrinsic table width expansion that pushed dialog beyond screen. */}
                   <div className={cn("min-w-0 w-full overflow-x-hidden", isMobile ? "-mx-0.5" : "")}>
+                    {/* Desktop expense = hook totals; mobile = per-page slice (Party pager semantics). */}
                     <TransactionsTable 
                       context={detailContext}
                       contextId={detailContextId}
                       transactions={paginatedTransactions}
                       userNames={userNames}
-                      // Mobile cards already render voucher + opposite account; desktop table stays unchanged.
-                      openingBalance={reportVariant === "income-exp" ? openingBalanceForAccount : 0}
-                      periodDr={reportVariant === "income-exp" ? periodDr : 0}
-                      periodCr={reportVariant === "income-exp" ? periodCr : 0}
-                      closingBalance={reportVariant === "income-exp" ? calculatedClosingBalance : 0}
+                      openingBalance={
+                        reportVariant === "income-exp"
+                          ? isMobile
+                            ? pageOpeningBalance
+                            : openingBalanceForAccount ?? 0
+                          : 0
+                      }
+                      periodDr={reportVariant === "income-exp" ? (isMobile ? pageDr : periodDr) : 0}
+                      periodCr={reportVariant === "income-exp" ? (isMobile ? pageCr : periodCr) : 0}
+                      closingBalance={
+                        reportVariant === "income-exp"
+                          ? isMobile
+                            ? pageOpeningBalance + pageDr - pageCr
+                            : calculatedClosingBalance
+                          : 0
+                      }
                     />
                   </div>
+                  <div className="flex-shrink-0">
+                    {isMobile ? (
+                      <MobileTransactionsPager
+                        currentPage={currentPage}
+                        totalItems={detailTransactions?.length ?? 0}
+                        rowsPerPage={rowsPerPage}
+                        onPageChange={setCurrentPage}
+                        onRowsPerPageChange={(n) => {
+                          setRowsPerPage(n);
+                          setCurrentPage(1);
+                        }}
+                        edgeCounts={(() => {
+                          const total = detailTransactions?.length ?? 0;
+                          if (rowsPerPage <= 0) return undefined;
+                          const totalPagesLoc = Math.max(1, Math.ceil(total / rowsPerPage));
+                          const safePg = Math.min(Math.max(1, currentPage), totalPagesLoc);
+                          const end = total - (safePg - 1) * rowsPerPage;
+                          const start = Math.max(0, end - rowsPerPage);
+                          const before = start;
+                          const after = Math.max(0, total - end);
+                          return before > 0 || after > 0 ? { before, after } : undefined;
+                        })()}
+                      />
+                    ) : (
                   <div className="flex items-center justify-between px-4 py-2 border-t bg-muted/30 flex-shrink-0">
                     <div className="text-sm text-muted-foreground">
                       Showing {(currentPage - 1) * rowsPerPage + 1} to {Math.min(currentPage * rowsPerPage, detailTransactions?.length || 0)} of {detailTransactions?.length || 0} transactions
@@ -1321,6 +1534,8 @@ export function ProfitAndLossPage({
                           Next
                         </Button>
                       </div>
+                    )}
+                  </div>
                     )}
                   </div>
                 </>

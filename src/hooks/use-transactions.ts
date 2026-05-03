@@ -122,6 +122,20 @@ export const getTransactionAmounts = (
                 if (["sale", "payment_out", "direct_income"].includes(transaction.type)) debit += amount;
                 if (["purchase", "payment_in", "direct_expense"].includes(transaction.type)) credit += amount;
             }
+
+            /** Party contra: sundry creditor/debtor ledger jahan party id bank leg jaisi `from/toAccountId` se juda ho — account context jaisa Dr/Cr. */
+            if (
+                transaction.type === "contra" &&
+                entity &&
+                typeof entity.id === "string" &&
+                entity.id !== "all" &&
+                entity.id !== "sales_account" &&
+                entity.id !== "purchase_account" &&
+                (transaction.fromAccountId === entity.id || transaction.toAccountId === entity.id)
+            ) {
+                if (transaction.toAccountId === entity.id) debit += amount;
+                if (transaction.fromAccountId === entity.id) credit += amount;
+            }
             
             if (transaction.type === "journal" && Array.isArray(transaction.entries)) {
                 const entry = transaction.entries.find((e: any) => e.accountId === entity?.id);
@@ -1113,6 +1127,8 @@ export function useTransactions(
             const currentId = String(entityIdForLinks);
             if (context === 'party') {
                 if (String((v as any)?.partyId ?? '') === currentId) return true;
+                if ((v as any)?.type === 'contra' && ((v as any).fromAccountId === currentId || (v as any).toAccountId === currentId))
+                  return true;
                 if ((v as any)?.type === 'journal' && Array.isArray((v as any)?.entries))
                     return (v as any).entries.some((e: any) => String(e?.accountId ?? '') === currentId);
                 return false;

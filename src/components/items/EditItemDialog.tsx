@@ -44,7 +44,7 @@ import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Checkbox } from "../ui/checkbox";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "../ui/alert-dialog";
 
 import { CalendarIcon, Loader2, PlusCircle, Trash2, Printer, Upload, FileText, ArrowDownUp } from "lucide-react";
@@ -54,6 +54,11 @@ import {
   masterEntityDialogHeaderClassName,
   masterEntityDialogFormWrapperClassName,
 } from "@/lib/masterEntityDialogClasses";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { toast as sonnerToast } from "sonner";
@@ -101,7 +106,8 @@ import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import {
@@ -292,6 +298,13 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const openingStockQty = form.watch('openingBalance') || 0;
   const openingStockRate = form.watch('openingBalanceRate') || 0;
   const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  /** IndexedDB/outbox sirf genuinely-local APK lane — hybrid Firestore company par Firestore-first save. */
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { user } = useAuth();
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   /** Naye file attachments — offline par local staging; online par `uploadItemAvatarAndAttachmentsRemote` */
@@ -335,8 +348,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    // Local-only / static: Firestore listeners skip — useVouchers processed lists (CreateItemDialog ke barabar)
-    if (isLocalOnlyMode()) {
+    // Local-static / APK local lane: listeners skip (`localSqlMirror`); cloud APK Firebase lists.
+    if (localSqlMirror) {
       setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
       setTaxes((processedTaxes as unknown as Tax[]) || []);
       return;
@@ -372,7 +385,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       unsubGroups();
       unsubTaxes();
     };
-  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, localSqlMirror]);
 
 
   useEffect(() => {
@@ -420,9 +433,16 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    // APK Firestore lane offline — save block (banner + disables match).
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
 
     const filesSnap = files;
     const itemRefSnap = item;
+
+    setIsOpen(false); // Item edit sheet/dialog band turant; uploads + updateDoc background
 
     void (async () => {
       const toastId = sonnerToast.loading("Updating item...");
@@ -433,8 +453,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
         let fileUrls: string[] = [];
 
-        // Static / local company: Firestore `updateDoc` fail — IndexedDB + outbox (baqi entities jaisa)
-        if (isLocalOnlyMode()) {
+        // Static / local lane: attach local stage; APK Firestore company par remote/upload path neeche
+        if (localSqlMirror) {
           fileUrls = [...existingFileUrls];
           if (newFilesToUpload.length > 0 && canAttachDocuments) {
             const staged = await stageItemAvatarAndAttachments({
@@ -512,7 +532,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
           fileUrls,
         };
 
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", itemRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: itemRefSnap.id,
@@ -546,7 +566,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
               openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
             });
           }, 100);
-          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Item Updated!", {
             id: toastId,
             description: showSyncHint
@@ -567,7 +586,6 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
         }, 100);
-        setIsOpen(false);
         sonnerToast.success("Item Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating item:", error);
@@ -586,6 +604,11 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This item has transactions and cannot be deleted." });
       setIsDeleteDialogOpen(false);
@@ -594,7 +617,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
     
     setIsLoading(true);
     try {
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "items", item.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: item.id,
@@ -1225,35 +1248,45 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
             </div>
             </div>
 
-              <DialogFooter className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end pt-4 border-t">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
-                </DialogClose>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0}>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setIsDeleteDialogOpen(true)}
-                          disabled={hasTransactions}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {hasTransactions && (
-                      <TooltipContent>
-                        <p>Cannot delete an item with existing transactions.</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1">
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
                   </Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={hasTransactions || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {hasTransactions && (
+                        <TooltipContent>
+                          <p>Cannot delete an item with existing transactions.</p>
+                        </TooltipContent>
+                      )}
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Changes
+                </Button>
               </DialogFooter>
             </form>
           </Form>
@@ -1271,8 +1304,12 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={apkOfflineViewOnly}
+                  onClick={handleDelete}
+                  className="bg-destructive hover:bg-destructive/90"
+                >
                     Move to Bin
                 </AlertDialogAction>
             </AlertDialogFooter>

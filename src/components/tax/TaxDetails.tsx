@@ -52,7 +52,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
-import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -617,6 +616,10 @@ export function TaxDetails({
               context="tax"
               contextId={tax.id}
               openingBalance={desktopPaginationMeta.openingForPage}
+              booksOpeningBalance={masterTaxOpening}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={currentPage === 1}
+              openingBalancePeriodStartDate={dateRange?.from}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={tax.openingBalanceNarration}
@@ -836,11 +839,6 @@ export function TaxDetails({
                     {formatCurrency(closingBalance, {showDrCr: true})}
                   </div>
                 </div>
-                <EntityLedgerOpeningHints
-                  masterOpening={masterTaxOpening}
-                  periodOpeningBroughtForward={openingBalanceForPeriod}
-                  hasDateFilter={hasLedgerDateFilter}
-                />
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -940,6 +938,10 @@ export function TaxDetails({
                   context="tax"
                   contextId={tax.id}
                   openingBalance={desktopPaginationMeta.openingForPage}
+                  booksOpeningBalance={masterTaxOpening}
+                  ledgerDateFilterActive={hasLedgerDateFilter}
+                  ledgerShowBookOpeningRow={currentPage === 1}
+                  openingBalancePeriodStartDate={dateRange?.from}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={tax.openingBalanceNarration}

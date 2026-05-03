@@ -32,6 +32,11 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import { useCompany } from "@/hooks/useCompany";
 import type { ExpenseAccount, ExpenseGroup } from "@/components/expenses/types";
 import { CreateExpenseGroupDialog } from "./CreateExpenseGroupDialog";
@@ -167,6 +172,8 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
 
+    setIsOpen(false); // Master edit: backdrop hat turant; save async
+
     void (async () => {
       const toastId = sonnerToast.loading("Updating expense account...");
       const isLocalGuestUser = user?.uid === "local_guest_user";
@@ -257,7 +264,6 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           await enqueueCompanyDocOutbox(companyId, "expense_accounts", "update", accountRefSnap.id, payload);
           const showSyncHint = backupSyncEnabled && !isLocalGuestUser;
           onAccountUpdated();
-          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -281,7 +287,6 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
         }
 
         onAccountUpdated();
-        setIsOpen(false);
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
@@ -544,35 +549,40 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 detailLabel="income/expense account"
               />
             </div>
-              <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
-                </DialogClose>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0}>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setIsDeleteDialogOpen(true)}
-                          disabled={hasTransactions}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {hasTransactions && (
-                      <TooltipContent>
-                        <p>Cannot delete an account with existing transactions.</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
                   </Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={hasTransactions}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {hasTransactions && (
+                        <TooltipContent>
+                          <p>Cannot delete an account with existing transactions.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <Button type="submit" disabled={isLoading} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Changes
+                </Button>
               </DialogFooter>
             </form>
           </Form>
@@ -589,7 +599,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
                 <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
                     Move to Bin
                 </AlertDialogAction>

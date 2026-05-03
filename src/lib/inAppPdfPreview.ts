@@ -195,6 +195,16 @@ export function showInAppPdfPreview(
   const previewCancelled = { v: false };
   /** Zoom slider / pinch ke baad re-paint debounce — har frame par poora PDF na paint ho. */
   let zoomRerenderTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Last canvas paint clampZoom(...) — pinch ke dauraan CSS scale = zoomPercent / yahi taaki bitmap live dikhe. */
+  let committedPaintZoomPercent = 100;
+
+  /** Pinch ke baad DOM transform hatana taaki blurry double-scale na rahe crisp repaint se pehle. */
+  const clearPinchVisualScale = () => {
+    zoomInner.style.transition = "";
+    zoomInner.style.transformOrigin = "";
+    zoomInner.style.transform = "";
+    zoomInner.style.willChange = "";
+  };
 
   const safeClose = () => {
     previewCancelled.v = true;
@@ -202,6 +212,7 @@ export function showInAppPdfPreview(
       clearTimeout(zoomRerenderTimer);
       zoomRerenderTimer = null;
     }
+    clearPinchVisualScale();
     try {
       onDispose();
     } catch {
@@ -334,7 +345,11 @@ export function showInAppPdfPreview(
           onFirstPageRendered: hideLoading,
           isCancelled: () => previewCancelled.v,
         });
-        if (!previewCancelled.v) hideLoading();
+        if (!previewCancelled.v) {
+          // Pinch live-scale denominator — har crisp paint ke baad sync (gallery image jaisa flow).
+          committedPaintZoomPercent = clampZoom(pct);
+          hideLoading();
+        }
       };
 
       await paintAtZoom(zoomPercent);
@@ -373,6 +388,10 @@ export function showInAppPdfPreview(
   zoomResetBtn.style.fontSize = "13px";
   zoomResetBtn.setAttribute("aria-label", "Reset zoom to 100 percent");
 
+  let pinchActive = false;
+  let pinchStartDist = 0;
+  let pinchStartZoom = 100;
+
   const scheduleZoomRepaint = (pct: number) => {
     if (!pdfPaintAtZoom) return;
     if (zoomRerenderTimer != null) clearTimeout(zoomRerenderTimer);
@@ -384,6 +403,9 @@ export function showInAppPdfPreview(
 
   const setZoom = (next: number) => {
     if (!usePdfJs) return;
+    pinchActive = false;
+    pinchStartDist = 0;
+    clearPinchVisualScale();
     zoomPercent = clampZoom(next);
     updateZoomLabel();
     scheduleZoomRepaint(zoomPercent);
@@ -393,9 +415,24 @@ export function showInAppPdfPreview(
   zoomInBtn.onclick = () => setZoom(zoomPercent + ZOOM_STEP);
   zoomResetBtn.onclick = () => setZoom(100);
 
-  // Pinch-to-zoom (two fingers) on preview area
-  let pinchStartDist = 0;
-  let pinchStartZoom = 100;
+  // Pinch-to-zoom — label + CSS scale live (full PDF.js paint slow → debounced); release par crisp paint.
+
+  const endPinchAndCommitPaint = () => {
+    if (!pinchActive) {
+      pinchStartDist = 0;
+      return;
+    }
+    pinchActive = false;
+    pinchStartDist = 0;
+    clearPinchVisualScale();
+    if (!pdfPaintAtZoom || previewCancelled.v) return;
+    if (zoomRerenderTimer != null) {
+      clearTimeout(zoomRerenderTimer);
+      zoomRerenderTimer = null;
+    }
+    void pdfPaintAtZoom(zoomPercent);
+  };
+
   const touchDist = (t: TouchList) => {
     if (t.length < 2) return 0;
     const dx = t[0].clientX - t[1].clientX;
@@ -406,6 +443,12 @@ export function showInAppPdfPreview(
     "touchstart",
     (ev) => {
       if (!usePdfJs || ev.touches.length !== 2) return;
+      if (zoomRerenderTimer != null) {
+        clearTimeout(zoomRerenderTimer);
+        zoomRerenderTimer = null;
+      }
+      clearPinchVisualScale();
+      pinchActive = true;
       pinchStartDist = touchDist(ev.touches);
       pinchStartZoom = zoomPercent;
     },
@@ -414,19 +457,28 @@ export function showInAppPdfPreview(
   scrollHost.addEventListener(
     "touchmove",
     (ev) => {
-      if (!usePdfJs || ev.touches.length !== 2 || pinchStartDist <= 0) return;
+      if (!usePdfJs || !pinchActive || ev.touches.length !== 2 || pinchStartDist <= 0) return;
       const d = touchDist(ev.touches);
       if (d <= 0) return;
       const ratio = d / pinchStartDist;
-      setZoom(pinchStartZoom * ratio);
+      const next = clampZoom(pinchStartZoom * ratio);
+      zoomPercent = next;
+      updateZoomLabel();
+      const base = Math.max(1, committedPaintZoomPercent);
+      zoomInner.style.transformOrigin = "center top";
+      zoomInner.style.willChange = "transform";
+      zoomInner.style.transition = "none";
+      zoomInner.style.transform = `scale(${next / base})`;
     },
     { passive: true }
   );
-  scrollHost.addEventListener("touchend", () => {
-    pinchStartDist = 0;
+  scrollHost.addEventListener("touchend", (ev) => {
+    if (!pinchActive) return;
+    if (ev.touches.length >= 2) return;
+    endPinchAndCommitPaint();
   });
   scrollHost.addEventListener("touchcancel", () => {
-    pinchStartDist = 0;
+    endPinchAndCommitPaint();
   });
 
   // Ctrl + wheel zoom (desktop / trackpad)

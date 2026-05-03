@@ -16,6 +16,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { firestore } from "@/lib/firebase";
+import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
+import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
@@ -262,17 +268,25 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
                   </FormItem>
                 )}
               />
-               <DialogFooter className="mt-4">
+               <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                   <DialogClose asChild>
-                      <Button variant="ghost">Cancel</Button>
+                    <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>Cancel</Button>
                   </DialogClose>
-                   <Button type="button" variant="outline" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save & New
-                  </Button>
-                  <Button type="submit" disabled={isLoading || !companyId}>
+                  <div className="flex min-w-0 flex-1 justify-center px-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
+                      onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
+                      disabled={isLoading}
+                    >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Create Group
+                      Save & New
+                    </Button>
+                  </div>
+                  <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Create Group
                   </Button>
               </DialogFooter>
             </form>

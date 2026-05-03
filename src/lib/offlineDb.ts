@@ -3,8 +3,8 @@
 /** Shared IndexedDB for offline data (companies, pending files). */
 const BASE_DB_NAME = "pocket-ledger-pending";
 // Browser me pehle se zyada version ho to `open(..., 2)` fail: "requested version < existing".
-// Purane builds ne 7 tak bump kiya tha — yahan kabhi isse neeche mat karo.
-const DB_VERSION = 8;
+// Purane builds ne 8 tak bump kiya — v9 `offlineAttachmentBlobs`: warm-sync attachment bytes cache.
+const DB_VERSION = 9;
 
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -34,6 +34,8 @@ export function openDB(): Promise<IDBDatabase> {
         "pendingMasterIdMappings",
         "cachedCompanies",
         "cachedCompanyCollections",
+        /** HTTPS attachment blobs — online full warm → offline preview */
+        "offlineAttachmentBlobs",
       ] as const;
       for (const name of storesWithIdKey) {
         if (!db.objectStoreNames.contains(name)) {

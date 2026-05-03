@@ -14,6 +14,10 @@ import type { Staff, StaffGroup } from "@/components/staff/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -223,10 +227,10 @@ export default function DesktopStaffStatementPage() {
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const reportDisplayTransactions = useMemo(() => {
-    if (hasDateFilter) return processedTransactions;
+    if (hasDateFilter || isMobile) return processedTransactions;
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
-  }, [processedTransactions, hasDateFilter]);
+  }, [processedTransactions, hasDateFilter, isMobile]);
 
   const filteredReportTransactions = useMemo(() => {
     if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -240,6 +244,23 @@ export default function DesktopStaffStatementPage() {
     });
   }, [reportDisplayTransactions, transactionSearch]);
 
+  const staffStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}`;
+  const {
+    pagingMeta: staffStatementMobilePaging,
+    pagerPage: staffReportPagerPage,
+    setPagerPage: setStaffReportPagerPage,
+    rowsPerPage: staffReportRowsPerPage,
+    setRowsPerPage: setStaffReportRowsPerPage,
+  } = useStatementReportMobilePaging({
+    filteredRows: filteredReportTransactions,
+    isMobile,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    resetKey: staffStatementMobilePagingKey,
+  });
+
   const { summaryData } = useMemo(() => {
     const emptyData = {
       summaryData: { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0, addSalary: 0 },
@@ -251,11 +272,16 @@ export default function DesktopStaffStatementPage() {
       .filter((v) => v.type === "journal" && v.subType === "add_salary")
       .reduce((sum, v) => sum + (v.total || 0), 0);
 
+    const payIn = entityVouchers.filter((v) => v.type === "payment_in").reduce((sum, v) => sum + (v.amount || 0), 0);
+    const payOut = entityVouchers.filter((v) => v.type === "payment_out").reduce((sum, v) => sum + (v.amount || 0), 0);
+    // Salary journal `add_salary` Money In chip me shamil nahi (helper me skip).
+    const { moneyIn, moneyOut } = mergePaymentAndLedgerJournalContraFlows(payIn, payOut, entityVouchers);
+
     const summary = {
       sales: entityVouchers.filter((v) => v.type === "sale").reduce((sum, v) => sum + (v.total || 0), 0),
       purchases: entityVouchers.filter((v) => v.type === "purchase").reduce((sum, v) => sum + (v.total || 0), 0),
-      moneyIn: entityVouchers.filter((v) => v.type === "payment_in").reduce((sum, v) => sum + (v.amount || 0), 0),
-      moneyOut: entityVouchers.filter((v) => v.type === "payment_out").reduce((sum, v) => sum + (v.amount || 0), 0),
+      moneyIn,
+      moneyOut,
       addSalary,
     };
 
@@ -401,7 +427,8 @@ export default function DesktopStaffStatementPage() {
   };
 
   const dateRangeLabel = useMemo(() => {
-    if (!hasDateFilter) return "Last 10 Txns";
+    // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
+    if (!hasDateFilter) return "All Time";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -435,7 +462,7 @@ export default function DesktopStaffStatementPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
             {activeEntity?.name ? (
               <>
                 <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -450,9 +477,19 @@ export default function DesktopStaffStatementPage() {
               </>
             ) : null}
           </div>
-          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
-          </span>
+          {activeEntity?.name ? (
+            <div className="flex-shrink-0" aria-hidden>
+              {selectedStaff ? (
+                <ReportStatementHeaderAvatar
+                  kind="staff"
+                  displayName={activeEntity.name}
+                  fileUrl={selectedStaff.fileUrl}
+                />
+              ) : (
+                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-center items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -603,18 +640,22 @@ export default function DesktopStaffStatementPage() {
               ))}
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
               {isMobile ? (
-                <div className="pb-24">
+                <div className="pb-4">
                   <TransactionsTable
-                    transactions={filteredReportTransactions}
+                    transactions={staffStatementMobilePaging.pageTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={staffStatementMobilePaging.openingForPage}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
                     openingBalanceLabel="Opening"
+                    periodDr={staffStatementMobilePaging.periodDrForPage}
+                    periodCr={staffStatementMobilePaging.periodCrForPage}
+                    closingBalance={staffStatementMobilePaging.closingForPage}
                     openingBalanceSearch={
                       <Input
                         placeholder="Search..."
@@ -645,6 +686,25 @@ export default function DesktopStaffStatementPage() {
                   }
                 />
               )}
+            </div>
+            {isMobile && view === "list" && (
+              <MobileTransactionsPager
+                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                currentPage={staffReportPagerPage}
+                totalItems={filteredReportTransactions.length}
+                rowsPerPage={staffReportRowsPerPage}
+                onPageChange={setStaffReportPagerPage}
+                onRowsPerPageChange={(n) => {
+                  setStaffReportRowsPerPage(n);
+                  setStaffReportPagerPage(1);
+                }}
+                edgeCounts={
+                  staffStatementMobilePaging.edges.before > 0 || staffStatementMobilePaging.edges.after > 0
+                    ? staffStatementMobilePaging.edges
+                    : undefined
+                }
+              />
+            )}
             </div>
           </>
         )}

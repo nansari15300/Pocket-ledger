@@ -17,7 +17,10 @@ import {
   sniffBlobKindForPreview,
 } from "@/lib/attachmentFormatLabel";
 import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
-import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
+import {
+  getOfflineCachedAttachmentBlob,
+  getRemoteAttachmentBlobPreferOfflineCache,
+} from "@/lib/offlineAttachmentUrlCache";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { getBlobFromLocalFileRef, getPendingPayloadForLocalRef, isLocalFileRef, LOCAL_FILE_PREFIX } from "@/lib/localPendingFiles";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
@@ -116,9 +119,17 @@ export async function prewarmPdfThumbnailsForGallery(
         if (!res.ok) continue;
         pdfFile = await res.blob();
       } else if (u.startsWith("http") || u.startsWith("blob:")) {
-        const res = await fetch(u, { mode: "cors", signal });
-        if (!res.ok) continue;
-        pdfFile = await res.blob();
+        // Full warm sync ne IndexedDB me jo PDF cache kiya ho — gallery hover turant
+        let pdfFileHttp: Blob | null = null;
+        if (u.startsWith("http")) {
+          pdfFileHttp = await getRemoteAttachmentBlobPreferOfflineCache(u, signal);
+        }
+        if (!pdfFileHttp || pdfFileHttp.size === 0) {
+          const res = await fetch(u, { mode: "cors", signal });
+          if (!res.ok) continue;
+          pdfFileHttp = await res.blob();
+        }
+        pdfFile = pdfFileHttp;
       } else {
         continue;
       }
@@ -140,6 +151,11 @@ async function fetchBlobWithTimeout(
   timeoutMs: number,
   signal?: AbortSignal
 ): Promise<Blob> {
+  // Online warm sync cache — offline pe bina network PDF thumb
+  if (input.startsWith("http://") || input.startsWith("https://")) {
+    const warm = await getOfflineCachedAttachmentBlob(input);
+    if (warm && warm.size > 0) return warm;
+  }
   // APK/static: hung network calls should fail fast so thumbnail UI doesn't spin forever.
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -312,7 +328,8 @@ export function FilePreview({
           // Pehle signed URL → SDK+fetch helper (CORS + naya `*.firebasestorage.app` host); phir direct getBlob — sirf getBlob+5s pe web "online" preview fail hota tha.
           let resolved: Blob | null = null;
           if (pdfUrl.startsWith("http")) {
-            resolved = await tryGetBlobFromFirebaseStorageDownloadUrl(pdfUrl, signal);
+            // Pehle warm-sync IndexedDB; phir SDK/getBlob path (helper se bytes background cache)
+            resolved = await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal);
           }
           if (!resolved) {
             try {
@@ -348,15 +365,12 @@ export function FilePreview({
           const response = await fetch(pdfUrl, { signal });
           pdfFile = await response.blob();
         } else if (pdfUrl.startsWith("http")) {
-          // SDK: auth + naya Storage URL; fetch WebView/CORS ma atkincha / spinner stuck
-          const fromSdk = storage
-            ? await tryGetBlobFromFirebaseStorageDownloadUrl(pdfUrl, signal)
-            : null;
-          if (fromSdk) {
-            pdfFile = fromSdk;
-          } else {
-            pdfFile = await fetchBlobWithTimeout(pdfUrl, PDF_REMOTE_FETCH_TIMEOUT_MS, signal);
-          }
+          // Warm cache → SDK/fetch (timeout wala fallback jab helper null)
+          const hydrated = await getRemoteAttachmentBlobPreferOfflineCache(pdfUrl, signal);
+          pdfFile =
+            hydrated && hydrated.size > 0
+              ? hydrated
+              : await fetchBlobWithTimeout(pdfUrl, PDF_REMOTE_FETCH_TIMEOUT_MS, signal);
         } else {
           setIsPdfLoading(false);
           return;
@@ -483,7 +497,8 @@ export function FilePreview({
                 /* Range/CORS — neeche pura blob */
               }
               if ((!probe || probe.size === 0) && !controller.signal.aborted) {
-                probe = await tryGetBlobFromFirebaseStorageDownloadUrl(file, controller.signal);
+                // Warm-sync cache pehle; phir lamba fallback (full warm IndexedDB offline sniff)
+                probe = await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal);
               }
               if ((!probe || probe.size === 0) && !controller.signal.aborted) {
                 probe = await fetchBlobWithTimeout(file, PDF_REMOTE_FETCH_TIMEOUT_MS, controller.signal);

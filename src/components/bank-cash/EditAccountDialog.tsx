@@ -25,7 +25,13 @@ import { firestore } from "@/lib/firebase";
 import Link from "next/link";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
@@ -101,6 +107,12 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const { toast } = useToast();
   const { user } = useAuth();
   const { company, companyId } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { processedAccountGroups } = useVouchers();
   const processedAccountGroupsRef = useRef(processedAccountGroups);
   processedAccountGroupsRef.current = processedAccountGroups;
@@ -199,8 +211,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    // Static/local: voucher hook cache — Firestore listener se pehle (CreateBankAccountDialog jaisa offline-safe)
-    if (isLocalOnlyMode()) {
+    /** APK/local lane groups cache se; Firestore company par snapshot (`apkEntityWriteUsesLocalSqliteMirror`). */
+    if (localSqlMirror) {
       setGroups((processedAccountGroups as AccountGroup[]) || []);
       return;
     }
@@ -220,7 +232,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       }
     );
     return () => unsubscribe();
-  }, [isOpen, companyId, processedAccountGroups]);
+  }, [isOpen, companyId, processedAccountGroups, localSqlMirror]);
 
   useEffect(() => {
     if (isOpen) {
@@ -262,10 +274,16 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
 
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const accountRefSnap = account;
+
+    setIsOpen(false); // Bank/cash edit band turant; static/APK shield + writes async
 
     void (async () => {
       // Static ledger: wide desktop guard (voucher jaisa) + company pin — save async ke baad `/dashboard`/picker jump
@@ -317,7 +335,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               documentFiles: needNewDocsUpload ? newDocFiles : [],
             });
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!isLocalOnlyMode()) {
+          if (!localSqlMirror) {
             st = await runRemote();
           } else if (typeof navigator !== "undefined" && navigator.onLine) {
             try {
@@ -354,8 +372,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
         };
 
-        // Static / local company: IndexedDB + outbox — `updateDoc` network par fail hota tha
-        if (isLocalOnlyMode()) {
+        // Static / APK local lane: IndexedDB + outbox — hybrid Firestore company par `updateDoc` neeche
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "bank_accounts", accountRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: accountRefSnap.id,
@@ -381,7 +399,6 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
               out: values.useFor?.out || [],
             } as { in: string[]; out: string[] },
           });
-          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Account Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.accountName}" saved locally.` : `"${values.accountName}" has been successfully updated.`,
@@ -416,7 +433,6 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
             out: values.useFor?.out || [],
           } as { in: string[]; out: string[] },
         });
-        setIsOpen(false);
         sonnerToast.success("Account Updated!", { id: toastId, description: `"${values.accountName}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating account:", error);
@@ -435,6 +451,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This account has transactions and cannot be deleted." });
       setIsDeleteDialogOpen(false);
@@ -447,10 +468,33 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
           armDashboardRedirectGuard(router, { isMobile: isMobile || isStaticAppBuild() });
           beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
         }
-        await updateDoc(doc(firestore, `companies/${companyId}/bank_accounts`, account.id), {
+        if (localSqlMirror) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "bank_accounts", account.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: account.id,
+            companyId,
+            balance: account.balance,
+            debit: account.debit,
+            credit: account.credit,
+            isDeleted: false,
+            ownerId: (account as { ownerId?: string }).ownerId,
+            accountName: account.accountName,
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: account.id,
+            companyId,
+            isDeleted: true,
+            deletedAt: new Date(),
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "bank_accounts", account.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "bank_accounts", "update", account.id, payload);
+        } else {
+          await updateDoc(doc(firestore, `companies/${companyId}/bank_accounts`, account.id), {
             isDeleted: true,
             deletedAt: serverTimestamp()
-        });
+          });
+        }
         toast({ title: "Account Moved to Bin", description: `"${account.accountName}" has been moved to the recycle bin.`});
         onAccountDeleted(account.id);
         setIsOpen(false);
@@ -856,35 +900,45 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                 />
             </div>
 
-              <DialogFooter className="mt-0 shrink-0 grid grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
-                </DialogClose>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0}>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setIsDeleteDialogOpen(true)}
-                          disabled={hasTransactions}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {hasTransactions && (
-                      <TooltipContent>
-                        <p>Cannot delete an account with existing transactions.</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1">
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
                   </Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={hasTransactions || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {hasTransactions && (
+                        <TooltipContent>
+                          <p>Cannot delete an account with existing transactions.</p>
+                        </TooltipContent>
+                      )}
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Changes
+                </Button>
               </DialogFooter>
             </form>
           </Form>
@@ -901,8 +955,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
+                <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
                     Move to Bin
                 </AlertDialogAction>
             </AlertDialogFooter>

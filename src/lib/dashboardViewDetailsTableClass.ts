@@ -1,6 +1,7 @@
 /**
- * Global `Table`/`TableRow` (ui/table.tsx) 3px black dividers — dashboard "View Details" dialogs me patla neutral line.
+ * Global `Table`/`TableRow` (ui/table.tsx) 3px black dividers — dashboard neutral line (1px via !important).
  * `<Table className={cn(..., DASHBOARD_VIEW_DETAILS_TABLE_CN)}>` se tbody/thead/tfoot override.
+ * "View Details" modals: root `dashboard-financial-popup` (globals.css) in lines ~0.4px tak patli karta hai.
  */
 export const DASHBOARD_VIEW_DETAILS_TABLE_CN =
   "[&_tbody_tr]:!border-b-[1px] [&_tbody_tr]:!border-border/65 [&_tbody_tr]:!border-black/0 " +

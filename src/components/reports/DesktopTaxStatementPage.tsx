@@ -14,6 +14,10 @@ import type { Tax, TaxGroup } from "@/components/tax/types";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -221,11 +225,12 @@ export default function DesktopTaxStatementPage() {
   );
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
+  // Mobile: poori list paging ke liye; desktop bina filter = last 10 (Party/Tax report pattern).
   const reportDisplayTransactions = useMemo(() => {
-    if (hasDateFilter) return processedTransactions;
+    if (hasDateFilter || isMobile) return processedTransactions;
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
-  }, [processedTransactions, hasDateFilter]);
+  }, [processedTransactions, hasDateFilter, isMobile]);
 
   const filteredReportTransactions = useMemo(() => {
     if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -239,6 +244,24 @@ export default function DesktopTaxStatementPage() {
     });
   }, [reportDisplayTransactions, transactionSearch]);
 
+  // Entity / date / search badle to page 1 — tail-window pager Party report jaisa.
+  const taxStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}`;
+  const {
+    pagingMeta: taxStatementMobilePaging,
+    pagerPage: taxReportPagerPage,
+    setPagerPage: setTaxReportPagerPage,
+    rowsPerPage: taxReportRowsPerPage,
+    setRowsPerPage: setTaxReportRowsPerPage,
+  } = useStatementReportMobilePaging({
+    filteredRows: filteredReportTransactions,
+    isMobile,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    resetKey: taxStatementMobilePagingKey,
+  });
+
   const { summaryData } = useMemo(() => {
     const emptyData = {
       summaryData: { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 },
@@ -246,11 +269,15 @@ export default function DesktopTaxStatementPage() {
     if (!activeEntity) return emptyData;
     const entityVouchers = processedTransactions;
 
+    const pin = entityVouchers.filter((v) => v.type === "payment_in").reduce((sum, v) => sum + (v.amount || 0), 0);
+    const pout = entityVouchers.filter((v) => v.type === "payment_out").reduce((sum, v) => sum + (v.amount || 0), 0);
+    const { moneyIn, moneyOut } = mergePaymentAndLedgerJournalContraFlows(pin, pout, entityVouchers);
+
     const summary = {
       sales: entityVouchers.filter((v) => v.type === "sale").reduce((sum, v) => sum + (v.total || 0), 0),
       purchases: entityVouchers.filter((v) => v.type === "purchase").reduce((sum, v) => sum + (v.total || 0), 0),
-      moneyIn: entityVouchers.filter((v) => v.type === "payment_in").reduce((sum, v) => sum + (v.amount || 0), 0),
-      moneyOut: entityVouchers.filter((v) => v.type === "payment_out").reduce((sum, v) => sum + (v.amount || 0), 0),
+      moneyIn,
+      moneyOut,
     };
 
     return { summaryData: summary };
@@ -396,7 +423,8 @@ export default function DesktopTaxStatementPage() {
   };
 
   const dateRangeLabel = useMemo(() => {
-    if (!hasDateFilter) return "Last 10 Txns";
+    // Entity report header row-2 — Party statement jaisa "All Time"; last-10 desktop slice alag logic.
+    if (!hasDateFilter) return "All Time";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -429,13 +457,13 @@ export default function DesktopTaxStatementPage() {
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
       <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
-        {/* Row 1: Back | Title | Showing X of Y voucher(s) */}
+        {/* Row 1: shared entity-report chrome — avatar daen; "Showing …" removed */}
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
             {activeEntity?.name ? (
               <>
                 <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -450,9 +478,19 @@ export default function DesktopTaxStatementPage() {
               </>
             ) : null}
           </div>
-          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            Showing {reportDisplayTransactions.length} of {processedTransactions.length} voucher(s)
-          </span>
+          {activeEntity?.name ? (
+            <div className="flex-shrink-0" aria-hidden>
+              {selectedTax ? (
+                <ReportStatementHeaderAvatar
+                  kind="tax"
+                  displayName={activeEntity.name}
+                  fileUrl={selectedTax.fileUrl}
+                />
+              ) : (
+                <ReportStatementHeaderAvatar kind="group" displayName={activeEntity.name} />
+              )}
+            </div>
+          ) : null}
         </div>
         {/* Row 2: Date range label (All Time or range) + reset icon when filtered */}
         <div className="flex justify-center items-center gap-2">
@@ -597,18 +635,22 @@ export default function DesktopTaxStatementPage() {
               ))}
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
               {isMobile ? (
-                <div className="pb-24">
+                <div className="pb-4">
                   <TransactionsTable
-                    transactions={filteredReportTransactions}
+                    transactions={taxStatementMobilePaging.pageTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={taxStatementMobilePaging.openingForPage}
                     userNames={userNames}
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
                     openingBalanceLabel="Opening"
+                    periodDr={taxStatementMobilePaging.periodDrForPage}
+                    periodCr={taxStatementMobilePaging.periodCrForPage}
+                    closingBalance={taxStatementMobilePaging.closingForPage}
                     openingBalanceSearch={
                       <Input
                         placeholder="Search..."
@@ -641,6 +683,26 @@ export default function DesktopTaxStatementPage() {
                   isTaxContext={true}
                 />
               )}
+            </div>
+            {/* mb-12: fixed footer + FAB overlap avoid — Party report pattern */}
+            {isMobile && view === "list" && (
+              <MobileTransactionsPager
+                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                currentPage={taxReportPagerPage}
+                totalItems={filteredReportTransactions.length}
+                rowsPerPage={taxReportRowsPerPage}
+                onPageChange={setTaxReportPagerPage}
+                onRowsPerPageChange={(n) => {
+                  setTaxReportRowsPerPage(n);
+                  setTaxReportPagerPage(1);
+                }}
+                edgeCounts={
+                  taxStatementMobilePaging.edges.before > 0 || taxStatementMobilePaging.edges.after > 0
+                    ? taxStatementMobilePaging.edges
+                    : undefined
+                }
+              />
+            )}
             </div>
           </>
         )}

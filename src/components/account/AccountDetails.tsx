@@ -23,14 +23,17 @@ import {
   ChevronsRight,
   FilePlus,
   XCircle,
+  X,
   MoreVertical,
   ArrowLeft,
   Search,
   Wrench,
   Columns3,
   ChevronDown,
+  File,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
+import * as XLSX from "xlsx";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format, startOfDay, endOfDay, isSameDay } from "date-fns";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
@@ -44,12 +47,11 @@ import {
   DrawerContent,
   DrawerHeader,
   DrawerTitle,
-  DrawerTrigger,
   DrawerDescription as MobileDialogDescription,
   DrawerClose,
   DrawerFooter,
 } from "@/components/ui/drawer";
-import { cn } from "@/lib/utils";
+import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Select,
@@ -96,6 +98,7 @@ import { calendarPanelClassName } from "@/lib/calendarChrome";
 import type { BSDate } from "@/lib/bs-date";
 import { Badge } from "../ui/badge";
 import { useVouchers } from "@/hooks/useVouchers";
+import { PermissionButton } from "@/components/permission";
 
 interface AccountDetailsProps {
   account: Account;
@@ -110,6 +113,10 @@ interface AccountDetailsProps {
   journalAccountNames?: Record<string, string>;
   onShowAll?: () => void;
   isAllVouchersView?: boolean;
+  /** Bank-cash mobile: Receive/Pay row. Reports Contra/Journal: Party-style Print/Excel/Date footer. */
+  mobileFooterVariant?: "ledger" | "report";
+  /** Sticky title with `mobileFooterVariant="report"` (e.g. Contra / Journal register detail). */
+  mobileReportStickyTitle?: string;
 }
 
 export function AccountDetails({
@@ -124,7 +131,9 @@ export function AccountDetails({
   transactions,
   journalAccountNames,
   onShowAll,
-  isAllVouchersView
+  isAllVouchersView,
+  mobileFooterVariant = "ledger",
+  mobileReportStickyTitle,
 }: AccountDetailsProps) {
   const { company, companyId } = useCompany();
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatRunning } =
@@ -315,7 +324,54 @@ export function AccountDetails({
       billWise: true,
     }, true);
   };
-  
+
+  // Reports hub: Excel export mirrors bank statement column shape (opening / totals footer rows).
+  const handleExcelLedger = useCallback(() => {
+    const dataForExport = processedTransactions.map((t: Record<string, unknown>) => {
+      const dRaw = (t as { date?: { toDate?: () => Date } }).date;
+      const d = dRaw?.toDate ? dRaw.toDate() : new Date((t as { date?: unknown }).date as string | number | Date);
+      return {
+        "Date (BS)": formatDateBS(d),
+        "Date (AD)": formatDate(d),
+        "Voucher No.": (t as { voucherNumber?: string }).voucherNumber,
+        Type:
+          typeof (t as { type?: string }).type === "string"
+            ? ((t as { type: string }).type || "").replace(/_/g, " ")
+            : String((t as { type?: unknown }).type ?? ""),
+        Narration: String((t as { narration?: string }).narration || ""),
+        Debit: Number((t as { debit?: number }).debit) || 0,
+        Credit: Number((t as { credit?: number }).credit) || 0,
+        Balance: `${Math.abs(Number((t as { balance?: number }).balance) || 0).toFixed(2)} ${((t as { balance?: number }).balance ?? 0) >= 0 ? "Dr" : "Cr"}`,
+      };
+    });
+    const summaryRows = [
+      {
+        "Date (BS)": "Opening Balance",
+        Balance: `${Math.abs(openingBalanceForPeriod).toFixed(2)} ${openingBalanceForPeriod >= 0 ? "Dr" : "Cr"}`,
+      },
+      { "Date (BS)": "Total", Debit: periodDr, Credit: periodCr },
+      {
+        "Date (BS)": "Closing Balance",
+        Balance: `${Math.abs(closingBalance).toFixed(2)} ${closingBalance >= 0 ? "Dr" : "Cr"}`,
+      },
+    ];
+    const finalData = [...dataForExport, {}, ...summaryRows] as Record<string, unknown>[];
+    const worksheet = XLSX.utils.json_to_sheet(finalData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ledger");
+    const safeName = (account.accountName || "account").replace(/[/\\?%*:|"<>]/g, "-");
+    XLSX.writeFile(workbook, `${safeName}_ledger.xlsx`);
+  }, [
+    processedTransactions,
+    formatDateBS,
+    formatDate,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    account.accountName,
+  ]);
+
   const balanceText = useMemo(() => {
     if (closingBalance === 0) return "Settled Up";
     return closingBalance >= 0 ? "Receivable" : "Payable";
@@ -401,142 +457,235 @@ export function AccountDetails({
   TransactionRow.displayName = 'TransactionRow';
 
 
-  const renderMobileView = () => (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden w-full">
-      {/* Mobile: scroll area extends to footer; inner pb-24 so last row clears fixed footer */}
-      <div className="p-2 border-b sticky top-0 bg-background z-10 space-y-3 flex-shrink-0">
-        <div className="bg-card p-3 rounded-lg flex items-center justify-between gap-2">
-            {onBack && (
-              <Button variant="ghost" size="icon" className="mr-2" onClick={onBack}>
-                <ArrowLeft className="h-5 w-5" />
-              </Button>
-            )}
-            <span className="text-sm font-medium text-muted-foreground flex-1">{balanceText}</span>
-            <span className={cn("text-2xl font-bold", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
-                {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
-            </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
-            <Combobox
-              options={allAccounts?.map(p => ({ value: p.id, label: p.accountName })) ?? []}
-              value={account?.id || ""}
-              onChange={(value) => {
-                  if (value && value !== account.id) {
-                      router.push(`/bank-cash/${value}`);
-                  }
-              }}
-              placeholder="Select an account"
-            />
-          </div>
-           <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="search transactions" className="pl-9 w-full" value={mobileSearchTerm} onChange={(e) => setMobileSearchTerm(e.target.value)} />
-            </div>
-        </div>
-      </div>
-      
-      {openingBalanceForPeriod !== 0 && (
-        <div className="bg-muted/30 p-3 m-4 rounded-lg">
-            <div className="flex justify-between items-center text-sm">
-                <p className="font-semibold text-muted-foreground">Opening Balance</p>
-                <Badge variant="secondary" className={cn("font-normal", openingBalanceForPeriod >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}>
-                    {formatCurrency(openingBalanceForPeriod, { showDrCr: true })}
-                </Badge>
-            </div>
-        </div>
-      )}
+  const renderMobileView = () => {
+    // `report`: Reports hub Contra/Journal — Party header + Print/Excel/Date; `ledger`: bank-cash quick voucher row.
+    const isReportChrome = mobileFooterVariant === "report";
+    const reportTitle = mobileReportStickyTitle ?? "Report";
+    const dateLineLabel = buildDateRangeText();
+    const hasDateFilterMobile = !!(dateRange?.from || dateRange?.to);
 
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="pb-24">
-        {filteredMobileTransactions.map((t: any) => (
-            <TransactionRow key={t.id} transaction={t} />
-        ))}
-        </div>
-      </ScrollArea>
-      
-        <div className="fixed bottom-0 left-0 right-0 p-2 border-t bg-background/80 backdrop-blur-sm z-50 flex items-center justify-around gap-2">
-             <AddVoucherDialog defaultTab="payment_in"><Button className="flex-1 bg-green-500 hover:bg-green-600 h-12 rounded-lg">Receive</Button></AddVoucherDialog>
-             <AddVoucherDialog defaultTab="payment_out"><Button className="flex-1 bg-red-500 hover:bg-red-600 h-12 rounded-lg">Pay</Button></AddVoucherDialog>
-             <AddVoucherDialog defaultTab="contra"><Button className="flex-1 bg-blue-500 hover:bg-blue-600 h-12 rounded-lg">Contra</Button></AddVoucherDialog>
-            <Drawer open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-              <DrawerTrigger asChild>
-                <Button variant="outline" size="icon" className="h-12 w-12 rounded-lg"><CalendarIcon /></Button>
-              </DrawerTrigger>
-              <DrawerContent>
-                 <DrawerHeader className="p-4 text-left">
-                    <DrawerTitle>Select Date Range</DrawerTitle>
-                    <MobileDialogDescription>
-                        Select a starting and ending date for the transaction list.
-                    </MobileDialogDescription>
-                </DrawerHeader>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
-                    {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                       <NepaliCalendar
-                          rangePresetSlot={
-                            <DateRangePresetRow
-                              country={company?.country}
-                              onApply={(r) => {
-                                onDateRangeChange(r);
-                                setIsCalendarOpen(false);
-                              }}
-                            />
-                          }
-                          onSelect={handleNepaliSelect}
-                          valueAD={dateRange}
-                          isRange={true}
-                          numberOfMonths={calendarMonths}
-                        />
+    const mobileCalendarDrawer = (
+      <Drawer open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+        <DrawerContent>
+          <DrawerHeader className="p-4 text-left">
+            <DrawerTitle>Select Date Range</DrawerTitle>
+            <MobileDialogDescription>Select a starting and ending date for the transaction list.</MobileDialogDescription>
+          </DrawerHeader>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+            {(dateSystem === "BS" || dateSystem === "Both") && (
+              <NepaliCalendar
+                rangePresetSlot={
+                  <DateRangePresetRow
+                    country={company?.country}
+                    onApply={(r) => {
+                      onDateRangeChange(r);
+                      setIsCalendarOpen(false);
+                    }}
+                  />
+                }
+                onSelect={handleNepaliSelect}
+                valueAD={dateRange}
+                isRange={true}
+                numberOfMonths={calendarMonths}
+              />
+            )}
+            {(dateSystem === "AD" || dateSystem === "Both") && (
+              <div className="flex-1">
+                <div
+                  className={cn(
+                    calendarPanelClassName,
+                    "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
+                      "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
                     )}
-                    {(dateSystem === 'AD' || dateSystem === 'Both') && (
-                      <div className="flex-1">
-                        <div
-                          className={cn(
-                            calendarPanelClassName,
-                            "max-h-[min(90dvh,720px)] overflow-y-auto overscroll-contain"
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "w-full border-b border-border pb-2 mb-2 -mt-0.5 shrink-0",
-                              "sticky top-0 z-10 -mx-1 px-1 bg-white dark:bg-card shadow-[0_4px_6px_-4px_rgba(0,0,0,0.12)]"
-                            )}
-                          >
-                            <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
-                              <DateRangePresetRow
-                                country={company?.country}
-                                onApply={(r) => {
-                                  onDateRangeChange(r);
-                                  setIsCalendarOpen(false);
-                                }}
-                              />
-                            </div>
-                          </div>
-                          <Calendar
-                            className="p-0 w-full"
-                            classNames={{ table: "w-full" }}
-                            initialFocus
-                            mode="range"
-                            defaultMonth={dateRange?.from}
-                            selected={asCalendarRange(dateRange)}
-                            onSelect={(range) => {
-                              if (onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
-                              if (range?.from && range.to) setIsCalendarOpen(false);
-                            }}
-                            numberOfMonths={calendarMonths}
-                          />
-                        </div>
-                      </div>
-                    )}
-                 </div>
-                 <DrawerFooter className="p-4 pt-2">
-                    <DrawerClose asChild><Button variant="outline">Close</Button></DrawerClose>
-                </DrawerFooter>
-              </DrawerContent>
-            </Drawer>
-        </div>
-    </div>
-  );
+                  >
+                    <div className="flex flex-wrap gap-1 sm:gap-1.5 justify-center sm:justify-start">
+                      <DateRangePresetRow
+                        country={company?.country}
+                        onApply={(r) => {
+                          onDateRangeChange(r);
+                          setIsCalendarOpen(false);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <Calendar
+                    className="p-0 w-full"
+                    classNames={{ table: "w-full" }}
+                    initialFocus
+                    mode="range"
+                    defaultMonth={dateRange?.from}
+                    selected={asCalendarRange(dateRange)}
+                    onSelect={(range) => {
+                      if (onDateRangeChange) onDateRangeChange(range as DateRange | undefined);
+                      if (range?.from && range.to) setIsCalendarOpen(false);
+                    }}
+                    numberOfMonths={calendarMonths}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          <DrawerFooter className="p-4 pt-2">
+            <DrawerClose asChild>
+              <Button variant="outline">Close</Button>
+            </DrawerClose>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+    );
+
+    return (
+      <div className="relative flex w-full min-h-0 flex-1 flex-col overflow-hidden">
+        {isReportChrome ? (
+          <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 border-b bg-white p-3">
+            <div className="flex min-w-0 items-center gap-2">
+              {onBack ? (
+                <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={onBack}>
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+              ) : null}
+              <div className="flex min-w-0 flex-1 items-center gap-1">
+                <h1 className="shrink-0 text-base font-bold text-muted-foreground">{reportTitle}</h1>
+                <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
+                  ·
+                </span>
+                <span
+                  className={cn("min-w-0 truncate text-sm font-medium", masterDetailBalanceToneClass(closingBalance))}
+                  title={account.accountName}
+                >
+                  {account.accountName}
+                </span>
+              </div>
+              <span className={cn("shrink-0 text-sm font-bold whitespace-nowrap", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(closingBalance, { showDrCr: true })}
+              </span>
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">{dateLineLabel}</span>
+              {hasDateFilterMobile ? (
+                <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" title="Clear date filter" onClick={() => onDateRangeChange(undefined)}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+            </div>
+            <div className="relative">
+              <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="search transactions"
+                className="w-full pl-9"
+                value={mobileSearchTerm}
+                onChange={(e) => setMobileSearchTerm(e.target.value)}
+              />
+            </div>
+          </header>
+        ) : (
+          <div className="sticky top-0 z-10 flex-shrink-0 space-y-3 border-b bg-background p-2">
+            <div className="bg-card flex items-center justify-between gap-2 rounded-lg p-3">
+              {onBack && (
+                <Button variant="ghost" size="icon" className="mr-2" onClick={onBack}>
+                  <ArrowLeft className="h-5 w-5" />
+                </Button>
+              )}
+              <span className="flex-1 text-sm font-medium text-muted-foreground">{balanceText}</span>
+              <span className={cn("text-2xl font-bold", closingBalance >= 0 ? "text-green-600" : "text-red-600")}>
+                {formatCurrency(Math.abs(closingBalance), { noSuffix: true })}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <Combobox
+                  options={allAccounts?.map((p) => ({ value: p.id, label: p.accountName })) ?? []}
+                  value={account?.id || ""}
+                  onChange={(value) => {
+                    if (value && value !== account.id) {
+                      router.push(`/bank-cash/${value}`);
+                    }
+                  }}
+                  placeholder="Select an account"
+                />
+              </div>
+              <div className="relative">
+                <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="search transactions"
+                  className="w-full pl-9"
+                  value={mobileSearchTerm}
+                  onChange={(e) => setMobileSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {openingBalanceForPeriod !== 0 && (
+          <div className="bg-muted/30 m-4 rounded-lg p-3">
+            <div className="flex items-center justify-between text-sm">
+              <p className="font-semibold text-muted-foreground">Opening Balance</p>
+              <Badge variant="secondary" className={cn("font-normal", openingBalanceForPeriod >= 0 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800")}>
+                {formatCurrency(openingBalanceForPeriod, { showDrCr: true })}
+              </Badge>
+            </div>
+          </div>
+        )}
+
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="pb-24">
+            {filteredMobileTransactions.map((t: any) => (
+              <TransactionRow key={t.id} transaction={t} />
+            ))}
+          </div>
+        </ScrollArea>
+
+        {mobileCalendarDrawer}
+
+        {isReportChrome ? (
+          <footer className="fixed bottom-0 left-0 right-0 z-50 flex items-stretch justify-around gap-1 border-t bg-white p-1.5">
+            <PermissionButton
+              permission="export_data"
+              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-green-500 py-1 text-white hover:bg-green-600"
+              onClick={handlePrintStatement}
+            >
+              <Printer className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Print</span>
+            </PermissionButton>
+            <PermissionButton
+              permission="export_data"
+              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-yellow-500 py-1 text-white hover:bg-yellow-600"
+              onClick={handleExcelLedger}
+            >
+              <File className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Excel</span>
+            </PermissionButton>
+            <Button
+              type="button"
+              className="flex min-w-0 flex-1 flex-col items-center justify-center rounded-md bg-slate-500 py-1 text-white hover:bg-slate-600"
+              onClick={() => setIsCalendarOpen(true)}
+            >
+              <CalendarIcon className="mb-0 h-4 w-4" /> <span className="text-[10px] leading-tight">Date</span>
+            </Button>
+          </footer>
+        ) : (
+          <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around gap-2 border-t bg-background/80 p-2 backdrop-blur-sm">
+            <AddVoucherDialog defaultTab="payment_in">
+              <Button className="h-12 flex-1 rounded-lg bg-green-500 hover:bg-green-600">Receive</Button>
+            </AddVoucherDialog>
+            <AddVoucherDialog defaultTab="payment_out">
+              <Button className="h-12 flex-1 rounded-lg bg-red-500 hover:bg-red-600">Pay</Button>
+            </AddVoucherDialog>
+            <AddVoucherDialog defaultTab="contra">
+              <Button className="h-12 flex-1 rounded-lg bg-blue-500 hover:bg-blue-600">Contra</Button>
+            </AddVoucherDialog>
+            <Button variant="outline" size="icon" className="h-12 w-12 rounded-lg" onClick={() => setIsCalendarOpen(true)}>
+              <CalendarIcon />
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderDesktopView = () => {
     // Exclude Contra and Journal from "Under Development" - they should show all transactions

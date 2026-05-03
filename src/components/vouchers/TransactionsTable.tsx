@@ -66,6 +66,22 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
 
+/** Firestore Timestamp | Date | string — opening / period row date columns ke liye */
+function normalizeLedgerObDateField(v: unknown): Date | null {
+  if (v == null || v === undefined) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  if (typeof (v as { toDate?: () => Date }).toDate === "function") {
+    try {
+      const d = (v as { toDate: () => Date }).toDate();
+      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  const p = new Date(v as string | number);
+  return isNaN(p.getTime()) ? null : p;
+}
+
 /** Spend-wise row grouping — mobile cards + desktop table must share shape; hooks using this stay above any conditional return. */
 type MobileBlock =
   | { type: "spacer" }
@@ -154,6 +170,12 @@ interface TransactionsTableProps {
   showItemPartyColumn?: boolean;
   /** When true (default), `isApproved` !== true rows get pink tint (main + narration). Party details use default. */
   highlightPendingApproval?: boolean;
+  /** Entity ledger: date filter on → Dated Opening pill; off → Book Opening. Reports omit = legacy `openingBalanceLabel`. */
+  ledgerDateFilterActive?: boolean;
+  /** With date filter: page-1 par Book Opening row dated ke upar; page>1 par sirf Dated row. */
+  ledgerShowBookOpeningRow?: boolean;
+  /** Range `from` — Dated Opening row ki Date column (BS/AD). */
+  openingBalancePeriodStartDate?: unknown;
 }
 
 export function TransactionsTable({
@@ -218,6 +240,9 @@ export function TransactionsTable({
   forceBalanceMode,
   showItemPartyColumn = true,
   highlightPendingApproval = true,
+  ledgerDateFilterActive,
+  ledgerShowBookOpeningRow = true,
+  openingBalancePeriodStartDate,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
@@ -548,6 +573,28 @@ export function TransactionsTable({
   const displayTotalDr = (displayPeriodDr || 0) + displayOpeningBalanceDr;
   const displayTotalCr = (displayPeriodCr || 0) + displayOpeningBalanceCr;
 
+  // Book vs Dated opening — header `EntityLedgerOpeningHints` ki jagah Type-column pill (`Book Opening` / `Dated Opening`).
+  const ledgerOpeningPillsEnabled =
+    typeof ledgerDateFilterActive === "boolean" &&
+    ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
+  const BOOK_OB_EPS = 5e-4;
+  const showBookOpeningAboveDatedRow =
+    ledgerOpeningPillsEnabled &&
+    Boolean(ledgerDateFilterActive) &&
+    ledgerShowBookOpeningRow &&
+    booksObScaled != null &&
+    Math.abs(booksObScaled) >= BOOK_OB_EPS;
+  const masterBookSignedScaled = booksObScaled ?? 0;
+  const bookRowOpeningDr = masterBookSignedScaled > 0 ? masterBookSignedScaled : 0;
+  const bookRowOpeningCr = masterBookSignedScaled < 0 ? Math.abs(masterBookSignedScaled) : 0;
+
+  /** Report / legacy jab `ledgerDateFilterActive` pass nahi: purana `openingBalanceLabel`; warna pills. */
+  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
+    ? ledgerDateFilterActive
+      ? "Dated Opening"
+      : "Book Opening"
+    : openingBalanceLabel;
+
   // Footer Formatters (Same Logic as Row). When balance is 0 show "Settled" (opening row + closing balance).
   const formatFooterBalance = (value: number) => {
     if (isBalanceMasked) return '*****';
@@ -608,21 +655,12 @@ export function TransactionsTable({
   /** Main OB `<tr>` aur narration `<tr>` ke beech double border na ho */
   const hasOpeningBalanceNarrationSubRow = showNarration && Boolean(openingBalanceNarrationTrimmed);
   /** Firestore Timestamp | Date | string — entity form ki "As on" date */
-  const openingBalanceRowDate = useMemo((): Date | null => {
-    const v = openingBalanceDate;
-    if (v == null || v === undefined) return null;
-    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-    if (typeof (v as { toDate?: () => Date }).toDate === "function") {
-      try {
-        const d = (v as { toDate: () => Date }).toDate();
-        return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-      } catch {
-        return null;
-      }
-    }
-    const p = new Date(v as string | number);
-    return isNaN(p.getTime()) ? null : p;
-  }, [openingBalanceDate]);
+  const openingBalanceRowDate = useMemo(() => normalizeLedgerObDateField(openingBalanceDate), [openingBalanceDate]);
+  /** Date filter start — sirf `Dated Opening` row ki date column */
+  const periodOpeningRowDate = useMemo(
+    () => normalizeLedgerObDateField(openingBalancePeriodStartDate),
+    [openingBalancePeriodStartDate]
+  );
   /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
   const openingBalanceNarrationColSpan =
     visibleColumns == null
@@ -650,42 +688,41 @@ export function TransactionsTable({
   );
   const showOpeningBalance = ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context) && !hasSpendWiseOpeningGroupRow;
 
-  // Prevent header/amount overlap — `openingBalanceDateRowCells` className ke liye pehle
+  // Prevent header/amount overlap — opening row cells helpers
   const ensureMinGaps = true;
 
-  /** Opening row dates — normal transaction row jaisa (muted/chhota mat) */
-  const openingBalanceDateRowCells =
+  /** Book row = entity "As on"; Dated row = range `from` (filter) ya phir same as book. */
+  const datedOpeningBalanceRowDate =
+    ledgerOpeningPillsEnabled && ledgerDateFilterActive ? periodOpeningRowDate : openingBalanceRowDate;
+
+  /** Opening row dates — normal transaction row jaisa */
+  const renderOpeningBalanceDateCells = (rowDate: Date | null) =>
     showOpeningBalance && showCol("date") ? (
       dateSystem === "Both" ? (
         <>
           <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-            {openingBalanceRowDate ? formatDateBS(openingBalanceRowDate) : ""}
+            {rowDate ? formatDateBS(rowDate) : ""}
           </TableCell>
           <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-            {openingBalanceRowDate ? formatDate(openingBalanceRowDate) : ""}
+            {rowDate ? formatDate(rowDate) : ""}
           </TableCell>
         </>
       ) : (
         <TableCell className={cn("align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
-          {openingBalanceRowDate
-            ? dateSystem === "AD"
-              ? formatDate(openingBalanceRowDate)
-              : formatDateBS(openingBalanceRowDate)
-            : ""}
+          {rowDate ? (dateSystem === "AD" ? formatDate(rowDate) : formatDateBS(rowDate)) : ""}
         </TableCell>
       )
     ) : null;
 
-  /** Type / voucher / user columns — alag cells taaki narration row date ke neeche left align ho */
-  const openingBalanceMainMiddleCells = (
+  const renderOpeningBalanceMiddleCells = (pillLabel: string, showSearchSlot: boolean) => (
     <>
       {showCol("type") && (
         <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
           <div className="flex flex-wrap items-center gap-2">
-            {openingBalanceLeftContent}
-            {openingBalanceSearch}
+            {showSearchSlot ? openingBalanceLeftContent : null}
+            {showSearchSlot ? openingBalanceSearch : null}
             <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
-              {openingBalanceLabel}
+              {pillLabel}
             </Badge>
           </div>
         </TableCell>
@@ -1100,33 +1137,75 @@ export function TransactionsTable({
     return (
       <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
         {showOpeningBalance && (
-          <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
-            <div className="flex justify-between items-start gap-2 min-w-0">
-              {/* OB date: entity form "As on" — statement card par bhi header ke niche */}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
-                <div className="flex items-center gap-2 min-w-0">
-                  {openingBalanceLeftContent}
-                  {openingBalanceSearch}
-                  {/* Desktop table jaisa: Type column pill, chhota gray bold heading nahi */}
-                  <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
-                    {openingBalanceLabel}
-                  </Badge>
+          <>
+            {/* Date filter + alag master OB: pehle Book Opening card (search/search slot sirf neeche wale Dated card par) */}
+            {showBookOpeningAboveDatedRow ? (
+              <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
+                <div className="flex justify-between items-start gap-2 min-w-0">
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
+                    <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium w-fit">
+                      Book Opening
+                    </Badge>
+                    {showCol("date") && openingBalanceRowDate ? (
+                      <p className="text-sm font-medium text-foreground">
+                        {dateSystem === "Both" ? (
+                          <>
+                            {formatDateBS(openingBalanceRowDate)} <span className="opacity-70">·</span>{" "}
+                            {formatDate(openingBalanceRowDate)}
+                          </>
+                        ) : dateSystem === "AD" ? (
+                          formatDate(openingBalanceRowDate)
+                        ) : (
+                          formatDateBS(openingBalanceRowDate)
+                        )}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="shrink-0 flex flex-col items-end gap-0.5">
+                    <span className={cn(
+                      "text-sm font-bold px-2 py-0.5 rounded-md",
+                      masterBookSignedScaled >= 0 ? "text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-200" : "text-red-700 bg-red-100 dark:bg-red-900/40 dark:text-red-200"
+                    )}>
+                      {context === "item" && stockView === "qty" && item
+                        ? `${formatQuantity(Math.abs(masterBookSignedScaled))} ${displayUnit || ""}`
+                        : `${formatCurrency(Math.abs(masterBookSignedScaled), { noSuffix: true, context: "transaction", noAnimation: true })} ${masterBookSignedScaled >= 0 ? "Dr" : "Cr"}`}
+                    </span>
+                  </div>
                 </div>
-                {showCol("date") && openingBalanceRowDate ? (
-                  <p className="text-sm font-medium text-foreground">
-                    {dateSystem === "Both" ? (
-                      <>
-                        {formatDateBS(openingBalanceRowDate)} <span className="opacity-70">·</span>{" "}
-                        {formatDate(openingBalanceRowDate)}
-                      </>
-                    ) : dateSystem === "AD" ? (
-                      formatDate(openingBalanceRowDate)
-                    ) : (
-                      formatDateBS(openingBalanceRowDate)
-                    )}
-                  </p>
-                ) : null}
-              </div>
+              </Card>
+            ) : null}
+            {showBookOpeningAboveDatedRow && showNarration && openingBalanceNarrationTrimmed ? (
+              <p className="mt-1 pl-0 text-[11px] leading-tight text-black break-words whitespace-normal line-clamp-none min-w-0 w-full px-0.5">
+                <span className="not-italic font-normal">Narration:</span>{" "}
+                <span className="whitespace-pre-wrap font-normal">{openingBalanceNarrationTrimmed}</span>
+              </p>
+            ) : null}
+            <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
+              <div className="flex justify-between items-start gap-2 min-w-0">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {openingBalanceLeftContent}
+                    {openingBalanceSearch}
+                    {/* Table ke Type column pill: Book/Dated/`openingBalanceLabel` (reports) */}
+                    <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
+                      {primaryOpeningRowPillText}
+                    </Badge>
+                  </div>
+                  {showCol("date") && datedOpeningBalanceRowDate ? (
+                    <p className="text-sm font-medium text-foreground">
+                      {dateSystem === "Both" ? (
+                        <>
+                          {formatDateBS(datedOpeningBalanceRowDate)} <span className="opacity-70">·</span>{" "}
+                          {formatDate(datedOpeningBalanceRowDate)}
+                        </>
+                      ) : dateSystem === "AD" ? (
+                        formatDate(datedOpeningBalanceRowDate)
+                      ) : (
+                        formatDateBS(datedOpeningBalanceRowDate)
+                      )}
+                    </p>
+                  ) : null}
+                </div>
               <div className="shrink-0 flex flex-col items-end gap-0.5">
                 {/* Bill-wise: show main amount (full OB) on top like normal transaction, then balance (outstanding) below. */}
                 {isBillWiseCardContext && obOutstandingDisplay != null ? (
@@ -1186,14 +1265,15 @@ export function TransactionsTable({
                   </>
                 )}
               </div>
-            </div>
-            {showNarration && openingBalanceNarrationTrimmed ? (
+              </div>
+            {!showBookOpeningAboveDatedRow && showNarration && openingBalanceNarrationTrimmed ? (
               <p className="mt-1.5 pl-0 text-[11px] leading-tight text-black break-words whitespace-normal line-clamp-none min-w-0 w-full">
                 <span className="not-italic font-normal">Narration:</span>{" "}
                 <span className="whitespace-pre-wrap font-normal">{openingBalanceNarrationTrimmed}</span>
               </p>
             ) : null}
           </Card>
+          </>
         )}
         {mobileBlocks.map((block, blockIdx) => {
           if (block.type === "spacer") {
@@ -1286,29 +1366,90 @@ export function TransactionsTable({
               useSpendWiseOpeningBalanceCard ? (
                 <>
                   {/* Render opening row in the main table so amount stays exactly under Debit/Credit columns. */}
+                  {showBookOpeningAboveDatedRow && (
+                    <tr
+                      data-row="opening-book"
+                      // Narration `<tr>` book ke turant baad — dual mode mein dated row se pehle
+                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                      className={cn(
+                        "bg-blue-50/50 dark:bg-blue-950/20",
+                        "[&>td]:border-y [&>td]:border-blue-500 [&>td]:border-solid",
+                        "[&>td:first-child]:border-l [&>td:last-child]:border-r",
+                        "[&>td:first-child]:rounded-l-xl [&>td:last-child]:rounded-r-xl",
+                        "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
+                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:border-b-0",
+                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                      )}
+                    >
+                      {renderOpeningBalanceDateCells(openingBalanceRowDate)}
+                      {renderOpeningBalanceMiddleCells("Book Opening", false)}
+                      {showFileBySelection && (
+                        <TableCell
+                          className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                        </TableCell>
+                      )}
+                      {showCol("dr") && !hideDebitColumn && (
+                        <TableCell className={cn("text-right font-semibold align-top text-green-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                          {bookRowOpeningDr > 0 ? formatFooterAmount(bookRowOpeningDr) : "-"}
+                        </TableCell>
+                      )}
+                      {showCol("cr") && !hideCreditColumn && (
+                        <TableCell className={cn("text-right font-semibold align-top text-red-700", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                          {bookRowOpeningCr > 0 ? formatFooterAmount(bookRowOpeningCr) : "-"}
+                        </TableCell>
+                      )}
+                      {showCol("status") && !hideStatusColumn && (
+                        <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                          <span className="font-semibold">-</span>
+                        </TableCell>
+                      )}
+                      {showCol("runningBalance") && !hideBalanceColumn && (
+                        <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                          {formatFooterBalance(masterBookSignedScaled)}
+                        </TableCell>
+                      )}
+                      <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+                        {openingBalanceActions != null && showBookOpeningAboveDatedRow ? (
+                          openingBalanceActions
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                                <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40" />
+                          </DropdownMenu>
+                        )}
+                      </TableCell>
+                    </tr>
+                  )}
+                  {showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                   <tr
-                    data-row="opening-balance"
-                    data-ob-narration-follows={hasOpeningBalanceNarrationSubRow || undefined}
+                    data-row="opening-balance-dated"
+                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
                     className={cn(
                       "bg-blue-50/50 dark:bg-blue-950/20",
                       "[&>td]:border-y [&>td]:border-blue-500 [&>td]:border-solid",
                       "[&>td:first-child]:border-l [&>td:last-child]:border-r",
                       "[&>td:first-child]:rounded-l-xl [&>td:last-child]:rounded-r-xl",
                       "[&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-                      hasOpeningBalanceNarrationSubRow && "[&>td]:border-b-0",
-                      hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:border-b-0",
+                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:!pb-0"
                     )}
                   >
-                    {/* Entity "As on" — same date columns as body rows */}
-                    {openingBalanceDateRowCells}
-                    {openingBalanceMainMiddleCells}
+                    {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}
+                    {renderOpeningBalanceMiddleCells(primaryOpeningRowPillText, true)}
                     {showFileBySelection && (
                       <TableCell
                         className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {/* Party/bank documents — same UX as voucher File column */}
-                        <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                        {/* Dual row: files book row par; dated row `-` — duplicate tick na ho */}
+                        <OpeningBalanceFileCellContent fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls} />
                       </TableCell>
                     )}
                     {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
@@ -1349,7 +1490,7 @@ export function TransactionsTable({
                         </TableCell>
                     )}
                     <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
-                        {openingBalanceActions != null ? (
+                        {openingBalanceActions != null && !showBookOpeningAboveDatedRow ? (
                           openingBalanceActions
                         ) : (
                           <DropdownMenu>
@@ -1363,7 +1504,7 @@ export function TransactionsTable({
                         )}
                     </TableCell>
                   </tr>
-                  {openingBalanceNarrationRow}
+                  {!showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                   {/* Spend-wise bank/account view: keep visual gap between OB and first group. */}
                   <tr data-row="opening-balance-gap" aria-hidden="true" className="spend-wise-gap-row">
                     <td
@@ -1375,24 +1516,79 @@ export function TransactionsTable({
                 </>
               ) : (
                 <>
-                  {/* Non–spend-wise: opening row; narration pehle cell me (voucher row jaisa, alag tr nahi) */}
+                  {/* Non–spend-wise: Book + Dated pills (dual jab filter + master OB alag ho); narration dual mein book ke baad */}
+                  {showBookOpeningAboveDatedRow && (
+                    <tr
+                      data-row="opening-book"
+                      data-ob-narration-follows={showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
+                      className={cn(
+                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "border-b-0 [&>td]:border-b-0",
+                        showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                      )}
+                    >
+                      {renderOpeningBalanceDateCells(openingBalanceRowDate)}
+                      {renderOpeningBalanceMiddleCells("Book Opening", false)}
+                      {showFileBySelection && (
+                        <TableCell
+                          className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                        </TableCell>
+                      )}
+                      {showCol("dr") && !hideDebitColumn && (
+                        <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                          {bookRowOpeningDr > 0 ? formatFooterAmount(bookRowOpeningDr) : "-"}
+                        </TableCell>
+                      )}
+                      {showCol("cr") && !hideCreditColumn && (
+                        <TableCell className={cn("text-right text-red-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
+                          {bookRowOpeningCr > 0 ? formatFooterAmount(bookRowOpeningCr) : "-"}
+                        </TableCell>
+                      )}
+                      {showCol("status") && !hideStatusColumn && (
+                        <TableCell className={cn("text-center align-top", ensureMinGaps && "min-w-[95px] px-[5px]")}>
+                          <span className="font-semibold">-</span>
+                        </TableCell>
+                      )}
+                      {showCol("runningBalance") && !hideBalanceColumn && (
+                        <TableCell className={cn("text-right font-semibold align-top", masterBookSignedScaled >= 0 ? "text-green-600" : "text-red-600", ensureMinGaps && "min-w-[115px] px-[5px]")}>
+                          {formatFooterBalance(masterBookSignedScaled)}
+                        </TableCell>
+                      )}
+                      <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
+                        {openingBalanceActions != null && showBookOpeningAboveDatedRow ? (
+                          openingBalanceActions
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                                <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-40" />
+                          </DropdownMenu>
+                        )}
+                      </TableCell>
+                    </tr>
+                  )}
+                  {showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                   <tr
-                    data-row="opening-balance"
-                    data-ob-narration-follows={hasOpeningBalanceNarrationSubRow || undefined}
+                    data-row="opening-balance-dated"
+                    data-ob-narration-follows={!showBookOpeningAboveDatedRow && hasOpeningBalanceNarrationSubRow ? true : undefined}
                     className={cn(
-                      hasOpeningBalanceNarrationSubRow && "border-b-0 [&>td]:border-b-0",
-                      hasOpeningBalanceNarrationSubRow && "[&>td]:!pb-0"
+                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "border-b-0 [&>td]:border-b-0",
+                      hasOpeningBalanceNarrationSubRow && !showBookOpeningAboveDatedRow && "[&>td]:!pb-0"
                     )}
                   >
-                    {openingBalanceDateRowCells}
-                    {openingBalanceMainMiddleCells}
+                    {renderOpeningBalanceDateCells(datedOpeningBalanceRowDate)}
+                    {renderOpeningBalanceMiddleCells(primaryOpeningRowPillText, true)}
                     {showFileBySelection && (
                       <TableCell
                         className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {/* Party/bank documents — same UX as voucher File column */}
-                        <OpeningBalanceFileCellContent fileUrls={openingBalanceAttachmentUrls} />
+                        <OpeningBalanceFileCellContent fileUrls={showBookOpeningAboveDatedRow ? undefined : openingBalanceAttachmentUrls} />
                       </TableCell>
                     )}
                     {showCol("dr") && !hideDebitColumn && <TableCell className={cn("text-right text-green-700 font-semibold align-top", ensureMinGaps && "min-w-[100px] px-[5px]")}>
@@ -1429,7 +1625,7 @@ export function TransactionsTable({
                         </TableCell>
                     )}
                     <TableCell className="w-10 p-1 text-center align-top" onClick={(e) => e.stopPropagation()}>
-                        {openingBalanceActions != null ? (
+                        {openingBalanceActions != null && !showBookOpeningAboveDatedRow ? (
                           openingBalanceActions
                         ) : (
                           <DropdownMenu>
@@ -1443,7 +1639,7 @@ export function TransactionsTable({
                         )}
                     </TableCell>
                   </tr>
-                  {openingBalanceNarrationRow}
+                  {!showBookOpeningAboveDatedRow && openingBalanceNarrationRow}
                 </>
               )
             )}

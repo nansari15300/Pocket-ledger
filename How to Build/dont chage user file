@@ -1,0 +1,10 @@
+Tumhare steps ab:
+
+Zarurat ho to npm run build:static (fresh out/).
+npm run cap:sync:bundled (remote APK nahi chahiye to yahi use karo;
+ plain cap:copy:android tab bhi OK hai agar env me remote vars set nahi hain).
+Android Studio / Gradle se naya APK build & install.
+Note: Agar PowerShell session me CAP_USE_REMOTE_WEB=1 permanent set hai
+ to normal npx cap sync phir se remote inject kar sakta hai — 
+ isliye bundled ke liye npm run cap:sync:bundled use karna safe hai.
+  Remote test ke liye phir npm run cap:sync:remote chalao.

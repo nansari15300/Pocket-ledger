@@ -35,7 +35,7 @@ export function notifyBrowserDbCollectionUpdated(companyId: string, collectionNa
   );
 }
 
-/** True jab local browser DB mirror chalana hai (static + web local-only). */
+/** True when default mirror rules apply (`static`/local‑only). Cloud firebase companies ke liye alag explicit flag (neeche). */
 function shouldMirrorToBrowserDb(): boolean {
   return isLocalOnlyMode();
 }
@@ -97,8 +97,8 @@ export async function getCompanyDocFromBrowserDb(
 export async function listCompanyDocsFromBrowserDb(
   companyId: string,
   collectionName: string,
-  /** Backup merge: `isLocalOnlyMode` false par bhi SQLite rows lo — jo voucher abhi Firestore flush nahi hue */
-  options?: { forBackupMerge?: boolean }
+  /** Backup merge / recycle-bin duplicate: soft-deleted rows bhi dikhao */
+  options?: { forBackupMerge?: boolean; includeSoftDeleted?: boolean }
 ): Promise<any[]> {
   if ((!options?.forBackupMerge && !isLocalOnlyMode()) || typeof window === "undefined" || !companyId || !collectionName) return [];
   try {
@@ -117,6 +117,7 @@ export async function listCompanyDocsFromBrowserDb(
         // corrupt row skip
       }
     }
+    if (options?.includeSoftDeleted) return out;
     return out.filter((item: any) => item.isDeleted !== true);
   } catch {
     return [];
@@ -234,18 +235,26 @@ export async function upsertCompanyDocInBrowserDb(
 /**
  * onSnapshot se aayi poori list SQLite mein — offline read + invoice party/items ke liye cache.
  * Har doc par notify nahi (performance / flood avoid).
+ * `cloudBackedOfflineCache`: firebase storage company browser/PWA web par SQLite shadow — purane guard me yahan skip tha aur offline sirf jitna RAM/Firestore cache me tha wahi.
  */
 export async function mirrorCollectionDocsToBrowserDbSilent(
   companyId: string,
   collectionName: string,
-  docs: any[]
+  docs: unknown[],
+  options?: { cloudBackedOfflineCache?: boolean }
 ): Promise<void> {
-  if (!shouldMirrorToBrowserDb() || !companyId || !collectionName || !Array.isArray(docs) || docs.length === 0) return;
+  if (typeof window === "undefined" || !companyId || !collectionName || !Array.isArray(docs) || docs.length === 0)
+    return;
+  const persistAllowed = shouldMirrorToBrowserDb() || options?.cloudBackedOfflineCache === true;
+  if (!persistAllowed) return;
+  /** Web cloud path: upsertCompanyDoc gate `shouldMirrorToBrowserDb` false — `force` se SQLite hi likho */
+  const forceUpsert = !shouldMirrorToBrowserDb();
   for (const row of docs) {
-    const id = row?.id as string | undefined;
+    const rec = row as { id?: string };
+    const id = rec?.id as string | undefined;
     if (!id) continue;
     const payload = { ...(row as object), id } as Record<string, unknown>;
-    await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, { notify: false });
+    await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, { notify: false, force: forceUpsert });
   }
 }
 

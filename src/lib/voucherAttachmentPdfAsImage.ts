@@ -2,6 +2,7 @@
 
 /**
  * Voucher attach: optional PDF → stitched JPEG on save (new + edit me purane PDF URL).
+ * Static/APK: linked HTTPS PDF ab bhi convert — `fetch` skip tha (`isLocalOnlyMode`); hybrid blob se fix.
  */
 import { toast as sonnerToast } from "sonner";
 import { compressFile } from "@/lib/compression";
@@ -9,7 +10,7 @@ import { attachmentMaxBytes } from "@/lib/attachmentCompressionUi";
 import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 import { convertPdfToStitchedJpegFile } from "@/lib/pdfToImageExport";
 import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
 
 export function looksLikePdfAttachmentUrl(url: string): boolean {
   const low = url.toLowerCase();
@@ -75,13 +76,6 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
 
     const url = item;
 
-    // Static/local mode: linked string attachments (local refs / remote URLs) ko touch na karo.
-    // Sirf newly-picked File PDFs convert hon, taaki edit/save flow me stale/CORS linked PDFs se error na aaye.
-    if (isLocalOnlyMode()) {
-      out.push(url);
-      continue;
-    }
-
     /* Offline `local:uuid` — URL me extension nahi; IndexedDB blob sniff se PDF tabhi convert */
     if (isLocalFileRef(url)) {
       try {
@@ -117,9 +111,18 @@ export async function convertPdfAttachmentsToJpegIfEnabled(
     }
 
     try {
-      const res = await fetch(url, { mode: "cors" });
-      if (!res.ok) throw new Error(String(res.status));
-      const blob = await res.blob();
+      const trimmedUrl = url.trim();
+      // APK / static WebView: seedha `fetch` + CORS often fail — Firebase SDK + warm IndexedDB (`FilePreview` jaisa).
+      let blob: Blob | null =
+        trimmedUrl.startsWith("http://") || trimmedUrl.startsWith("https://")
+          ? await getRemoteAttachmentBlobPreferOfflineCache(trimmedUrl)
+          : null;
+      if (!blob || blob.size === 0) {
+        const res = await fetch(url, { mode: "cors" });
+        if (!res.ok) throw new Error(String(res.status));
+        blob = await res.blob();
+      }
+      if (!blob || blob.size === 0) throw new Error("empty blob");
       const kind = await sniffBlobKindForPreview(blob);
       if (kind !== "pdf") {
         out.push(url);

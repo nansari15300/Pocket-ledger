@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { AccountDetails } from "@/components/account/AccountDetails";
 import { AccountList } from "@/components/bank-cash/AccountList";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useDate } from "@/hooks/useDate";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -15,8 +16,6 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
 
 type JournalAccount = {
@@ -31,7 +30,7 @@ type JournalAccount = {
 export function JournalReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatCurrencyForPrint } = useDate();
   const {
     vouchers: allVouchers,
     loading: vouchersLoading,
@@ -181,70 +180,60 @@ export function JournalReportDetail() {
   if (isMobile) {
     if (currentAccount) {
       return (
-        <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-2 border-b flex-shrink-0 flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => { setSelectedAccount(null); setShowAllCompanyVouchers(false); }}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <span className="font-semibold truncate">{currentAccount.accountName}</span>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <AccountDetails
-              account={currentAccount as any}
-              allAccounts={allAccounts as any}
-              transactions={currentTransactions}
-              onAccountUpdated={() => {}}
-              onAccountDeleted={() => { setSelectedAccount(null); setShowAllCompanyVouchers(false); }}
-              onShowAll={() => setShowAllCompanyVouchers(true)}
-              dateRange={dateRange}
-              onDateRangeChange={setDateRange}
-              userNames={userNames}
-              journalAccountNames={journalAccountNames}
-              isAllVouchersView={showAllCompanyVouchers}
-            />
-          </div>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          <AccountDetails
+            account={currentAccount as any}
+            allAccounts={allAccounts as any}
+            transactions={currentTransactions}
+            onAccountUpdated={() => {}}
+            onAccountDeleted={() => {
+              setSelectedAccount(null);
+              setShowAllCompanyVouchers(false);
+            }}
+            onShowAll={() => setShowAllCompanyVouchers(true)}
+            dateRange={dateRange}
+            onDateRangeChange={setDateRange}
+            userNames={userNames}
+            journalAccountNames={journalAccountNames}
+            isAllVouchersView={showAllCompanyVouchers}
+            onBack={() => {
+              setSelectedAccount(null);
+              setShowAllCompanyVouchers(false);
+            }}
+            mobileFooterVariant="report"
+            mobileReportStickyTitle="Journal"
+          />
         </div>
       );
     }
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="p-4 border-b space-y-3 flex-shrink-0">
-          <h2 className="text-lg font-bold font-headline">Journals</h2>
+      <ReportRegisterMobileListChrome
+        title="Journals"
+        actionSlot={
           <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="journal">
             <PermissionButton permission="create_records" className="w-full">
               <PlusCircle className="mr-2 h-4 w-4" /> Create Journal Voucher
             </PermissionButton>
           </AddVoucherDialog>
-          <Card className="p-3 text-center">
-            <p className="text-xs text-muted-foreground">Total Journal Amount</p>
-            <p className="text-xl font-bold text-blue-600">
-              {formatCurrency(totalJournalAmount, { noSuffix: true })}
-            </p>
-          </Card>
-        </div>
-        <div className="p-3 border-b flex-shrink-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search accounts..."
-              className="pl-9"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-          <h3 className="text-sm font-semibold">Accounts involved ({filteredAccounts.length})</h3>
-        </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <AccountList
-            accounts={filteredAccounts as any}
-            onSelectAccount={handleSelectAccount as any}
-            selectedAccount={selectedAccount as any}
-            searchTerm={searchTerm}
-          />
-        </div>
-      </div>
+        }
+        summary={{
+          label: "Total Journal Amount",
+          // Mobile chrome sticky summary: plain string totals only
+          amountText: formatCurrencyForPrint(totalJournalAmount, { noSuffix: true }),
+          amountClassName: "text-blue-600",
+        }}
+        searchPlaceholder="Search accounts..."
+        searchValue={searchTerm}
+        onSearchChange={setSearchTerm}
+        listSectionTitle={`Accounts involved (${filteredAccounts.length})`}
+      >
+        <AccountList
+          accounts={filteredAccounts as any}
+          onSelectAccount={handleSelectAccount as any}
+          selectedAccount={selectedAccount as any}
+          searchTerm={searchTerm}
+        />
+      </ReportRegisterMobileListChrome>
     );
   }
 

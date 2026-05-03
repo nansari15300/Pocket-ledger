@@ -44,8 +44,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
 
     function PrintOptionsDialog() {
       const [open, setOpen] = React.useState(true);
-      // Mobile-specific print options: keep requested defaults for file/user/note unchecked.
-      const isMobile = typeof window !== "undefined" ? window.matchMedia("(max-width: 768px)").matches : false;
+      // PC + mobile/APK sab par same checklist — column toggles niche false (optional PDF width).
       const [printLogo, setPrintLogo] = React.useState(true);
       const [printCompany, setPrintCompany] = React.useState(true);
       const [printNarration, setPrintNarration] = React.useState(true);
@@ -63,7 +62,7 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
           }}
         >
           <DialogContent
-            // Keep large modal sizing only on mobile; desktop stays compact like previous size.
+            // Choti screen par full-ish height scroll; desktop par `max-w-md` + overflow — options list lambi hai.
             className="w-[98vw] max-w-[98vw] h-[90vh] max-h-[90vh] rounded-2xl p-4 overflow-y-auto sm:h-auto sm:w-full sm:max-w-md"
             aria-describedby="print-options-desc"
           >
@@ -106,81 +105,83 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                   </p>
                 </div>
               </div>
-              {isMobile ? (
-                <>
-                  {/* Mobile print controls: show narration/title and column toggles in one place. */}
-                  <div className="flex items-start gap-3 space-y-0">
-                    <Checkbox
-                      id="print-title"
-                      checked={printTitle}
-                      onCheckedChange={(c) => setPrintTitle(c === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1.5 leading-none">
-                      <Label htmlFor="print-title" className="cursor-pointer font-medium">
-                        Print report title
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Shows title and total vouchers line.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 space-y-0">
-                    <Checkbox
-                      id="print-narration"
-                      checked={printNarration}
-                      onCheckedChange={(c) => setPrintNarration(c === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1.5 leading-none">
-                      <Label htmlFor="print-narration" className="cursor-pointer font-medium">
-                        Print narration
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Shows narration/details rows below entries.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 space-y-0">
-                    <Checkbox
-                      id="print-user-column"
-                      checked={printUserColumn}
-                      onCheckedChange={(c) => setPrintUserColumn(c === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1.5 leading-none">
-                      <Label htmlFor="print-user-column" className="cursor-pointer font-medium">
-                        Include User column
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Auto off for mobile by default.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 space-y-0">
-                    <Checkbox
-                      id="print-file-column"
-                      checked={printFileColumn}
-                      onCheckedChange={(c) => setPrintFileColumn(c === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1.5 leading-none">
-                      <Label htmlFor="print-file-column" className="cursor-pointer font-medium">
-                        Include File column
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Auto off for mobile by default.</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 space-y-0">
-                    <Checkbox
-                      id="print-note-vouchers"
-                      checked={printNotes}
-                      onCheckedChange={(c) => setPrintNotes(c === true)}
-                      className="mt-0.5"
-                    />
-                    <div className="grid gap-1.5 leading-none">
-                      <Label htmlFor="print-note-vouchers" className="cursor-pointer font-medium">
-                        Include Note vouchers
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Auto off for mobile by default.</p>
-                    </div>
-                  </div>
-                </>
-              ) : null}
+              {/* Report body + optional columns — pehle sirf narrow mobile ke liye tha; ab PC print bhi yehi choose karta hai */}
+              <div className="flex items-start gap-3 space-y-0">
+                <Checkbox
+                  id="print-title"
+                  checked={printTitle}
+                  onCheckedChange={(c) => setPrintTitle(c === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="print-title" className="cursor-pointer font-medium">
+                    Print report title
+                  </Label>
+                  <p className="text-xs text-muted-foreground">Shows title and total vouchers line.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 space-y-0">
+                <Checkbox
+                  id="print-narration"
+                  checked={printNarration}
+                  onCheckedChange={(c) => setPrintNarration(c === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="print-narration" className="cursor-pointer font-medium">
+                    Print narration
+                  </Label>
+                  <p className="text-xs text-muted-foreground">Shows narration/details rows below entries.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 space-y-0">
+                <Checkbox
+                  id="print-user-column"
+                  checked={printUserColumn}
+                  onCheckedChange={(c) => setPrintUserColumn(c === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="print-user-column" className="cursor-pointer font-medium">
+                    Include User column
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Adds User column to the PDF table when checked. Off by default.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 space-y-0">
+                <Checkbox
+                  id="print-file-column"
+                  checked={printFileColumn}
+                  onCheckedChange={(c) => setPrintFileColumn(c === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="print-file-column" className="cursor-pointer font-medium">
+                    Include File column
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Adds File column to the PDF table when checked. Off by default.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 space-y-0">
+                <Checkbox
+                  id="print-note-vouchers"
+                  checked={printNotes}
+                  onCheckedChange={(c) => setPrintNotes(c === true)}
+                  className="mt-0.5"
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="print-note-vouchers" className="cursor-pointer font-medium">
+                    Include Note vouchers
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Includes note-type vouchers in the printout when checked. Off by default.
+                  </p>
+                </div>
+              </div>
             </div>
             <DialogFooter className="flex-row items-center justify-end gap-2 [&>*]:mt-0">
               {/* Company-login-like action styling: blue cancel + green continue in one row. */}
@@ -198,11 +199,11 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
                   finish({
                     printIncludeLogo: printLogo,
                     printIncludeCompanyDetails: printCompany,
-                    printIncludeNarration: isMobile ? printNarration : undefined,
-                    printIncludeTitle: isMobile ? printTitle : undefined,
-                    printIncludeUserColumn: isMobile ? printUserColumn : undefined,
-                    printIncludeFileColumn: isMobile ? printFileColumn : undefined,
-                    printIncludeNotes: isMobile ? printNotes : undefined,
+                    printIncludeNarration: printNarration,
+                    printIncludeTitle: printTitle,
+                    printIncludeUserColumn: printUserColumn,
+                    printIncludeFileColumn: printFileColumn,
+                    printIncludeNotes: printNotes,
                   })
                 }
               >

@@ -25,14 +25,15 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import type { Staff, StaffGroup } from "@/components/staff/types";
@@ -59,6 +60,11 @@ import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 
 /** CreateStaffForm jaisa: Ungrouped bucket → form value `ungrouped_staff` (null / empty legacy). */
 function normalizeStaffEditGroupId(groupId: string | null | undefined): string {
@@ -101,6 +107,12 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
 
   const { toast } = useToast();
   const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { processedStaffGroups } = useVouchers();
   const processedStaffGroupsRef = useRef(processedStaffGroups);
   processedStaffGroupsRef.current = processedStaffGroups;
@@ -165,7 +177,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   
   useEffect(() => {
     if (!dialogOpen || !companyId) return;
-    if (isLocalOnlyMode()) {
+    if (localSqlMirror) {
       setGroups((processedStaffGroups as StaffGroup[]) || []);
       return;
     }
@@ -182,17 +194,23 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       }
     );
     return () => unsubscribe();
-  }, [dialogOpen, companyId, processedStaffGroups]);
+  }, [dialogOpen, companyId, processedStaffGroups, localSqlMirror]);
 
   function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
 
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const staffRefSnap = staff;
+
+    setDialogOpen(false); // Immediate close — APK/PC/mobile; persistence async below
 
     void (async () => {
       beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
@@ -241,7 +259,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             });
 
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!isLocalOnlyMode()) {
+          if (!localSqlMirror) {
             st = await runRemote();
           } else if (typeof navigator !== "undefined" && navigator.onLine) {
             try {
@@ -261,7 +279,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
         const newOpeningBalance = values.openingBalance || 0;
         const narrationClean = values.openingBalanceNarration?.trim() || null;
 
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "staff", staffRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: staffRefSnap.id,
@@ -299,7 +317,6 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
-          setDialogOpen(false);
           sonnerToast.success(showSyncHint ? "Updated. Will sync when online." : "Staff Updated!", {
             id: toastId,
             description: showSyncHint ? `"${values.name}" saved locally.` : `"${values.name}" has been successfully updated.`,
@@ -342,7 +359,6 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
-        setDialogOpen(false);
         sonnerToast.success("Staff Updated!", { id: toastId, description: `"${values.name}" has been successfully updated.` });
       } catch (error) {
         console.error("Error updating staff:", error);
@@ -361,6 +377,11 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This staff member has transactions and cannot be deleted." });
       setIsDeleteDialogOpen(false);
@@ -368,10 +389,33 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
     }
     setIsLoading(true);
     try {
+        if (localSqlMirror) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "staff", staff.id);
+          const base: Record<string, unknown> = fromDb ?? {
+            id: staff.id,
+            companyId,
+            balance: staff.balance,
+            debit: staff.debit,
+            credit: staff.credit,
+            isDeleted: false,
+            ownerId: user?.uid ?? "local_guest_user",
+            name: staff.name,
+          };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: staff.id,
+            companyId,
+            isDeleted: true,
+            deletedAt: new Date(),
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "staff", staff.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "staff", "update", staff.id, payload);
+        } else {
         await updateDoc(doc(firestore, `companies/${companyId}/staff`, staff.id), {
             isDeleted: true,
             deletedAt: serverTimestamp()
         });
+        }
         toast({ title: "Staff Member Moved to Bin", description: `"${staff.name}" has been moved.`});
         onStaffDeleted();
       setDialogOpen(false);
@@ -687,20 +731,26 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
               </div>
             </div>
 
-              <DialogFooter className="mt-0 grid shrink-0 grid-cols-2 gap-2 border-t border-border/80 bg-background/95 py-3 sm:flex sm:justify-end">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
+                  </Button>
                 </DialogClose>
-                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0}>
-                          <AlertDialogTrigger asChild>
-                            <Button type="button" variant="destructive" disabled={isLoading || hasTransactions}>
-                              <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                            </Button>
-                          </AlertDialogTrigger>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={isLoading || hasTransactions || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
                         </span>
                       </TooltipTrigger>
                       {hasTransactions && (
@@ -708,24 +758,15 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
                           <p>Cannot delete a staff member with existing transactions.</p>
                         </TooltipContent>
                       )}
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
                     </Tooltip>
                   </TooltipProvider>
-                  <AlertDialogContent>
-                      <AlertDialogHeader>
-                          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                              This action will move the staff member <span className="font-semibold text-foreground">{staff.name}</span> to the recycle bin.
-                          </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
-                              Move to Bin
-                          </AlertDialogAction>
-                      </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <Button type="submit" disabled={isLoading} className="col-span-2 sm:col-span-1 sm:ml-auto">
+                </div>
+                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
@@ -735,6 +776,22 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
           </div>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will move the staff member <span className="font-semibold text-foreground">{staff.name}</span> to the recycle bin.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={apkOfflineViewOnly} onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+              Move to Bin
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <CreateStaffGroupDialog onGroupCreated={handleGroupCreated} isOpen={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} groups={groups} />
     </>
   );

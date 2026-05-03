@@ -4,7 +4,7 @@
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2, CalendarIcon, Upload } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp, onSnapshot, collection, query, Timestamp } from "firebase/firestore";
@@ -44,10 +44,16 @@ import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 
 /** Create form jaisa: combobox value hamesha `ungrouped_party` ho jab party bucket “Ungrouped” ho (null / legacy empty). */
 function normalizePartyEditGroupId(groupId: string | null | undefined): string {
@@ -83,6 +89,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  /** APK purely-local lane hi SQLite/outbox — Firestore-online company mirrors se redirect/UI race kam (`apkEntityWriteUsesLocalSqliteMirror`). */
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  /** APK cloud offline: sirf dekho — Save/Bin toolbar band; Cancel/`DialogClose` khula. */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { processedGroups } = useVouchers();
   /** Dialog effect me Firestore fail hone par bhi latest list — deps me poora array na dalein (balance churn). */
   const processedGroupsRef = React.useRef(processedGroups);
@@ -152,8 +166,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
     seedFromVoucherContext();
 
-    // Local-first: Firestore snapshot mat lagao (network/auth error + redundant) — SQLite + context kaafi.
-    if (isLocalOnlyMode()) {
+    // Local-first lane: redundant Firestore snapshot na lagao (`localSqlMirror` = static guest / APK storageOption local).
+    if (localSqlMirror) {
       void (async () => {
         const fromDb = await loadGroupsFromBrowserDb();
         if (cancelled) return;
@@ -196,7 +210,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       cancelled = true;
       unsubscribe();
     };
-  }, [isOpen, companyId, toast]);
+  }, [isOpen, companyId, toast, localSqlMirror]);
 
 
   useEffect(() => {
@@ -234,12 +248,19 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
 
     const isLocalGuestUser = user?.uid === "local_guest_user";
     const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
     const fileSnap = file;
     const docSlotsSnap = docSlots;
     const partyRefSnap = party;
+
+    // PC/mobile/APK: form turant band; storage/Firestore ka kaam niche async (`void` block) — user block nahi
+    setIsOpen(false);
 
     void (async () => {
       setIsLoading(true);
@@ -284,7 +305,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             });
 
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!isLocalOnlyMode()) {
+          if (!localSqlMirror) {
             st = await runRemote();
           } else if (typeof navigator !== "undefined" && navigator.onLine) {
             try {
@@ -305,7 +326,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         const resolvedGroupId = values.groupId?.trim() || getUngroupedGroupId("party");
         const narrationClean = values.openingBalanceNarration?.trim() || null;
 
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", partyRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: partyRefSnap.id,
@@ -342,8 +363,6 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             documentFileUrls,
             openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
           });
-          // Mobile master-detail: close dialog only after successful save to avoid accidental back/list jump.
-          setIsOpen(false);
           sonnerToast.success(showSyncHint ? "Saved — will sync" : "Updated", {
             duration: PARTY_TOAST_OK_MS,
             description: showSyncHint ? "Background sync" : values.name,
@@ -384,8 +403,6 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           documentFileUrls,
           openingBalanceNarration: values.openingBalanceNarration?.trim() || "",
         });
-        // Keep dialog close tied to success so failed save doesn't pop user out of current detail view.
-        setIsOpen(false);
         sonnerToast.success("Updated", { duration: PARTY_TOAST_OK_MS, description: values.name });
       } catch (error) {
         console.error("Error updating party:", error);
@@ -404,6 +421,11 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsDeleteDialogOpen(false);
+      return;
+    }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This party has transactions and cannot be deleted." });
       setIsDeleteDialogOpen(false);
@@ -412,6 +434,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
     
     setIsLoading(true);
     try {
+      if (localSqlMirror) {
         const fromDb = await getCompanyDocFromBrowserDb(companyId, "parties", party.id);
         const base: Record<string, unknown> = fromDb ?? {
           id: party.id,
@@ -431,20 +454,14 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
           isDeleted: true,
           deletedAt: Timestamp.now(),
         };
-        // Copy-to / offline-created parties ke liye delete action hamesha local DB me reflect karo.
         await upsertCompanyDocInBrowserDb(companyId, "parties", party.id, payload);
         await enqueueCompanyDocOutbox(companyId, "parties", "update", party.id, payload);
-        if (!isLocalOnlyMode()) {
-          try {
-            // Online mode me server mirror best-effort: missing remote doc ho tab bhi local delete rollback na ho.
-            await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
-              isDeleted: true,
-              deletedAt: serverTimestamp()
-            });
-          } catch (error) {
-            console.warn("Remote delete fallback to local outbox for party:", party.id, error);
-          }
-        }
+      } else {
+        await updateDoc(doc(firestore, `companies/${companyId}/parties`, party.id), {
+          isDeleted: true,
+          deletedAt: serverTimestamp(),
+        });
+      }
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
         onPartyDeleted(party.id);
         setIsOpen(false);
@@ -553,7 +570,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
             <DialogDescription>Update the details for {party.name}.</DialogDescription>
           </DialogHeader>
           <Form {...form}>
-            {/* flex-col: scroll body + footer hamesha dikhe (Save cut off na ho) */}
+            {/* Scroll body + ek hi row footer: Cancel • Bin • Save — pehle grid me Save neeche doosri line tha */}
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-4 pr-1">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -804,32 +821,45 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                 />
 
             </div>
-              <DialogFooter className="mt-0 shrink-0 gap-2 border-t bg-background/95 py-3 grid grid-cols-2 sm:flex sm:justify-end">
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+                {/* Taarteeb: Cancel (baaen) | Move to Bin (beech) | Save (daaen); shadcn DialogFooter ka flex-col-reverse yahan row se replace */}
                 <DialogClose asChild>
-                  <Button type="button" variant="ghost">Cancel</Button>
+                  {/* Gray pill: user ask — ghost ke upar slate fill (global pill = rounded-full pehle se) */}
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
+                  </Button>
                 </DialogClose>
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0}>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          onClick={() => setIsDeleteDialogOpen(true)}
-                          disabled={hasTransactions}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" /> Move to Bin
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    {hasTransactions && (
-                      <TooltipContent>
-                        <p>Cannot delete a party with existing transactions.</p>
-                      </TooltipContent>
-                    )}
-                  </Tooltip>
-                </TooltipProvider>
-                <Button type="submit" className="col-span-2 sm:col-span-1" disabled={isLoading}>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={hasTransactions || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {hasTransactions && (
+                        <TooltipContent>
+                          <p>Cannot delete a party with existing transactions.</p>
+                        </TooltipContent>
+                      )}
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                {/* APK cloud offline par submit band — sirf Cancel/close chalu */}
+                <Button type="submit" className="shrink-0" disabled={isLoading || apkOfflineViewOnly}>
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Save Changes
                 </Button>
@@ -848,8 +878,15 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                {/* Gray pill Cancel — AlertDialog baked `outline` ke saath slate odd/even bhi constants me */}
+                <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={apkOfflineViewOnly}
+                  onClick={handleDelete}
+                  className="bg-destructive hover:bg-destructive/90"
+                >
                     Move to Bin
                 </AlertDialogAction>
             </AlertDialogFooter>

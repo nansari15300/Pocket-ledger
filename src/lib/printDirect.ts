@@ -205,7 +205,7 @@ export async function openPrintDirect(payload: PrintPayload, iframeTargetIdOrNew
       ...payload,
       printIncludeLogo: opts.printIncludeLogo,
       printIncludeCompanyDetails: opts.printIncludeCompanyDetails,
-      // Mobile print customization: allow dialog toggles to override print content safely.
+      // Print options dialog (PC + mobile/APK): user choices override narration/title/columns safely.
       showNarration:
         typeof opts.printIncludeNarration === "boolean"
           ? opts.printIncludeNarration

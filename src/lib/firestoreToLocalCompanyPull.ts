@@ -19,6 +19,7 @@ import {
   stampLocalMirrorBackedByFirestore,
 } from "@/lib/localMirrorServerMeta";
 import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } from "@/lib/serverBackupEncryption";
+import { isLocalOnlyMode } from "@/lib/localMode";
 
 /** Merge options: `storageOption: local` par same doc id pe Firestore purana na jeete (restore / backup). */
 export type MergeRemoteLocalDocsOptions = {
@@ -181,34 +182,37 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
   });
   /** Purani bugfix: sirf remoteData mirror se offline extras + purge/META SQLite me align nahi ho paate — merged hi bake karo */
   if (merged.length > 0) {
-    await mirrorCollectionDocsToBrowserDbSilent(localCompanyId, collectionPath, merged);
+    await mirrorCollectionDocsToBrowserDbSilent(localCompanyId, collectionPath, merged, {
+      cloudBackedOfflineCache: !isLocalOnlyMode(),
+    });
   }
   return merged;
 }
 
 /** Saari listed subcollections ek baar — manual “download / refresh local cache” ya health check ke liye. */
+/** Full warm sync: sequential na — parallel pulls se masters + vouchers jaldi SQLite me aa jayein */
 export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
   fsCompanyId: string,
   localCompanyId: string,
   company: Company | null
 ): Promise<{ path: string; count: number }[]> {
-  const out: { path: string; count: number }[] = [];
-  for (const path of COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS) {
-    try {
-      const rows = await pullCompanySubcollectionFromFirestoreToLocalDb(
-        fsCompanyId,
-        localCompanyId,
-        path,
-        company,
-        path === "vouchers" ? "date" : undefined
-      );
-      out.push({ path, count: rows.length });
-    } catch (e) {
-      console.warn("[pullAllCompanySubcollectionsFromFirestoreToLocalDb]", path, e);
-      out.push({ path, count: 0 });
-    }
-  }
-  return out;
+  return await Promise.all(
+    COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS.map(async (path) => {
+      try {
+        const rows = await pullCompanySubcollectionFromFirestoreToLocalDb(
+          fsCompanyId,
+          localCompanyId,
+          path,
+          company,
+          path === "vouchers" ? "date" : undefined
+        );
+        return { path, count: rows.length };
+      } catch (e) {
+        console.warn("[pullAllCompanySubcollectionsFromFirestoreToLocalDb]", path, e);
+        return { path, count: 0 };
+      }
+    })
+  );
 }
 
 /** Debug / Settings: SQLite mirror me kitni rows hain (sirf tab jab `listCompanyDocsFromBrowserDb` allow kare). */

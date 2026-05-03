@@ -14,14 +14,13 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { PermissionButton } from "@/components/permission";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 
 export function AddSalaryReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatCurrencyForPrint } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedStaff, userNames } = useVouchers();
   const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -166,30 +165,26 @@ export function AddSalaryReportDetail() {
     }
     return (
       <>
-        <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Add Salary</h2>
+        <ReportRegisterMobileListChrome
+          title="Add Salary"
+          actionSlot={
             <PermissionButton permission="create_records" className="w-full" onClick={() => setIsVoucherOpen(true)}>
               <PlusCircle className="mr-2 h-4 w-4" /> Add Salary Voucher
             </PermissionButton>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Total Salary Added</p>
-              <p className="text-xl font-bold text-blue-600">{formatCurrency(totalSalaryAdded, { noSuffix: true })}</p>
-            </Card>
-          </div>
-          <div className="p-3 border-b flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search staff..." className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            </div>
-          </div>
-          <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-            <h3 className="text-sm font-semibold">Staff ({filteredStaff.length})</h3>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />
-          </div>
-        </div>
+          }
+          summary={{
+            label: "Total Salary Added",
+            /* Mobile chrome summary slot typed as string (see ReportRegisterMobileListChrome) */
+            amountText: formatCurrencyForPrint(totalSalaryAdded, { noSuffix: true }),
+            amountClassName: "text-blue-600",
+          }}
+          searchPlaceholder="Search staff..."
+          searchValue={searchTerm}
+          onSearchChange={setSearchTerm}
+          listSectionTitle={`Staff (${filteredStaff.length})`}
+        >
+          <StaffList staff={filteredStaff} onSelectStaff={handleSelectStaff} selectedStaff={selectedStaff} searchTerm={searchTerm} />
+        </ReportRegisterMobileListChrome>
         <AddVoucherDialog isOpen={isVoucherOpen} onOpenChange={setIsVoucherOpen} onVoucherCreated={() => {}} defaultTab="add_salary" />
       </>
     );

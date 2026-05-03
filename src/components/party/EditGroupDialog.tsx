@@ -10,7 +10,7 @@ import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +18,11 @@ import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { Group } from "@/components/party/types";
 import { useCompany } from "@/hooks/useCompany";
+import {
+  MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import { useAuth } from "@/hooks/useAuth";
 import { toast as sonnerToast } from "sonner";
 
@@ -63,28 +68,31 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     }
   }, [isOpen, group, form]);
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
+  function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
-    setIsLoading(true);
-    try {
-      const groupRef = doc(firestore, `companies/${companyId}/groups`, group.id);
-      await updateDoc(groupRef, {
-        name: values.name,
-        parentId: values.parentId,
-      });
+    const gid = group.id;
+    setIsOpen(false); // Dialog turant; `updateDoc` background — RHF submit block nahi rakhta
+    void (async () => {
+      setIsLoading(true);
+      try {
+        const groupRef = doc(firestore, `companies/${companyId}/groups`, gid);
+        await updateDoc(groupRef, {
+          name: values.name,
+          parentId: values.parentId,
+        });
 
-      toast({ title: "Group Updated!", description: `"${values.name}" has been successfully updated.` });
-      onGroupUpdated();
-      setIsOpen(false);
-    } catch (error) {
-      console.error("Error updating group:", error);
-      toast({ variant: "destructive", title: "Error Updating Group", description: "An error occurred. Please try again." });
-    } finally {
-      setIsLoading(false);
-    }
+        toast({ title: "Group Updated!", description: `"${values.name}" has been successfully updated.` });
+        onGroupUpdated();
+      } catch (error) {
+        console.error("Error updating group:", error);
+        toast({ variant: "destructive", title: "Error Updating Group", description: "An error occurred. Please try again." });
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }
 
   const handleDelete = async () => {
@@ -176,43 +184,51 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
                   </FormItem>
                 )}
               />
-              <DialogFooter className="mt-4 justify-between">
-                 <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-                  <AlertDialogTrigger asChild>
-                      <Button type="button" variant="destructive" disabled={isLoading || isSystemGroup || hasAccounts}>
-                          <Trash2 className="mr-2 h-4 w-4" /> Delete
-                      </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                      <AlertDialogHeader>
-                          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                              This action will move the group <span className="font-semibold text-foreground">{group.name}</span> to the recycle bin.
-                          </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                          <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={handleDelete} disabled={isLoading} className="bg-destructive hover:bg-destructive/90">
-                              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                              Move to Recycle Bin
-                          </AlertDialogAction>
-                      </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <div className="flex gap-2">
-                  <DialogClose asChild>
-                    <Button variant="ghost">Cancel</Button>
-                  </DialogClose>
-                  <Button type="submit" disabled={isLoading || isSystemGroup}>
-                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Save Changes
+              <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+                <DialogClose asChild>
+                  <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                    Cancel
+                  </Button>
+                </DialogClose>
+                <div className="flex min-w-0 flex-1 justify-center px-1">
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="shrink-0 px-3 sm:px-4"
+                    onClick={() => setIsDeleteDialogOpen(true)}
+                    disabled={isLoading || isSystemGroup || hasAccounts}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Delete
                   </Button>
                 </div>
+                <Button type="submit" disabled={isLoading || isSystemGroup} className="shrink-0">
+                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Save Changes
+                </Button>
               </DialogFooter>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will move the group <span className="font-semibold text-foreground">{group.name}</span> to the recycle bin.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS} disabled={isLoading}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} disabled={isLoading} className="bg-destructive hover:bg-destructive/90">
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Move to Recycle Bin
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

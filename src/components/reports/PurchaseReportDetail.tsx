@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PlusCircle, Search } from "lucide-react";
+import { PlusCircle, Search, ArrowLeft } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -17,15 +17,15 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 
 export function PurchaseReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
   const { companyId } = useCompany();
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatCurrencyForPrint } = useDate();
   const { vouchers: allVouchers, loading: vouchersLoading, processedParties } = useVouchers();
   const [selectedParty, setSelectedParty] = useState<Party | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -180,45 +180,34 @@ export function PurchaseReportDetail() {
       );
     }
     return (
-      <div className="flex flex-col h-full min-h-0 overflow-hidden">
-        <div className="p-4 border-b space-y-3 flex-shrink-0">
-          <h2 className="text-lg font-bold font-headline">Purchase</h2>
+      <ReportRegisterMobileListChrome
+        title="Purchase"
+        actionSlot={
           <AddVoucherDialog onVoucherCreated={() => {}} defaultTab="purchase">
             <PermissionButton permission="create_records" className="w-full">
               <PlusCircle className="mr-2 h-4 w-4" />
               Create Purchase
             </PermissionButton>
           </AddVoucherDialog>
-          <Card className="p-3 text-center">
-            <p className="text-xs text-muted-foreground">Total Purchase</p>
-            <p className="text-xl font-bold text-green-600">
-              {formatCurrency(totalPurchases, { noSuffix: true })}
-            </p>
-          </Card>
-        </div>
-        <div className="p-3 border-b flex-shrink-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search accounts..."
-              className="pl-9"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-          <h3 className="text-sm font-semibold">Purchase accounts ({filteredParties.length})</h3>
-        </div>
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <PartyList
-            parties={filteredParties}
-            onSelectParty={handleSelectParty}
-            selectedParty={selectedParty}
-            searchTerm={searchTerm}
-          />
-        </div>
-      </div>
+        }
+        summary={{
+          label: "Total Purchase",
+          // `ReportRegisterMobileListChrome` amountText: string — print formatter, desktop total ab bhi animate
+          amountText: formatCurrencyForPrint(totalPurchases, { noSuffix: true }),
+          amountClassName: "text-green-600",
+        }}
+        searchPlaceholder="Search accounts..."
+        searchValue={searchTerm}
+        onSearchChange={setSearchTerm}
+        listSectionTitle={`Purchase accounts (${filteredParties.length})`}
+      >
+        <PartyList
+          parties={filteredParties}
+          onSelectParty={handleSelectParty}
+          selectedParty={selectedParty}
+          searchTerm={searchTerm}
+        />
+      </ReportRegisterMobileListChrome>
     );
   }
 

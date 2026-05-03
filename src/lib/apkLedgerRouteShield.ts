@@ -10,7 +10,7 @@
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { persistPlModalParentQuery } from "@/lib/modalUrlSync";
-import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { isDashboardRedirectGuardActive } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
@@ -23,9 +23,14 @@ const LEDGER_SHIELD_HOLD_MS = 26_000;
 export const PL_APK_LEDGER_WRITE_ARM_EVENT = "pl_apk_ledger_write_arm";
 
 export function apkLedgerRouteShieldEligible(): boolean {
-  if (typeof window === "undefined" || !isStaticAppBuild()) return false;
-  // Sirf native shell — Electron .exe par user ne /company glitch report nahi kiya; shield wahan side-effect kam rakho.
-  return isCapacitorNativeApp();
+  if (typeof window === "undefined") return false;
+  /**
+   * Pehle: sirf static (`build:static`) + native — remote WebView (`cap:sync:remote`, live site bundle) par
+   * `NEXT_PUBLIC_STATIC_BUILD` kabhi `"1"` nahin ho → Shield **kabhi activate hi nahin**, voucher save ke baad
+   * `clearCompanyId`/`/company` race kholta tha.
+   */
+  if (isCapacitorNativeApp()) return true;
+  return false;
 }
 
 /**
@@ -56,6 +61,22 @@ export function isApkLedgerWriteShieldActive(): boolean {
 /** `clearCompanyId` aur `/company` push se pehle check — dashboard guard + ledger shield dono */
 export function shouldSuppressTransientCompanyClear(): boolean {
   return isDashboardRedirectGuardActive() || isApkLedgerWriteShieldActive();
+}
+
+/**
+ * APK: SQLite/file save turant hai → kabhi ek frame tak React `companyId` null rehe jata hai magar tab/session/localStorage par company already pinned.
+ * Transient stale (`!reactId` + persisted) par `/company` timer mat uthao — persisted hi source ho sakta hai.
+ */
+export function shouldDeferMissingCompanyRedirectNative(reactCompanyId: string | null | undefined): boolean {
+  if (typeof window === "undefined" || !isCapacitorNativeApp()) return false;
+  try {
+    const persisted = String(readSelectedCompanyId() || "").trim();
+    const reactId = String(reactCompanyId ?? "").trim();
+    if (!persisted) return false;
+    return reactId === "";
+  } catch {
+    return false;
+  }
 }
 
 function bumpLedgerWriteShieldDeadline(): void {
@@ -99,15 +120,17 @@ export function beginApkLedgerAsyncWriteShield(opts?: { pinCompanyId?: string | 
   // Deadline pehle bump: snapshot/event ke fail hone par bhi company-recovery stale read roke
   bumpLedgerWriteShieldDeadline();
   snapshotApkLedgerUrlBeforeAsyncWrite();
-  pinCompanyIdIfAny(opts?.pinCompanyId ?? "");
+  // Arg kabhi glitch empty ho tab bhi persisted id pin karo (local save fast race)
+  const pinTarget = String(opts?.pinCompanyId ?? "").trim() || String(readSelectedCompanyId() ?? "").trim();
+  pinCompanyIdIfAny(pinTarget || undefined);
   notifyApkLedgerAsyncWriteStarted();
   plNavDbg("apkLedgerShield.begin", {
-    pinHint: plNavDbgIdHint(opts?.pinCompanyId ?? ""),
+    pinHint: plNavDbgIdHint(pinTarget || String(opts?.pinCompanyId ?? "")),
     transientSuppress: shouldSuppressTransientCompanyClear(),
   });
   // P3 correlate: voucher save/arm vs `listRecovery:*` timestamps (debug flag off = no-op)
   plDbgCompanyRecovery("ledgerShield:beginApkLedgerAsyncWriteShield", {
     snapshotEligible: shouldSnapshotLedgerUrlBeforeWrite(),
-    pinCompanyId: String(opts?.pinCompanyId ?? "").trim().slice(0, 24) || null,
+    pinCompanyId: String(pinTarget || String(opts?.pinCompanyId ?? "")).trim().slice(0, 24) || null,
   });
 }

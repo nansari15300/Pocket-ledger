@@ -15,7 +15,9 @@ import { ThemeProvider } from "@/hooks/useTheme";
 import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackButton";
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
+import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
+import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
 
 function PresenceManager() {
     usePresence();
@@ -30,6 +32,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <CompanyProvider>
                 <CapacitorAndroidBackButton />
                 <StaticFastResumeSyncManager />
+                {/* Online par masters/vouchers/plans SQLite + IndexedDB attachments preload */}
+                <OfflineWarmSyncManager />
                 <LiveMirrorFolderMissingDialog />
                 <PresenceManager />
                 <PrintLogoPreloader />
@@ -45,6 +49,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         </DialogBackHandlerProvider>
                     </BalanceModeProvider>
                 </DateProvider>
+                {/* Pehli device login: company naam + % (min 2s) — localStorage se dubara nahi */}
+                <FirstDeviceCompanyHydrationOverlay />
             </CompanyProvider>
         </AuthProvider>
       </ThemeProvider>

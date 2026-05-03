@@ -11,6 +11,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogFooter,
+  DialogClose,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -38,6 +39,10 @@ import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageCl
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import {
+  MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
+  MASTER_DIALOG_FOOTER_ROW_CLASS,
+} from "@/lib/masterDialogFooterStyles";
 import { Combobox } from "@/components/ui/combobox";
 import NepaliCalendar from "@/components/ui/nepali-calendar";
 import { FilePreview } from "@/components/vouchers/FilePreview";
@@ -452,11 +457,14 @@ export function CreateFinishedGoodDialog({
                 )}
               </div>
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isLoading}>
+            <DialogFooter className={MASTER_DIALOG_FOOTER_ROW_CLASS}>
+              <DialogClose asChild>
+                <Button type="button" variant="ghost" className={MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS}>
+                  Cancel
+                </Button>
+              </DialogClose>
+              <span className="min-w-0 flex-1" aria-hidden />
+              <Button type="submit" disabled={isLoading} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create finished good
               </Button>

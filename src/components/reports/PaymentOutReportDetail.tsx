@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { PlusCircle, Search, Users } from "lucide-react";
+import { PlusCircle, Search, Users, ArrowLeft } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -19,9 +19,9 @@ import type { DateRange } from "@/components/ui/ad-calendar";
 import { doc, getDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSearchParams } from "next/navigation";
+import { ReportRegisterMobileListChrome } from "@/components/reports/ReportRegisterMobileListChrome";
 import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
@@ -30,7 +30,7 @@ import {
 export function PaymentOutReportDetail() {
   const isMobile = useIsMobile();
   const searchParams = useSearchParams();
-  const { formatCurrency } = useDate();
+  const { formatCurrency, formatCurrencyForPrint } = useDate();
   const {
     vouchers: allVouchers,
     loading: vouchersLoading,
@@ -367,9 +367,9 @@ export function PaymentOutReportDetail() {
     }
     return (
       <>
-        <div className="flex flex-col h-full min-h-0 overflow-hidden">
-          <div className="p-4 border-b space-y-3 flex-shrink-0">
-            <h2 className="text-lg font-bold font-headline">Payment Out</h2>
+        <ReportRegisterMobileListChrome
+          title="Payment Out"
+          actionSlot={
             <div className="grid grid-cols-2 gap-2">
               <PermissionButton permission="create_records" className="w-full" onClick={() => openVoucherDialog("payment_out")}>
                 <PlusCircle className="mr-2 h-4 w-4" /> Payment Out
@@ -378,42 +378,21 @@ export function PaymentOutReportDetail() {
                 <PlusCircle className="mr-2 h-4 w-4" /> Direct Expense
               </PermissionButton>
             </div>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Total Paid</p>
-              <p className="text-xl font-bold text-red-600">
-                {formatCurrency(totalPayments, { noSuffix: true })}
-              </p>
-            </Card>
-          </div>
-          <div className="p-3 border-b flex-shrink-0">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search payees..."
-                className="pl-9"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="px-3 pt-2 pb-1 border-b flex-shrink-0">
-            <h3 className="text-sm font-semibold">Paid to ({filteredPayees.length})</h3>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <PayeeList
-              payees={filteredPayees}
-              selectedPayee={selectedPayee}
-              onSelectPayee={handleSelectPayee}
-              searchTerm={searchTerm}
-            />
-          </div>
-        </div>
-        <AddVoucherDialog
-          isOpen={isVoucherOpen}
-          onOpenChange={setIsVoucherOpen}
-          onVoucherCreated={() => {}}
-          defaultTab={defaultTab}
-        />
+          }
+          summary={{
+            label: "Total Paid",
+            // Same as Payment In: mobile list chrome `amountText` must be plain string
+            amountText: formatCurrencyForPrint(totalPayments, { noSuffix: true }),
+            amountClassName: "text-red-600",
+          }}
+          searchPlaceholder="Search payees..."
+          searchValue={searchTerm}
+          onSearchChange={setSearchTerm}
+          listSectionTitle={`Paid to (${filteredPayees.length})`}
+        >
+          <PayeeList payees={filteredPayees} selectedPayee={selectedPayee} onSelectPayee={handleSelectPayee} searchTerm={searchTerm} />
+        </ReportRegisterMobileListChrome>
+        <AddVoucherDialog isOpen={isVoucherOpen} onOpenChange={setIsVoucherOpen} onVoucherCreated={() => {}} defaultTab={defaultTab} />
       </>
     );
   }

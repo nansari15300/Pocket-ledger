@@ -8,11 +8,15 @@ import { Button } from "@/components/ui/button";
 import { PermissionButton } from "@/components/permission";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { Combobox } from "@/components/ui/combobox";
-import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X } from "lucide-react";
+import { ArrowLeft, Calendar as CalendarIcon, File, Printer, BarChart2, X, PanelRight } from "lucide-react";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { asCalendarRange, type DateRange } from "@/components/ui/ad-calendar";
 import { format } from "date-fns";
 import { cn, masterDetailBalanceToneClass } from "@/lib/utils";
+import { mergePaymentAndLedgerJournalContraFlows } from "@/lib/reportStatementMoneyInOutExtras";
+import { ReportStatementHeaderAvatar } from "@/components/reports/ReportStatementHeaderAvatar";
+import { useStatementReportMobilePaging } from "@/hooks/useStatementReportMobilePaging";
+import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import {
   clearPlModalParentQueryBackup,
   pathnameForModalRouterReplace,
@@ -51,6 +55,7 @@ import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { Card } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import usePermissions from "@/hooks/usePermissions";
+import { useReportList } from "@/contexts/ReportListContext";
 
 const ReportSummaryCard = React.memo(function ReportSummaryCard({
   title,
@@ -85,6 +90,10 @@ export default function DesktopBankStatementPage() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const { setReportListOpen } = useReportList();
+  const reportsPathNorm = pathname?.replace(/\/+$/, "") ?? "";
+  /** `/reports` hub: report list Sheet trigger header me — FAB footer/pager se alag clash na ho */
+  const isReportsHubMobile = isMobile && reportsPathNorm === "/reports";
   const calendarMonths = useCalendarMonths();
   const openingModalRef = useRef(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
@@ -266,10 +275,10 @@ export default function DesktopBankStatementPage() {
 
   const hasDateFilter = !!dateRange?.from || !!dateRange?.to;
   const reportDisplayTransactions = useMemo(() => {
-    if (hasDateFilter) return processedTransactions;
+    if (hasDateFilter || isMobile) return processedTransactions;
     if (processedTransactions.length <= 10) return processedTransactions;
     return processedTransactions.slice(-10);
-  }, [processedTransactions, hasDateFilter]);
+  }, [processedTransactions, hasDateFilter, isMobile]);
 
   const filteredReportTransactions = useMemo(() => {
     if (!transactionSearch.trim()) return reportDisplayTransactions;
@@ -318,19 +327,35 @@ export default function DesktopBankStatementPage() {
     });
   }, [tableTransactions, spendWiseBuiltRows, transactionSearch]);
 
-  const visibleNonSpacerCount = useMemo(
-    () => displayTableRows.filter((t: any) => !(t as any)._spendWiseSpacer).length,
-    [displayTableRows]
-  );
+  const bankStatementMobilePagingKey = `${activeEntity?.id ?? ""}|${hasDateFilter}|${transactionSearch.trim()}|${spendWiseActive ? "sw" : "st"}`;
+  const {
+    pagingMeta: bankStatementMobilePaging,
+    pagerPage: bankReportPagerPage,
+    setPagerPage: setBankReportPagerPage,
+    rowsPerPage: bankReportRowsPerPage,
+    setRowsPerPage: setBankReportRowsPerPage,
+  } = useStatementReportMobilePaging({
+    filteredRows: displayTableRows,
+    isMobile,
+    openingBalanceForPeriod,
+    periodDr,
+    periodCr,
+    closingBalance,
+    resetKey: bankStatementMobilePagingKey,
+  });
 
   const summaryData = useMemo(() => {
     if (!activeEntity) return { sales: 0, purchases: 0, moneyIn: 0, moneyOut: 0 };
     const entityVouchers = processedTransactions;
+    const pin = entityVouchers.filter((v: any) => v.type === "payment_in").reduce((sum: number, v: any) => sum + (v.amount || 0), 0);
+    const pout = entityVouchers.filter((v: any) => v.type === "payment_out").reduce((sum: number, v: any) => sum + (v.amount || 0), 0);
+    // JRNL/Contra ledger Dr/Cr — summary chips Payment ke saath merge (statement rows se match).
+    const { moneyIn, moneyOut } = mergePaymentAndLedgerJournalContraFlows(pin, pout, entityVouchers);
     return {
       sales: entityVouchers.filter((v: any) => v.type === "sale").reduce((sum: number, v: any) => sum + (v.total || 0), 0),
       purchases: entityVouchers.filter((v: any) => v.type === "purchase").reduce((sum: number, v: any) => sum + (v.total || 0), 0),
-      moneyIn: entityVouchers.filter((v: any) => v.type === "payment_in").reduce((sum: number, v: any) => sum + (v.amount || 0), 0),
-      moneyOut: entityVouchers.filter((v: any) => v.type === "payment_out").reduce((sum: number, v: any) => sum + (v.amount || 0), 0),
+      moneyIn,
+      moneyOut,
     };
   }, [processedTransactions, activeEntity]);
 
@@ -427,7 +452,8 @@ export default function DesktopBankStatementPage() {
   };
 
   const dateRangeLabel = useMemo(() => {
-    if (!hasDateFilter) return "Last 10 Txns";
+    // Party statement jaisa: bina range = "All Time" (UI); data ab bhi last-10 slice desktop par.
+    if (!hasDateFilter) return "All Time";
     const from = dateRange!.from!;
     const to = dateRange!.to || from;
     const fromAD = format(from, "LLL dd, y");
@@ -466,12 +492,13 @@ export default function DesktopBankStatementPage() {
   return (
     <div className="h-full min-h-0 flex flex-col bg-gray-50 overflow-hidden">
       <header className="sticky top-0 z-10 flex-shrink-0 flex flex-col gap-2 p-3 border-b bg-white">
+        {/* Row 1: title · naam · report-list (reports hub mobile) · avatar — voucher count pager me nahi dikhao (trimSummary). */}
         <div className="flex items-center gap-2 min-w-0">
           <Button variant="ghost" size="icon" className="flex-shrink-0 h-8 w-8" onClick={handleReportBack}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <h1 className="shrink-0 text-base font-bold">{pageTitle}</h1>
+            <h1 className="shrink-0 text-base font-bold text-muted-foreground">{pageTitle}</h1>
             {activeEntity ? (
               <>
                 <span className="shrink-0 select-none text-muted-foreground/55" aria-hidden>
@@ -489,9 +516,36 @@ export default function DesktopBankStatementPage() {
               </>
             ) : null}
           </div>
-          <span className="flex-shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            Showing {visibleNonSpacerCount} of {processedTransactions.length} voucher(s)
-          </span>
+          {isReportsHubMobile ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 flex-shrink-0"
+              onClick={() => setReportListOpen(true)}
+              aria-label="Open report list"
+              title="Report list"
+            >
+              <PanelRight className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {activeEntity ? (
+            <div className="flex-shrink-0" aria-hidden>
+              {selectedAccount ? (
+                <ReportStatementHeaderAvatar
+                  kind="bank"
+                  displayName={String((activeEntity as any).accountName ?? (activeEntity as any).name ?? "")}
+                  fileUrl={selectedAccount.fileUrl}
+                  bankIsSpecial={!!selectedAccount.isSpecial}
+                />
+              ) : (
+                <ReportStatementHeaderAvatar
+                  kind="group"
+                  displayName={String((activeEntity as any).name ?? "")}
+                />
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-center items-center gap-2">
           <span className="text-xs font-medium text-muted-foreground">{dateRangeLabel}</span>
@@ -639,16 +693,17 @@ export default function DesktopBankStatementPage() {
               ))}
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 -mx-4 md:mx-0 md:px-0" data-floating-button-scroll>
+            <div className="flex flex-1 min-h-0 flex-col -mx-4 md:mx-0">
+            <div className="flex-1 min-h-0 overflow-y-auto px-0.5 md:mx-0 md:px-0" data-floating-button-scroll>
               {isMobile ? (
-                <div className="pb-24">
+                <div className="pb-4">
                   <TransactionsTable
                     key={`bank-report-${activeEntity?.id ?? "none"}-${spendWiseActive ? "sw" : "st"}`}
-                    transactions={displayTableRows}
+                    transactions={bankStatementMobilePaging.pageTransactions}
                     context={activeContext}
                     contextId={activeEntity?.id}
                     forceBalanceMode="statement"
-                    openingBalance={openingBalanceForPeriod}
+                    openingBalance={bankStatementMobilePaging.openingForPage}
                     openingBalanceOutstanding={selectedAccount ? openingBalanceOutstanding : undefined}
                     openingBalanceLinkedVoucherNos={selectedAccount ? openingBalanceLinkedVoucherNos : undefined}
                     blinkMode={spendWiseActive ? spendWiseBlinkMode : undefined}
@@ -656,6 +711,9 @@ export default function DesktopBankStatementPage() {
                     journalAccountNames={journalAccountNames}
                     onRowClick={handleEditVoucher}
                     openingBalanceLabel="Opening"
+                    periodDr={bankStatementMobilePaging.periodDrForPage}
+                    periodCr={bankStatementMobilePaging.periodCrForPage}
+                    closingBalance={bankStatementMobilePaging.closingForPage}
                     openingBalanceSearch={
                       <Input
                         placeholder="Search..."
@@ -691,6 +749,27 @@ export default function DesktopBankStatementPage() {
                   }
                 />
               )}
+            </div>
+            {isMobile && view === "list" && (
+              <MobileTransactionsPager
+                // Party report footer pager; bank: Showing/Trxn Of line hatayi (`trimSummary`)
+                className="flex-shrink-0 border-t bg-muted/25 mb-12"
+                currentPage={bankReportPagerPage}
+                totalItems={displayTableRows.length}
+                rowsPerPage={bankReportRowsPerPage}
+                onPageChange={setBankReportPagerPage}
+                onRowsPerPageChange={(n) => {
+                  setBankReportRowsPerPage(n);
+                  setBankReportPagerPage(1);
+                }}
+                edgeCounts={
+                  bankStatementMobilePaging.edges.before > 0 || bankStatementMobilePaging.edges.after > 0
+                    ? bankStatementMobilePaging.edges
+                    : undefined
+                }
+                trimSummary
+              />
+            )}
             </div>
           </>
         )}

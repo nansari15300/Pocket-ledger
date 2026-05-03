@@ -63,7 +63,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
-import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import { EditStaffDialog } from "./EditStaffDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -841,6 +840,9 @@ export function StaffDetails({
           contextId={staff.id}
           openingBalance={mobilePaginationMeta.openingForPage}
           booksOpeningBalance={masterStaffOpening}
+          ledgerDateFilterActive={hasLedgerDateFilter}
+          ledgerShowBookOpeningRow={currentPage === 1}
+          openingBalancePeriodStartDate={dateRange?.from}
           openingBalanceOutstanding={openingBalanceOutstanding}
           openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
           openingBalanceNarration={staff.openingBalanceNarration}
@@ -1063,11 +1065,6 @@ export function StaffDetails({
                   {formatCurrency(closingBalance, { showDrCr: true })}
                 </div>
               </div>
-              <EntityLedgerOpeningHints
-                masterOpening={masterStaffOpening}
-                periodOpeningBroughtForward={openingBalanceForPeriod}
-                hasDateFilter={hasLedgerDateFilter}
-              />
             </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -1191,6 +1188,9 @@ export function StaffDetails({
                   contextId={staff.id}
                   openingBalance={desktopPaginationMeta.openingForPage}
                   booksOpeningBalance={masterStaffOpening}
+                  ledgerDateFilterActive={hasLedgerDateFilter}
+                  ledgerShowBookOpeningRow={currentPage === 1}
+                  openingBalancePeriodStartDate={dateRange?.from}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={staff.openingBalanceNarration}

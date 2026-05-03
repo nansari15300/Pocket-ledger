@@ -611,22 +611,35 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     /** `firestoreRemotePullAttempt`: root server verify ke baad hi Firestore→SQLite ek baar pull; offline native par false */
     const bindHybridFirestoreToCompany = (opts: { firestoreRemotePullAttempt: boolean }) => {
       if (cancelled) return;
-      if (opts.firestoreRemotePullAttempt && shouldUseLocalCompanyData) {
+      // Cloud firebase company ko bhi mirror chahiye: purane guard me sirf `storageOption===local`/static — offline par SQLite khali → sirf wo screens jahan pehle online snapshot mila usable tha (PWA/APK overlap).
+      const shouldSqliteHydratePullFromFirestore =
+        opts.firestoreRemotePullAttempt &&
+        (shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape));
+
+      // Initial full-collection `getDocs` parallel (chunked): sequential wait se user offline hue to adhuri mirror (# critical paths only pehle nahi poora bootstrap).
+      if (shouldSqliteHydratePullFromFirestore) {
         void (async () => {
-          for (const { path, setter, orderByField } of collectionsToPrefetch) {
-            try {
-              const remoteData = await pullCompanySubcollectionFromFirestoreToLocalDb(
-                fsCompanyId,
-                companyId,
-                path,
-                companyRef.current,
-                orderByField
-              );
-              if (!remoteData.length) continue;
-              setter(sqliteCachedRowsForSetter(remoteData, orderByField));
-            } catch {
-              /* onSnapshot neeche retry */
-            }
+          const CONCURRENCY = 4;
+          for (let i = 0; i < collectionsToPrefetch.length; i += CONCURRENCY) {
+            if (cancelled) break;
+            const chunk = collectionsToPrefetch.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              chunk.map(async ({ path, setter, orderByField }) => {
+                try {
+                  const remoteData = await pullCompanySubcollectionFromFirestoreToLocalDb(
+                    fsCompanyId,
+                    companyId,
+                    path,
+                    companyRef.current,
+                    orderByField
+                  );
+                  if (!remoteData.length) return;
+                  if (!cancelled) setter(sqliteCachedRowsForSetter(remoteData, orderByField));
+                } catch {
+                  /* onSnapshot neeche incremental mirror */
+                }
+              })
+            );
           }
         })();
       }
@@ -690,11 +703,18 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
               });
             }
             setter(Array.isArray(dataForUi) ? dataForUi.map(stripMirrorMetaForEntityListRow) : dataForUi);
-            if (shouldUseLocalCompanyData && !isGroup) {
+            // Har synced cloud company ke liye `company_docs` me debounced bake — airplane mode par pura ledger/masters SQLite se (sirf jo screen kholi thi wala data nahi).
+            const persistSqliteFromSnap =
+              !isGroup &&
+              (shouldUseLocalCompanyData ||
+                isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape));
+            if (persistSqliteFromSnap) {
               const debounceKey = `${companyId}::${path}`;
               clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
               mirrorSnapshotTimersRef.current[debounceKey] = setTimeout(() => {
-                void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi);
+                void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi, {
+                  cloudBackedOfflineCache: persistSqliteFromSnap && !shouldUseLocalCompanyData,
+                });
               }, 500);
             }
           })();
@@ -790,7 +810,8 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     if (hydrateFromMirrorWhenOffline) {
       bindHybridFirestoreToCompany({
-        firestoreRemotePullAttempt: shouldUseLocalCompanyData,
+        firestoreRemotePullAttempt:
+          shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
       });
     } else {
       getDocFromServer(companyRootDocRef)
@@ -824,7 +845,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             return;
           }
           bindHybridFirestoreToCompany({
-            firestoreRemotePullAttempt: shouldUseLocalCompanyData,
+            firestoreRemotePullAttempt:
+              shouldUseLocalCompanyData ||
+              isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
           });
         })
         .catch((err: unknown) => {
@@ -843,7 +866,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
           // APK local company + stale build path (purana guard) + reachable-Firestore-fail mirrors
           if (networkLike || (shouldUseLocalCompanyData && isStaticAppBuild())) {
             bindHybridFirestoreToCompany({
-              firestoreRemotePullAttempt: networkLike ? false : shouldUseLocalCompanyData,
+              firestoreRemotePullAttempt: networkLike
+                ? false
+                : shouldUseLocalCompanyData || isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape),
             });
             return;
           }
@@ -863,13 +888,18 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
-    const shouldUseLocalCompanyData = isLocalOnlyMode() || company?.storageOption === "local";
-    if (!shouldUseLocalCompanyData || !companyId) return;
+    const co = company as CloudBackedCompanyShape | null | undefined;
+    const shouldListenSqliteBump =
+      !!companyId &&
+      (isLocalOnlyMode() ||
+        String(co?.storageOption || "").toLowerCase() === "local" ||
+        isCloudBackedCompany(co));
+    if (!shouldListenSqliteBump) return;
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
       if (!d || d.companyId !== companyId || !d.collection) return;
       const coll = d.collection;
-      listCompanyDocsFromBrowserDb(companyId, coll)
+      listCompanyDocsFromBrowserDb(companyId, coll, { forBackupMerge: true })
         .then((cached) => {
           if (!cached.length) return;
           // Browser DB notify merge: deleted rows ko rehydrate hone se roko (sirf Recycle Bin me visible).
@@ -926,7 +956,13 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     };
     window.addEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
     return () => window.removeEventListener(BROWSER_DB_COLLECTION_BUMP, onBump);
-  }, [companyId, company?.storageOption]);
+  }, [
+    companyId,
+    company?.storageOption,
+    company?.syncedFromCloud,
+    company?.syncPolicy,
+    company?.authoritativeCompanyId,
+  ]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */
   useEffect(() => {

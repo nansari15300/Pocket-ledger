@@ -2543,6 +2543,8 @@ export function FinancialSummaryCards({
             >
                 <DialogContent
                     className={cn(
+                        /* dashboard-financial-popup: modal ke andar horizontal dividers globals.css se patle */
+                        "dashboard-financial-popup",
                         "flex w-full max-w-[100vw] flex-col gap-0 overflow-hidden rounded-lg border p-0",
                         "h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] sm:max-w-[90vw]",
                         "pt-[env(safe-area-inset-top)]"
@@ -2686,7 +2688,7 @@ export function FinancialSummaryCards({
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
                                 <DialogContent 
-                                    className="max-w-4xl p-0 h-[90vh] rounded-lg flex flex-col"
+                                    className="dashboard-financial-popup max-w-4xl p-0 h-[90vh] rounded-lg flex flex-col"
                                     onPointerDownOutside={(e) => {
                                         const target = e.target as HTMLElement;
                                         // Prevent closing when clicking on Select dropdown (portal)
@@ -2836,7 +2838,7 @@ export function FinancialSummaryCards({
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                     </DialogTrigger>
-                                    <DialogContent className="max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
+                                    <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
                                         <DialogHeader className="p-4 border-b flex flex-col space-y-3">
                                             <DialogTitle className="whitespace-nowrap text-base md:text-lg">Receivables & Payables Details</DialogTitle>
                                             <div className="flex items-center gap-2 flex-wrap">
@@ -3114,7 +3116,7 @@ export function FinancialSummaryCards({
                                     <DialogTrigger asChild>
                                         <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                     </DialogTrigger>
-                                    <DialogContent className="max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
+                                    <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
                                         <DialogHeader className="p-4 border-b flex flex-col space-y-3">
                                             <DialogTitle className="whitespace-nowrap text-base md:text-lg">Cash Flow Details</DialogTitle>
                                             {/* First Row: Date Filter and Entity Dropdown */}
@@ -3343,7 +3345,7 @@ export function FinancialSummaryCards({
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
                                 <DialogContent className={cn(
-                                    "p-0 rounded-lg flex flex-col",
+                                    "dashboard-financial-popup p-0 rounded-lg flex flex-col",
                                     isMobile ? "max-w-[100vw] w-[100vw] h-[90vh] m-0" : "max-w-6xl h-[90vh]"
                                 )}>
                                     <DialogHeader className={cn("border-b border-black flex flex-col", isMobile ? "p-2 space-y-2" : "p-4 space-y-3")}>
@@ -3476,7 +3478,7 @@ export function FinancialSummaryCards({
                                                                 <Table className={cn("w-full table-fixed", DASHBOARD_VIEW_DETAILS_TABLE_CN)}>
                                                                 {/* 4 column: Account date ke neeche — Cash Flow jaisa text-sm */}
                                                                 <TableHeader>
-                                                                    <TableRow className="border-b-[0.5px] border-gray-400">
+                                                                    <TableRow className="border-b-[0.2px] border-gray-400">
                                                                         <TableHead className={cn("font-bold text-sm", isMobile && "px-1 py-1 w-[30%]")}>Date</TableHead>
                                                                         <TableHead className={cn("font-bold text-sm", isMobile && "px-1 py-1 w-[26%]")}>Voucher No</TableHead>
                                                                         <TableHead className={cn("text-right font-bold text-sm", isMobile && "px-1 py-1 w-[22%]")}>Dr</TableHead>
@@ -3555,7 +3557,7 @@ export function FinancialSummaryCards({
                                                                             
                                                                             return (
                                                                                     <React.Fragment key={taxGroup.taxId}>
-                                                                                        <TableRow className="bg-muted/50 border-b-[0.5px] border-gray-400">
+                                                                                        <TableRow className="bg-muted/50 border-b-[0.2px] border-gray-400">
                                                                                             <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-1 px-1" : "py-2")}>
                                                                                                 <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
                                                                                                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -3582,7 +3584,7 @@ export function FinancialSummaryCards({
                                                                                                 <TableRow 
                                                                                                     key={rowKey} 
                                                                                                     className={cn(
-                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer text-sm",
+                                                                                                        "border-b-[0.2px] border-gray-400 cursor-pointer text-sm",
                                                                                                         isSelected ? "bg-muted" : "hover:bg-muted/50"
                                                                                                     )}
                                                                                                     onClick={() => setSelectedTransactionId(tx.id)}
@@ -3603,7 +3605,7 @@ export function FinancialSummaryCards({
                                                                                             /* Per Account Footer — 4 cols: label x2, Dr, Cr */
                                                                                             taxFilter === 'all' ? (
                                                                                                 <>
-                                                                                                    <TableRow className="bg-muted/30 border-t-[0.5px] border-gray-400">
+                                                                                                    <TableRow className="bg-muted/30 border-t-[0.2px] border-gray-400">
                                                                                                         <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             {getTaxTotalLabel(taxGroup.taxName)} - Total
                                                                                                         </TableCell>
@@ -3614,7 +3616,7 @@ export function FinancialSummaryCards({
                                                                                                             {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
                                                                                                     </TableRow>
-                                                                                                    <TableRow className="bg-muted/30 border-b-[0.5px] border-gray-400">
+                                                                                                    <TableRow className="bg-muted/30 border-b-[0.2px] border-gray-400">
                                                                                                         <TableCell colSpan={2} className={cn("font-semibold text-sm", isMobile ? "py-0.5 px-1" : "py-1")}>
                                                                                                             {taxGroup.taxName} - Net Balance
                                                                                                         </TableCell>
@@ -3667,7 +3669,7 @@ export function FinancialSummaryCards({
                                                                 <Table className={DASHBOARD_VIEW_DETAILS_TABLE_CN}>
                                                                     {/* 4 column + account under date — pehle branch jaisa */}
                                                                     <TableHeader>
-                                                                        <TableRow className="border-b-[0.5px] border-gray-400">
+                                                                        <TableRow className="border-b-[0.2px] border-gray-400">
                                                                             <TableHead className="font-bold text-sm">Date</TableHead>
                                                                             <TableHead className="font-bold text-sm">Voucher No</TableHead>
                                                                             <TableHead className="text-right font-bold text-sm">Dr</TableHead>
@@ -3746,7 +3748,7 @@ export function FinancialSummaryCards({
                                                                                 
                                                                                 return (
                                                                                     <React.Fragment key={taxGroup.taxId}>
-                                                                                        <TableRow className="bg-muted/50 border-b-[0.5px] border-gray-400">
+                                                                                        <TableRow className="bg-muted/50 border-b-[0.2px] border-gray-400">
                                                                                             <TableCell colSpan={2} className="font-semibold text-sm py-2">
                                                                                                 <div className="flex items-center gap-1 cursor-pointer" onClick={() => toggleTaxAccount(taxGroup.taxId)}>
                                                                                                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -3770,7 +3772,7 @@ export function FinancialSummaryCards({
                                                                                                 <TableRow 
                                                                                                     key={rowKey} 
                                                                                                     className={cn(
-                                                                                                        "border-b-[0.5px] border-gray-400 cursor-pointer text-sm",
+                                                                                                        "border-b-[0.2px] border-gray-400 cursor-pointer text-sm",
                                                                                                         isSelected ? "bg-muted" : "hover:bg-muted/50"
                                                                                                     )}
                                                                                                     onClick={() => setSelectedTransactionId(tx.id)}
@@ -3790,7 +3792,7 @@ export function FinancialSummaryCards({
                                                                                         {isExpanded && (
                                                                                             taxFilter === 'all' ? (
                                                                                                 <>
-                                                                                                    <TableRow className="bg-muted/30 border-t-[0.5px] border-gray-400">
+                                                                                                    <TableRow className="bg-muted/30 border-t-[0.2px] border-gray-400">
                                                                                                         <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                             {getTaxTotalLabel(taxGroup.taxName)} - Total
                                                                                                         </TableCell>
@@ -3801,7 +3803,7 @@ export function FinancialSummaryCards({
                                                                                                             {accountReceived > 0 ? formatCurrency(accountReceived, {noSuffix: true}) : '-'}
                                                                                                         </TableCell>
                                                                                                     </TableRow>
-                                                                                                    <TableRow className="bg-muted/30 border-b-[0.5px] border-gray-400">
+                                                                                                    <TableRow className="bg-muted/30 border-b-[0.2px] border-gray-400">
                                                                                                         <TableCell colSpan={2} className="text-sm font-semibold py-1">
                                                                                                             {taxGroup.taxName} - Net Balance
                                                                                                         </TableCell>
@@ -3956,7 +3958,7 @@ export function FinancialSummaryCards({
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
                                 <DialogContent className={cn(
-                                    "p-0 rounded-lg flex flex-col transition-all duration-300",
+                                    "dashboard-financial-popup p-0 rounded-lg flex flex-col transition-all duration-300",
                                     isMobile && bankCashRotated ? "max-w-[90vh] w-[90vh] h-[100vw] m-0 fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-90" : "",
                                     isMobile && !bankCashRotated ? "max-w-[100vw] w-[100vw] h-[90vh] m-0" : "",
                                     !isMobile ? "max-w-6xl h-[90vh]" : ""

@@ -1495,7 +1495,7 @@ export default function DashboardPage() {
                                 <DialogTrigger asChild>
                                     <Button variant="link" size="sm" className="h-auto p-0">View Details</Button>
                                 </DialogTrigger>
-                                <DialogContent className="max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
+                                <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
                                     <DialogHeader className="p-4 border-b flex flex-col gap-3">
                                         {/* Title Row - Mobile: Title + Close Icon */}
                                         <div className="flex items-center justify-between">
@@ -1689,7 +1689,7 @@ export default function DashboardPage() {
                     <div className="text-right pt-2">
                         <Dialog open={cashFlowOpen} onOpenChange={setCashFlowOpen}>
                             <DialogTrigger asChild><Button variant="link" size="sm" className="h-auto p-0">View Details</Button></DialogTrigger>
-                            <DialogContent className="max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
+                            <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
                                 <DialogHeader className="p-4 border-b flex flex-row justify-between items-center">
                                     <div className="flex flex-col"><DialogTitle>Cash Flow Details</DialogTitle></div>
                                     <div className="flex items-center gap-2 mr-12">
@@ -1785,7 +1785,7 @@ export default function DashboardPage() {
                         <div className="text-right pt-2">
                              <Dialog open={taxSummaryOpen} onOpenChange={setTaxSummaryOpen}>
                                 <DialogTrigger asChild><Button variant="link" size="sm" className="h-auto p-0">View Details</Button></DialogTrigger>
-                                <DialogContent className="max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
+                                <DialogContent className="dashboard-financial-popup max-w-6xl p-0 h-[90vh] rounded-lg flex flex-col">
                                     <DialogHeader className="p-4 border-b flex flex-row justify-between items-center">
                                         <div className="flex flex-col"><DialogTitle>Tax Summary Details</DialogTitle></div>
                                         <div className="flex items-center gap-2 mr-12">
@@ -1916,7 +1916,7 @@ export default function DashboardPage() {
                             <Dialog open={stockSummaryOpen} onOpenChange={setStockSummaryOpen}>
                                 <DialogTrigger asChild><Button variant="link" size="sm" className="h-auto p-0">View Details</Button></DialogTrigger>
                                 <DialogContent 
-                                    className="max-w-4xl p-0 h-[90vh] rounded-lg flex flex-col"
+                                    className="dashboard-financial-popup max-w-4xl p-0 h-[90vh] rounded-lg flex flex-col"
                                     onInteractOutside={(e) => {
                                         const target = e.target as HTMLElement;
                                         // Prevent closing when clicking on Popover or Select dropdowns

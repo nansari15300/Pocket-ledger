@@ -14,6 +14,8 @@ type Props = {
   className?: string;
   /** Party-style newest-first slice: pehle kitne vouchers window se pehle, kitne baad (dropdown = page size). */
   edgeCounts?: { before: number; after: number };
+  /** Bank statement: "Showing / Trxn Of total" line hata — sirf page-size select + Prev/Next (count clutter avoid). */
+  trimSummary?: boolean;
 };
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100] as const;
@@ -26,6 +28,7 @@ export function MobileTransactionsPager({
   onRowsPerPageChange,
   className,
   edgeCounts,
+  trimSummary = false,
 }: Props) {
   const totalPages = Math.max(1, rowsPerPage > 0 ? Math.ceil(totalItems / rowsPerPage) : 1);
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
@@ -55,13 +58,24 @@ export function MobileTransactionsPager({
               </span>
             ) : null}
           </div>
-          <div className="flex shrink-0 items-center gap-1 text-[10px] font-bold">
-            <span className="whitespace-nowrap text-muted-foreground">Showing</span>
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-1 text-[10px] font-bold",
+              trimSummary && "flex-1 justify-center min-w-0"
+            )}
+          >
+            {!trimSummary ? (
+              <span className="whitespace-nowrap text-muted-foreground">Showing</span>
+            ) : null}
             <Select
               value={String(rowsPerPage)}
               onValueChange={(value) => onRowsPerPageChange(Number(value) || 0)}
             >
-              <SelectTrigger className="h-5 w-[70px] text-[10px] font-bold">
+              <SelectTrigger
+                className="h-5 w-[70px] text-[10px] font-bold"
+                aria-label="Rows per page"
+                title="Rows per page"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -73,9 +87,11 @@ export function MobileTransactionsPager({
                 <SelectItem value="0">All</SelectItem>
               </SelectContent>
             </Select>
-            <span className="whitespace-nowrap text-muted-foreground">
-              Trxn Of <span className="tabular-nums">{totalItems}</span>
-            </span>
+            {!trimSummary ? (
+              <span className="whitespace-nowrap text-muted-foreground">
+                Trxn Of <span className="tabular-nums">{totalItems}</span>
+              </span>
+            ) : null}
           </div>
           <div className="flex min-w-0 items-center gap-1">
             {edgeCounts != null && rowsPerPage > 0 ? (

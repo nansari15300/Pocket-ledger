@@ -35,7 +35,7 @@ import { getLocalFiscalSplitOrDefaults, LOCAL_FISCAL_SPLIT_CHANGED_EVENT } from 
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
-import { shouldSuppressTransientCompanyClear } from "@/lib/apkLedgerRouteShield";
+import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
 
@@ -1336,6 +1336,20 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     if (!companyId && user) {
+        queueMicrotask(() => {
+          // Fast SQLite/local writes: persisted company id turant hai, React `companyId` ek frame baad hydrate — stale null avoid
+          try {
+            if (companyIdLiveRef.current) return;
+            const redo = readSelectedCompanyId()?.trim();
+            if (redo) {
+              setCompanyIdState(redo);
+              plNavDbg("useCompany.persistedHydrate.microtask", { hint: plNavDbgIdHint(redo) });
+            }
+          } catch {
+            /* ignore */
+          }
+        });
+
         try {
             // Refresh recovery must use per-tab company first, otherwise another tab's last selection wins.
             const storedCompanyId = readSelectedCompanyId();
@@ -1357,6 +1371,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
                     }
                     const live = normalizeAppPath(getBrowserPathname());
                     if (shouldSkipMissingCompanyRedirect(live, live)) return;
+                    // Persisted-pin delay vs React hydrate (APK turant-SQLite path)
+                    if (shouldDeferMissingCompanyRedirectNative(companyIdLiveRef.current)) {
+                      plDbgCompanyRecovery("redirectNoStoredCompany:nativeHydrationDeferHold", {});
+                      plNavDbg("useCompany.router.push./company TIMER BLOCKED hydrationDefer", { live });
+                      return;
+                    }
                     // APK save / ledger shield: storage flush + ~26s race me `/company` mat kholo.
                     if (shouldSuppressTransientCompanyClear()) {
                       plDbgCompanyRecovery("redirectNoStoredCompany:shieldHold", {});
@@ -1377,6 +1397,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         } catch (_) {
             const live = normalizeAppPath(getBrowserPathname());
             if (!shouldSkipMissingCompanyRedirect(pathTrim, live)) {
+                // Fast local hydrate: React null, storage me id — transient push mat karo
+                if (shouldDeferMissingCompanyRedirectNative(companyId)) {
+                  plDbgCompanyRecovery("redirectNoStoredCompany:catch:nativeHydrationDefer", {});
+                  return;
+                }
                 // Fallback catch path me bhi guard respect karo taaki transient read-error se save ke turant baad `/company` na khule.
                 if (shouldSuppressTransientCompanyClear()) {
                   plDbgCompanyRecovery("redirectNoStoredCompany:catch:shieldHold", {});

@@ -29,7 +29,7 @@ import { coerceVoucherDocumentDate } from "@/lib/voucherDateNormalize";
 import { getPlan, numericEntitlement, companyStorageIsLocal, type Entitlements, type PlanId } from "@/config/plans";
 import { getPlanFromPlans } from "@/hooks/useLivePlans";
 import { readCachedPlansRecord, defaultPlansRecordFallback } from "@/lib/plansCatalogCache";
-import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import { getLocalCompanyById, listLocalCompanies } from "@/lib/localCompanyStore";
 import { resolvePlanIdForVoucherEnforcement } from "@/lib/companyPlanLocalCache";
 import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
@@ -41,7 +41,18 @@ import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
 import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
+import { apkCloudCompanyUsesSqliteFirstWrites } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+
+/**
+ * Firestore offline error ke baad SQLite/outbox fallback — APK par sirf genuinely local-SQLite-first company (`storageOption: local`).
+ * Capacitor + cloud Firebase: queue mat lagao taaki stale redirect race na ho; Electron/web purana `(local || static)` rule.
+ */
+async function allowLocalFirestoreFailureQueue(companyId: string): Promise<boolean> {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) return true;
+  return !isCapacitorNativeApp() && (isLocalOnlyMode() || isStaticAppBuild());
+}
 
 /** Firestore company root: `planExpiry` Timestamp ya `planExpiryMs` — tier overlay + cache ke saath expiry compare */
 function planExpiryMsFromCompanyFirestoreData(row: Record<string, unknown>): number | null {
@@ -288,7 +299,7 @@ export async function patchVoucherFields(
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
   // APK / static mobile: SQLite+outbox ke beech pathname race — `/dashboard` jump se pehle URL + company pin.
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (isLocalOnlyMode()) {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-first: SQLite turant; online mirror company ke liye Firestore bhi seedha — warna outbox/JSON se delete server pe late/miss, refresh pe voucher wapas.
     const existing = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) || {};
     const payload = removeUndefined({
@@ -352,7 +363,8 @@ export async function patchVoucherFields(
   try {
     await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, voucherId), partial);
   } catch (e) {
-    if (!isLikelyOfflineFirestoreError(e) || !(isLocalOnlyMode() || isStaticAppBuild())) throw e;
+    if (!isLikelyOfflineFirestoreError(e)) throw e;
+    if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
     await upsertLocalVoucherFromPartialForOutbox(companyId, voucherId, partial);
     return;
   }
@@ -548,6 +560,91 @@ async function saveVoucherOfflineLocalCreate(
 }
 
 /**
+ * SQLite `company_docs` voucher row aur us row ka canonical `company_id` (UPSERT/outbox same key ho).
+ * Registry id vs authoritative Firestore id mismatch par approve/update miss hota tha ("Voucher not found").
+ */
+async function resolveVoucherSnapshotForLocalWrite(
+  companyId: string,
+  voucherId: string
+): Promise<{ voucher: Record<string, unknown>; writeCompanyId: string } | null> {
+  const primary = String(companyId ?? "").trim();
+  if (!primary || !voucherId) return null;
+  const tryIds: string[] = [];
+  const seen = new Set<string>();
+  const push = (x: string) => {
+    const s = String(x ?? "").trim();
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    tryIds.push(s);
+  };
+  push(primary);
+  try {
+    const reg = await getLocalCompanyById(primary, { includeDeleted: true });
+    push(String((reg as Record<string, unknown> | null)?.authoritativeCompanyId ?? "").trim());
+    const all = await listLocalCompanies({ includeDeleted: true });
+    for (const c of all) {
+      const a = String((c as Record<string, unknown>).authoritativeCompanyId ?? "").trim();
+      if (c.id === primary || a === primary) push(c.id);
+    }
+  } catch {
+    /* ignore — single-id try still runs */
+  }
+  for (const cid of tryIds) {
+    const v = await getCompanyDocFromBrowserDb(cid, "vouchers", voucherId);
+    if (v && typeof v === "object") return { voucher: v as Record<string, unknown>, writeCompanyId: cid };
+  }
+  return null;
+}
+
+/** Local mirror pe approve persist (local-only APK + Firebase mode offline fallback). */
+async function approveVoucherLocalPersist(
+  companyId: string,
+  voucherId: string,
+  approvedByUserId: string,
+  approvedByName?: string | null
+): Promise<void> {
+  const resolved = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId);
+  if (!resolved) throw new Error("Voucher not found.");
+  const { voucher, writeCompanyId } = resolved;
+  if ((voucher as Record<string, unknown>)?.["isApproved"] === true) return;
+  // Firebase-mode offline me `getEffectiveHistorySettings` Firestore pe ja sakta — yahan defaults safe.
+  const { enabled: historyEnabled, limit: historyLimit } = isLocalOnlyMode()
+    ? await getEffectiveHistorySettings(companyId)
+    : { enabled: true, limit: 10 };
+  const existingHistory = Array.isArray((voucher as Record<string, unknown>)?.["history"])
+    ? ((voucher as Record<string, unknown>)["history"] as unknown[])
+    : [];
+  const approverName = approvedByName || approvedByUserId;
+  const previousApprover =
+    (voucher as Record<string, unknown>)?.["approvedByUserName"] ||
+    (voucher as Record<string, unknown>)?.["approvedByUserId"] ||
+    "N/A";
+  const approvalEntry = {
+    changedAt: new Date(),
+    changedBy: approvedByUserId,
+    changes: {
+      isApproved: { from: (voucher as Record<string, unknown>)?.["isApproved"] === true ? true : false, to: true },
+      approvedByUserName: { from: (voucher as Record<string, unknown>)?.["approvedByUserName"] || "N/A", to: approverName },
+      approvedByUserId: { from: (voucher as Record<string, unknown>)?.["approvedByUserId"] || "N/A", to: approvedByUserId },
+      approvedBy: { from: previousApprover, to: approverName },
+    },
+  };
+  const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+  const payload = removeUndefined({
+    ...voucher,
+    id: voucherId,
+    isApproved: true,
+    approvedByUserId,
+    approvedByUserName: approverName,
+    approvedAt: Timestamp.now(),
+    history: newHistory,
+  }) as Record<string, unknown>;
+  coerceVoucherDocumentDate(payload);
+  await upsertCompanyDocInBrowserDb(writeCompanyId, "vouchers", voucherId, payload);
+  await enqueueVoucherOutbox(writeCompanyId, "update", voucherId, payload);
+}
+
+/**
  * Client-only: Save or update voucher. Runs in browser so Firestore uses signed-in user auth (server action has no auth → 500).
  */
 export type SaveVoucherApproveOption = { approvedByUserId: string; approvedByName?: string | null };
@@ -566,18 +663,30 @@ export async function saveVoucher(
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
+  /** APK Firebase company: SQLite-first mat — Firestore writes (redirect race mitigation). Local row `storageOption: local` = purana behaviour. */
+  const sqliteFirst = await apkCloudCompanyUsesSqliteFirstWrites(companyId);
 
-  // Edit: form/outbox se `date` key missing ho to pehle server/SQLite ki purani date merge — warna niche `coerceVoucherDocumentDate` `Timestamp.now()` se aaj likh deta (online update me zyada dikhta tha)
+  // Edit: form/outbox se `date` key missing ho to purani voucher date merge — static/APK offline me pehla `getDoc` hang/slow kar sakta tha (“Saving…” chipka)
   if (voucherId) {
     try {
-      const snap = await getDoc(doc(firestore, voucherPath, voucherId));
-      let oldRow: Record<string, unknown> | null = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
-      // Hybrid offline `getDoc` fail: mirrors se date merge (`isLocalOnlyMode` tak seemit mat rakho — edit offline break)
-      if (!oldRow && voucherId) {
-        try {
-          oldRow = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) as Record<string, unknown> | null;
-        } catch {
-          oldRow = null;
+      let oldRow: Record<string, unknown> | null = null;
+      if (sqliteFirst) {
+        oldRow =
+          (
+            await resolveVoucherSnapshotForLocalWrite(companyId, voucherId).then((r) => r?.voucher ?? null)
+          ) ?? null;
+      } else {
+        const snap = await getDoc(doc(firestore, voucherPath, voucherId));
+        oldRow = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+        if (!oldRow) {
+          try {
+            oldRow = (await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId)) as Record<
+              string,
+              unknown
+            > | null;
+          } catch {
+            oldRow = null;
+          }
         }
       }
       const dMissing =
@@ -601,7 +710,7 @@ export async function saveVoucher(
     else if (!cleanVoucherData.type) cleanVoucherData.type = "sale";
   }
 
-  if (isLocalOnlyMode()) {
+  if (sqliteFirst) {
     // Static local-first: voucher writes ko direct Firebase pe mat bhejo; only local + outbox.
     if (!voucherRef) {
       return saveVoucherOfflineLocalCreate(
@@ -612,7 +721,9 @@ export async function saveVoucher(
         options?.preGeneratedVoucherId ?? null
       );
     }
-    const existingLocal = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId!);
+    const resolvedExisting = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId!);
+    const existingLocal = resolvedExisting?.voucher ?? null;
+    const writeCompanyIdLocal = resolvedExisting?.writeCompanyId ?? companyId;
     const nowTs = Timestamp.now();
     const mergedLocal = removeUndefined({
       ...(existingLocal || {}),
@@ -626,8 +737,8 @@ export async function saveVoucher(
       updatedAt: nowTs,
     }) as Record<string, unknown>;
     coerceVoucherDocumentDate(mergedLocal);
-    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId!, mergedLocal);
-    await enqueueVoucherOutbox(companyId, "update", voucherId!, mergedLocal);
+    await upsertCompanyDocInBrowserDb(writeCompanyIdLocal, "vouchers", voucherId!, mergedLocal);
+    await enqueueVoucherOutbox(writeCompanyIdLocal, "update", voucherId!, mergedLocal);
     return { id: voucherId! };
   }
 
@@ -715,7 +826,8 @@ export async function saveVoucher(
     return { id: newId };
     } catch (e) {
       if (isVoucherLimitError(e)) throw e;
-      if (!isLocalOnlyMode() || !isLikelyOfflineFirestoreError(e)) throw e;
+      if (!isLikelyOfflineFirestoreError(e)) throw e;
+      if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
       return saveVoucherOfflineLocalCreate(
         companyId,
         userId,
@@ -839,9 +951,8 @@ export async function saveVoucher(
   try {
     await updateDoc(voucherRef, fireUpdate);
   } catch (e) {
-    // Static/hybrid APK: sirf offline/network — local SQLite + outbox; online-only web build unchanged
-    const queueLocalStale =
-      isLikelyOfflineFirestoreError(e) && (isLocalOnlyMode() || isStaticAppBuild());
+    // Static/hybrid: offline queue; APK Firebase company par allowLocalFirestoreFailureQueue false ho to throw
+    const queueLocalStale = isLikelyOfflineFirestoreError(e) && (await allowLocalFirestoreFailureQueue(companyId));
     if (!queueLocalStale) throw e;
     const { id: _oldId, ...oldRest } = oldData as Record<string, unknown>;
     const forLocal = removeUndefined({
@@ -872,7 +983,7 @@ export async function updateVoucherSpendWiseLinks(
   if (!companyId || !voucherId) throw new Error("Missing companyId or voucherId");
   // Spend-wise patch = local SQLite/outbox burst — shield `saveVoucher` / `patchVoucherFields` jaisa
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (isLocalOnlyMode()) {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-only mode me spend-wise links browser DB me update karke outbox queue karo.
     const oldData = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!oldData) throw new Error("Voucher not found");
@@ -951,7 +1062,7 @@ export async function updateVoucherSpendWiseLinks(
       history: newHistory,
     });
   } catch (e) {
-    if (!(isLikelyOfflineFirestoreError(e) && (isStaticAppBuild() || isLocalOnlyMode()))) throw e;
+    if (!(isLikelyOfflineFirestoreError(e) && (await allowLocalFirestoreFailureQueue(companyId)))) throw e;
     await upsertLocalVoucherFromPartialForOutbox(companyId, voucherId, {
       linkedPaymentInIds,
       linkedPaymentInAmounts,
@@ -977,7 +1088,7 @@ export async function syncBillWiseAllocationsToTargetVouchers(
   if (!companyId || !sourceVoucherId) return;
   // Multi-doc allocation sync — APK par turant-heavy write burst; ledger shield ek hi entry se arm
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (isLocalOnlyMode()) {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-only mode me reverse allocation links local vouchers par maintain karo.
     const prevIds = new Set(
       previousAllocations
@@ -1097,75 +1208,52 @@ export async function approveVoucherWithHistory(
   }
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
 
-  if (isLocalOnlyMode()) {
-    // Local-only mode me approve state local voucher doc par apply karo + queue sync.
-    const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
-    if (!voucher) throw new Error("Voucher not found.");
-    if ((voucher as any)?.isApproved === true) return;
-    const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
-    const existingHistory = Array.isArray((voucher as any)?.history) ? (voucher as any).history : [];
-    const approverName = approvedByName || approvedByUserId;
-    const previousApprover = (voucher as any)?.approvedByUserName || (voucher as any)?.approvedByUserId || "N/A";
-    const approvalEntry = {
-      changedAt: new Date(),
-      changedBy: approvedByUserId,
-      changes: {
-        isApproved: { from: (voucher as any)?.isApproved === true ? true : false, to: true },
-        approvedByUserName: { from: (voucher as any)?.approvedByUserName || "N/A", to: approverName },
-        approvedByUserId: { from: (voucher as any)?.approvedByUserId || "N/A", to: approvedByUserId },
-        approvedBy: { from: previousApprover, to: approverName },
-      },
-    };
-    const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
-    const payload = removeUndefined({
-      ...(voucher as any),
-      id: voucherId,
-      isApproved: true,
-      approvedByUserId,
-      approvedByUserName: approverName,
-      approvedAt: Timestamp.now(),
-      history: newHistory,
-    }) as Record<string, unknown>;
-    coerceVoucherDocumentDate(payload);
-    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, payload);
-    await enqueueVoucherOutbox(companyId, "update", voucherId, payload);
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
+    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
     return;
   }
   const voucherRef = doc(firestore, `companies/${companyId}/vouchers`, voucherId);
   const { enabled: historyEnabled, limit: historyLimit } = await getEffectiveHistorySettings(companyId);
 
-  await runTransaction(firestore, async (tx) => {
-    const snap = await tx.get(voucherRef);
-    if (!snap.exists()) throw new Error("Voucher not found.");
+  try {
+    await runTransaction(firestore, async (tx) => {
+      const snap = await tx.get(voucherRef);
+      if (!snap.exists()) throw new Error("Voucher not found.");
 
-    const voucher = snap.data() as any;
-    if (voucher?.isApproved === true) return;
+      const voucher = snap.data() as any;
+      if (voucher?.isApproved === true) return;
 
-    const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
-    const approverName = approvedByName || approvedByUserId;
-    const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
+      const existingHistory = Array.isArray(voucher?.history) ? voucher.history : [];
+      const approverName = approvedByName || approvedByUserId;
+      const previousApprover = voucher?.approvedByUserName || voucher?.approvedByUserId || "N/A";
 
-    const approvalEntry = {
-      changedAt: new Date(),
-      changedBy: approvedByUserId,
-      changes: {
-        isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
-        approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
-        approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
-        approvedBy: { from: previousApprover, to: approverName },
-      },
-    };
+      const approvalEntry = {
+        changedAt: new Date(),
+        changedBy: approvedByUserId,
+        changes: {
+          isApproved: { from: voucher?.isApproved === true ? true : false, to: true },
+          approvedByUserName: { from: voucher?.approvedByUserName || "N/A", to: approverName },
+          approvedByUserId: { from: voucher?.approvedByUserId || "N/A", to: approvedByUserId },
+          approvedBy: { from: previousApprover, to: approverName },
+        },
+      };
 
-    const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
+      const newHistory = historyEnabled ? [approvalEntry, ...existingHistory].slice(0, historyLimit) : existingHistory;
 
-    tx.update(voucherRef, {
-      isApproved: true,
-      approvedByUserId: approvedByUserId,
-      approvedByUserName: approverName,
-      approvedAt: serverTimestamp(),
-      history: newHistory,
+      tx.update(voucherRef, {
+        isApproved: true,
+        approvedByUserId: approvedByUserId,
+        approvedByUserName: approverName,
+        approvedAt: serverTimestamp(),
+        history: newHistory,
+      });
     });
-  });
+  } catch (e) {
+    // PWA firebase mode offline: mirrored SQLite approve (same APK local-first resolution).
+    if (!isLikelyOfflineFirestoreError(e)) throw e;
+    await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
+    return;
+  }
   await mirrorVoucherDocToBrowserDb(companyId, voucherId);
 }
 
@@ -1179,7 +1267,7 @@ export async function resetVoucherHistory(
   voucherId: string
 ): Promise<{ success: true }> {
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (isLocalOnlyMode()) {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-only mode: history clear local voucher doc me apply karo.
     const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!voucher) throw new Error("Voucher not found");
@@ -1267,7 +1355,7 @@ export async function deleteHistoryEntries(
   changedAtMs: number[]
 ): Promise<{ success: true }> {
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
-  if (isLocalOnlyMode()) {
+  if (await apkCloudCompanyUsesSqliteFirstWrites(companyId)) {
     // Local-only mode: selected history rows local voucher se remove karo.
     const voucher = await getCompanyDocFromBrowserDb(companyId, "vouchers", voucherId);
     if (!voucher) throw new Error("Voucher not found");

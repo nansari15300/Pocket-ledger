@@ -36,7 +36,6 @@ import { hasPaymentLinks, hasSpendWiseLinks, hasAllocationsToVoucherId } from "@
 import { useAuth } from "@/hooks/useAuth";
 import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
-import { isLocalOnlyMode } from "@/lib/localMode";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
@@ -46,6 +45,8 @@ import { stripIdsForCrossCompanyClone } from "@/lib/crossCompanyMasterPrefill";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { persistLedgerModalParentFromBrowser } from "@/lib/modalUrlSync";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { plNavDbg, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
@@ -247,7 +248,10 @@ async function getNextVoucherNumberForTarget(
   const vouchersPath = collection(firestore, `companies/${targetCompanyId}/vouchers`);
   const typeQuery = query(vouchersPath, where("type", "==", String(voucherLike.type || "sale")));
   const fsRows = (await getDocs(typeQuery)).docs.map((d) => d.data() as Record<string, any>);
-  const localRows = isLocalOnlyMode() ? await listCompanyDocsFromBrowserDb(targetCompanyId, "vouchers") : [];
+  // APK + Firestore company: browser DB vouchers merge mat karo — duplicate/next-no galat ho sakta tha (`apkEntityWriteUsesLocalSqliteMirror`).
+  const localRows = apkEntityWriteUsesLocalSqliteMirror(targetCompanyDoc)
+    ? await listCompanyDocsFromBrowserDb(targetCompanyId, "vouchers")
+    : [];
   const mergedRows = [...fsRows, ...localRows].filter((r) => {
     if (voucherLike.type === "sale" || voucherLike.type === "purchase") {
       const srcLineType = voucherLike?.lineItems?.[0]?.type || "item";
@@ -457,12 +461,19 @@ function orderMasterCandidatesForCollection(
   return ordered;
 }
 
-async function loadCollectionRows(companyId: string, collectionName: CollectionName): Promise<Array<Record<string, any>>> {
+async function loadCollectionRows(
+  companyId: string,
+  collectionName: CollectionName,
+  /** Kis company lane par SQLite mirror merge karna hai — APK Firestore-company par skip */
+  laneCompany: { storageOption?: string } | null | undefined
+): Promise<Array<Record<string, any>>> {
   const fsRows = (await getDocs(collection(firestore, `companies/${companyId}/${collectionName}`))).docs.map((d) => ({
     id: d.id,
     ...(d.data() as Record<string, any>),
   }));
-  const localRows = isLocalOnlyMode() ? await listCompanyDocsFromBrowserDb(companyId, collectionName) : [];
+  const localRows = apkEntityWriteUsesLocalSqliteMirror(laneCompany)
+    ? await listCompanyDocsFromBrowserDb(companyId, collectionName)
+    : [];
   const byId = new Map<string, Record<string, any>>();
   [...fsRows, ...localRows].forEach((r) => {
     const id = String((r as any)?.id || "");
@@ -474,15 +485,18 @@ async function loadCollectionRows(companyId: string, collectionName: CollectionN
 async function remapVoucherReferencesByName(
   sourceCompanyId: string,
   targetCompanyId: string,
-  voucher: Record<string, any>
+  voucher: Record<string, any>,
+  /** Har side ka `storageOption` — APK cloud par local rows merge gate */
+  allCompaniesLane: ReadonlyArray<{ id: string; storageOption?: string }>
 ): Promise<{ remapped: Record<string, any>; unmatchedNames: string[]; unmatchedCategories: string[] }> {
+  const lane = (cid: string) => allCompaniesLane.find((c) => c.id === cid) ?? null;
   const collections: CollectionName[] = ["parties", "bank_accounts", "staff", "taxes", "expense_accounts", "items"];
   const sourceRowsByCollection = new Map<CollectionName, Array<Record<string, any>>>();
   const targetNameToIdByCollection = new Map<CollectionName, Map<string, string>>();
   for (const cname of collections) {
     const [sourceRows, targetRows] = await Promise.all([
-      loadCollectionRows(sourceCompanyId, cname),
-      loadCollectionRows(targetCompanyId, cname),
+      loadCollectionRows(sourceCompanyId, cname, lane(sourceCompanyId)),
+      loadCollectionRows(targetCompanyId, cname, lane(targetCompanyId)),
     ]);
     sourceRowsByCollection.set(cname, sourceRows);
     const idx = new Map<string, string>();
@@ -966,6 +980,14 @@ export function AddVoucherDialog(props: any) {
     if (eid) return allCompanies.find((c) => c.id === eid) ?? ctxCompany ?? null;
     return ctxCompany ?? null;
   }, [editCompanyId, allCompanies, ctxCompany]);
+  const navigatorOnline = useNavigatorOnline();
+  /** Dialog company lane: APK local ⇒ SQLite/live snapshot; APK Firestore ⇒ onSnapshot taaki stale mirror `/company` na khenche. */
+  const voucherSqlMirrorFirst = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  /** Offline + Firestore-mode company: sirf dekho — Save / Copy / Approve band (`editingDisabled` merge). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
   const { user, customUser } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -1381,7 +1403,7 @@ export function AddVoucherDialog(props: any) {
       setLiveVoucher(null);
       return;
     }
-    if (isLocalOnlyMode()) {
+    if (voucherSqlMirrorFirst) {
       // Compare Side B: voucher dusri company ka — context `vouchers` me nahi; SQLite se same company id.
       if (editCompanyId?.trim() && editCompanyId.trim() !== ctxCompanyId) {
         void listCompanyDocsFromBrowserDb(editCompanyId.trim(), "vouchers").then((rows) => {
@@ -1408,7 +1430,7 @@ export function AddVoucherDialog(props: any) {
       unsub();
       setLiveVoucher(null);
     };
-  }, [isOpen, voucher?.id, companyId, postCopyNewFormSeed, voucher?.type, editCompanyId, ctxCompanyId, vouchers]);
+  }, [isOpen, voucher?.id, companyId, postCopyNewFormSeed, voucher?.type, editCompanyId, ctxCompanyId, vouchers, voucherSqlMirrorFirst]);
 
   // Preserve clicked contra leg + attachments from table row when live doc has not synced fileUrls yet.
   const effectiveVoucher = liveVoucher
@@ -1442,7 +1464,9 @@ export function AddVoucherDialog(props: any) {
       return;
     }
     const fetchVoucher = async (cid: string, vid: string) => {
-      if (isLocalOnlyMode()) {
+      /** Har cid ka apna lane — APK me Side B alag storage ho sakti hai (`apkEntityWriteUsesLocalSqliteMirror`). */
+      const lane = allCompanies.find((c) => c.id === cid) ?? company;
+      if (apkEntityWriteUsesLocalSqliteMirror(lane)) {
         if (cid && cid !== ctxCompanyId) {
           const rows = await listCompanyDocsFromBrowserDb(cid, "vouchers");
           return rows.find((v: any) => v.id === vid) || null;
@@ -1468,7 +1492,7 @@ export function AddVoucherDialog(props: any) {
       }
     });
     return () => { cancelled = true; };
-  }, [voucherForDialogChrome?.id, voucherForDialogChrome?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId]);
+  }, [voucherForDialogChrome?.id, voucherForDialogChrome?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId, allCompanies, company]);
 
   // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
   // Re-run when company changes so live voucher settings (from Settings) apply immediately
@@ -1490,18 +1514,25 @@ export function AddVoucherDialog(props: any) {
   // Show Approve / Save & Approve for any existing voucher if user can approve (approved voucher: enable when form has changes)
   const showApproveButton =
     !!voucherForDialogChrome?.id &&
-    can("approve_transactions");
+    can("approve_transactions") &&
+    !apkOfflineViewOnly;
 
   const showSaveAndApproveOnCreate =
     !voucherForDialogChrome?.id &&
     can("approve_transactions") &&
-    effectiveNotificationSettings?.approve?.on !== false;
+    effectiveNotificationSettings?.approve?.on !== false &&
+    !apkOfflineViewOnly;
 
   const handleApprove = useCallback(async () => {
     const cid = String(editCompanyId?.trim() || ctxCompanyId || "");
     const activeContextCompanyId = String(ctxCompanyId || "").trim();
     // Copied-draft par approve sirf source saved doc ke liye — chrome me id nahi dikhate, yahan bhi guard.
     if (!cid || !effectiveVoucher?.id || postCopyNewFormSeed || isApproving || !user?.uid) return;
+    // APK cloud offline: approve Firestore call fail + galat UX — pehle roko.
+    if (apkOfflineViewOnly) {
+      toast.warning("Offline — view only. Connect to approve.");
+      return;
+    }
     // APK/mobile: kuch parent / global effect approve ke baad silently `/dashboard` push kar deta hai — guard poll + restore (native ~8s).
     armDashboardRedirectGuard(router, { isMobile: ledgerModalGuardWide });
     plNavDbg("AddVoucherDialog.handleApprove.start", {
@@ -1555,6 +1586,7 @@ export function AddVoucherDialog(props: any) {
     isMobile,
     ledgerModalGuardWide,
     router,
+    apkOfflineViewOnly,
   ]);
 
   const prepareCopyDraftForCompany = useCallback(async (sourceVoucherId?: string, minSavedAtMs?: number) => {
@@ -1564,6 +1596,9 @@ export function AddVoucherDialog(props: any) {
     // warna source=target ho kar mismatch detect nahi hota aur old ids pass-through ho jate hain.
     const sourceCompanyId = String(companyId || "").trim();
     const destinationCompanyId = String(targetCompanyIdRef.current || targetCompanyId || "").trim();
+    /** Source lane: APK Firestore-company par local mirror fallback copy-race ko bigaad sakta tha (`apkEntityWriteUsesLocalSqliteMirror`). */
+    const sourceLaneCompany = allCompanies.find((c) => c.id === sourceCompanyId) ?? company ?? null;
+    const readLocalVoucherStaleFallback = apkEntityWriteUsesLocalSqliteMirror(sourceLaneCompany);
     if (!sourceCompanyId || !destinationCompanyId) {
       toast.error("Company not selected.");
       return null;
@@ -1590,15 +1625,17 @@ export function AddVoucherDialog(props: any) {
               break;
             }
           }
-          // Local/static mode me save ke baad row browser DB me pehle aa sakta hai.
-          const localRow =
-            (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ?? null;
-          if (localRow) {
-            const updatedMs = toEpochMs((localRow as any).updatedAt);
-            const isFreshEnough = minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
-            if (isFreshEnough) {
-              sourceDoc = localRow;
-              break;
+          // APK local lane: save ke baad row browser DB pehle aa sakta hai; Firestore lane par isse purana mirror copy na ho.
+          if (readLocalVoucherStaleFallback) {
+            const localRow =
+              (await getCompanyDocFromBrowserDb(sourceCompanyId, "vouchers", voucherIdToCopy) as Record<string, any> | null) ?? null;
+            if (localRow) {
+              const updatedMs = toEpochMs((localRow as any).updatedAt);
+              const isFreshEnough = minSavedAtMs == null || updatedMs == null || updatedMs >= (minSavedAtMs - 1200);
+              if (isFreshEnough) {
+                sourceDoc = localRow;
+                break;
+              }
             }
           }
           await new Promise<void>((resolve) => setTimeout(resolve, 180));
@@ -1621,7 +1658,12 @@ export function AddVoucherDialog(props: any) {
       const targetCompanyDoc = allCompanies.find((c) => c.id === destinationCompanyId) || null;
       const nextVoucherNumber = await getNextVoucherNumberForTarget(destinationCompanyId, targetCompanyDoc, sourceDoc);
       const cleaned = resetCrossLinksForCopy(sourceDoc);
-      const { remapped, unmatchedNames, unmatchedCategories } = await remapVoucherReferencesByName(sourceCompanyId, destinationCompanyId, cleaned);
+      const { remapped, unmatchedNames, unmatchedCategories } = await remapVoucherReferencesByName(
+        sourceCompanyId,
+        destinationCompanyId,
+        cleaned,
+        allCompanies
+      );
       const copyPayload = {
         ...remapped,
         voucherNumber: nextVoucherNumber,
@@ -1648,7 +1690,7 @@ export function AddVoucherDialog(props: any) {
     } finally {
       setIsCopyingToCompany(false);
     }
-  }, [companyId, targetCompanyId, user?.uid, effectiveVoucher?.id, allCompanies, postCopyNewFormSeed, effectiveVoucher, defaultVoucherData]);
+  }, [companyId, targetCompanyId, user?.uid, effectiveVoucher?.id, allCompanies, postCopyNewFormSeed, effectiveVoucher, defaultVoucherData, company]);
 
   /** Party/bank/target me create-save ke baad mismatch list dubara ginti — Copy buttons stale na rahein (`accountName` match ab mila ho). */
   const refreshCopyMismatchAfterMasterSave = useCallback(async () => {
@@ -1658,12 +1700,17 @@ export function AddVoucherDialog(props: any) {
     await new Promise<void>((resolve) => setTimeout(() => resolve(), 400));
     try {
       const cleaned = resetCrossLinksForCopy(copySourceVoucherSnapshot);
-      const { unmatchedCategories } = await remapVoucherReferencesByName(sourceCompanyId, destinationCompanyId, cleaned);
+      const { unmatchedCategories } = await remapVoucherReferencesByName(
+        sourceCompanyId,
+        destinationCompanyId,
+        cleaned,
+        allCompanies
+      );
       setCopyMismatchCategories(unmatchedCategories);
     } catch {
       /* Firestore list race par ignore — user fir save / company change kar sakta hai */
     }
-  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot]);
+  }, [companyId, targetCompanyId, postCopyNewFormSeed, copySourceVoucherSnapshot, allCompanies]);
 
   /** Quartet (PI/PO/DInc/DExp) tabs switch — prefilled Create_* dialog cancel + mismatch recount; tab-click se dialog na khule. */
   const onCashflowQuadTabNavigate = useCallback(() => {
@@ -1681,6 +1728,8 @@ export function AddVoucherDialog(props: any) {
     const candidateIds = Array.from(candidateIdsBucket);
     const targetCompanyNameResolved =
       allCompanies.find((c) => c.id === destinationCompanyId)?.name || "selected company";
+    const sourceLaneCompany = allCompanies.find((c) => c.id === sourceCompanyId) ?? null;
+    const destLaneCompany = allCompanies.find((c) => c.id === destinationCompanyId) ?? null;
 
     /** Jo row/side user ne Copy dabaya — seed snapshot ki exact master id pehle; baaki Set order par depend na ho. */
     const preferredMasterIds = resolvePreferredSourceMasterIdsFromSnapshot(copySourceVoucherSnapshot, opts);
@@ -1703,8 +1752,8 @@ export function AddVoucherDialog(props: any) {
     };
 
     for (const collectionName of collectionsToCopy) {
-      const sourceRows = await loadCollectionRows(sourceCompanyId, collectionName);
-      const targetRows = await loadCollectionRows(destinationCompanyId, collectionName);
+      const sourceRows = await loadCollectionRows(sourceCompanyId, collectionName, sourceLaneCompany);
+      const targetRows = await loadCollectionRows(destinationCompanyId, collectionName, destLaneCompany);
       const targetNameSet = collectTargetLowerNames(targetRows as Record<string, any>[]);
       const sourceById = new Map(sourceRows.map((row) => [String(row.id || ""), row]));
 
@@ -1854,7 +1903,8 @@ export function AddVoucherDialog(props: any) {
     // २. Unassigned file को cleanup (पहिलेकै लजिक)
     if (status === 'saved' && defaultVoucherData?.unassignedFile?.id && companyId) {
       try {
-        if (!isLocalOnlyMode()) {
+        const laneForFirestoreCleanup = company;
+        if (!apkEntityWriteUsesLocalSqliteMirror(laneForFirestoreCleanup)) {
           const fileDocRef = doc(firestore, `companies/${companyId}/unassigned_documents`, defaultVoucherData.unassignedFile.id);
           await deleteDoc(fileDocRef);
         }
@@ -1890,6 +1940,7 @@ export function AddVoucherDialog(props: any) {
   }, [
     onOpenChange,
     companyId,
+    company,
     defaultVoucherData?.unassignedFile?.id,
     props,
     voucher?.id,
@@ -2073,7 +2124,7 @@ export function AddVoucherDialog(props: any) {
               : undefined
           }
           showHistoryButton={!!voucherForDialogChrome?.id && can("view_voucher_history")}
-          editingDisabled={editingDisabled || historyBlocksEdit}
+          editingDisabled={editingDisabled || historyBlocksEdit || apkOfflineViewOnly}
           restrictConvertWhenLinked={hasLinks}
           deleteDisabledWhenLinked={isEditLockedByLinks}
           showApproveButton={showApproveButton}
@@ -2237,8 +2288,12 @@ export function AddVoucherDialog(props: any) {
               isMobile && "min-w-0 w-full text-center",
               BTN_SAVE_CLASS
             )}
-            disabled={isCopyingToCompany || !targetCompanyId}
+            disabled={isCopyingToCompany || !targetCompanyId || apkOfflineViewOnly}
             onClick={async () => {
+              if (apkOfflineViewOnly) {
+                toast.warning("Offline — view only.");
+                return;
+              }
               let sourceVoucherId = voucher?.id ? String(voucher.id) : undefined;
               let saveStartedAtMs: number | undefined;
 

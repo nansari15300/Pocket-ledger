@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Plus } from "lucide-react";
+import { Plus, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
+import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
+import { useReportList } from "@/contexts/ReportListContext";
 
 function isCompanySelectOrCreatePath(pathname: string | null): boolean {
   if (!pathname) return false;
@@ -152,5 +154,46 @@ export function MobileFloatingButton() {
         onVoucherCreated={() => {}}
       />
     </>
+  );
+}
+
+/** Mobile `/reports?report=…`: report list sheet — bank ke alag (header); baaki reports FAB thoda uper (footer/pager clearance) */
+export function ReportsMobileReportListFab() {
+  const pathname = usePathname();
+  const searchParams = useLocationSearchParams();
+  const { setReportListOpen } = useReportList();
+  const isMobile = useIsMobile();
+
+  const normalized = pathname?.replace(/\/+$/, "") ?? "";
+  const isReportListPage = normalized === "/reports";
+  const reportId = searchParams.get("report");
+  const reportSelected = Boolean(reportId);
+  // Bank statement: list toggle ab `DesktopBankStatementPage` header me — yahan duplicate FAB mat dikhao
+  if (reportId === "bank-statement") {
+    return null;
+  }
+
+  if (!isReportListPage || !isMobile || !reportSelected || isCompanySelectOrCreatePath(pathname)) {
+    return null;
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      title="Open report list"
+      aria-label="Open report list"
+      onClick={() => setReportListOpen(true)}
+      className={cn(
+        // User request: gol disk nahi — sirf PanelRight icon; dahin + niche screen edge ke qareeb
+        "fixed z-[58] shrink-0 h-auto min-h-10 min-w-10 rounded-none border-0 bg-transparent p-1 shadow-none",
+        "hover:bg-muted/35 active:bg-muted/50",
+        // Party / staff / … reports: fixed footer + pager se uper — overlap avoid (bank uses header icon)
+        "right-1 bottom-[calc(6.75rem+env(safe-area-inset-bottom,0px))]"
+      )}
+    >
+      <PanelRight className="h-5 w-5 text-foreground" />
+    </Button>
   );
 }

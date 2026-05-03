@@ -3,10 +3,22 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
-import { collection, doc, getDocs, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
+import {
+  Timestamp,
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 
 type DuplicateDecision = "active_exists" | "restored" | "create_new";
 
@@ -118,17 +130,61 @@ export async function resolveRecycleBinDuplicate({
   const trimmedName = String(name || "").trim();
   if (!trimmedName) return { decision: "create_new" };
 
+  // APK / SQLite mirror: duplicate + restore bina Firestore `getDocs` wait (offline "Creating…" stall fix).
+  if (isLocalOnlyMode()) {
+    const rows = await listCompanyDocsFromBrowserDb(companyId, collectionName, { includeSoftDeleted: true });
+    const active = rows.find((r: Record<string, unknown>) => {
+      const nm = String(r[fieldName] ?? "").trim();
+      return nm === trimmedName && r.isDeleted !== true;
+    }) as Record<string, unknown> | undefined;
+    if (active?.id != null && String(active.id).trim()) return { decision: "active_exists" };
+
+    const recycled = rows.find((r: Record<string, unknown>) => {
+      const nm = String(r[fieldName] ?? "").trim();
+      return nm === trimmedName && r.isDeleted === true;
+    }) as Record<string, unknown> | undefined;
+    const rid = recycled?.id != null ? String(recycled.id).trim() : "";
+    if (!rid) return { decision: "create_new" };
+
+    const shouldRestore = await askRestoreChoiceInApp(entityLabel, trimmedName);
+    if (!shouldRestore) return { decision: "create_new" };
+
+    const merged = {
+      ...recycled,
+      id: rid,
+      isDeleted: false,
+      deletedAt: null,
+      restoredAt: Timestamp.now(),
+    } as Record<string, unknown>;
+    await upsertCompanyDocInBrowserDb(companyId, collectionName, rid, merged);
+    await enqueueCompanyDocOutbox(companyId, collectionName, "update", rid, merged);
+    return { decision: "restored", restoredId: rid };
+  }
+
+  const RECYCLE_QUERY_MS = 5000;
+
   const q = query(
     collection(firestore, `companies/${companyId}/${collectionName}`),
     where(fieldName, "==", trimmedName)
   );
-  const snap = await getDocs(q);
-  const docs = snap.docs;
+  let docs: Array<{ id: string; data: () => Record<string, unknown> }>;
+  try {
+    const snap = await Promise.race([
+      getDocs(q),
+      new Promise<Awaited<ReturnType<typeof getDocs>>>((_, reject) =>
+        setTimeout(() => reject(new Error("resolveRecycleBinDuplicate-timeout")), RECYCLE_QUERY_MS)
+      ),
+    ]);
+    docs = snap.docs.map((d) => ({ id: d.id, data: () => d.data() as Record<string, unknown> }));
+  } catch {
+    // Network stall: dubara naam mat roko — SQLite mirror / flush baad me resolve karenge (master create unblock).
+    return { decision: "create_new" };
+  }
 
-  const active = docs.find((d) => (d.data() as any)?.isDeleted !== true);
+  const active = docs.find((d) => d.data()?.["isDeleted"] !== true);
   if (active) return { decision: "active_exists" };
 
-  const recycled = docs.find((d) => (d.data() as any)?.isDeleted === true);
+  const recycled = docs.find((d) => d.data()?.["isDeleted"] === true);
   if (!recycled) return { decision: "create_new" };
 
   // Ask choice in app dialog instead of browser alert.

@@ -9,6 +9,46 @@ type Body = { companyId?: string; localCompanyId?: string };
 
 const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
 
+/**
+ * Next dev (hot reload) / thin Wi‑Fi par Admin SDK kabhi ECONNRESET abort — ek-do retry se POST stable.
+ * Non-transient errors ko retry nahi karte (permission, invalid arg, etc.).
+ */
+function isTransientFirestoreOrNetworkError(e: unknown): boolean {
+  const msg = String(
+    typeof e === "object" && e !== null && "message" in e ? (e as { message?: unknown }).message : e
+  ).toLowerCase();
+  const code =
+    typeof e === "object" && e !== null && "code" in e
+      ? String((e as { code?: unknown }).code || "")
+      : "";
+  return (
+    msg.includes("econnreset") ||
+    msg.includes("etimedout") ||
+    msg.includes("econnrefused") ||
+    msg.includes("aborted") ||
+    msg.includes("socket hang up") ||
+    msg.includes("deadline exceeded") ||
+    code === "UNAVAILABLE" ||
+    code === "DEADLINE_EXCEEDED" ||
+    code === "ABORTED"
+  );
+}
+
+async function withFirestoreTransientRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      if (!isTransientFirestoreOrNetworkError(e) || attempt === maxAttempts) throw e;
+      await new Promise((r) => setTimeout(r, 120 * attempt));
+    }
+  }
+  throw last;
+}
+
 function normalizeCompanyPlanId(raw: unknown): PlanId {
   const s = String(raw ?? "basic").trim();
   if (s === "basic" || s === "advance" || s === "pro" || s === "pro-plus") return s;
@@ -61,7 +101,7 @@ export async function POST(req: NextRequest) {
         : companyId /* backward compat: same id */;
 
     const ref = getAdminDb().collection("companies").doc(companyId);
-    const snap = await ref.get();
+    const snap = await withFirestoreTransientRetry(() => ref.get());
     if (!snap.exists) {
       return NextResponse.json({ error: "company_not_found" }, { status: 404 });
     }
@@ -112,14 +152,16 @@ export async function POST(req: NextRequest) {
       offlineLicenseValidUntilMs = Math.min(offlineLicenseValidUntilMs, planExpiryMs);
     }
 
-    await ref.set(
-      {
-        linkedLocalCompanyId: localCompanyId,
-        offlineLicenseValidUntilMs,
-        offlineLicenseUpdatedAtMs: now,
-        offlineLicenseLastChunkMs: chunkMs,
-      },
-      { merge: true }
+    await withFirestoreTransientRetry(() =>
+      ref.set(
+        {
+          linkedLocalCompanyId: localCompanyId,
+          offlineLicenseValidUntilMs,
+          offlineLicenseUpdatedAtMs: now,
+          offlineLicenseLastChunkMs: chunkMs,
+        },
+        { merge: true }
+      )
     );
 
     return NextResponse.json({

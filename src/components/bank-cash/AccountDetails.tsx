@@ -69,13 +69,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDate } from "@/hooks/useDate";
-import { EntityLedgerOpeningHints } from "@/components/common/EntityLedgerOpeningHints";
 import { ScrollArea } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
-import { FilePreview } from "../vouchers/FilePreview";
 import {
   Dialog,
   DialogContent,
@@ -1020,11 +1018,12 @@ export function AccountDetails({
   ]);
 
   const dateRangeLabel = useMemo(() => {
+    // Bina date filter = Party/Bank entity reports jaisa "All Time" (na ki Last N Txns label)
     if (!dateRange || (dateRange.from == null && dateRange.to == null)) {
-      return rowsPerPage > 0 ? `Last ${rowsPerPage} Txns` : "All Txns";
+      return "All Time";
     }
     return buildDateRangeText();
-  }, [dateRange, dateSystem, formatDateBS, rowsPerPage]);
+  }, [dateRange, dateSystem, formatDateBS, formatDate]);
 
   const accountNamesMap = useMemo(
     () => ({
@@ -1177,6 +1176,10 @@ export function AccountDetails({
             contextId={account.id}
             forceBalanceMode="statement"
             openingBalance={showMaskedBalance ? 0 : mobilePageLedgerStats.openingForPage}
+            booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
+            ledgerDateFilterActive={hasLedgerDateFilter}
+            ledgerShowBookOpeningRow={currentPage === 1}
+            openingBalancePeriodStartDate={dateRange?.from}
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
             openingBalanceNarration={(account as any).openingBalanceNarration}
@@ -1377,13 +1380,6 @@ export function AccountDetails({
                     )}
                   </div>
                 </div>
-                {!showMaskedBalance && (
-                  <EntityLedgerOpeningHints
-                    masterOpening={masterAccountOpening}
-                    periodOpeningBroughtForward={openingBalanceForPeriod}
-                    hasDateFilter={hasLedgerDateFilter}
-                  />
-                )}
               </div>
             </div>
             <div className="flex items-center gap-2 justify-end flex-nowrap overflow-x-auto scrollbar-slim-dim flex-shrink-0">
@@ -1478,17 +1474,7 @@ export function AccountDetails({
             </div>
           </div>
         </div>
-        {/* Bank account PDF/images — party Details jaisa preview strip */}
-        {account.documentFileUrls && account.documentFileUrls.length > 0 && account.id !== "all" && (
-          <div className="border-b px-3 py-2 flex flex-wrap gap-2 items-start bg-muted/15">
-            <span className="text-xs font-medium text-muted-foreground pt-1">Documents:</span>
-            <div className="flex flex-wrap gap-2">
-              {account.documentFileUrls.map((url, i) => (
-                <FilePreview key={`${url}-${i}`} file={url} size={56} />
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Opening-balance documents: no preview strip here—only File column tick on opening row (openingBalanceAttachmentUrls). */}
 
         {/* TABLE AREA - Statement = running balance; Bill wise = per-row outstanding (same as PartyDetails) */}
         <div className="flex-1 flex flex-col min-h-0 overflow-x-auto scrollbar-slim-dim">
@@ -1501,6 +1487,10 @@ export function AccountDetails({
               contextId={account.id}
               forceBalanceMode="statement"
               openingBalance={showMaskedBalance ? 0 : desktopPageLedgerStats.openingForPage}
+              booksOpeningBalance={showMaskedBalance ? undefined : masterAccountOpening}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={currentPage === 1}
+              openingBalancePeriodStartDate={dateRange?.from}
               openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceNarration={(account as any).openingBalanceNarration}
