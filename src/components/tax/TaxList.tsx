@@ -10,9 +10,14 @@ import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Tooltip, TooltipProvider, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Card } from "@/components/ui/card";
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 
 export function TaxList({ 
     taxes, 
@@ -35,26 +40,29 @@ export function TaxList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  /** Party account list — `EntityListQuickFilterBar` niche (Default / Dr / By Name…) */
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const filteredAndSortedTaxes = useMemo(() => {
-    return taxes
-      .filter(tax =>
-        tax.name && tax.name.toLowerCase().includes(searchTerm.toLowerCase())
-      )
-      .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [taxes, searchTerm]);
+    return filterAndSortMasterEntityListRows(taxes, searchTerm, quickFilter);
+  }, [taxes, searchTerm, quickFilter]);
 
   if (filteredAndSortedTaxes.length === 0) {
     return (
-      <div className="p-8 text-center text-sm text-muted-foreground bg-background rounded-b-lg border-t-0">
-        No taxes found.
-      </div>
+      <TooltipProvider delayDuration={200}>
+        <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
+          <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+            No taxes found.
+          </div>
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        </div>
+      </TooltipProvider>
     );
   }
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background">
+      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background" data-theme-list="account-list">
         <ScrollArea className="min-h-0 min-w-0 flex-1">
           <ul className="p-2 space-y-1">
           <AnimatePresence mode="popLayout">
@@ -143,6 +151,7 @@ export function TaxList({
           </AnimatePresence>
         </ul>
       </ScrollArea>
+      <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
     </div>
     </TooltipProvider>
   );

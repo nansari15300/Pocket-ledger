@@ -1,6 +1,4 @@
-
 "use client";
-
 import type { ExpenseAccount } from "@/components/expenses/types";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -9,9 +7,14 @@ import { DollarSign, Lock } from "lucide-react";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "../ui/tooltip";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -38,29 +41,41 @@ export function ExpenseAccountList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings?.rows?.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? (animationSettings?.rows?.duration ?? 2.5) : 0;
+  /** Income & Expense account column — Party jaisi sort/footer controls */
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
   const filteredAndSortedAccounts = useMemo(() => {
-    return (accounts || [])
-      .filter((account) => {
-        if (!account.name) return false;
-        const nameLower = account.name.toLowerCase();
-        const searchLower = searchTerm.toLowerCase();
-        return nameLower.includes(searchLower);
-      })
-      .sort((a, b) => Math.abs(b.balance || 0) - Math.abs(a.balance || 0));
-  }, [accounts, searchTerm]);
+    return filterAndSortMasterEntityListRows(accounts ?? [], searchTerm, quickFilter);
+  }, [accounts, searchTerm, quickFilter]);
 
   if (filteredAndSortedAccounts.length === 0) {
     return (
-      <div className="p-8 text-center text-sm text-muted-foreground bg-background rounded-b-lg border-t-0">
-        No accounts found.
-      </div>
+      <TooltipProvider delayDuration={200}>
+        <div
+          className={cn(
+            "flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background",
+            disabled && "pointer-events-none opacity-60"
+          )}
+          data-theme-list="account-list"
+        >
+          <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+            No accounts found.
+          </div>
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        </div>
+      </TooltipProvider>
     );
   }
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className={cn("flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background", disabled && "pointer-events-none opacity-60")}>
+      <div
+        className={cn(
+          "flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-t-0 bg-background",
+          disabled && "pointer-events-none opacity-60"
+        )}
+        data-theme-list="account-list"
+      >
         <ScrollArea className="min-h-0 min-w-0 flex-1">
           <ul className="p-2 space-y-1">
             <AnimatePresence mode="popLayout">
@@ -147,6 +162,7 @@ export function ExpenseAccountList({
             </AnimatePresence>
           </ul>
         </ScrollArea>
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
       </div>
     </TooltipProvider>
   );

@@ -62,9 +62,14 @@ import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-group
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
-import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudEntityMasterReadFromSqliteMirror,
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { BTN_SAVE_NEW_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import {
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
@@ -154,8 +159,22 @@ export function CreatePartyForm({
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
   const { dateSystem, formatDate, formatDateBS } = useDate();
   const { processedGroups } = useVouchers();
+  const processedGroupsRef = useRef(processedGroups);
+  processedGroupsRef.current = processedGroups;
+  /** Party create lists: pure-local=outbox lane; APK cloud=warm-SQLite mirror reads (`apkCloudEntityMasterReadFromSqliteMirror`). */
+  const sqliteListsSkipFirestore = useMemo(
+    () =>
+      apkEntityWriteUsesLocalSqliteMirror(company) || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [company]
+  );
   const isLocalGuestUser = user?.uid === "local_guest_user";
   const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+  const navigatorOnline = useNavigatorOnline();
+  /** APK Firestore company offline: party create Save band — local-storage company exempt (`apkCloudCompanyOfflineViewOnly`). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as Resolver<FormValues>,
@@ -271,23 +290,48 @@ export function CreatePartyForm({
   
   useEffect(() => {
     if (!companyId) return;
-    if (isLocalOnlyMode()) {
-      // Local-only mode: groups Firestore listener skip karo; form local cached groups/useVouchers se chalti rahe.
-      return;
+    let cancelled = false;
+
+    const seedFromVouchers = () => {
+      const fb = (processedGroupsRef.current || []).filter((g: any) => !g.isDeleted) as Group[];
+      if (fb.length) setGroups(fb);
+    };
+
+    /** SQLite warm mirror — APK cloud / pure-local listeners avoid karte hain. */
+    const loadMirror = async (): Promise<void> => {
+      try {
+        const rows = await listCompanyDocsFromBrowserDb(companyId, "groups");
+        if (cancelled) return;
+        const mapped = rows
+          .map((r: any) => ({ ...r, id: r.id } as Group))
+          .filter((g) => !(g as any).isDeleted);
+        if (mapped.length) setGroups(mapped);
+      } catch {
+        /* ignore — combobox Fallback processed groups pe */
+      }
+    };
+
+    if (sqliteListsSkipFirestore) {
+      seedFromVouchers();
+      void loadMirror();
+      return () => {
+        cancelled = true;
+      };
     }
+
     const q = query(collection(firestore, `companies/${companyId}/groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Group)).filter(g => !g.isDeleted));
+      setGroups(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as Group)).filter((g) => !g.isDeleted));
     });
     return () => unsubscribe();
-  }, [companyId]);
+  }, [companyId, sqliteListsSkipFirestore]);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
+    void (async () => {
       if (!companyId || !user?.uid) return;
-      if (isLocalOnlyMode()) {
-        // Local-only mode: Firestore-backed ungrouped initializer call mat chalao.
+      /** Pure-local APK: Firestore-backed ungrouped seed mat chalao; cloud APK me server canonical ID chahiye. */
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         const current = form.getValues("groupId");
         if (!current) form.setValue("groupId", getUngroupedGroupId("party"), { shouldDirty: false });
         return;
@@ -301,7 +345,7 @@ export function CreatePartyForm({
     return () => {
       alive = false;
     };
-  }, [companyId, user?.uid, form]);
+  }, [companyId, user?.uid, form, company]);
 
   useEffect(() => {
     const handlePrefill = (event: CustomEvent) => {
@@ -377,6 +421,10 @@ export function CreatePartyForm({
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
     if ((!user || !user.email) && !isStaticAppBuild()) {
       toast({
         variant: "destructive",
@@ -408,7 +456,7 @@ export function CreatePartyForm({
     const documentFilesSnap = files.documents;
 
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: IndexedDB pending files + SQLite row (online upload nahin)
         if (!companyId) {
           sonnerToast.error("No company selected", {
@@ -575,7 +623,7 @@ export function CreatePartyForm({
 
     } catch (error) {
       console.error("Error creating party:", error);
-      const staticMode = isLocalOnlyMode();
+      const staticMode = apkEntityWriteUsesLocalSqliteMirror(company);
       if (staticMode) {
         try {
           if (!companyId) throw new Error("Select a company before saving a party.");
@@ -970,14 +1018,14 @@ export function CreatePartyForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading}
+                disabled={isLoading || apkOfflineViewOnly}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             ) : null}
           </div>
-          <Button type="submit" className="shrink-0" disabled={isLoading}>
+          <Button type="submit" className="shrink-0" disabled={isLoading || apkOfflineViewOnly}>
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Party
           </Button>

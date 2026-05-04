@@ -773,6 +773,7 @@ export function ExpenseAccountDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={currentPage === 1}
               openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
               openingBalanceNarration={account.openingBalanceNarration}
               openingBalanceAttachmentUrls={account.documentFileUrls}
               openingBalanceDate={(account as any).openingBalanceDate}
@@ -997,6 +998,7 @@ export function ExpenseAccountDetails({
                   ledgerDateFilterActive={hasLedgerDateFilter}
                   ledgerShowBookOpeningRow={currentPage === 1}
                   openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
                   openingBalanceNarration={account.openingBalanceNarration}
                   openingBalanceAttachmentUrls={account.documentFileUrls}
                   openingBalanceDate={(account as any).openingBalanceDate}

@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Smartphone } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
@@ -37,7 +37,8 @@ import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRed
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
-import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudFirestoreMasterWriteFromCompanyShape } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { countSyncOutboxRowsForCompany } from "@/lib/localVoucherOutbox";
 import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 // APK par `[PL-NAV]` traces screen pe — adb/browser ki zarurat kam (flags: `plNavRedirectDebug.ts` header)
 import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
@@ -60,14 +61,83 @@ function signOutWithLoginCleanup() {
   return signOutWithFirestoreTeardown(auth);
 }
 
-/** APK + online company: sirf offline par chhota strip — view-only reminder (EXE path me render nahi hota). */
+/** APK + cloud company offline: amber strip sirf ~2s — lambi “view only” strip na chipke (`useEffect` timed dismiss). */
 function ApkCloudOfflineViewBanner() {
   const { company } = useCompany();
   const online = useNavigatorOnline();
-  if (!apkCloudCompanyOfflineViewOnly(company, online)) return null;
+  const offlineViewOnly = apkCloudCompanyOfflineViewOnly(company, online);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!offlineViewOnly) {
+      setVisible(false);
+      return;
+    }
+    setVisible(true);
+    const tid = window.setTimeout(() => setVisible(false), 2000);
+    return () => clearTimeout(tid);
+  }, [offlineViewOnly]);
+
+  if (!visible) return null;
   return (
     <div className="border-b border-border/60 bg-amber-500/15 py-1.5 text-center text-[11px] font-medium text-amber-950 dark:text-amber-100 sm:text-xs">
       Offline — view only. Full edit when you are back online.
+    </div>
+  );
+}
+
+/**
+ * Offline → online transition: SQLite outbox pending ho **ya** APK cloud company ho (warm mirror sync),
+ * bina navigation reload — user ko acknowledgement strip.
+ */
+function ApkCloudOnlineSyncAckBanner() {
+  const online = useNavigatorOnline();
+  const { companyId, company } = useCompany();
+  const prevOnlineRef = useRef(online);
+  const [visible, setVisible] = useState(false);
+  const [text, setText] = useState("");
+
+  useEffect(() => {
+    const wasOffline = prevOnlineRef.current === false;
+    prevOnlineRef.current = online;
+    if (!(wasOffline && online)) return;
+    const cid = companyId?.trim();
+    if (!cid) return;
+
+    let cancelled = false;
+    /** Explicit `number` — DOM timers; avoids Node `Timer` vs `number` clash when libs merge */
+    let dismissTimer: number | null = null;
+
+    void (async () => {
+      const pending = await countSyncOutboxRowsForCompany(cid);
+      const mirrorCloudCompany = apkCloudFirestoreMasterWriteFromCompanyShape(company);
+      if (cancelled) return;
+
+      let msg: string | null = null;
+      if (pending > 0) {
+        msg = "You're online — pending changes are syncing.";
+      } else if (mirrorCloudCompany) {
+        msg = "You're online — local data sync starting.";
+      }
+      if (!msg) return;
+      setText(msg);
+      setVisible(true);
+      dismissTimer = window.setTimeout(() => {
+        setVisible(false);
+        setText("");
+      }, 4500);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (dismissTimer != null) clearTimeout(dismissTimer);
+    };
+  }, [online, companyId, company]);
+
+  if (!visible || !text) return null;
+  return (
+    <div className="border-b border-border/60 bg-emerald-500/15 py-1.5 text-center text-[11px] font-medium text-emerald-950 dark:text-emerald-100 sm:text-xs">
+      {text}
     </div>
   );
 }
@@ -752,6 +822,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />
+                      <ApkCloudOnlineSyncAckBanner />
                       <DashboardMainWithEdgeSwipe
                         className={cn(
                           "flex-1 min-h-0",

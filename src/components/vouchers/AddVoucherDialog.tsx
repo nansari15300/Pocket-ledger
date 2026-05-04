@@ -923,8 +923,13 @@ function VoucherDialogContent({
         )}
       </div>
 
-      {/* Dialog form canvas background: fill leftover white space without changing field colors. */}
-      <div className={cn("w-full min-w-0 max-w-full pl-[2px] pr-[2px] pt-6 flex-1 flex flex-col min-h-0 overflow-x-hidden box-border bg-slate-100", isMobile ? "pb-0" : "pb-6 md:p-6")}>
+      {/* Dialog form canvas: desktop `pt-6` breathable; APK/mobile par `pt-0` ta sky strip ke border ke niche white/slate wasted band (user scroll-area ke upar khali dhari). */}
+      <div
+        className={cn(
+          "w-full min-w-0 max-w-full pl-[2px] pr-[2px] flex-1 flex flex-col min-h-0 overflow-x-hidden box-border bg-slate-100",
+          isMobile ? "pt-0 pb-0" : "pt-6 pb-6 md:p-6"
+        )}
+      >
         <Suspense fallback={<div className="p-10 text-center"><Loader2 className="animate-spin mx-auto" /></div>}>
           {ActiveForm ? (
             <ActiveForm 
@@ -1985,7 +1990,7 @@ export function AddVoucherDialog(props: any) {
             </p>
           </div>
           <div className="flex shrink-0 flex-row items-center justify-end justify-self-end self-center gap-[10px]">
-            {(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext) && (
+            {(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id)) && (
               <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                 <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
                   <SelectValue placeholder="Company" />
@@ -2033,7 +2038,7 @@ export function AddVoucherDialog(props: any) {
           )}
           {isDesktop && (
             <div className="ml-auto flex shrink-0 items-center gap-[10px]">
-              {(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext) && (
+              {(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id)) && (
                 <Select value={targetCompanyId || ""} onValueChange={handleLedgerHeaderCompanyChange}>
                   {/* Company selector: desktop par item-section tone match (soft green ribbon family). */}
                   <SelectTrigger className="h-9 min-w-[9rem] w-auto max-w-[22vw] shrink rounded-full border-emerald-300/80 bg-emerald-50">
@@ -2137,7 +2142,8 @@ export function AddVoucherDialog(props: any) {
           targetCompanyOptions={allCompanies.map((c) => ({ id: c.id, name: c.name }))}
           onTargetCompanyChange={handleLedgerHeaderCompanyChange}
           formInstanceKey={copyDraftSeedVersion}
-          showHeaderCompanySelector={Boolean(postCopyNewFormSeed || apkLedgerPinsShellCompanyContext)}
+          // APK: sirf new txn (+ copy-target shell) par company switch; saved edit par company dropdown nahin (`voucherForDialogChrome` = live doc).
+          showHeaderCompanySelector={Boolean(postCopyNewFormSeed || (apkLedgerPinsShellCompanyContext && !voucherForDialogChrome?.id))}
           copySaveTargetCompanyId={postCopyNewFormSeed ? (targetCompanyId || undefined) : undefined}
           copyMismatchCategories={postCopyNewFormSeed ? copyMismatchCategories : undefined}
           // Party/staff/tax/item/account sab: pehle prefilled Create dialog — direct Firestore clone nahi (user save se pehle edit mile).

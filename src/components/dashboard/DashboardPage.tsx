@@ -2046,14 +2046,21 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-2">
             <div className={cn("flex items-center space-x-2", isMobile ? "order-1" : "md:order-2")}>
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <BsDatePicker isRange valueAD={recentDateRange} onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)} transactionDates={transactionDates} />
+                <BsDatePicker
+                  isRange
+                  valueAD={recentDateRange}
+                  onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)}
+                  transactionDates={transactionDates}
+                  hideTriggerIcon={isMobile}
+                  rangeEmptyLabel={isMobile ? "Change date" : undefined}
+                />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
                 <Popover>
                     <PopoverTrigger asChild>
                     <Button id="recent-date" variant={"outline"} className={cn("w-auto justify-start text-left font-normal h-9", !recentDateRange && "text-muted-foreground")}>
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {recentDateRange?.from ? (recentDateRange.to ? <>{format(recentDateRange.from, "LLL dd, y")} - {format(recentDateRange.to, "LLL dd, y")}</> : format(recentDateRange.from, "LLL dd, y")) : (<span>Date range</span>)}
+                        {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
+                        {recentDateRange?.from ? (recentDateRange.to ? <>{format(recentDateRange.from, "LLL dd, y")} - {format(recentDateRange.to, "LLL dd, y")}</> : format(recentDateRange.from, "LLL dd, y")) : (<span>{isMobile ? "Change date" : "Date range"}</span>)}
                     </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">

@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useRouter } from "next/navigation";
 import type { TaxGroup } from "@/components/tax/types";
@@ -54,7 +54,11 @@ import { format } from "date-fns";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
@@ -111,6 +115,12 @@ export function CreateTaxForm({
   const { dateSystem } = useDate();
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const navigatorOnline = useNavigatorOnline();
+  /** APK cloud company offline: tax create parity vouchers — Save band. */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
@@ -133,7 +143,7 @@ export function CreateTaxForm({
     let alive = true;
     (async () => {
       if (!companyId || !user?.uid) return;
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: keep tax default on local ungrouped without Firestore call.
         const current = form.getValues("groupId");
         if (!current) form.setValue("groupId", getUngroupedGroupId("tax"), { shouldDirty: false });
@@ -289,6 +299,10 @@ export function CreateTaxForm({
         sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
         return;
       }
+      if (apkOfflineViewOnly) {
+        sonnerToast.error("Offline — view only.");
+        return;
+      }
       if (!options.saveAndNew) {
         onCloseDialogRequest?.();
       } else {
@@ -303,12 +317,17 @@ export function CreateTaxForm({
       toast({ variant: "destructive", title: "Error", description: "You must be logged in and have a company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsLoading(false);
+      return;
+    }
 
     const toastId = sonnerToast.loading("Saving tax...");
     setIsLoading(true);
     
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         const totalAttachBytesLocal =
           (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
         if (totalAttachBytesLocal > 0) {
@@ -497,7 +516,7 @@ export function CreateTaxForm({
       onTaxCreated?.(saveAndNew, newTaxId, newTax);
     } catch (error) {
       console.error("Error creating tax:", error);
-      if (isLikelyOfflineFirestoreError(error)) {
+      if (isLikelyOfflineFirestoreError(error) && apkEntityWriteUsesLocalSqliteMirror(company)) {
         try {
           if (!companyId || !user) throw new Error("Missing company or user.");
           const totalCatch =
@@ -760,13 +779,13 @@ export function CreateTaxForm({
               variant="ghost"
               className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
               onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-              disabled={isLoading}
+              disabled={isLoading || apkOfflineViewOnly}
             >
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & New
             </Button>
           </div>
-          <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+          <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Tax
           </Button>

@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, PlusCircle } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { addDoc, collection, serverTimestamp } from "firebase/firestore";
@@ -29,7 +29,11 @@ import type { ItemGroup } from "@/components/items/types";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 
@@ -58,8 +62,14 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const isMobile = useIsMobile();
+  const navigatorOnline = useNavigatorOnline();
+  /** APK cloud company offline: item group Create / Save & New band. */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -82,6 +92,14 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
     if (!user || !companyId) {
         toast({ variant: "destructive", title: "Authentication Error", description: "You must be logged in." });
         return;
+    }
+    if (apkOfflineViewOnly) {
+      toast({
+        variant: "destructive",
+        title: "Offline — view only",
+        description: "Connect to create an item group.",
+      });
+      return;
     }
     setIsLoading(true);
     try {
@@ -127,7 +145,7 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
       }
 
       let createdId = "";
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-first mode: save item group in browser DB and queue backup sync.
         createdId = createLocalEntityId("item_group");
         const payload = {
@@ -231,13 +249,13 @@ export function CreateItemGroupDialog({ onGroupCreated, children, isOpen, onOpen
                       variant="ghost"
                       className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                       onClick={form.handleSubmit(data => onSubmit(data, true))}
-                      disabled={isLoading}
+                      disabled={isLoading || apkOfflineViewOnly}
                     >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & New
                     </Button>
                   </div>
-                  <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+                  <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Group
                   </Button>

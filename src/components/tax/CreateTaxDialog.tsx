@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
 import { useRouter } from "next/navigation";
 import type { TaxGroup } from "@/components/tax/types";
@@ -13,7 +13,6 @@ import { addDoc, collection, serverTimestamp, query, where, getDocs, onSnapshot 
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { isLocalOnlyMode } from "@/lib/localMode";
 import { firestore, storage } from "@/lib/firebase";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -31,7 +30,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
-import { format } from "date-fns";
+import { apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   cnMasterEntityDialogContent,
@@ -69,7 +69,12 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
   const [isNestedOpen, setIsNestedOpen] = useState(false);
   const router = useRouter();
   const [groups, setGroups] = useState<TaxGroup[]>(parentGroups);
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
+  const sqliteListsSkipFirestore = useMemo(
+    () =>
+      apkEntityWriteUsesLocalSqliteMirror(company) || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [company]
+  );
   const { processedTaxGroups } = useVouchers();
   const processedTaxGroupsRef = useRef(processedTaxGroups);
   processedTaxGroupsRef.current = processedTaxGroups;
@@ -81,8 +86,21 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    if (isLocalOnlyMode()) {
-      setGroups((processedTaxGroups as TaxGroup[]) || []);
+
+    /** APK cloud/local-static: SQLite mirror authoritative — redundant Firestore snapshot na lagao */
+    if (sqliteListsSkipFirestore) {
+      setGroups((processedTaxGroupsRef.current as TaxGroup[]) || []);
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "tax_groups");
+          const filtered = rows
+            .filter((r: any) => !r.isDeleted)
+            .map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as TaxGroup));
+          if (filtered.length > 0) setGroups(filtered);
+        } catch (e) {
+          console.warn("[CreateTaxDialog] tax_groups SQLite mirror failed", e);
+        }
+      })();
       return;
     }
     const q = query(collection(firestore, `companies/${companyId}/tax_groups`), where("isDeleted", "==", false));
@@ -98,7 +116,7 @@ export function CreateTaxDialog({ onTaxCreated, children, groups: parentGroups =
       }
     );
     return () => unsubscribe();
-  }, [isOpen, companyId, processedTaxGroups]);
+  }, [isOpen, companyId, sqliteListsSkipFirestore]);
 
   const handleTaxCreated = (isSaveAndNew: boolean, newId: string, newTax?: { id: string; name: string; rate: number; balance?: number; companyId: string; groupId?: string }) => {
     onTaxCreated(newId, newTax);

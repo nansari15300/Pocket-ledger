@@ -241,6 +241,20 @@ export async function clearSyncOutboxForCompany(companyId: string): Promise<void
 }
 
 /** Seedha Firestore update ke baad pending outbox row hatao — purana flush overwrite na kare. */
+/** APK online banner gate: pending outbox rows count (SQLite, company scoped). */
+export async function countSyncOutboxRowsForCompany(companyId: string): Promise<number> {
+  try {
+    const cid = companyId.trim();
+    if (!cid) return 0;
+    const db = await getBrowserDb();
+    if (!db) return 0;
+    const row = db.prepare(`SELECT COUNT(1) as c FROM sync_outbox WHERE company_id = ?`).get(cid) as { c?: number };
+    return Number(row?.c ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 export async function removeOutboxRowsForCompanyDoc(
   companyId: string,
   collectionName: string,

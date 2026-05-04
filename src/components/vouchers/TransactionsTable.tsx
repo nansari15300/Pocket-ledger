@@ -44,7 +44,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Card } from "@/components/ui/card";
-import { differenceInDays, format } from "date-fns";
+import { differenceInDays, format, startOfDay } from "date-fns";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { useCompany } from "@/hooks/useCompany";
 import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
@@ -80,6 +80,25 @@ function normalizeLedgerObDateField(v: unknown): Date | null {
   }
   const p = new Date(v as string | number);
   return isNaN(p.getTime()) ? null : p;
+}
+
+/** Form "As on" date ledger query range (from/to days, inclusive) ke andar? — andar: stacked Book row / single-row Book pill; bahar: sirf Dated. */
+function isMasterOpeningDateInLedgerQueryRange(
+  range: { from?: Date | null; to?: Date | null } | null | undefined,
+  masterObDay: Date | null
+): boolean {
+  if (!masterObDay || !range) return false;
+  const ob = startOfDay(masterObDay).getTime();
+  const rawFrom = range.from != null ? startOfDay(range.from).getTime() : undefined;
+  const rawTo = range.to != null ? startOfDay(range.to).getTime() : undefined;
+  if (rawFrom == null && rawTo == null) return false;
+  if (rawFrom != null && rawTo != null) {
+    const lo = Math.min(rawFrom, rawTo);
+    const hi = Math.max(rawFrom, rawTo);
+    return ob >= lo && ob <= hi;
+  }
+  if (rawFrom != null) return ob >= rawFrom;
+  return ob <= rawTo!;
 }
 
 /** Spend-wise row grouping — mobile cards + desktop table must share shape; hooks using this stay above any conditional return. */
@@ -132,7 +151,8 @@ interface TransactionsTableProps {
   hideCreditColumn?: boolean;
   hideBalanceColumn?: boolean;
   hideFooter?: boolean;
-  dateRange?: any;
+  /** Ledger date filter range — Books opening sirf tab jab `openingBalanceDate` is inclusive range me ho. */
+  dateRange?: { from?: Date | null; to?: Date | null };
   isInitialLoad?: boolean;
   isDateChange?: boolean;
   getDisplayValue?: (value: number) => string;
@@ -170,9 +190,9 @@ interface TransactionsTableProps {
   showItemPartyColumn?: boolean;
   /** When true (default), `isApproved` !== true rows get pink tint (main + narration). Party details use default. */
   highlightPendingApproval?: boolean;
-  /** Entity ledger: date filter on → Dated Opening pill; off → Book Opening. Reports omit = legacy `openingBalanceLabel`. */
+  /** Entity ledger: pills on when set; dated vs book wording `dateRange` + master OB date se decide. */
   ledgerDateFilterActive?: boolean;
-  /** With date filter: page-1 par Book Opening row dated ke upar; page>1 par sirf Dated row. */
+  /** Page-1: upar stacked Book row (jab master OB nonzero + OB date range me); page>1 sirf dated carry. */
   ledgerShowBookOpeningRow?: boolean;
   /** Range `from` — Dated Opening row ki Date column (BS/AD). */
   openingBalancePeriodStartDate?: unknown;
@@ -578,22 +598,9 @@ export function TransactionsTable({
     typeof ledgerDateFilterActive === "boolean" &&
     ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
   const BOOK_OB_EPS = 5e-4;
-  const showBookOpeningAboveDatedRow =
-    ledgerOpeningPillsEnabled &&
-    Boolean(ledgerDateFilterActive) &&
-    ledgerShowBookOpeningRow &&
-    booksObScaled != null &&
-    Math.abs(booksObScaled) >= BOOK_OB_EPS;
   const masterBookSignedScaled = booksObScaled ?? 0;
   const bookRowOpeningDr = masterBookSignedScaled > 0 ? masterBookSignedScaled : 0;
   const bookRowOpeningCr = masterBookSignedScaled < 0 ? Math.abs(masterBookSignedScaled) : 0;
-
-  /** Report / legacy jab `ledgerDateFilterActive` pass nahi: purana `openingBalanceLabel`; warna pills. */
-  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
-    ? ledgerDateFilterActive
-      ? "Dated Opening"
-      : "Book Opening"
-    : openingBalanceLabel;
 
   // Footer Formatters (Same Logic as Row). When balance is 0 show "Settled" (opening row + closing balance).
   const formatFooterBalance = (value: number) => {
@@ -661,6 +668,31 @@ export function TransactionsTable({
     () => normalizeLedgerObDateField(openingBalancePeriodStartDate),
     [openingBalancePeriodStartDate]
   );
+  /** Form "As on" date range ke andar ho to Book labels + upar wali master row; bahar ho to sirf Dated. */
+  const masterOpeningDateWithinLedgerRange = useMemo(
+    () => isMasterOpeningDateInLedgerQueryRange(dateRange, openingBalanceRowDate),
+    [dateRange, openingBalanceRowDate]
+  );
+  const showBookOpeningAboveDatedRow =
+    ledgerOpeningPillsEnabled &&
+    Boolean(ledgerDateFilterActive) &&
+    ledgerShowBookOpeningRow &&
+    booksObScaled != null &&
+    Math.abs(booksObScaled) >= BOOK_OB_EPS &&
+    masterOpeningDateWithinLedgerRange;
+  /** Date filter + page-1: Book/Dated pill — range me master OB na ho to hamesha Dated; page>1 = Dated carry row. */
+  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
+    ? !ledgerDateFilterActive
+      ? "Book Opening"
+      : showBookOpeningAboveDatedRow
+        ? "Dated Opening"
+        : !ledgerShowBookOpeningRow
+          ? "Dated Opening"
+          : masterOpeningDateWithinLedgerRange
+            ? "Book Opening"
+            : "Dated Opening"
+    : openingBalanceLabel;
+
   /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
   const openingBalanceNarrationColSpan =
     visibleColumns == null

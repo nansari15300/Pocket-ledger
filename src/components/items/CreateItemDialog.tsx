@@ -98,10 +98,10 @@ import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
-import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import {
@@ -206,6 +206,11 @@ export function CreateItemDialog({
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  /** APK cloud Firebase: lists mirror SQLite — vouchers hook pe depend kam (`apkCloudEntityMasterReadFromSqliteMirror`). */
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
@@ -217,6 +222,8 @@ export function CreateItemDialog({
   const { processedItemGroups, processedTaxes } = useVouchers();
   const processedItemGroupsRef = useRef(processedItemGroups);
   processedItemGroupsRef.current = processedItemGroups;
+  const processedTaxesRef = useRef(processedTaxes);
+  processedTaxesRef.current = processedTaxes;
   const [groups, setGroups] = useState<ItemGroup[]>([]);
   const [taxes, setTaxes] = useState<Tax[]>([]);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
@@ -399,13 +406,42 @@ export function CreateItemDialog({
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    if (localSqlMirror) {
-      // Local-only mode: use in-memory processed collections instead of Firestore listeners.
-      setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
-      setTaxes((processedTaxes as unknown as Tax[]) || []);
-      return;
+    let cancelled = false;
+
+    const fallbackGroups = () => {
+      const g = (processedItemGroupsRef.current || []) as unknown as ItemGroup[];
+      if (g.length) setGroups(g);
+    };
+    const fallbackTaxes = () => {
+      const t = (processedTaxesRef.current || []) as unknown as Tax[];
+      if (t.length) setTaxes(t);
+    };
+
+    if (sqliteListsOnlyNoSnapshot) {
+      fallbackGroups();
+      fallbackTaxes();
+      void (async () => {
+        try {
+          const [gRows, tRows] = await Promise.all([
+            listCompanyDocsFromBrowserDb(companyId, "item_groups"),
+            listCompanyDocsFromBrowserDb(companyId, "taxes"),
+          ]);
+          if (cancelled) return;
+          if (gRows.length) {
+            setGroups(gRows.map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as ItemGroup)));
+          }
+          if (tRows.length) {
+            setTaxes(tRows.map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as Tax)));
+          }
+        } catch (e) {
+          console.warn("[CreateItemDialog] mirror lists failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
-    
+
     const qGroups = query(collection(firestore, `companies/${companyId}/item_groups`));
     const unsubGroups = onSnapshot(qGroups, (snapshot) => {
         setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ItemGroup)));
@@ -424,7 +460,7 @@ export function CreateItemDialog({
         unsubGroups();
         unsubTaxes();
     };
-  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, localSqlMirror]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, sqliteListsOnlyNoSnapshot]);
 
   const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const inputFile = e.target.files?.[0];

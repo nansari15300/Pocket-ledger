@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Trash2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
@@ -18,6 +18,9 @@ import { firestore } from "@/lib/firebase";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from "@/components/ui/select";
 import type { Group } from "@/components/party/types";
 import { useCompany } from "@/hooks/useCompany";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
   MASTER_DIALOG_CANCEL_GRAY_PILL_BTN_CLASS,
@@ -49,7 +52,13 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  /** APK + Firestore-backed company offline: Save/Delete voucher jaisa band (local-storage company nahin). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -71,6 +80,10 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
       return;
     }
     const gid = group.id;
@@ -102,6 +115,11 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     }
     if (hasAccounts) {
       sonnerToast.error("Cannot Delete", { description: "This group has accounts and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
       setIsDeleteDialogOpen(false);
       return;
     }
@@ -191,17 +209,30 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
                   </Button>
                 </DialogClose>
                 <div className="flex min-w-0 flex-1 justify-center px-1">
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    className="shrink-0 px-3 sm:px-4"
-                    onClick={() => setIsDeleteDialogOpen(true)}
-                    disabled={isLoading || isSystemGroup || hasAccounts}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Delete
-                  </Button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex max-w-full min-w-0 shrink" tabIndex={0}>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            className="shrink-0 px-3 sm:px-4"
+                            onClick={() => setIsDeleteDialogOpen(true)}
+                            disabled={isLoading || isSystemGroup || hasAccounts || apkOfflineViewOnly}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Delete
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {!hasAccounts && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading || isSystemGroup} className="shrink-0">
+                <Button type="submit" disabled={isLoading || isSystemGroup || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
@@ -222,7 +253,7 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
             <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS} disabled={isLoading}>
               Cancel
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={isLoading} className="bg-destructive hover:bg-destructive/90">
+            <AlertDialogAction onClick={handleDelete} disabled={isLoading || apkOfflineViewOnly} className="bg-destructive hover:bg-destructive/90">
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Move to Recycle Bin
             </AlertDialogAction>

@@ -1468,7 +1468,15 @@ function DashboardPageContent() {
           <div className="flex flex-wrap items-center gap-2 min-h-9">
             <div className={cn("flex items-center gap-2 h-9", isMobile ? "order-1" : "md:order-2")}>
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
-                <BsDatePicker isRange valueAD={recentDateRange} onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)} transactionDates={transactionDates} className="h-9" />
+                <BsDatePicker
+                  isRange
+                  valueAD={recentDateRange}
+                  onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)}
+                  transactionDates={transactionDates}
+                  className="h-9"
+                  hideTriggerIcon={isMobile}
+                  rangeEmptyLabel={isMobile ? "Change date" : undefined}
+                />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
                 <Popover open={isRecentCalendarOpen} onOpenChange={(open) => {
@@ -1479,7 +1487,7 @@ function DashboardPageContent() {
                     <PopoverTrigger asChild>
                     <Button id="recent-date" variant={"outline"} className={cn("w-auto justify-start text-left font-normal h-9", !recentDateRange && "text-muted-foreground")}>
                         {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
-                        {recentDateRange?.from ? (recentDateRange.to ? <>{formatDate(recentDateRange.from)} - {formatDate(recentDateRange.to)}</> : formatDate(recentDateRange.from)) : (<span>Date range</span>)}
+                        {recentDateRange?.from ? (recentDateRange.to ? <>{formatDate(recentDateRange.from)} - {formatDate(recentDateRange.to)}</> : formatDate(recentDateRange.from)) : (<span>{isMobile ? "Change date" : "Date range"}</span>)}
                     </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">

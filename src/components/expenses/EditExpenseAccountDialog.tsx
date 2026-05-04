@@ -11,7 +11,7 @@ import {
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
@@ -56,7 +56,12 @@ import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudEntityMasterReadFromSqliteMirror,
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useVouchers } from "@/hooks/useVouchers";
 
 /** CreateExpenseAccountDialog jaisa: Ungrouped bucket → form value `ungrouped_expense`. */
@@ -105,6 +110,20 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   const [docSlots, setDocSlots] = useState<Array<File | string>>(() => account.documentFileUrls || []);
 
 
+  /** Pure-local=outbox lane; APK cloud lists SQLite mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
+
+  const navigatorOnline = useNavigatorOnline();
+  /** APK + Firestore company offline: voucher jaisa Save / Move-to-Bin disable (pure-local exempt). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: {
@@ -143,10 +162,32 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
   
   useEffect(() => {
     if (!companyId || !isOpen) return;
-    if (isLocalOnlyMode()) {
-      setGroups((processedExpenseGroups as ExpenseGroup[]) || []);
-      return;
+    let cancelled = false;
+
+    const seedFb = () => {
+      const fb = (processedExpenseGroupsRef.current || []) as ExpenseGroup[];
+      if (fb.length) setGroups(fb);
+    };
+
+    if (sqliteListsOnlyNoSnapshot) {
+      seedFb();
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "expense_groups");
+          if (cancelled) return;
+          const mapped = rows.map(
+            (r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as ExpenseGroup)
+          );
+          if (mapped.length) setGroups(mapped);
+        } catch (e) {
+          console.warn("[EditExpenseAccountDialog] expense_groups mirror failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
+
     const q = query(collection(firestore, `companies/${companyId}/expense_groups`));
     const unsubscribe = onSnapshot(
       q,
@@ -160,11 +201,15 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
       }
     );
     return () => unsubscribe();
-  }, [companyId, isOpen, processedExpenseGroups]);
+  }, [companyId, isOpen, sqliteListsOnlyNoSnapshot]);
 
   function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
       return;
     }
 
@@ -219,7 +264,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
               documentFiles: needNewDocsUpload ? newDocFiles : [],
             });
           let st: { fileUrl: string | null; documentFileUrls: string[] };
-          if (!isLocalOnlyMode()) {
+          if (!localSqlMirror) {
             st = await runRemote();
           } else if (typeof navigator !== "undefined" && navigator.onLine) {
             try {
@@ -248,7 +293,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
           documentFileUrls: documentFileUrls.length ? documentFileUrls : [],
         };
 
-        if (isLocalOnlyMode()) {
+        if (localSqlMirror) {
           const fromDb = await getCompanyDocFromBrowserDb(companyId, "expense_accounts", accountRefSnap.id);
           const base: Record<string, unknown> = fromDb ?? {
             id: accountRefSnap.id,
@@ -307,6 +352,11 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
     }
     if (hasTransactions) {
       sonnerToast.error("Cannot Delete", { description: "This account has transactions and cannot be deleted." });
+      setIsDeleteDialogOpen(false);
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
       setIsDeleteDialogOpen(false);
       return;
     }
@@ -565,12 +615,17 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                             variant="destructive"
                             className="shrink-0 px-3 sm:px-4"
                             onClick={() => setIsDeleteDialogOpen(true)}
-                            disabled={hasTransactions}
+                            disabled={hasTransactions || apkOfflineViewOnly}
                           >
                             <Trash2 className="mr-2 h-4 w-4 shrink-0" /> Move to Bin
                           </Button>
                         </span>
                       </TooltipTrigger>
+                      {!hasTransactions && apkOfflineViewOnly && (
+                        <TooltipContent>
+                          <p>Offline — view only.</p>
+                        </TooltipContent>
+                      )}
                       {hasTransactions && (
                         <TooltipContent>
                           <p>Cannot delete an account with existing transactions.</p>
@@ -579,7 +634,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
                     </Tooltip>
                   </TooltipProvider>
                 </div>
-                <Button type="submit" disabled={isLoading} className="shrink-0">
+                <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save Changes
                 </Button>
@@ -600,7 +655,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel className={MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS}>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90">
+                <AlertDialogAction onClick={handleDelete} disabled={apkOfflineViewOnly} className="bg-destructive hover:bg-destructive/90">
                     Move to Bin
                 </AlertDialogAction>
             </AlertDialogFooter>

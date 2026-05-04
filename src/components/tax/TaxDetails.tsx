@@ -620,6 +620,7 @@ export function TaxDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={currentPage === 1}
               openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
               openingBalanceOutstanding={openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
               openingBalanceNarration={tax.openingBalanceNarration}
@@ -942,6 +943,7 @@ export function TaxDetails({
                   ledgerDateFilterActive={hasLedgerDateFilter}
                   ledgerShowBookOpeningRow={currentPage === 1}
                   openingBalancePeriodStartDate={dateRange?.from}
+                  dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={tax.openingBalanceNarration}

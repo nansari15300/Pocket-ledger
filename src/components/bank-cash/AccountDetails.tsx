@@ -1180,6 +1180,7 @@ export function AccountDetails({
             ledgerDateFilterActive={hasLedgerDateFilter}
             ledgerShowBookOpeningRow={currentPage === 1}
             openingBalancePeriodStartDate={dateRange?.from}
+            dateRange={dateRange}
             openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
             openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
             openingBalanceNarration={(account as any).openingBalanceNarration}
@@ -1491,6 +1492,7 @@ export function AccountDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={currentPage === 1}
               openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
               openingBalanceOutstanding={showMaskedBalance ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={showMaskedBalance ? undefined : openingBalanceLinkedVoucherNos}
               openingBalanceNarration={(account as any).openingBalanceNarration}

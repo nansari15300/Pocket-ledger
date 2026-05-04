@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, PlusCircle } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { addDoc, collection, doc, serverTimestamp, Timestamp } from "firebase/firestore";
@@ -26,7 +26,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { Group } from "@/components/party/types";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
@@ -59,9 +63,15 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const isLocalGuestUser = user?.uid === "local_guest_user";
   const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
+  const navigatorOnline = useNavigatorOnline();
+  /** APK + Firestore company offline: voucher jaisa Create Group / Save & New band. */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;
   const setOpen = parentOnOpenChange !== undefined ? parentOnOpenChange : setInternalIsOpen;
@@ -97,9 +107,17 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
         toast({ variant: "destructive", title: "Company Not Selected", description: "Please select a company first." });
         return;
     }
+    if (apkOfflineViewOnly) {
+      toast({
+        variant: "destructive",
+        title: "Offline — view only",
+        description: "Connect to the internet to create a group.",
+      });
+      return;
+    }
     setIsLoading(true);
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: group direct local DB me save karo; Firebase write skip.
         const localId = createLocalEntityId("group");
         const payload = {
@@ -203,7 +221,7 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
       }
     } catch (error: any) {
       console.error("Error creating group:", error);
-      const isOfflineFallback = isLocalOnlyMode() || isLikelyOfflineFirestoreError(error);
+      const isOfflineFallback = apkEntityWriteUsesLocalSqliteMirror(company) && isLikelyOfflineFirestoreError(error);
       if (isOfflineFallback) {
         // Offline/local create: local company_docs + outbox enqueue so list me turant dikhe.
         const localId = createLocalEntityId("group");
@@ -302,13 +320,13 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
                     variant="ghost"
                     className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                     onClick={form.handleSubmit(data => onSubmit(data, true))}
-                    disabled={isLoading}
+                    disabled={isLoading || apkOfflineViewOnly}
                   >
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save & New
                   </Button>
                 </div>
-                <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+                <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Group
                 </Button>

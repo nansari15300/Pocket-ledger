@@ -926,6 +926,7 @@ export function PartyDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={currentPage === 1}
               openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
               openingBalanceActions={undefined}
               showNarration={showNarration}
               visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
@@ -1358,6 +1359,7 @@ export function PartyDetails({
               ledgerDateFilterActive={hasLedgerDateFilter}
               ledgerShowBookOpeningRow={currentPage === 1}
               openingBalancePeriodStartDate={dateRange?.from}
+              dateRange={dateRange}
               openingBalanceActions={
                 party.id !== "all" && !(party as any).isSystemAccount ? (
                   <EditPartyDialog

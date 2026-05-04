@@ -19,7 +19,7 @@ import type { AccountGroup } from "@/components/bank-cash/types";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { CreateAccountGroupDialog } from "./CreateAccountGroupDialog";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 
@@ -47,7 +47,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
 
   const form = useForm<FormValues>({
@@ -78,7 +78,7 @@ export function CreateBankAccountForm({ onAccountCreated, groups }: { onAccountC
 
     setIsLoading(true);
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: save account in browser DB and queue cloud backup sync.
         const localId = createLocalEntityId("bank");
         const payload = {

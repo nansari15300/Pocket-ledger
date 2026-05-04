@@ -27,7 +27,11 @@ import type { StaffGroup } from "@/components/staff/types";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 
@@ -59,7 +63,13 @@ export function CreateStaffGroupDialog({ onGroupCreated, children, isOpen, onOpe
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  /** APK + cloud company offline: staff group Create band (`apkCloudCompanyOfflineViewOnly`). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -86,10 +96,18 @@ export function CreateStaffGroupDialog({ onGroupCreated, children, isOpen, onOpe
         toast({ variant: "destructive", title: "Authentication Error", description: "You must be logged in." });
         return;
     }
+    if (apkOfflineViewOnly) {
+      toast({
+        variant: "destructive",
+        title: "Offline — view only",
+        description: "Connect to create a staff group.",
+      });
+      return;
+    }
     setIsLoading(true);
     
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: save staff group locally and queue backup sync.
         const localId = createLocalEntityId("staff_group");
         const payload = {
@@ -274,13 +292,13 @@ export function CreateStaffGroupDialog({ onGroupCreated, children, isOpen, onOpe
                       variant="ghost"
                       className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                       onClick={form.handleSubmit(data => onSubmit(data, true))}
-                      disabled={isLoading}
+                      disabled={isLoading || apkOfflineViewOnly}
                     >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & New
                     </Button>
                   </div>
-                  <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+                  <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Group
                   </Button>

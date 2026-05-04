@@ -18,6 +18,10 @@ type BsDatePickerBaseProps = {
   disabled?: boolean;
   children?: React.ReactNode;
   className?: string;
+  /** Mobile-only Recent Transactions jaisa: trigger par calendar icon nahin — lucide Icon hide */
+  hideTriggerIcon?: boolean;
+  /** Range mode me empty/`from`-only fallback text (default: "Pick a date range") */
+  rangeEmptyLabel?: string;
 };
 
 type BsDatePickerConditionalProps =
@@ -47,7 +51,18 @@ function atNoon(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
 }
 
-export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numberOfMonthsProp, transactionDates = [], isRange: isRangeProp, disabled = false, children, className }: BsDatePickerProps) {
+export default function BsDatePicker({
+  valueAD,
+  onChangeAD,
+  numberOfMonths: numberOfMonthsProp,
+  transactionDates = [],
+  isRange: isRangeProp,
+  disabled = false,
+  children,
+  className,
+  hideTriggerIcon = false,
+  rangeEmptyLabel,
+}: BsDatePickerProps) {
   const [open, setOpen] = React.useState(false);
   const { formatDateBS } = useDate();
   const { company } = useCompany();
@@ -96,13 +111,15 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
     }
   }
 
+  const emptyRangeText = () => rangeEmptyLabel ?? "Pick a date range";
+
   const displayValue = () => {
     if (children) return children;
-    if (!valueAD) return isRange ? "Pick a date range" : "Pick a date";
+    if (!valueAD) return isRange ? emptyRangeText() : "Pick a date";
 
     if (isRange) {
         const range = valueAD as DateRange | undefined;
-        if (!range?.from) return "Pick a date range";
+        if (!range?.from) return emptyRangeText();
         const fromBS = isValidForBS(range.from) ? formatDateBS(range.from) : "";
         const toBS = range.to && isValidForBS(range.to) ? formatDateBS(range.to) : "";
         if (fromBS && toBS) {
@@ -122,12 +139,17 @@ export default function BsDatePicker({ valueAD, onChangeAD, numberOfMonths: numb
       <PopoverTrigger asChild>
         <Button 
           variant="outline" 
-          className={cn("w-auto justify-start text-left font-normal h-10 px-2 gap-1 min-w-0", !valueAD && "text-muted-foreground", className)} 
+          className={cn(
+            "w-auto justify-start text-left font-normal h-10 px-2 gap-1 min-w-0",
+            hideTriggerIcon && "gap-0",
+            !valueAD && "text-muted-foreground",
+            className
+          )}
           disabled={disabled}
           onClick={() => setOpen(true)}
           data-theme-detail="date-range"
         >
-            <Icon className="h-4 w-4 shrink-0" />
+            {!hideTriggerIcon && <Icon className="h-4 w-4 shrink-0" />}
             <span className="truncate min-w-0">{displayValue()}</span>
         </Button>
       </PopoverTrigger>

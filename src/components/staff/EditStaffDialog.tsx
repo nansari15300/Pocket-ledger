@@ -14,7 +14,7 @@ import {
   isProfileAvatarImageFile,
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
-import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -32,7 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
@@ -109,6 +109,10 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
@@ -177,10 +181,31 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   
   useEffect(() => {
     if (!dialogOpen || !companyId) return;
-    if (localSqlMirror) {
-      setGroups((processedStaffGroups as StaffGroup[]) || []);
-      return;
+    let cancelled = false;
+
+    const seedFb = () => {
+      const fb = (processedStaffGroupsRef.current || []) as StaffGroup[];
+      if (fb.length) setGroups(fb);
+    };
+
+    if (sqliteListsOnlyNoSnapshot) {
+      seedFb();
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "staff_groups");
+          if (cancelled) return;
+          if (rows.length) {
+            setGroups(rows.map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as StaffGroup)));
+          }
+        } catch (e) {
+          console.warn("[EditStaffDialog] staff_groups mirror failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
+
     const q = query(collection(firestore, `companies/${companyId}/staff_groups`));
     const unsubscribe = onSnapshot(
       q,
@@ -194,7 +219,7 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
       }
     );
     return () => unsubscribe();
-  }, [dialogOpen, companyId, processedStaffGroups, localSqlMirror]);
+  }, [dialogOpen, companyId, processedStaffGroups, sqliteListsOnlyNoSnapshot]);
 
   function onSubmit(values: z.infer<typeof formSchema>): void {
     if (!companyId) {

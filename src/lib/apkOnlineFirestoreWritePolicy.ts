@@ -38,6 +38,16 @@ export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: s
 }
 
 /**
+ * APK + Firestore company: master dialogs me dropdown lists SQLite mirror / warm-sync se —
+ * redundant `onSnapshot` band taaki offline UI stable rahe aur network churn kam ho.
+ */
+export function apkCloudEntityMasterReadFromSqliteMirror(
+  company: { storageOption?: string } | null | undefined
+): boolean {
+  return apkCloudFirestoreMasterWriteFromCompanyShape(company) && isLocalOnlyMode();
+}
+
+/**
  * APK + Firestore company (`storageOption` ≠ local) + device offline ⇒ UI: view-only (Save/Copy/Delete band; Cancel chalu).
  * EXE/desktop: `isCapacitorNativeApp` false — hamesha false.
  */

@@ -106,9 +106,9 @@ import { CreateItemGroupDialog } from "./CreateItemGroupDialog";
 import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
-import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import {
   isProfileDocumentFile,
@@ -301,6 +301,10 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const navigatorOnline = useNavigatorOnline();
   /** IndexedDB/outbox sirf genuinely-local APK lane — hybrid Firestore company par Firestore-first save. */
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
@@ -348,11 +352,41 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    // Local-static / APK local lane: listeners skip (`localSqlMirror`); cloud APK Firebase lists.
-    if (localSqlMirror) {
-      setGroups((processedItemGroups as unknown as ItemGroup[]) || []);
-      setTaxes((processedTaxes as unknown as Tax[]) || []);
-      return;
+    let cancelled = false;
+
+    const fallbackGroups = () => {
+      const g = (processedItemGroupsRef.current || []) as unknown as ItemGroup[];
+      if (g.length > 0) setGroups(g);
+    };
+    const fallbackTaxes = () => {
+      const t = (processedTaxesRef.current || []) as unknown as Tax[];
+      if (t.length > 0) setTaxes(t);
+    };
+
+    /** APK cloud + pure-local: redundant Firestore snapshots band — SQLite mirror authoritative. */
+    if (sqliteListsOnlyNoSnapshot) {
+      fallbackGroups();
+      fallbackTaxes();
+      void (async () => {
+        try {
+          const [gRows, tRows] = await Promise.all([
+            listCompanyDocsFromBrowserDb(companyId, "item_groups"),
+            listCompanyDocsFromBrowserDb(companyId, "taxes"),
+          ]);
+          if (cancelled) return;
+          if (gRows.length) {
+            setGroups(gRows.map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as ItemGroup)));
+          }
+          if (tRows.length) {
+            setTaxes(tRows.map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as Tax)));
+          }
+        } catch (e) {
+          console.warn("[EditItemDialog] SQLite mirror lists failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
 
     const qGroups = query(collection(firestore, `companies/${companyId}/item_groups`));
@@ -385,7 +419,7 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
       unsubGroups();
       unsubTaxes();
     };
-  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, localSqlMirror]);
+  }, [isOpen, companyId, toast, processedItemGroups, processedTaxes, sqliteListsOnlyNoSnapshot]);
 
 
   useEffect(() => {

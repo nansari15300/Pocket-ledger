@@ -44,7 +44,7 @@ import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -90,8 +90,12 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  /** APK purely-local lane hi SQLite/outbox — Firestore-online company mirrors se redirect/UI race kam (`apkEntityWriteUsesLocalSqliteMirror`). */
+  /** Pure-local APK SQLite writes; APK cloud Firebase = Firestore saves par bhi dropdown lists SQLite mirror se (`apkCloudEntityMasterReadFromSqliteMirror`). */
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   /** APK cloud offline: sirf dekho — Save/Bin toolbar band; Cancel/`DialogClose` khula. */
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
@@ -166,8 +170,8 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
 
     seedFromVoucherContext();
 
-    // Local-first lane: redundant Firestore snapshot na lagao (`localSqlMirror` = static guest / APK storageOption local).
-    if (localSqlMirror) {
+    // APK cloud bhi redundant `onSnapshot` band — SQLite mirror (`warm sync`) authoritative lists ke liye.
+    if (sqliteListsOnlyNoSnapshot) {
       void (async () => {
         const fromDb = await loadGroupsFromBrowserDb();
         if (cancelled) return;
@@ -177,12 +181,6 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         cancelled = true;
       };
     }
-
-    void (async () => {
-      const fromDb = await loadGroupsFromBrowserDb();
-      if (cancelled || !fromDb.length) return;
-      applyPartyGroups(fromDb);
-    })();
 
     const q = query(collection(firestore, `companies/${companyId}/groups`));
     const unsubscribe = onSnapshot(
@@ -210,7 +208,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
       cancelled = true;
       unsubscribe();
     };
-  }, [isOpen, companyId, toast, localSqlMirror]);
+  }, [isOpen, companyId, toast, sqliteListsOnlyNoSnapshot]);
 
 
   useEffect(() => {

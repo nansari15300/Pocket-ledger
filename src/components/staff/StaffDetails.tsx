@@ -843,6 +843,7 @@ export function StaffDetails({
           ledgerDateFilterActive={hasLedgerDateFilter}
           ledgerShowBookOpeningRow={currentPage === 1}
           openingBalancePeriodStartDate={dateRange?.from}
+          dateRange={dateRange}
           openingBalanceOutstanding={openingBalanceOutstanding}
           openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
           openingBalanceNarration={staff.openingBalanceNarration}
@@ -1191,6 +1192,7 @@ export function StaffDetails({
                   ledgerDateFilterActive={hasLedgerDateFilter}
                   ledgerShowBookOpeningRow={currentPage === 1}
                   openingBalancePeriodStartDate={dateRange?.from}
+                  dateRange={dateRange}
                   openingBalanceOutstanding={openingBalanceOutstanding}
                   openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
                   openingBalanceNarration={staff.openingBalanceNarration}

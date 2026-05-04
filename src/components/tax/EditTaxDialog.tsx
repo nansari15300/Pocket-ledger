@@ -14,7 +14,7 @@ import {
   isProfileDocumentFile,
 } from "@/lib/entityProfileLocalFiles";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import {
@@ -58,7 +58,7 @@ import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { toast as sonnerToast } from "sonner";
 import { isSystemParentGroup } from "@/lib/system-groups";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -92,6 +92,10 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
@@ -153,12 +157,31 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    if (localSqlMirror) {
-      // Local mode me group list local vouchers hook se hydrate karo; Firestore listener avoid karo.
-      setGroups((processedTaxGroups as TaxGroup[]) || []);
-      return;
+    let cancelled = false;
+
+    const seedFb = () => {
+      const fb = (processedTaxGroupsRef.current || []) as TaxGroup[];
+      if (fb.length > 0) setGroups(fb);
+    };
+
+    if (sqliteListsOnlyNoSnapshot) {
+      seedFb();
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "tax_groups");
+          if (cancelled) return;
+          if (rows.length) {
+            setGroups(rows.map((r: any) => ({ ...r, id: r.id } as TaxGroup)));
+          }
+        } catch (e) {
+          console.warn("[EditTaxDialog] tax_groups mirror load failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
-    
+
     const q = query(collection(firestore, `companies/${companyId}/tax_groups`));
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
         const fetchedGroups = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TaxGroup));
@@ -170,7 +193,7 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
     });
     
     return () => unsubscribe();
-  }, [isOpen, companyId, toast, processedTaxGroups, localSqlMirror]);
+  }, [isOpen, companyId, toast, processedTaxGroups, sqliteListsOnlyNoSnapshot]);
 
   function onSubmit(values: FormValues): void {
     if (!companyId) {

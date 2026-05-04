@@ -40,8 +40,13 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { toast as sonnerToast } from "sonner";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
-import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import {
+  apkCloudEntityMasterReadFromSqliteMirror,
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 import {
   stageEntityAvatarAndDocuments,
@@ -119,21 +124,49 @@ export function CreateExpenseAccountDialog({
   const open = isOpen !== undefined ? isOpen : internalIsOpen;
   const setOpen = onOpenChange !== undefined ? onOpenChange : setInternalIsOpen;
 
+  /** Expense group combobox listener: pure-local **ya** APK cloud warm mirror. */
+  const sqliteSkipFirestoreListener = useMemo(
+    () =>
+      apkEntityWriteUsesLocalSqliteMirror(company) || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [company]
+  );
+
+  const navigatorOnline = useNavigatorOnline();
+  /** APK Firestore company offline: create expense voucher jaisa Save band (`apkCloudCompanyOfflineViewOnly`). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema) as Resolver<z.infer<typeof formSchema>>,
     defaultValues: { name: "", openingBalance: 0, groupId: "", openingBalanceNarration: "" },
   });
   
-  // Local / SQLite: EditExpenseAccountDialog jaisa — `processedExpenseGroups` se list bharo (listener yahan lagta nahin).
+  /** Local / APK cloud: vouchers context + SQLite `expense_groups` — redundant `onSnapshot` avoid. */
   useEffect(() => {
     if (!companyId || !open) return;
-    if (!isLocalOnlyMode()) return;
-    setGroups((processedExpenseGroups as ExpenseGroup[]) || []);
-  }, [companyId, open, processedExpenseGroups]);
+    let cancelled = false;
 
-  useEffect(() => {
-    if (!companyId || !open) return;
-    if (isLocalOnlyMode()) return;
+    if (sqliteSkipFirestoreListener) {
+      setGroups((processedExpenseGroups as ExpenseGroup[]) || []);
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "expense_groups");
+          if (cancelled) return;
+          const mapped = rows
+            .map((r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as ExpenseGroup))
+            .filter((g) => !(g as any).isDeleted);
+          if (mapped.length > 0) setGroups(mapped);
+        } catch (e) {
+          console.warn("[CreateExpenseAccountDialog] expense_groups mirror failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const q = query(collection(firestore, `companies/${companyId}/expense_groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setGroups(
@@ -143,7 +176,7 @@ export function CreateExpenseAccountDialog({
       );
     });
     return () => unsubscribe();
-  }, [companyId, open]);
+  }, [companyId, open, processedExpenseGroups, sqliteSkipFirestoreListener]);
 
   // Default group: when defaultGroupType=income (Sale form), use first Income group; else Ungrouped
   const incomeGroupIds = useMemo(() => {
@@ -175,7 +208,7 @@ export function CreateExpenseAccountDialog({
         if (alive && firstIncomeId) form.setValue("groupId", firstIncomeId, { shouldDirty: false });
         return;
       }
-      const ungroupedId = isLocalOnlyMode()
+      const ungroupedId = apkEntityWriteUsesLocalSqliteMirror(company)
         ? getUngroupedGroupId("expense")
         : await ensureUngroupedGroup(companyId, user.uid, "expense");
       if (!alive) return;
@@ -324,6 +357,10 @@ export function CreateExpenseAccountDialog({
         sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
         return;
       }
+      if (apkOfflineViewOnly) {
+        sonnerToast.error("Offline — view only.");
+        return;
+      }
       if (!options.saveAndNew) {
         setOpen(false);
       } else {
@@ -338,12 +375,17 @@ export function CreateExpenseAccountDialog({
       toast({ variant: "destructive", title: "Error", description: "You must be logged in and have a company selected." });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsLoading(false);
+      return;
+    }
 
     const toastId = sonnerToast.loading("Creating expense account...");
     setIsLoading(true);
     try {
       // Local-first: CreatePartyForm jaisa — pehle browser DB + outbox; Firestore getDocs (duplicate) / Capital OB mat chalao.
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         const resolvedGroupId =
           values.groupId?.trim() || getUngroupedGroupId("expense");
         const selectedGroup = groups.find((g) => g.id === resolvedGroupId);
@@ -519,7 +561,7 @@ export function CreateExpenseAccountDialog({
       }
     } catch (error) {
       console.error("Error creating expense account:", error);
-      if (isLikelyOfflineFirestoreError(error) && companyId && user) {
+      if (isLikelyOfflineFirestoreError(error) && companyId && user && apkEntityWriteUsesLocalSqliteMirror(company)) {
         try {
           const totalCatch =
             (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
@@ -795,13 +837,13 @@ export function CreateExpenseAccountDialog({
                   variant="ghost"
                   className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                   onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                  disabled={isLoading}
+                  disabled={isLoading || apkOfflineViewOnly}
                 >
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save & New
                 </Button>
               </div>
-              <Button type="submit" disabled={isLoading} className="shrink-0">
+              <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create
               </Button>

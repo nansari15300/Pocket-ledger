@@ -27,7 +27,11 @@ import type { TaxGroup } from "./types";
 import { toast as sonnerToast } from "sonner";
 import { isSystemGroupName } from "@/lib/system-group-names";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 
@@ -59,7 +63,13 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
-  const { companyId } = useCompany();
+  const { companyId, company } = useCompany();
+  const navigatorOnline = useNavigatorOnline();
+  /** APK + Firestore company offline: tax group create band (`apkCloudCompanyOfflineViewOnly`). */
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -88,7 +98,12 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
       sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
       return;
     }
-    
+
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      return;
+    }
+
     // Close dialog immediately for better UX
     if (!options.saveAndNew && onOpenChange) {
       onOpenChange(false);
@@ -102,12 +117,17 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
         toast({ variant: "destructive", title: "Authentication Error", description: "You must be logged in." });
         return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsLoading(false);
+      return;
+    }
 
     const toastId = sonnerToast.loading("Creating group...");
     setIsLoading(true);
     
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only mode: save tax group locally and queue backup sync.
         const localId = createLocalEntityId("tax_group");
         const payload = {
@@ -278,13 +298,13 @@ export function CreateTaxGroupDialog({ onGroupCreated, children, isOpen, onOpenC
                       variant="ghost"
                       className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                       onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                      disabled={isLoading}
+                      disabled={isLoading || apkOfflineViewOnly}
                     >
                       {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                       Save & New
                     </Button>
                   </div>
-                  <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+                  <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Create Group
                   </Button>

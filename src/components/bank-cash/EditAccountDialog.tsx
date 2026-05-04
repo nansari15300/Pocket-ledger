@@ -25,7 +25,7 @@ import { firestore } from "@/lib/firebase";
 import Link from "next/link";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
-import { apkCloudCompanyOfflineViewOnly, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
@@ -51,7 +51,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { format } from "date-fns";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useAuth } from "@/hooks/useAuth";
-import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
@@ -109,6 +109,11 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const { company, companyId } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  /** APK Firebase company: dropdown lists SQLite warm-mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
+  const sqliteListsOnlyNoSnapshot = useMemo(
+    () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [localSqlMirror, company]
+  );
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
     [company, navigatorOnline]
@@ -211,11 +216,37 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
-    /** APK/local lane groups cache se; Firestore company par snapshot (`apkEntityWriteUsesLocalSqliteMirror`). */
-    if (localSqlMirror) {
-      setGroups((processedAccountGroups as AccountGroup[]) || []);
-      return;
+    let cancelled = false;
+
+    /** Combobox fallback jab SQLite abhi khali ho (cold open). */
+    const seedFallback = () => {
+      const fb = (processedAccountGroupsRef.current || []) as AccountGroup[];
+      if (fb.length) setGroups(fb);
+    };
+
+    const loadGroupsFromMirror = async (): Promise<AccountGroup[]> => {
+      try {
+        const rows = await listCompanyDocsFromBrowserDb(companyId, "account_groups");
+        return rows.map((r: any) => ({ ...r, id: r.id } as AccountGroup));
+      } catch {
+        return [];
+      }
+    };
+
+    if (sqliteListsOnlyNoSnapshot) {
+      seedFallback();
+      void (async () => {
+        const fromDb = await loadGroupsFromMirror();
+        if (cancelled) return;
+        if (fromDb.length) setGroups(fromDb);
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
+
+    seedFallback();
+
     const q = query(collection(firestore, `companies/${companyId}/account_groups`));
     const unsubscribe = onSnapshot(
       q,
@@ -232,7 +263,7 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
       }
     );
     return () => unsubscribe();
-  }, [isOpen, companyId, processedAccountGroups, localSqlMirror]);
+  }, [isOpen, companyId, processedAccountGroups, sqliteListsOnlyNoSnapshot]);
 
   useEffect(() => {
     if (isOpen) {

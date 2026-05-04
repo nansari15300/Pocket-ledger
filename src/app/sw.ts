@@ -22,7 +22,8 @@ declare const self: ServiceWorkerGlobalScope;
 
 const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
-  skipWaiting: true,
+  // `skipWaiting: true` naya SW activate hote hi purane tab control le leta — APK/Capacitor me online aane par navigate/shell mismatch se “restart” feel aata tha.
+  skipWaiting: false,
   clientsClaim: true,
   /** `true` kabhi‑kabhi preload response fail hone par offline navigate `~offline` fallback de deta (Capacitor WebView). */
   navigationPreload: false,

@@ -55,6 +55,8 @@ import {
 } from "@/lib/fileUploadLimits";
 import { RestrictedFileUploader } from "@/components/ui/RestrictedFileUploader";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
 
 const schema = z.object({
   name: z.string().min(2, "Item name must be at least 2 characters."),
@@ -85,6 +87,13 @@ export function CreateFinishedGoodDialog({
   const { companyId, company } = useCompany();
   const { canAddAvatar } = usePermissions();
   const { dateSystem } = useDate();
+
+  /** APK cloud company offline: finished good create Firebase-only — voucher jaisa Save band. */
+  const navigatorOnline = useNavigatorOnline();
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema) as Resolver<FormValues>,
@@ -150,6 +159,10 @@ export function CreateFinishedGoodDialog({
   const handleSubmit = async (values: FormValues) => {
     if (!user || !companyId) {
       toast({ variant: "destructive", title: "Error", description: "Login and company required." });
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
       return;
     }
 
@@ -464,7 +477,7 @@ export function CreateFinishedGoodDialog({
                 </Button>
               </DialogClose>
               <span className="min-w-0 flex-1" aria-hidden />
-              <Button type="submit" disabled={isLoading} className="shrink-0">
+              <Button type="submit" disabled={isLoading || apkOfflineViewOnly} className="shrink-0">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Create finished good
               </Button>

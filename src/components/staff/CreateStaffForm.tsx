@@ -60,8 +60,13 @@ import type { StaffGroup } from "@/components/staff/types";
 import { CreateStaffGroupDialog } from "./CreateStaffGroupDialog";
 import { ensureUngroupedGroup, getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
-import { isLocalOnlyMode } from "@/lib/localMode";
-import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import {
+  apkCloudEntityMasterReadFromSqliteMirror,
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
 
 function createLocalEntityId(prefix: string): string {
@@ -110,6 +115,20 @@ export function CreateStaffForm({
   const { toast } = useToast();
   const { user } = useAuth();
   const { companyId, company } = useCompany();
+  /** Staff-group combobox: APK cloud SQLite mirror path (`warm sync`). */
+  const sqliteListsSkipFirestore = useMemo(
+    () =>
+      apkEntityWriteUsesLocalSqliteMirror(company) || apkCloudEntityMasterReadFromSqliteMirror(company),
+    [company]
+  );
+
+  /** APK cloud company offline: staff create vouchers jaisa Save band (`apkCloudCompanyOfflineViewOnly`). */
+  const navigatorOnline = useNavigatorOnline();
+  const apkOfflineViewOnly = useMemo(
+    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
+    [company, navigatorOnline]
+  );
+
   const { canAddAvatar, canAddFileImagePdf } = usePermissions();
   const canAttachDocuments = canAddFileImagePdf || canAddAvatar;
 
@@ -163,24 +182,40 @@ export function CreateStaffForm({
   // ---------------------------
   useEffect(() => {
     if (!companyId) return;
-    if (isLocalOnlyMode()) {
-      // Local-only mode: avoid Firestore listeners while offline/local guest.
-      return;
+    let cancelled = false;
+
+    if (sqliteListsSkipFirestore) {
+      void (async () => {
+        try {
+          const rows = await listCompanyDocsFromBrowserDb(companyId, "staff_groups");
+          if (cancelled) return;
+          const mapped = rows.map(
+            (r: Record<string, unknown> & { id: string }) => ({ ...r, id: r.id } as StaffGroup)
+          );
+          if (mapped.length > 0) setGroups(mapped);
+        } catch (e) {
+          console.warn("[CreateStaffForm] staff_groups SQLite mirror failed", e);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
+
     const q = query(collection(firestore, `companies/${companyId}/staff_groups`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedGroups = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() } as StaffGroup));
       setGroups(fetchedGroups);
     });
     return () => unsubscribe();
-  }, [companyId]);
+  }, [companyId, sqliteListsSkipFirestore]);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
+    void (async () => {
       if (!companyId || !user?.uid) return;
-      if (isLocalOnlyMode()) {
-        // Local-only mode: default to local ungrouped ID without Firestore ensure call.
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
+        // Pure-local APK: local synthetic ungrouped; Firestore ensure avoid.
         const current = form.getValues("groupId");
         if (!current) form.setValue("groupId", getUngroupedGroupId("staff"), { shouldDirty: false });
         return;
@@ -194,7 +229,7 @@ export function CreateStaffForm({
     return () => {
       alive = false;
     };
-  }, [companyId, user?.uid, form]);
+  }, [companyId, user?.uid, form, company]);
 
   // ---------------------------
   // ✅ Build combobox options (duplicate-safe)
@@ -397,6 +432,10 @@ export function CreateStaffForm({
         sonnerToast.error("Validation Failed", { description: "Please check all fields and try again." });
         return;
       }
+      if (apkOfflineViewOnly) {
+        sonnerToast.error("Offline — view only.");
+        return;
+      }
       if (!options.saveAndNew) {
         onCloseDialogRequest?.();
       } else {
@@ -415,12 +454,17 @@ export function CreateStaffForm({
       });
       return;
     }
+    if (apkOfflineViewOnly) {
+      sonnerToast.error("Offline — view only.");
+      setIsLoading(false);
+      return;
+    }
 
     const toastId = sonnerToast.loading("Saving staff member...");
     setIsLoading(true);
 
     try {
-      if (isLocalOnlyMode()) {
+      if (apkEntityWriteUsesLocalSqliteMirror(company)) {
         // Local-only: IndexedDB pending files + SQLite — turant Storage upload nahi
         const totalAttachBytesLocal =
           (avatarToUpload?.file.size ?? 0) + documentFiles.reduce((s, f) => s + f.size, 0);
@@ -593,7 +637,7 @@ export function CreateStaffForm({
       onStaffCreated?.(saveAndNew, newStaffId);
     } catch (error) {
       console.error("Error creating staff member:", error);
-      if (isLikelyOfflineFirestoreError(error)) {
+      if (isLikelyOfflineFirestoreError(error) && apkEntityWriteUsesLocalSqliteMirror(company)) {
         try {
           if (!companyId || !user) throw new Error("Missing company or user.");
           const totalCatch =
@@ -920,13 +964,13 @@ export function CreateStaffForm({
                 variant="ghost"
                 className={cn(BTN_SAVE_NEW_CLASS, "shrink-0 px-4")}
                 onClick={(e) => handleFormSubmit(e, { saveAndNew: true })}
-                disabled={isLoading}
+                disabled={isLoading || apkOfflineViewOnly}
               >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save & New
               </Button>
             </div>
-            <Button type="submit" disabled={isLoading || !companyId} className="shrink-0">
+            <Button type="submit" disabled={isLoading || !companyId || apkOfflineViewOnly} className="shrink-0">
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Add Staff Member
             </Button>

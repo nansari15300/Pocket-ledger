@@ -10,10 +10,15 @@ import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Package } from "lucide-react";
 import type { StockView } from "./ItemDetails";
-import React, { useMemo } from "react";
-import { Tooltip, TooltipTrigger, TooltipContent } from "../ui/tooltip";
+import React, { useMemo, useState } from "react";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/tooltip";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import {
+  EntityListQuickFilterBar,
+  type EntityListQuickFilter,
+} from "@/components/entity/EntityListQuickFilterBar";
+import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 
 interface ItemListProps {
   items: Item[];
@@ -28,13 +33,49 @@ interface ItemListProps {
   getItemHref?: (item: Item) => string | undefined;
 }
 
-const getInitials = (name: string) => {
-  if (!name) return "NA";
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("");
+/** Qty/amount row — footer Dr/Cr/settled `balance` field jaisa hi number (Party list semantically). */
+function getItemRowDisplayMetrics(
+  item: Item,
+  stockView: StockView,
+  itemDisplayUnits: Record<string, string>,
+  formatCurrency: (v: number, o?: { showDrCr?: boolean }) => React.ReactNode
+) {
+  const conversions = (item.unitConversions || []) as any[];
+  const smallestUnit =
+    conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((item as any).openingBalanceUnit || "");
+  const displayUnit = itemDisplayUnits[item.id] || smallestUnit || "";
+
+  const getSmallestUnitFactor = (unit: string): number => {
+    if (!unit || conversions.length === 0) return 1;
+    if (unit === smallestUnit) return 1;
+    let factor = 1;
+    let currentUnit = unit;
+    for (let i = 0; i < 10; i++) {
+      const conv = conversions.find((c) => c.fromUnit === currentUnit);
+      if (!conv) return 0;
+      factor *= Number(conv.conversionFactor) || 1;
+      currentUnit = conv.toUnit;
+      if (currentUnit === smallestUnit) break;
+    }
+    return factor;
+  };
+
+  const displayUnitFactor = getSmallestUnitFactor(displayUnit);
+  const displayQty = displayUnitFactor > 0 ? (item.stockQty || 0) / displayUnitFactor : 0;
+  const displayValue = stockView === "amount" ? Number(item.balance) || 0 : displayQty;
+  const isPositive = displayValue >= 0;
+  const formattedDisplayValue =
+    stockView === "amount" ? formatCurrency(displayValue, { showDrCr: true }) : `${displayValue.toFixed(2)}`;
+
+  return { displayValue, displayUnit, formattedDisplayValue, isPositive };
+}
+
+type ItemListFilterRow = {
+  item: Item;
+  name?: string;
+  balance: number;
+  openingBalanceDate?: unknown;
+  metrics: ReturnType<typeof getItemRowDisplayMetrics>;
 };
 
 export function ItemList({
@@ -42,7 +83,7 @@ export function ItemList({
   onSelectItem,
   selectedItem,
   searchTerm,
-  stockView = 'amount',
+  stockView = "amount",
   itemDisplayUnits,
   pendingApprovalByItemId = {},
   getItemHref,
@@ -51,75 +92,63 @@ export function ItemList({
   const { settings: animationSettings } = useAnimationSettings();
   const isRowAnimationEnabled = animationSettings.rows.enabled === true;
   const rowAnimationDuration = isRowAnimationEnabled ? animationSettings.rows.duration : 0;
-  
-  const filteredAndSortedItems = useMemo(() => {
-      return items
-        .filter((item) =>
-          item.name && item.name.toLowerCase().includes(searchTerm.toLowerCase())
-        )
-        .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
-  }, [items, searchTerm]);
+  /** Party master list jaisa niche sort/filter strip */
+  const [quickFilter, setQuickFilter] = useState<EntityListQuickFilter>("default");
 
+  const enrichedRows: ItemListFilterRow[] = useMemo(() => {
+    return (items || []).map((item) => {
+      const metrics = getItemRowDisplayMetrics(item, stockView, itemDisplayUnits, formatCurrency);
+      return {
+        item,
+        name: item.name,
+        balance: metrics.displayValue,
+        openingBalanceDate: item.openingBalanceDate,
+        metrics,
+      };
+    });
+  }, [items, stockView, itemDisplayUnits, formatCurrency]);
 
-  if (filteredAndSortedItems.length === 0) {
+  const filteredAndSortedRows = useMemo(() => {
+    return filterAndSortMasterEntityListRows(enrichedRows, searchTerm, quickFilter) as ItemListFilterRow[];
+  }, [enrichedRows, searchTerm, quickFilter]);
+
+  if (filteredAndSortedRows.length === 0) {
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        No items found.
-      </div>
+      <TooltipProvider delayDuration={200}>
+        <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background" data-theme-list="account-list">
+          <div className="flex flex-1 min-h-[120px] items-center justify-center p-4 text-sm text-muted-foreground">
+            No items found.
+          </div>
+          <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
+        </div>
+      </TooltipProvider>
     );
   }
 
   return (
-    <ScrollArea className="h-full min-w-0">
-      <div className="space-y-2 p-2">
-        <AnimatePresence>
-          {filteredAndSortedItems.map((item) => {
-            const isSelected = selectedItem?.id === item.id;
-            
-            const conversions = (item.unitConversions || []) as any[];
-            const smallestUnit = conversions.length > 0 ? conversions[conversions.length - 1].toUnit : ((item as any).openingBalanceUnit || '');
-            const displayUnit = itemDisplayUnits[item.id] || smallestUnit || '';
-            
-            const getSmallestUnitFactor = (unit: string): number => {
-              if (!unit || conversions.length === 0) return 1;
-              if (unit === smallestUnit) return 1;
-              
-              let factor = 1;
-              let currentUnit = unit;
-              
-              for (let i=0; i < 10; i++) { // safety break
-                  const conv = conversions.find(c => c.fromUnit === currentUnit);
-                  if (!conv) return 0;
-                  factor *= Number(conv.conversionFactor) || 1;
-                  currentUnit = conv.toUnit;
-                  if (currentUnit === smallestUnit) break;
-              }
-              return factor;
-            };
-            
-            const displayUnitFactor = getSmallestUnitFactor(displayUnit);
-            const displayQty = displayUnitFactor > 0 ? (item.stockQty || 0) / displayUnitFactor : 0;
-            
-            const displayValue = stockView === 'amount' ? item.balance : displayQty;
-            const isPositive = (displayValue || 0) >= 0;
-            const formattedDisplayValue = stockView === 'amount'
-                ? formatCurrency(displayValue, { showDrCr: true })
-                : `${displayValue.toFixed(2)}`;
+    <TooltipProvider delayDuration={200}>
+      <div className="flex h-full min-h-0 min-w-0 flex-col rounded-b-lg border-x border-b bg-background" data-theme-list="account-list">
+        <ScrollArea className="min-h-0 flex-1 min-w-0">
+          <div className="space-y-2 p-2">
+            <AnimatePresence>
+              {filteredAndSortedRows.map(({ item, metrics }) => {
+                const isSelected = selectedItem?.id === item.id;
+                const { formattedDisplayValue, isPositive, displayUnit } = metrics;
 
-            const href = getItemHref?.(item);
-            const cardClassName = cn(
-              "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
-              isSelected
-                ? "border-primary bg-secondary"
-                : "hover:border-primary/50"
-            );
-            const cardContent = (
+                const href = getItemHref?.(item);
+                const cardClassName = cn(
+                  "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
+                  isSelected ? "border-primary bg-secondary" : "hover:border-primary/50"
+                );
+                const cardContent = (
                   <div className="pl-master-list-row">
                     <div className="pl-master-list-row-leading">
                       <div className="relative flex-shrink-0">
                         <Avatar className="h-8 w-8 text-sm">
                           <AvatarImage src={item.fileUrls?.[0]} />
-                          <AvatarFallback><Package/></AvatarFallback>
+                          <AvatarFallback>
+                            <Package />
+                          </AvatarFallback>
                         </Avatar>
                         {(pendingApprovalByItemId[item.id] ?? 0) > 0 && (
                           <span
@@ -151,35 +180,38 @@ export function ItemList({
                       )}
                     >
                       {formattedDisplayValue}
-                      {stockView === 'qty' && <span className="text-xs">{displayUnit}</span>}
+                      {stockView === "qty" && <span className="text-xs">{displayUnit}</span>}
                     </div>
                   </div>
-            );
-            return (
-              <motion.li
-                key={item.id}
-                layout
-                initial={false}
-                exit={{ transition: { duration: 0 } }}
-                transition={{ 
-                  duration: rowAnimationDuration,
-                  ease: "easeInOut"
-                }}
-              >
-                {href ? (
-                  <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
-                    <Card className={cardClassName}>{cardContent}</Card>
-                  </Link>
-                ) : (
-                  <Card className={cardClassName} onClick={() => onSelectItem(item)}>
-                    {cardContent}
-                  </Card>
-                )}
-              </motion.li>
-            );
-          })}
-        </AnimatePresence>
+                );
+                return (
+                  <motion.li
+                    key={item.id}
+                    layout
+                    initial={false}
+                    exit={{ transition: { duration: 0 } }}
+                    transition={{
+                      duration: rowAnimationDuration,
+                      ease: "easeInOut",
+                    }}
+                  >
+                    {href ? (
+                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                        <Card className={cardClassName}>{cardContent}</Card>
+                      </Link>
+                    ) : (
+                      <Card className={cardClassName} onClick={() => onSelectItem(item)}>
+                        {cardContent}
+                      </Card>
+                    )}
+                  </motion.li>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+        </ScrollArea>
+        <EntityListQuickFilterBar active={quickFilter} onChange={setQuickFilter} />
       </div>
-    </ScrollArea>
+    </TooltipProvider>
   );
-};
+}

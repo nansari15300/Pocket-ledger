@@ -1249,8 +1249,9 @@ export async function approveVoucherWithHistory(
       });
     });
   } catch (e) {
-    // PWA firebase mode offline: mirrored SQLite approve (same APK local-first resolution).
+    // `saveVoucher` jaisa: APK + Firestore company par offline queue mat — seedha throw (allowLocalFirestoreFailureQueue false).
     if (!isLikelyOfflineFirestoreError(e)) throw e;
+    if (!(await allowLocalFirestoreFailureQueue(companyId))) throw e;
     await approveVoucherLocalPersist(companyId, voucherId, approvedByUserId, approvedByName);
     return;
   }
