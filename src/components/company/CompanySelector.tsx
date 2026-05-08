@@ -67,7 +67,6 @@ import {
 import { hasAnySelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 /** Company picker visibility: admin-hidden rows (`movedToAdminRecycleAt`) normal app me na dikhao. */
 function isCompanyVisibleInSelector(c: CompanyData): boolean {
@@ -115,6 +114,12 @@ function canRememberCompanyUsername(company: CompanyData, userEmail?: string | n
   return isOnlineSharedCompany(company as CompanyData & { isOwned?: boolean }) || isLocalOnlyMode();
 }
 
+/** Radix: sidebar click = pointer-outside; header company menu band na ho. */
+const stopCloseIfMainSidebar = (e: { preventDefault: () => void; target: EventTarget | null }) => {
+  const el = e.target as HTMLElement | null;
+  if (el?.closest?.("[data-pl-main-sidebar]")) e.preventDefault();
+};
+
 const GoogleDriveIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 512 512">
       <path d="M339 339l-22.5-39h-73l-22.5 39H339zm-10.5-52.5l-40.5-70.5h-45l-40.5 70.5h126z" fill="#26a65b"/>
@@ -135,6 +140,17 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   }>({ type: null, company: null });
   const [companies, setCompanies] = useState<CompanyData[]>(() =>
     (initialCompanies ?? []).filter(isCompanyVisibleInSelector)
+  );
+
+  const parentCompaniesListSig = useMemo(
+    () =>
+      (initialCompanies ?? [])
+        .map((c) => {
+          const co = c as CompanyData & { storageOption?: string };
+          return `${c.id}\0${c.name ?? ""}\0${String(co.storageOption ?? "")}\0${Boolean((c as CompanyData & { isOwned?: boolean }).isOwned)}`;
+        })
+        .join("|"),
+    [initialCompanies]
   );
 
   // States for password dialog
@@ -161,7 +177,7 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       return;
     }
     setCompanies((initialCompanies ?? []).filter(isCompanyVisibleInSelector));
-  }, [user, contextCompanies, contextCompanyLoading, initialCompanies]);
+  }, [user, contextCompanies, contextCompanyLoading, parentCompaniesListSig]);
 
 
   const handleSelectCompany = (company: CompanyData) => {
@@ -711,7 +727,16 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
   );
 }
 
-export function CompanyActions({ companies, onCompanyCreated }: { companies: CompanyData[], onCompanyCreated: () => void }) {
+export function CompanyActions({
+  companies,
+  onCompanyCreated,
+  /** Header strip: trigger par sirf naam + `truncate` — building/chevron hata diye user request se. */
+  triggerLayout = "desktop",
+}: {
+  companies: CompanyData[];
+  onCompanyCreated: () => void;
+  triggerLayout?: "mobile" | "desktop";
+}) {
   const router = useRouter();
   const { user } = useAuth();
   const { companyId, setCompanyId, triggerSync, reloadLocalCompanyRegistry } = useCompany();
@@ -883,10 +908,6 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
     return () => { cancelled = true; };
   }, [sharedOwnerIdsKey]);
 
-  // APK/iOS shell: lambi naam strip header ko bhar leta — naam title/aria-label; trigger par sirf building icon.
-  const [apkCompanyTriggerIconOnly, setApkCompanyTriggerIconOnly] = useState(false);
-  useEffect(() => setApkCompanyTriggerIconOnly(isCapacitorNativeApp()), []);
-
   const companyTriggerLabel =
     activeCompany?.name.trim() ||
     (!companies?.length ? "No company — add one" : "Select company");
@@ -898,28 +919,23 @@ export function CompanyActions({ companies, onCompanyCreated }: { companies: Com
           <Button
             variant="outline"
             className={cn(
-              "h-9",
-              apkCompanyTriggerIconOnly ? "w-9 shrink-0 p-0 justify-center" : "max-w-[240px] justify-between"
+              "flex h-9 min-w-0 justify-start gap-0 font-normal",
+              // Mobile header: parent `flex-1` — `w-full` + truncate lambi naam ke liye.
+              triggerLayout === "mobile" && "w-full max-w-none px-2",
+              // Desktop: baaki controls poori dikhein; company box hi shrink + truncate.
+              triggerLayout === "desktop" && "max-w-[min(100%,280px)] shrink px-3"
             )}
             data-theme-header="company-selector"
-            title={apkCompanyTriggerIconOnly ? companyTriggerLabel : undefined}
-            aria-label={apkCompanyTriggerIconOnly ? `Company: ${companyTriggerLabel}` : undefined}
+            title={companyTriggerLabel}
+            aria-label={`Company: ${companyTriggerLabel}`}
           >
-            {apkCompanyTriggerIconOnly ? (
-              <Building2 className="h-4 w-4 shrink-0" />
-            ) : (
-              <>
-                <div className="flex min-w-0 items-center gap-2">
-                  <Building2 className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{activeCompany ? activeCompany.name : "No Company"}</span>
-                </div>
-                <ChevronDown className="ml-2 h-4 w-4 shrink-0" />
-              </>
-            )}
+            <span className="min-w-0 flex-1 truncate text-left">
+              {activeCompany ? activeCompany.name : "No Company"}
+            </span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuPortal>
-        <DropdownMenuContent className="w-64">
+        <DropdownMenuContent className="w-64" onPointerDownOutside={stopCloseIfMainSidebar} onInteractOutside={stopCloseIfMainSidebar}>
           {(localOwnedCompanies.length > 0 ||
             sharedLocalCompanies.length > 0 ||
             cloudOwnedCompanies.length > 0 ||

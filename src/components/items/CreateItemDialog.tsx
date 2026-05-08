@@ -99,6 +99,7 @@ import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { resolveRecycleBinDuplicate } from "@/lib/recycleBinDuplicate";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { itemStrippedRowToCreateItemFormPatch } from "@/lib/crossCompanyMasterPrefill";
 import { upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
@@ -205,7 +206,8 @@ export function CreateItemDialog({
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   /** APK cloud Firebase: lists mirror SQLite — vouchers hook pe depend kam (`apkCloudEntityMasterReadFromSqliteMirror`). */
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),

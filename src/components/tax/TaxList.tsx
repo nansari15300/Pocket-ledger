@@ -18,6 +18,8 @@ import {
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 export function TaxList({ 
     taxes, 
@@ -69,6 +71,7 @@ export function TaxList({
             {filteredAndSortedTaxes.map(tax => {
                 const isSelected = selectedTax?.id === tax.id;
                 const href = getItemHref?.(tax);
+                const attachmentPreviewUrl = trimEntityFileUrlForPreview(tax.fileUrl);
                 const cardClassName = cn(
                     "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
                     isSelected
@@ -79,12 +82,14 @@ export function TaxList({
                         <div className="pl-master-list-row">
                             <div className="pl-master-list-row-leading">
                             <div className="relative flex-shrink-0">
-                              <Avatar className="h-8 w-8 text-sm bg-muted text-muted-foreground">
-                                <AvatarImage src={tax.fileUrl} alt={tax.name} />
-                                <AvatarFallback>
-                                  <Receipt className="h-4 w-4" />
-                                </AvatarFallback>
-                              </Avatar>
+                              <EntityFileAttachmentHover fileUrl={attachmentPreviewUrl} triggerClassName="inline-flex shrink-0 rounded-md">
+                                <Avatar className="h-8 w-8 text-sm bg-muted text-muted-foreground">
+                                  <AvatarImage src={attachmentPreviewUrl ?? undefined} alt={tax.name} />
+                                  <AvatarFallback>
+                                    <Receipt className="h-4 w-4" />
+                                  </AvatarFallback>
+                                </Avatar>
+                              </EntityFileAttachmentHover>
                               {(pendingApprovalByTaxId[tax.id] ?? 0) > 0 && (
                                 <span
                                   className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
@@ -137,7 +142,8 @@ export function TaxList({
                     transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                   >
                     {href ? (
-                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
                         <Card className={cardClassName}>{cardContent}</Card>
                       </Link>
                     ) : (

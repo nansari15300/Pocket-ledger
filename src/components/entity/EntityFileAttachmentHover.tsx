@@ -6,6 +6,7 @@ import { SingleAttachmentHoverPreviewBody } from "@/components/vouchers/attachme
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 type Props = {
   /** Party / bank / tax `fileUrl` — khali ho to sirf children (no portal). */
@@ -22,7 +23,8 @@ type Props = {
 export function EntityFileAttachmentHover({ fileUrl, children, triggerClassName }: Props) {
   // Mobile UX: avatar hover preview disable, so only explicit tap/click preview flows remain.
   const isMobile = useIsMobile();
-  const u = fileUrl?.trim();
+  // `"null"` string / stale SQLite — bina attachment ke PDF portal mat kholo; lists me `ResolvedEntityAvatar` src bhi trim ke saath pass karo.
+  const u = trimEntityFileUrlForPreview(fileUrl);
   if (!u) return <>{children}</>;
   const onPdfDbl =
     getAttachmentFormatLabel(u) === "PDF"

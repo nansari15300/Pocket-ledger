@@ -112,3 +112,37 @@ export async function openPdfBlobInExternalViewer(blob: Blob, fileName: string):
     }
   }
 }
+
+/** Native-only: already-local file URI ko seedha FileOpener do (blob/base64 conversion bilkul nahi). */
+export async function openLocalFileUriInExternalViewer(
+  fileUri: string,
+  contentType: string,
+  fallbackTitle?: string
+): Promise<void> {
+  const uri = String(fileUri || "").trim();
+  if (!uri) return;
+  if (!isCapacitorNative()) {
+    window.open(uri, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    const { FileOpener } = await import("@capacitor-community/file-opener");
+    await FileOpener.open({
+      filePath: uri,
+      contentType: contentType || "application/octet-stream",
+      openWithDefault: true,
+    });
+  } catch (e) {
+    console.warn("[openPdfExternal] direct local-uri open failed", e);
+    try {
+      const { Share } = await import("@capacitor/share");
+      await Share.share({
+        title: fallbackTitle || "Open file",
+        url: uri,
+        dialogTitle: "Open file",
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+}

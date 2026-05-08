@@ -19,6 +19,8 @@ import {
   type EntityListQuickFilter,
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 interface ItemListProps {
   items: Item[];
@@ -136,6 +138,7 @@ export function ItemList({
                 const { formattedDisplayValue, isPositive, displayUnit } = metrics;
 
                 const href = getItemHref?.(item);
+                const attachmentPreviewUrl = trimEntityFileUrlForPreview(item.fileUrls?.[0]);
                 const cardClassName = cn(
                   "min-w-0 max-w-full overflow-hidden p-1 cursor-pointer border",
                   isSelected ? "border-primary bg-secondary" : "hover:border-primary/50"
@@ -144,12 +147,18 @@ export function ItemList({
                   <div className="pl-master-list-row">
                     <div className="pl-master-list-row-leading">
                       <div className="relative flex-shrink-0">
-                        <Avatar className="h-8 w-8 text-sm">
-                          <AvatarImage src={item.fileUrls?.[0]} />
-                          <AvatarFallback>
-                            <Package />
-                          </AvatarFallback>
-                        </Avatar>
+                        {/* `fileUrls[0]` = master photo — hover portal list row pe pehle band tha */}
+                        <EntityFileAttachmentHover
+                          fileUrl={attachmentPreviewUrl}
+                          triggerClassName="inline-flex shrink-0 rounded-md"
+                        >
+                          <Avatar className="h-8 w-8 text-sm">
+                            <AvatarImage src={attachmentPreviewUrl ?? undefined} />
+                            <AvatarFallback>
+                              <Package />
+                            </AvatarFallback>
+                          </Avatar>
+                        </EntityFileAttachmentHover>
                         {(pendingApprovalByItemId[item.id] ?? 0) > 0 && (
                           <span
                             className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
@@ -196,7 +205,8 @@ export function ItemList({
                     }}
                   >
                     {href ? (
-                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
                         <Card className={cardClassName}>{cardContent}</Card>
                       </Link>
                     ) : (

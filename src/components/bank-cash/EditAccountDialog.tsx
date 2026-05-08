@@ -26,6 +26,7 @@ import Link from "next/link";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
@@ -108,7 +109,8 @@ export function EditAccountDialog({ account, allAccounts, onAccountUpdated, onAc
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   /** APK Firebase company: dropdown lists SQLite warm-mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),

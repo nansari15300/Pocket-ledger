@@ -3,6 +3,8 @@
  * Use when data source = "browser" (no Node server). See docs/BROWSER-SQLITE-NO-SERVER.md.
  */
 
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+
 const BASE_IDB_NAME = "pocket-ledger-browser-db";
 const LEGACY_IDB_NAME = BASE_IDB_NAME;
 const IDB_STORE = "store";
@@ -12,6 +14,11 @@ export type SqlJsDatabase = import("sql.js").Database;
 
 function getRuntimeDbScope(): string {
   if (typeof window === "undefined") return "default";
+  // Embedded/native: WebView localhost port app restart par badal sakta hai; fixed scope se SQLite persistence stable rakho.
+  if (isCapacitorNativeApp()) return "capacitor_native_embedded";
+  // Electron packaged localhost: runtime port drift se DB split avoid.
+  const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase();
+  if (ua.includes("electron") && window.location.hostname === "localhost") return "electron_embedded";
   // Host-based DB scope: localhost vs production domain ko अलग rakhkar data conflict avoid kare.
   const host = `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`;
   return host.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
@@ -19,6 +26,12 @@ function getRuntimeDbScope(): string {
 
 function getScopedIdbName(): string {
   return `${BASE_IDB_NAME}__${getRuntimeDbScope()}`;
+}
+
+function getHostPortScopeForLegacyFallback(): string {
+  if (typeof window === "undefined") return "default";
+  const host = `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`;
+  return host.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
 }
 
 function openIndexedDB(idbName: string): Promise<IDBDatabase> {
@@ -64,6 +77,15 @@ export function loadDbFromIndexedDB(): Promise<ArrayBuffer | null> {
     const scopedName = getScopedIdbName();
     const scoped = await readByName(scopedName);
     if (scoped) return scoped;
+    // Scope migration safety: embedded/native fixed-scope par switch ke baad current host-port DB se one-time import.
+    const legacyHostScopedName = `${BASE_IDB_NAME}__${getHostPortScopeForLegacyFallback()}`;
+    if (legacyHostScopedName !== scopedName) {
+      const hostScoped = await readByName(legacyHostScopedName);
+      if (hostScoped) {
+        await saveDbToIndexedDB(new Uint8Array(hostScoped));
+        return hostScoped;
+      }
+    }
     // First run after DB scoping change: legacy DB se one-time fallback read so offline companies immediately visible rahein.
     const legacy = await readByName(LEGACY_IDB_NAME);
     if (!legacy) return null;
@@ -115,6 +137,40 @@ function initSchema(db: SqlJsDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_company_docs_company_collection
     ON company_docs(company_id, collection)
   `);
+  // Capacitor attachment migration: bytes DataDirectory me, SQLite me stable refs (path/meta) only.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS attachment_file_refs (
+      scope TEXT NOT NULL,
+      id TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      content_type TEXT,
+      size INTEGER NOT NULL DEFAULT 0,
+      meta_json TEXT,
+      updatedAt INTEGER,
+      PRIMARY KEY (scope, id)
+    )
+  `);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_attachment_file_refs_scope_updated
+    ON attachment_file_refs(scope, updatedAt)
+  `);
+  // Dashboard-friendly voucher projection: full JSON parse se pehle amount/date/type columns quick read.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS company_docs_projection (
+      company_id TEXT NOT NULL,
+      collection TEXT NOT NULL,
+      id TEXT NOT NULL,
+      doc_type TEXT,
+      doc_date_ms INTEGER,
+      amount_value REAL,
+      updatedAt INTEGER,
+      PRIMARY KEY (company_id, collection, id)
+    )
+  `);
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_company_docs_projection_company_collection_date
+    ON company_docs_projection(company_id, collection, doc_date_ms)
+  `);
   db.run(`
     CREATE TABLE IF NOT EXISTS company_users (
       company_id TEXT NOT NULL,
@@ -160,9 +216,23 @@ export interface BrowserDbWrapper {
 
 let cachedDb: { wrapper: BrowserDbWrapper; db: SqlJsDatabase } | null = null;
 
+// SQLite bind ke liye unsupported JS values ko deterministic scalar me normalize karo.
+function normalizeSqlParam(value: unknown): unknown {
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") return null;
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return value.getTime();
+  return value;
+}
+
 function wrapDb(db: SqlJsDatabase, onSave: () => Promise<void>): BrowserDbWrapper {
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   const scheduleSave = () => {
-    onSave().catch(() => {});
+    // Burst writes (mirror batches) ke waqt har row export avoid karke one-shot debounced flush rakho.
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      onSave().catch(() => {});
+    }, 250);
   };
   return {
     raw: db,
@@ -170,27 +240,35 @@ function wrapDb(db: SqlJsDatabase, onSave: () => Promise<void>): BrowserDbWrappe
       const stmt = db.prepare(sql);
       return {
         get(...params: unknown[]) {
-          if (params.length) stmt.bind(params as number[]);
-          const ok = stmt.step();
-          const row = ok ? (stmt.getAsObject() as unknown) : undefined;
-          stmt.free();
-          return row;
+          try {
+            if (params.length) stmt.bind(params.map((p) => normalizeSqlParam(p)) as unknown[]);
+            const ok = stmt.step();
+            return ok ? (stmt.getAsObject() as unknown) : undefined;
+          } finally {
+            stmt.free();
+          }
         },
         all(...params: unknown[]) {
-          if (params.length) stmt.bind(params as number[]);
-          const rows: unknown[] = [];
-          while (stmt.step()) rows.push(stmt.getAsObject());
-          stmt.free();
-          return rows;
+          try {
+            if (params.length) stmt.bind(params.map((p) => normalizeSqlParam(p)) as unknown[]);
+            const rows: unknown[] = [];
+            while (stmt.step()) rows.push(stmt.getAsObject());
+            return rows;
+          } finally {
+            stmt.free();
+          }
         },
         run(...params: unknown[]) {
-          if (params.length) stmt.bind(params as number[]);
-          stmt.step();
-          stmt.free();
-          const r = db.exec("SELECT changes()");
-          const changes = r[0]?.values?.[0]?.[0] ?? 0;
+          try {
+            if (params.length) stmt.bind(params.map((p) => normalizeSqlParam(p)) as unknown[]);
+            stmt.step();
+          } finally {
+            stmt.free();
+          }
+          // changes() query ki extra prepare/exec cost hata kar direct sqlite counter read karo.
+          const changes = Number(db.getRowsModified?.() ?? 0);
           scheduleSave();
-          return { changes: changes as number };
+          return { changes };
         },
       };
     },

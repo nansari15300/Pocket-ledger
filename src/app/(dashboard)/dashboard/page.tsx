@@ -46,9 +46,11 @@ import {
   Factory,
   HandCoins,
   BarChart3,
+  Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableHeader,
@@ -80,7 +82,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useDate } from '@/hooks/useDate';
-import { useIsMobile, useCalendarMonths } from '@/hooks/use-mobile';
+import { useIsMobile, useCalendarMonths, useMobileView } from '@/hooks/use-mobile';
 import { openPrintDirect } from "@/lib/printDirect";
 import usePermissions from '@/hooks/usePermissions';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -89,6 +91,10 @@ import { useVouchers } from '@/hooks/useVouchers';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TransactionsTable } from '@/components/vouchers/TransactionsTable';
+import {
+  getOppositeAccountLabel,
+  getTransactionQuickSearchHaystack,
+} from "@/components/vouchers/transactionTableShared";
 import { useDashboard } from '@/hooks/useDashboard';
 import AdCalendar from "@/components/ui/ad-calendar";
 import { DateRangePresetRow } from "@/components/ui/DateRangePresetRow";
@@ -111,6 +117,8 @@ import {
   voucherCountsAsDashboardPaySalary,
   voucherCountsAsDashboardPaymentOutExcludingPaySalary,
 } from "@/lib/dashboardPaySalaryStat";
+import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
+import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 
 // Type definitions
 type Voucher = {
@@ -494,6 +502,67 @@ useEffect(() => {
     )
 };
 
+/**
+ * Recent search: sirf card/table dikhane wale text + amounts/dates — poori object walk nahi
+ * (warna "rcpt" jaise substring kisi hidden field me lag kar Sale row bhi aa jata tha).
+ * Space = alag words; har word ko AND (sab kahi na kahi match hone chahiye).
+ */
+function transactionMatchesRecentQuickSearch(
+  tx: any,
+  qLower: string,
+  journalAccountNames: Record<string, string>,
+  userNames: Record<string, string>
+): boolean {
+  if (!qLower) return true;
+  const tokens = qLower
+    .split(/\s+/)
+    .map((t) => t.replace(/,/g, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+
+  const names = { ...journalAccountNames, ...userNames };
+  const pieces: string[] = [];
+
+  pieces.push(getTransactionQuickSearchHaystack(tx, names));
+  pieces.push(getOppositeAccountLabel(tx, names, "daybook", undefined, undefined) || "");
+  if (typeof tx?.title === "string" && tx.type === "note") pieces.push(tx.title);
+
+  const uid = tx?.userId;
+  if (uid && userNames[uid]) pieces.push(userNames[uid]);
+
+  for (const key of ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"] as const) {
+    const v = tx[key];
+    if (v == null || v === "") continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) {
+      pieces.push(String(n), n.toFixed(2), n.toLocaleString("en-IN"));
+      pieces.push(n.toLocaleString());
+    }
+  }
+
+  const d =
+    tx?.date && (typeof tx.date.toDate === "function" ? tx.date.toDate() : new Date(tx.date));
+  if (d && !isNaN(d.getTime())) {
+    pieces.push(d.toISOString(), d.toLocaleDateString(), d.toLocaleString());
+  }
+
+  const hay = pieces.join(" ").toLowerCase().replace(/,/g, " ");
+
+  const numericFields = ["debit", "credit", "total", "amount", "balance", "runningBalance", "outstanding"].map(
+    (k) => Number(tx[k])
+  );
+
+  for (const tok of tokens) {
+    if (!tok) continue;
+    if (hay.includes(tok)) continue;
+    const qNum = Number(tok.replace(/,/g, ""));
+    if (Number.isFinite(qNum) && numericFields.some((n) => Number.isFinite(n) && Math.abs(n - qNum) < 0.000001)) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 function DashboardPageContent() {
   const { company, companyId, setCompanyId } = useCompany();
@@ -508,6 +577,9 @@ function DashboardPageContent() {
   const hideFabTimeout = useRef<NodeJS.Timeout | null>(null);
   const { dateSystem, formatDate, formatDateBS, formatCurrency, formatCurrencyForPrint } = useDate();
   const isMobile = useIsMobile();
+  /** Phone detect: APK/WebView me PC mode + width≥768 par `isMobile` false ho jata hai — Recent header phir bhi compact hona chahiye. */
+  const { isRealMobile } = useMobileView();
+  const recentTransactionsCompact = isMobile || isRealMobile;
   const calendarMonths = useCalendarMonths();
   
   const [loading, setLoading] = React.useState(true);
@@ -522,6 +594,20 @@ function DashboardPageContent() {
   const [cashFlowFilter, setCashFlowFilter] = useState<'all' | 'inflow' | 'outflow'>('all');
   const [cashFlowCategoryFilter, setCashFlowCategoryFilter] = useState<'all' | 'party' | 'staff' | 'tax' | 'income_expense' | 'other'>('all');
   const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
+
+  /** Print / page-level R/P: same server aggregation as FinancialSummaryCards (duplicate API — range alag ho sakta hai). */
+  const {
+    summary: pageServerRpSummary,
+    loading: pageServerRpLoading,
+    useClientFallback: pageServerRpClientFb,
+    preferServer: pagePreferServerRp,
+  } = useServerReceivablesPayablesSummary({
+    companyId: company?.id,
+    storageOption: company?.storageOption,
+    receivablesDateRange,
+    enabled: true,
+  });
+
   const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(undefined);
   const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(undefined);
   const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(undefined);
@@ -552,6 +638,8 @@ function DashboardPageContent() {
   const [isRecentCalendarOpen, setIsRecentCalendarOpen] = React.useState(false);
   const [tempRecentDateRange, setTempRecentDateRange] = React.useState<DateRange | undefined>(undefined);
   const [recentFilters, setRecentFilters] = useState<Record<string, string>>({});
+  /** Recent card header: client-side quick filter (voucher no / narration / names) — pool + "Showing" counts isi se. */
+  const [recentQuickSearch, setRecentQuickSearch] = useState('');
   /** Recent card quick chip: click -> all-time unapproved only (date/type/column filters ignore). */
   const [recentUnapprovedOnly, setRecentUnapprovedOnly] = useState(false);
   const [activeRecentFilter, setActiveRecentFilter] = useState<string | null>(null);
@@ -620,6 +708,21 @@ function DashboardPageContent() {
     const timer = setInterval(() => setLiveTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  /** Welcome card clock line: app `dateSystem` ke mutabiq aaj ki tariikh — AD/BS label zaroor dikhein (pehle sirf locale AD tha). */
+  const welcomeSystemDateTimeLine = useMemo(() => {
+    const d = liveTime;
+    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+    const weekday = format(d, "EEEE");
+    const timePart = d.toLocaleTimeString();
+    if (dateSystem === "AD") {
+      return `${weekday}, ${formatDate(d)} (AD) | ${timePart}`;
+    }
+    if (dateSystem === "BS") {
+      return `${weekday}, ${formatDateBS(d)} (BS) | ${timePart}`;
+    }
+    return `${weekday} · AD ${formatDate(d)} · BS ${formatDateBS(d)} | ${timePart}`;
+  }, [liveTime, dateSystem, formatDate, formatDateBS]);
 
   const newYearInfo = useMemo(() => {
     const now = new Date();
@@ -740,91 +843,68 @@ function DashboardPageContent() {
     }
   }, [vouchers, fetchUserName, userNames]);
 
-  // ---------- FINANCIAL SUMMARY CALCULATION (Grouped) ----------
-  const financialSummary = React.useMemo(() => {
-    if (loading) return { 
-        totalReceivable: 0, 
-        totalPayable: 0, 
-        receivables: { parties: [], staff: [], taxes: [] }, 
-        payables: { parties: [], staff: [], taxes: [] },
-        recCount: 0,
-        payCount: 0
-    };
-    
-    let filteredVouchers = vouchers;
-    if (receivablesDateRange?.from) {
-        const fromDate = startOfDay(receivablesDateRange.from);
-        const toDate = receivablesDateRange.to ? endOfDay(receivablesDateRange.to) : endOfDay(fromDate);
-        filteredVouchers = vouchers.filter(v => {
-            const txDate = safeToDate(v.date);
-            return txDate && txDate >= fromDate && txDate <= toDate;
-        });
+  // ---------- FINANCIAL SUMMARY CALCULATION (Grouped) — shared + optional server aggregate ----------
+  const needPageClientRp =
+    !pagePreferServerRp ||
+    pageServerRpClientFb ||
+    (!pageServerRpSummary && !pageServerRpLoading);
+
+  const pageClientFinancialSummary = React.useMemo(() => {
+    if (!needPageClientRp) {
+      return computeReceivablesPayablesFinancialSummary({
+        vouchers,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        receivablesDateRange,
+        loading: true,
+      });
     }
+    return computeReceivablesPayablesFinancialSummary({
+      vouchers,
+      processedParties,
+      processedStaff,
+      processedTaxes,
+      receivablesDateRange,
+      loading: !!loading,
+    });
+  }, [
+    needPageClientRp,
+    loading,
+    vouchers,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    receivablesDateRange,
+  ]);
 
-    const receivables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
-    const payables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
-
-    const processEntity = (entity: any, type: 'party' | 'staff' | 'tax') => {
-        let balance = Number(entity.openingBalance) || 0;
-
-        filteredVouchers.forEach(v => {
-            const amount = v.total || v.amount || 0;
-
-            if (v.type === 'journal') {
-                const entry = v.entries?.find((e: any) => e.accountId === entity.id);
-                if (entry) {
-                    balance += (Number(entry.debit) || 0) - (Number(entry.credit) || 0);
-                }
-            } else {
-                 if (v.partyId === entity.id && type === 'party') {
-                    if (["sale", "payment_out", "direct_income"].includes(v.type)) balance += amount;
-                    else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) balance -= amount;
-                } else if (v.staffId === entity.id && type === 'staff') {
-                    if (v.type === 'payment_out') balance += amount;
-                    else if (v.type === 'payment_in') balance -= amount;
-                } else if (v.taxAccountId === entity.id && type === 'tax') {
-                    if (v.type === 'payment_out') balance += amount;
-                    else if (v.type === 'payment_in') balance -= amount;
-                } else if (v.lineItems?.some((li: any) => li.taxAccountId === entity.id) && type === 'tax') {
-                    const taxAmount = v.lineItems.reduce(
-                        (sum: number, li: any) => li.taxAccountId === entity.id ? sum + Number(li.taxAmount || 0) : sum,
-                        0
-                    );
-                    if (v.type === 'purchase') balance += taxAmount;
-                    else if (v.type === 'sale') balance -= taxAmount;
-                }
-            }
-        });
-
-        const entityData = { party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl };
-        if (balance > 0.01) {
-            if (type === 'party') receivables.parties.push(entityData);
-            if (type === 'staff') receivables.staff.push(entityData);
-            if (type === 'tax') receivables.taxes.push(entityData);
-        } else if (balance < -0.01) {
-            if (type === 'party') payables.parties.push(entityData);
-            if (type === 'staff') payables.staff.push(entityData);
-            if (type === 'tax') payables.taxes.push(entityData);
-        }
-    };
-    
-    processedParties.forEach(p => processEntity(p, 'party'));
-    processedStaff.forEach(s => processEntity(s, 'staff'));
-    processedTaxes.forEach(t => processEntity(t, 'tax'));
-    
-    const sortFn = (a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance);
-    receivables.parties.sort(sortFn); receivables.staff.sort(sortFn); receivables.taxes.sort(sortFn);
-    payables.parties.sort(sortFn); payables.staff.sort(sortFn); payables.taxes.sort(sortFn);
-
-    const calcSum = (arr: any[]) => arr.reduce((sum, item) => sum + item.balance, 0);
-    const totalReceivable = calcSum(receivables.parties) + calcSum(receivables.staff) + calcSum(receivables.taxes);
-    const totalPayable = calcSum(payables.parties) + calcSum(payables.staff) + calcSum(payables.taxes);
-
-    const recCount = receivables.parties.length + receivables.staff.length + receivables.taxes.length;
-    const payCount = payables.parties.length + payables.staff.length + payables.taxes.length;
-
-    return { totalReceivable, totalPayable, receivables, payables, recCount, payCount };
-  }, [processedParties, processedStaff, processedTaxes, loading, vouchers, receivablesDateRange]);
+  const financialSummary = React.useMemo(() => {
+    if (pagePreferServerRp && !pageServerRpClientFb && pageServerRpSummary) {
+      return pageServerRpSummary;
+    }
+    if (pagePreferServerRp && !pageServerRpClientFb && pageServerRpLoading) {
+      return computeReceivablesPayablesFinancialSummary({
+        vouchers,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        receivablesDateRange,
+        loading: true,
+      });
+    }
+    return pageClientFinancialSummary;
+  }, [
+    pagePreferServerRp,
+    pageServerRpClientFb,
+    pageServerRpSummary,
+    pageServerRpLoading,
+    pageClientFinancialSummary,
+    vouchers,
+    processedParties,
+    processedStaff,
+    processedTaxes,
+    receivablesDateRange,
+  ]);
 
   const netBalance = financialSummary.totalReceivable + financialSummary.totalPayable;
 
@@ -1071,25 +1151,36 @@ function DashboardPageContent() {
     userNames
   );
 
-  const recentTransactions = useMemo(() => {
+  const recentSortedBase = useMemo(() => {
     if (!allRecentTransactions) return [];
     let sorted = [...allRecentTransactions].sort((a, b) => {
-        const dateA = safeToDate(a.date)?.getTime() || 0;
-        const dateB = safeToDate(b.date)?.getTime() || 0;
-        if (dateB !== dateA) return dateB - dateA;
-        const creationA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-        const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-        return creationB - creationA;
-      });
+      const dateA = safeToDate(a.date)?.getTime() || 0;
+      const dateB = safeToDate(b.date)?.getTime() || 0;
+      if (dateB !== dateA) return dateB - dateA;
+      const creationA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+      const creationB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+      return creationB - creationA;
+    });
     if (recentUnapprovedOnly) {
-      // Approval pending = isApproved true nahin (same highlight logic as row styling).
       sorted = sorted.filter((tx) => (tx as any).isApproved !== true);
-      return sorted;
     }
-    const limit = Number(recentRowsPerPage);
-    if (!isNaN(limit) && limit > 0) sorted = sorted.slice(0, limit);
     return sorted;
-  }, [allRecentTransactions, recentRowsPerPage, recentUnapprovedOnly]);
+  }, [allRecentTransactions, recentUnapprovedOnly]);
+
+  const recentPoolBeforeLimit = useMemo(() => {
+    const q = recentQuickSearch.trim().toLowerCase();
+    if (!q) return recentSortedBase;
+    return recentSortedBase.filter((tx) =>
+      transactionMatchesRecentQuickSearch(tx, q, journalAccountNames, userNames)
+    );
+  }, [recentSortedBase, recentQuickSearch, journalAccountNames, userNames]);
+
+  const recentTransactions = useMemo(() => {
+    if (recentUnapprovedOnly) return recentPoolBeforeLimit;
+    const limit = Number(recentRowsPerPage);
+    if (!isNaN(limit) && limit > 0) return recentPoolBeforeLimit.slice(0, limit);
+    return recentPoolBeforeLimit;
+  }, [recentPoolBeforeLimit, recentRowsPerPage, recentUnapprovedOnly]);
   
   const handlePrint = () => {
     const shouldInclude = (type: 'party' | 'staff' | 'tax') => {
@@ -1339,14 +1430,16 @@ function DashboardPageContent() {
       recentDateRange !== undefined ||
       (recentVoucherTypes.length > 0 && !recentVoucherTypes.includes('all')) ||
       Object.values(recentFilters).some(v => v) ||
-      recentUnapprovedOnly,
-    [recentDateRange, recentVoucherTypes, recentFilters, recentUnapprovedOnly]
+      recentUnapprovedOnly ||
+      recentQuickSearch.trim() !== '',
+    [recentDateRange, recentVoucherTypes, recentFilters, recentUnapprovedOnly, recentQuickSearch]
   );
   const clearRecentFilters = () => {
     setRecentDateRange(undefined);
     setRecentVoucherTypes(['all']);
     setRecentFilters({});
     setRecentUnapprovedOnly(false);
+    setRecentQuickSearch('');
   };
   const applyRecentUnapprovedFilter = () => {
     // User request: button click = all-time unapproved vouchers only.
@@ -1354,6 +1447,7 @@ function DashboardPageContent() {
     setRecentDateRange(undefined);
     setRecentVoucherTypes(['all']);
     setRecentFilters({});
+    setRecentQuickSearch('');
     setActiveRecentFilter(null);
     setRecentRowsPerPage('0');
   };
@@ -1435,6 +1529,18 @@ function DashboardPageContent() {
     return dateSystem === 'AD' ? formatDate(d) : formatDateBS(d);
   };
 
+  /** Mobile: poori range date-trigger button mein mat dikhao — title ke neeche ek line; strip/control row ki height stable. */
+  const recentTransactionsMobileRangeLine = useMemo(() => {
+    if (!recentDateRange?.from) return null;
+    const from = recentDateRange.from;
+    const to = recentDateRange.to;
+    const adPart = to ? `${formatDate(from)} – ${formatDate(to)}` : formatDate(from);
+    const bsPart = to ? `${formatDateBS(from)} – ${formatDateBS(to)}` : formatDateBS(from);
+    if (dateSystem === 'AD') return adPart;
+    if (dateSystem === 'BS') return bsPart;
+    return `${adPart} · ${bsPart}`;
+  }, [recentDateRange, dateSystem, formatDate, formatDateBS]);
+
 
   const renderFinancialSummaries = (reportsEnabled: boolean, showVoucherDateCharts = false) => {
     return (
@@ -1459,23 +1565,70 @@ function DashboardPageContent() {
     <Card
       className={cn(
         "border-2 w-full border-violet-300/70 pl-dashboard-ribbon-violet",
-        isMobile && "px-0"
+        recentTransactionsCompact && "px-0"
       )}
     >
-      <CardHeader className={cn("px-2 sm:px-4", isMobile && "px-2")}>
-        <div className="flex flex-col gap-2">
-          <CardTitle className="text-center w-full">Recent Transactions</CardTitle>
-          <div className="flex flex-wrap items-center gap-2 min-h-9">
-            <div className={cn("flex items-center gap-2 h-9", isMobile ? "order-1" : "md:order-2")}>
+      {/* Compact: CardHeader default `p-6` hata kar chhoti strip — sirf text jitni height */}
+      <CardHeader
+        className={cn(
+          "px-2 sm:px-4",
+          recentTransactionsCompact && "space-y-1 px-2 py-1.5 sm:px-4",
+          // Recent tab + mobile: `main` scroll par title/date upar chipke rahein — `sticky` ka scrollport wahi `<main>` hai (layout).
+          recentTransactionsCompact &&
+            visibleCard === "recent-transactions" &&
+            "sticky top-0 z-20 border-b border-gray-300 bg-gray-200 py-2 shadow-sm dark:border-gray-600 dark:bg-gray-800"
+        )}
+      >
+        <div className={cn("flex flex-col", recentTransactionsCompact ? "gap-1" : "gap-2")}>
+          {/* Mobile: title compact rakho; date-range ko button row ke just upar dikhana hai. */}
+          <div
+            className={cn(
+              "flex w-full flex-col items-center justify-center",
+              recentTransactionsCompact && "gap-0 py-0"
+            )}
+          >
+            <CardTitle
+              className={cn(
+                "w-full text-center",
+                recentTransactionsCompact && recentDateRange?.from && "text-sm font-semibold leading-none",
+                recentTransactionsCompact && !recentDateRange?.from && "text-base font-semibold leading-none"
+              )}
+            >
+              Recent Transactions
+            </CardTitle>
+          </div>
+          {/* User request: upar sirf title + date range line hi rahe. */}
+          {recentTransactionsCompact && (
+            <p
+              className="w-full max-w-full truncate px-1 text-center text-[11px] font-bold leading-tight text-foreground"
+              title={recentTransactionsMobileRangeLine ?? "Date range"}
+            >
+              {recentTransactionsMobileRangeLine ?? "Date range"}
+            </p>
+          )}
+          {/* Compact mobile me controls niche fixed panel me jayenge; yahan desktop/non-compact controls hi rakho. */}
+          {!recentTransactionsCompact && (
+          <div
+            className={cn(
+              "flex items-center gap-2 min-h-9",
+              recentTransactionsCompact ? "flex-nowrap overflow-x-auto" : "flex-wrap"
+            )}
+          >
+            <div className={cn("flex shrink-0 items-center gap-2 h-9", recentTransactionsCompact ? "order-1" : "md:order-2")}>
             {(dateSystem === 'BS' || dateSystem === 'Both') && (
                 <BsDatePicker
                   isRange
                   valueAD={recentDateRange}
                   onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)}
                   transactionDates={transactionDates}
-                  className="h-9"
-                  hideTriggerIcon={isMobile}
-                  rangeEmptyLabel={isMobile ? "Change date" : undefined}
+                  className="h-9 max-w-[min(100%,9rem)] sm:max-w-none"
+                  hideTriggerIcon={recentTransactionsCompact}
+                  rangeEmptyLabel={recentTransactionsCompact ? "Change date" : undefined}
+                  children={
+                    recentTransactionsCompact ? (
+                      <span className="min-w-0 truncate">Change date</span>
+                    ) : undefined
+                  }
                 />
             )}
             {(dateSystem === 'AD' || dateSystem === 'Both') && (
@@ -1485,9 +1638,30 @@ function DashboardPageContent() {
                   else setTempRecentDateRange(undefined);
                 }}>
                     <PopoverTrigger asChild>
-                    <Button id="recent-date" variant={"outline"} className={cn("w-auto justify-start text-left font-normal h-9", !recentDateRange && "text-muted-foreground")}>
-                        {!isMobile && <CalendarIcon className="mr-2 h-4 w-4" />}
-                        {recentDateRange?.from ? (recentDateRange.to ? <>{formatDate(recentDateRange.from)} - {formatDate(recentDateRange.to)}</> : formatDate(recentDateRange.from)) : (<span>{isMobile ? "Change date" : "Date range"}</span>)}
+                    <Button
+                      id="recent-date"
+                      variant={"outline"}
+                      className={cn(
+                        "h-9 justify-start text-left font-normal",
+                        recentTransactionsCompact ? "w-auto max-w-[min(100%,9rem)] min-w-0 shrink-0" : "w-auto",
+                        !recentDateRange && "text-muted-foreground"
+                      )}
+                    >
+                        {!recentTransactionsCompact && <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />}
+                        {/* Mobile: trigger par lambi range mat — range title ke neeche */}
+                        {recentTransactionsCompact ? (
+                          <span className="min-w-0 truncate">Change date</span>
+                        ) : recentDateRange?.from ? (
+                          recentDateRange.to ? (
+                            <>
+                              {formatDate(recentDateRange.from)} - {formatDate(recentDateRange.to)}
+                            </>
+                          ) : (
+                            formatDate(recentDateRange.from)
+                          )
+                        ) : (
+                          <span>Date range</span>
+                        )}
                     </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="end">
@@ -1527,8 +1701,8 @@ function DashboardPageContent() {
                 </Popover>
             )}
             </div>
-            <div className={cn("flex items-center gap-2 flex-1 min-w-0 h-9", isMobile ? "order-2" : "md:order-1")}>
-                {!isMobile && <span className="text-sm font-medium shrink-0">Show:</span>}
+            <div className={cn("flex items-center gap-2 flex-1 min-w-0 h-9", recentTransactionsCompact ? "order-2" : "md:order-1")}>
+                {!recentTransactionsCompact && <span className="text-sm font-medium shrink-0">Show:</span>}
                 <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
                     <SelectTrigger className="h-9 flex-1 min-w-0 w-full max-w-[140px]">
                         <SelectValue />
@@ -1540,7 +1714,7 @@ function DashboardPageContent() {
                         <SelectItem value="0">All</SelectItem>
                     </SelectContent>
                 </Select>
-                {!isMobile && (
+                {!recentTransactionsCompact && (
                 <label className="flex items-center gap-2 h-9 cursor-pointer shrink-0">
                   <Checkbox id="recent-show-narration" checked={showRecentNarration} onCheckedChange={(c) => setShowRecentNarration(!!c)} className="h-4 w-4" />
                   <span className="text-sm whitespace-nowrap">Show Narration</span>
@@ -1558,15 +1732,61 @@ function DashboardPageContent() {
                 >
                   Unapproved
                 </Button>
+                {/* Clear icon ko Unapproved ke right dikhana hai; unapproved active hone par bhi force-visible. */}
+                {(isRecentFilterActive || recentUnapprovedOnly) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    onClick={clearRecentFilters}
+                    aria-label="Clear Filters"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
             </div>
-             {isRecentFilterActive && <Button variant="ghost" size="icon" className="h-9 w-9" onClick={clearRecentFilters} aria-label="Clear Filters"><X className="h-4 w-4" /></Button>}
           </div>
-          <span className="text-sm font-medium text-muted-foreground">Showing {recentTransactions ? recentTransactions.length : 0} Vouchers Of All {allRecentTransactions ? allRecentTransactions.length : 0} Vouchers</span>
+          )}
+          {/* Count row: compact mobile ke liye niche fixed panel; yahan desktop/non-compact hi. */}
+          {!recentTransactionsCompact && (
+          <div className="flex h-9 w-full min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                'min-w-0 flex-1 font-medium text-muted-foreground',
+                recentTransactionsCompact ? 'truncate text-sm' : 'text-sm'
+              )}
+              title={
+                recentTransactionsCompact
+                  ? `${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`
+                  : `Showing ${recentTransactions.length} Vouchers Of All ${recentPoolBeforeLimit.length} Vouchers`
+              }
+            >
+              {recentTransactionsCompact
+                ? `${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`
+                : `Showing ${recentTransactions.length} Vouchers Of All ${recentPoolBeforeLimit.length} Vouchers`}
+            </span>
+            <div className="relative h-9 w-[min(42vw,11rem)] shrink-0 sm:w-44">
+              <Search
+                className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                type="search"
+                enterKeyHint="search"
+                placeholder="Search"
+                value={recentQuickSearch}
+                onChange={(e) => setRecentQuickSearch(e.target.value)}
+                className="h-9 py-1 pl-8 pr-2 text-sm"
+                aria-label="Search recent vouchers"
+              />
+            </div>
+          </div>
+          )}
         </div>
       </CardHeader>
       <CardContent className="px-0 pb-2">
         {/* Mobile: 2px horizontal gap so Recent transaction cards match Daybook spacing */}
-        <div className={cn("w-full overflow-x-auto", isMobile && "px-[2px]")}>
+        <div className={cn("w-full overflow-x-auto", recentTransactionsCompact && "px-[2px]")}>
         <TransactionsTable
           transactions={recentTransactions}
           context="daybook"
@@ -1591,6 +1811,7 @@ function DashboardPageContent() {
           onVoucherTypeChange={setRecentVoucherTypes}
           hideFooter={true}
           showNarration={showRecentNarration}
+          transactionCardSearchHighlight={recentQuickSearch}
         />
         </div>
       </CardContent>
@@ -1638,7 +1859,7 @@ function DashboardPageContent() {
           )}
 
           <p className="text-sm text-muted-foreground font-mono">
-            {liveTime.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} | {liveTime.toLocaleTimeString()}
+            {welcomeSystemDateTimeLine}
           </p>
         </CardHeader>
       </Card>
@@ -1673,27 +1894,185 @@ function DashboardPageContent() {
     "dashboard-charts": "border-fuchsia-500 bg-fuchsia-300 text-fuchsia-950 dark:border-fuchsia-400 dark:bg-fuchsia-800 dark:text-fuchsia-50",
   };
 
-  /* Footer stack height = top pad + inner pad + row — `pb-[72px]` zyada tha, niche safed khali strip + scroll dead zone; fixed strip `pb-0` se window edge tak chipke */
+  /** Recent compact: gray controls + footer tabs ke beech gap hatane ke liye footer top padding band + `bottom` offset = sirf row height. */
+  const isRecentCompactFooter =
+    recentTransactionsCompact && visibleCard === "recent-transactions";
+  /* Mobile: pehle `2+4+32` galat tha — `pt-1` `h-8` ke andar (border-box); asli ≈ 2+32=34. Recent compact: footer top pt band + `bottom` = sirf row (`h-8`/`h-[38px]`). */
   const footerReservePx = isMobile
-    ? 2 + 4 + 32
-    : 2 + 4 + 38;
+    ? isRecentCompactFooter
+      ? 32
+      : 34
+    : isRecentCompactFooter
+      ? 38
+      : 2 + 4 + 38;
+  /** Compact recent: bottom controls panel (2 rows) footer ke upar fixed rahe, content overlap na kare. */
+  const recentBottomControlsReservePx =
+    recentTransactionsCompact && visibleCard === "recent-transactions" ? 74 : 0;
 
   return (
-    <div className="px-0.5 pt-0.5" style={{ paddingBottom: footerReservePx }}>
+    <div className="px-0.5 pt-0.5" style={{ paddingBottom: footerReservePx + recentBottomControlsReservePx }}>
       <div className="p-0 min-h-0">
         {renderDashboardContent()}
       </div>
 
+      {/* User request: top me sirf title+date; baaki controls ko footer ke upar fixed niche panel me rakho. */}
+      {recentTransactionsCompact && visibleCard === "recent-transactions" && (
+        <div
+          className={cn(
+            // Footer / upar Recent card jaisa: `98vw`+center se zyada wide hota tha — `px-0.5` + main column bounds taaki txn cards / sticky header ke barabar width.
+            "fixed left-0 right-0 z-50 box-border px-0.5",
+            !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16")
+          )}
+          style={{ bottom: `${footerReservePx}px` }}
+        >
+          {/* Bottom controls: solid gray + opaque; `border-b-0` — niche emerald footer se flush, double border line na dikhe. */}
+          <div className="w-full max-w-full box-border space-y-1 overflow-x-hidden border border-b-0 border-gray-300 bg-gray-200 px-1 py-1 dark:border-gray-600 dark:bg-gray-800">
+            {/* Row 1: date change + rows + unapproved + clear */}
+            {/* Controls row: wrap allow karo so small screens par content clip na ho. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="flex min-w-0 items-center gap-2 h-8">
+                {(dateSystem === 'BS' || dateSystem === 'Both') && (
+                  <BsDatePicker
+                    isRange
+                    valueAD={recentDateRange}
+                    onChangeAD={(range) => setRecentDateRange(range as DateRange | undefined)}
+                    transactionDates={transactionDates}
+                    className="h-8 max-w-[8rem]"
+                    hideTriggerIcon={true}
+                    rangeEmptyLabel={"Change date"}
+                    children={<span className="min-w-0 truncate">Change date</span>}
+                  />
+                )}
+                {(dateSystem === 'AD' || dateSystem === 'Both') && (
+                  <Popover open={isRecentCalendarOpen} onOpenChange={(open) => {
+                    setIsRecentCalendarOpen(open);
+                    if (open) setTempRecentDateRange(recentDateRange);
+                    else setTempRecentDateRange(undefined);
+                  }}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="recent-date-bottom"
+                        variant={"outline"}
+                        className="h-8 w-auto max-w-[8rem] min-w-0 shrink-0 justify-start text-left font-normal"
+                      >
+                        <span className="min-w-0 truncate">Change date</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="end">
+                      <AdCalendar
+                        rangePresetSlot={
+                          <DateRangePresetRow
+                            country={company?.country}
+                            onApply={(r) => {
+                              setTempRecentDateRange(r);
+                              setRecentDateRange(r);
+                              setIsRecentCalendarOpen(false);
+                            }}
+                          />
+                        }
+                        valueAD={tempRecentDateRange ?? recentDateRange}
+                        isRange
+                        numberOfMonths={calendarMonths}
+                        transactionDates={transactionDates}
+                        onSelect={(adDate) => {
+                          const range = tempRecentDateRange ?? recentDateRange;
+                          if (!range?.from || (range.from && range.to)) {
+                            setTempRecentDateRange({ from: adDate, to: undefined });
+                          } else if (adDate < range.from) {
+                            const next = { from: adDate, to: range.from };
+                            setTempRecentDateRange(next);
+                            setRecentDateRange(next);
+                            setIsRecentCalendarOpen(false);
+                          } else {
+                            const next = { from: range.from, to: adDate };
+                            setTempRecentDateRange(next);
+                            setRecentDateRange(next);
+                            setIsRecentCalendarOpen(false);
+                          }
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                )}
+              </div>
+              <div className="flex min-w-0 flex-1 items-center gap-1 h-8">
+                <Select value={recentRowsPerPage} onValueChange={(v) => setRecentRowsPerPage(v)}>
+                  <SelectTrigger className="h-8 min-w-0 w-full max-w-[112px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="20">Last 20</SelectItem>
+                    <SelectItem value="30">Last 30</SelectItem>
+                    <SelectItem value="50">Last 50</SelectItem>
+                    <SelectItem value="0">All</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={recentUnapprovedOnly ? "default" : "outline"}
+                  className="h-8 whitespace-nowrap"
+                  onClick={() => {
+                    if (recentUnapprovedOnly) setRecentUnapprovedOnly(false);
+                    else applyRecentUnapprovedFilter();
+                  }}
+                >
+                  Unapproved
+                </Button>
+                {(isRecentFilterActive || recentUnapprovedOnly) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={clearRecentFilters}
+                    aria-label="Clear Filters"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </div>
+            {/* Row 2: count + search */}
+            <div className="flex h-8 w-full min-w-0 items-center gap-2">
+              <span
+                className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground"
+                title={`${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`}
+              >
+                {`${recentTransactions.length} Vouchers Of ${recentPoolBeforeLimit.length}`}
+              </span>
+              <div className="relative h-8 w-[min(42vw,11rem)] shrink-0 sm:w-44">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  type="search"
+                  enterKeyHint="search"
+                  placeholder="Search"
+                  value={recentQuickSearch}
+                  onChange={(e) => setRecentQuickSearch(e.target.value)}
+                  className="h-8 py-1 pl-8 pr-2 text-sm"
+                  aria-label="Search recent vouchers"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div
         className={cn(
-          "fixed bottom-0 left-0 right-0 z-40 px-0.5 pt-0.5 pb-0",
+          "fixed bottom-0 left-0 right-0 z-40 px-0.5 pb-0",
+          // Recent compact: top pad mat — gray fixed panel aur emerald footer ke beech safed gap.
+          !isRecentCompactFooter && "pt-0.5",
           !isMobile && (sidebarRailOpen ? "md:left-64" : "md:left-16")
         )}
       >
         {/* User request: footer tabs ko ek hi green container me rakho; desktop row icon+label, mobile icon hide */}
         <div
           className={cn(
-            "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex items-stretch justify-center gap-0.5 px-1 pt-1 pb-0",
+            "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald flex items-stretch justify-center gap-0.5 px-1 pb-0",
+            !isRecentCompactFooter && "pt-1",
             // User request: desktop/PC me footer buttons ~20% taller; mobile unchanged.
             isMobile ? "h-8" : "h-[38px]"
           )}

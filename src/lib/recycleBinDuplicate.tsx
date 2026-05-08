@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 
 type DuplicateDecision = "active_exists" | "restored" | "create_new";
 
@@ -54,6 +55,14 @@ async function askRestoreChoiceInApp(entityLabel: string, name: string): Promise
 
     function RestoreChoiceDialog() {
       const [open, setOpen] = React.useState(true);
+      React.useEffect(() => {
+        if (!open) return;
+        // Device back pe pehle ye restore-choice dialog close ho; peeche ka page/navigation consume na ho.
+        return registerImperativeDialogBack(() => {
+          setOpen(false);
+          finish(false);
+        });
+      }, [open]);
       return (
         <AlertDialogPrimitive.Root
           open={open}

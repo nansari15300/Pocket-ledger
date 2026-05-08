@@ -107,6 +107,7 @@ import { CreateTaxDialog } from "../tax/CreateTaxDialog";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { getUngroupedGroupId } from "@/lib/ungrouped-groups";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -300,7 +301,8 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   /** IndexedDB/outbox sirf genuinely-local APK lane — hybrid Firestore company par Firestore-first save. */
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
     [localSqlMirror, company]

@@ -82,6 +82,7 @@ import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession"
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
@@ -725,17 +726,29 @@ function UserProfileButton() {
             onMouseEnter={openProfileFromHover}
             onMouseLeave={scheduleProfileHoverClose}
           >
-            {/* Header avatar: hover par bada pic preview mat dikhao — sirf chhota circle + dropdown (entity lists par `EntityFileAttachmentHover` alag). */}
+            {/* Profile pic: dropdown + `AttachmentHoverPortal` (global hover ON) — Firebase/Google URL bhi hydrate body fix */}
             <div
               className={cn(
                 "relative h-9 w-9 rounded-full inline-flex [&:focus-visible]:outline-none",
                 isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
               )}
             >
-              <Avatar className="h-full w-full">
-                <AvatarImage src={user.photoURL ?? undefined} alt={user.displayName ?? "User"} />
-                <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
-              </Avatar>
+              {user.photoURL?.trim() ? (
+                <EntityFileAttachmentHover
+                  fileUrl={user.photoURL}
+                  triggerClassName="inline-flex h-full w-full rounded-full"
+                >
+                  <Avatar className="h-full w-full">
+                    <AvatarImage src={user.photoURL ?? undefined} alt={user.displayName ?? "User"} />
+                    <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
+                  </Avatar>
+                </EntityFileAttachmentHover>
+              ) : (
+                <Avatar className="h-full w-full">
+                  <AvatarImage src={undefined} alt={user.displayName ?? "User"} />
+                  <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
+                </Avatar>
+              )}
             </div>
           </Button>
         </DropdownMenuTrigger>
@@ -1066,7 +1079,7 @@ function DateSystemSwitcher() {
           <Button variant="outline" size="sm" className={cn("whitespace-nowrap h-9", isMobile && "px-3")} data-theme-header="date-selector">
             {!isMobile && <CalendarDays className="mr-2 h-4 w-4" />}
             <span>{dateSystem}</span>
-            <ChevronDown className="ml-2 h-4 w-4" />
+            {/* User request: date trigger par chevron hata — menu ab bhi Dropdown se khulta hai. */}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent>
@@ -1102,11 +1115,63 @@ function DateSystemSwitcher() {
   );
 }
 
+
+/**
+ * Company dropdown: sirf yahi usePathname + route-based list filter — sidebar navigate par parent header strip unnecessary re-render na ho.
+ */
+function HeaderCompanyPickerIsland({
+  unfilteredHeaderCompanies,
+  loading,
+  user,
+  isSuperAdminUser,
+  onCompanyCreated,
+  mobileStrip,
+}: {
+  unfilteredHeaderCompanies: Company[];
+  loading: boolean;
+  user: { uid: string; email: string | null } | null | undefined;
+  isSuperAdminUser: boolean;
+  onCompanyCreated: () => void;
+  // Mobile header row: pulse skeleton par shrink-0 (layout)
+  mobileStrip?: boolean;
+}) {
+  const pathname = usePathname();
+  const companies = useMemo(
+    () =>
+      filterSharedOnlyCompaniesForSuperAdminInMainApp(
+        unfilteredHeaderCompanies,
+        user,
+        isSuperAdminUser,
+        pathname
+      ),
+    [unfilteredHeaderCompanies, user, isSuperAdminUser, pathname]
+  );
+  // Pehli load: skeleton; data aane ke baad loading dubara true ho to bhi purana box dikhate raho (sidebar navigate flash band).
+  if (loading && unfilteredHeaderCompanies.length === 0) {
+    return (
+      <div
+        className={cn(
+          "h-8 animate-pulse rounded-md bg-background/60",
+          // Mobile: company slot poori width — skeleton bhi stretch.
+          mobileStrip ? "w-full min-w-0" : "w-32 shrink-0"
+        )}
+      />
+    );
+  }
+  return (
+    <CompanyActions
+      companies={companies}
+      onCompanyCreated={onCompanyCreated}
+      triggerLayout={mobileStrip ? "mobile" : "desktop"}
+    />
+  );
+}
+
 export function DesktopAppHeader() {
   const { user, customUser } = useAuth();
-  const pathname = usePathname();
   const { allCompanies: contextCompanies, loading: companyContextLoading } = useCompany();
-  const [companies, setCompanies] = useState<Company[]>([]);
+  // Firestore merge alag; pathname sirf HeaderCompanyPickerIsland — sidebar navigate par parent header strip unnecessary re-render na ho.
+  const [unfilteredHeaderCompanies, setUnfilteredHeaderCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const isSuperAdmin = customUser?.role === "SuperAdmin";
   const isSuperAdminByEmail = useMemo(() => {
@@ -1116,44 +1181,42 @@ export function DesktopAppHeader() {
   }, [user?.email]);
   const isSuperAdminUser = isSuperAdmin || isSuperAdminByEmail;
 
+  // Local / static: CompanyProvider context yahi deps; navigate par Firestore effect na chale (company box flicker band).
   useEffect(() => {
-    if (isLocalOnlyMode()) {
-      // Local-first: header list = owned + local + mirrored online/shared (CompanySelector ke saath align)
-      setLoading(Boolean(companyContextLoading));
-      const isOwnedByUser = (c: Company) =>
-        (!!user?.uid && c.ownerId === user?.uid) ||
-        (!!user?.email &&
-          !!c.ownerEmail &&
-          c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
-      const mapped = filterSharedOnlyCompaniesForSuperAdminInMainApp(
-        (contextCompanies || [])
-          .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
-          .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[],
-        user,
-        isSuperAdminUser,
-        pathname
-      );
-      setCompanies(mapped);
-      if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
-        listLocalCompanies()
-          .then((rows) => {
-            const mappedRows = rows
-              // Local fallback me bhi hidden tab companies suppress rakho.
-              .filter((r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) => !r?.isDeleted && r?.movedToAdminRecycleAt == null)
-              .map((r) => {
-                const c = { ...(r as unknown as Company) };
-                return { ...c, isOwned: isOwnedByUser(c) } as Company;
-              });
-            setCompanies(mappedRows);
-          })
-          .finally(() => setLoading(false));
-      }
-      return;
+    if (!isLocalOnlyMode()) return;
+    // Local-first: header list = owned + local + mirrored online/shared (CompanySelector ke saath align)
+    setLoading(Boolean(companyContextLoading));
+    const isOwnedByUser = (c: Company) =>
+      (!!user?.uid && c.ownerId === user?.uid) ||
+      (!!user?.email &&
+        !!c.ownerEmail &&
+        c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
+    const mappedBase = (contextCompanies || [])
+      .filter((c) => isCompanyVisibleInHeader(c as Company & { movedToAdminRecycleAt?: unknown }))
+      .map((c) => ({ ...c, isOwned: isOwnedByUser(c) })) as Company[];
+    setUnfilteredHeaderCompanies(mappedBase);
+    if (!companyContextLoading && (!contextCompanies || contextCompanies.length === 0)) {
+      listLocalCompanies()
+        .then((rows) => {
+          const mappedRows = rows
+            // Local fallback me bhi hidden tab companies suppress rakho.
+            .filter((r: { isDeleted?: boolean; movedToAdminRecycleAt?: unknown }) => !r?.isDeleted && r?.movedToAdminRecycleAt == null)
+            .map((r) => {
+              const c = { ...(r as unknown as Company) };
+              return { ...c, isOwned: isOwnedByUser(c) } as Company;
+            });
+          setUnfilteredHeaderCompanies(mappedRows);
+        })
+        .finally(() => setLoading(false));
     }
+  }, [user, contextCompanies, companyContextLoading]);
 
+  // Firebase web: Firestore listeners — sirf user / SuperAdmin; sidebar navigate par dubara setLoading(true) / skeleton na ho.
+  useEffect(() => {
+    if (isLocalOnlyMode()) return;
     if (!user || !user.email) {
       setLoading(false);
-      setCompanies([]);
+      setUnfilteredHeaderCompanies([]);
       return;
     }
     setLoading(true);
@@ -1211,22 +1274,17 @@ export function DesktopAppHeader() {
         }
       });
 
-      const next = filterSharedOnlyCompaniesForSuperAdminInMainApp(
-        Array.from(companyMap.values()),
-        user,
-        isSuperAdminUser,
-        pathname
-      );
+      const merged = Array.from(companyMap.values());
       // Avoid no-op state writes — lekin sirf id/isOwned mat compare karo; rename (name) change par bhi next apply ho (selector live rahe)
-      setCompanies((prev) => {
-        const sameLength = prev.length === next.length;
-        if (!sameLength) return next;
+      setUnfilteredHeaderCompanies((prev) => {
+        const sameLength = prev.length === merged.length;
+        if (!sameLength) return merged;
         const rowSig = (c: Company) =>
           `${c.id}\0${Boolean(c.isOwned)}\0${c.name ?? ""}\0${String((c as Company & { storageOption?: string }).storageOption ?? "")}`;
         const same =
-          prev.length === next.length &&
-          prev.every((p, i) => rowSig(p) === rowSig(next[i] as Company));
-        return same ? prev : next;
+          prev.length === merged.length &&
+          prev.every((p, i) => rowSig(p) === rowSig(merged[i] as Company));
+        return same ? prev : merged;
       });
       setLoading(false);
     };
@@ -1295,7 +1353,7 @@ export function DesktopAppHeader() {
       unsubShared();
       unsubOwnedByEmail();
     };
-  }, [user, isSuperAdminUser, contextCompanies, companyContextLoading, pathname]);
+  }, [user, isSuperAdminUser]);
 
   const onCompanyCreated = () => {
     // This is now handled automatically by the onSnapshot listeners.
@@ -1341,35 +1399,49 @@ export function DesktopAppHeader() {
   }, []);
 
   return (
-    <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-0.5 py-0.5">
+    <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-[2px] py-0.5">
       {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
       {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
       {/* User request: header container ko pink tone me dikhana */}
-      <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full min-w-0 p-2">
+      {/* User request: dono taraf ~2px — sidebar kinaare, avatar daen; beech me company truncate. */}
+      {/* Mobile: yahan horizontal padding 0 — sirf outer header `px-[2px]` se sidebar kinaare 2px; desktop par andar +2px. */}
+      <div
+        className={cn(
+          "pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-pink w-full min-w-0 py-1",
+          headerIsMobile ? "px-0" : "px-[2px]"
+        )}
+      >
         {headerIsMobile ? (
-          <div
-            className={cn(
-              // Mobile: expand/chevron hataya — saari cheezen ek hi horizontal strip me swipe
-              "flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden",
-              "[-webkit-overflow-scrolling:touch] overscroll-x-contain touch-pan-x",
-              "pb-0.5 [scrollbar-width:thin]",
-              "[&>*]:flex-shrink-0"
-            )}
-          >
-            <SidebarTrigger />
-            {loading ? (
-              <div className="h-8 w-32 shrink-0 animate-pulse rounded-md bg-background/60" />
-            ) : (
-              <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
-            )}
-            <DateSystemSwitcher />
-            <MobileReportButtonsOnly />
-            <AddNewButtonOnReportPage />
-            <UserProfileButton />
+          <div className="flex w-full min-w-0 items-center">
+            {/* Sidebar ↔ company: exactly 4px (`mr-1`); outer header se sidebar ~2px. */}
+            <div className="mr-1 flex shrink-0 items-center">
+              <SidebarTrigger />
+            </div>
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+              <div className="min-w-0 flex-1">
+                <HeaderCompanyPickerIsland
+                  unfilteredHeaderCompanies={unfilteredHeaderCompanies}
+                  loading={loading}
+                  user={user}
+                  isSuperAdminUser={isSuperAdminUser}
+                  onCompanyCreated={onCompanyCreated}
+                  mobileStrip
+                />
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <DateSystemSwitcher />
+                <MobileReportButtonsOnly />
+                <AddNewButtonOnReportPage />
+              </div>
+            </div>
+            <div className="ml-2 flex shrink-0 items-center">
+              <UserProfileButton />
+            </div>
           </div>
         ) : (
           <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
-            <div className="flex min-w-0 flex-shrink-0 items-center gap-2">
+            {/* `min-w-0` ta company `truncate` narrow window par kaam kare — sidebar↔company 4px (`gap-1`). */}
+            <div className="flex min-w-0 items-center gap-1">
               <SidebarTrigger />
               {isElectronDesk ? (
                 <Button
@@ -1394,11 +1466,13 @@ export function DesktopAppHeader() {
                   )}
                 </Button>
               ) : null}
-              {loading ? (
-                <div className="h-8 w-32 animate-pulse rounded-md bg-background/60" />
-              ) : (
-                <CompanyActions companies={companies} onCompanyCreated={onCompanyCreated} />
-              )}
+              <HeaderCompanyPickerIsland
+                unfilteredHeaderCompanies={unfilteredHeaderCompanies}
+                loading={loading}
+                user={user}
+                isSuperAdminUser={isSuperAdminUser}
+                onCompanyCreated={onCompanyCreated}
+              />
               <DateSystemSwitcher />
             </div>
 

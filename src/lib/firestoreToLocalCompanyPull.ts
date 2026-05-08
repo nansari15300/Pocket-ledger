@@ -190,14 +190,20 @@ export async function pullCompanySubcollectionFromFirestoreToLocalDb(
 }
 
 /** Saari listed subcollections ek baar — manual “download / refresh local cache” ya health check ke liye. */
-/** Full warm sync: sequential na — parallel pulls se masters + vouchers jaldi SQLite me aa jayein */
+/** Full warm sync: parallel pulls — optional progress har subcollection complete par (overlay % ke liye). */
 export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
   fsCompanyId: string,
   localCompanyId: string,
-  company: Company | null
+  company: Company | null,
+  opts?: {
+    onSubcollectionDone?: (info: { path: string; completed: number; total: number }) => void;
+  }
 ): Promise<{ path: string; count: number }[]> {
+  const paths = [...COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS];
+  const total = paths.length;
+  let completed = 0;
   return await Promise.all(
-    COMPANY_LOCAL_MIRROR_SUBCOLLECTIONS.map(async (path) => {
+    paths.map(async (path) => {
       try {
         const rows = await pullCompanySubcollectionFromFirestoreToLocalDb(
           fsCompanyId,
@@ -206,9 +212,13 @@ export async function pullAllCompanySubcollectionsFromFirestoreToLocalDb(
           company,
           path === "vouchers" ? "date" : undefined
         );
+        completed++;
+        opts?.onSubcollectionDone?.({ path, completed, total });
         return { path, count: rows.length };
       } catch (e) {
         console.warn("[pullAllCompanySubcollectionsFromFirestoreToLocalDb]", path, e);
+        completed++;
+        opts?.onSubcollectionDone?.({ path, completed, total });
         return { path, count: 0 };
       }
     })

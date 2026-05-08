@@ -11,6 +11,21 @@ import {
   writeCachedPlansRecord,
 } from "@/lib/plansCatalogCache";
 
+let staticPlansSeedFetchPromise: Promise<Record<string, unknown> | null> | null = null;
+
+async function loadStaticPlansSeedOnce(): Promise<Record<string, unknown> | null> {
+  // Multiple mounts par duplicate /plans-seed-raw.json network calls avoid karke single shared fetch rakho.
+  if (!staticPlansSeedFetchPromise) {
+    staticPlansSeedFetchPromise = (async () => {
+      const res = await fetch("/plans-seed-raw.json", { cache: "no-cache" });
+      if (!res.ok) return null;
+      const raw = (await res.json()) as Record<string, unknown>;
+      return raw && typeof raw === "object" ? raw : null;
+    })().catch(() => null);
+  }
+  return staticPlansSeedFetchPromise;
+}
+
 /**
  * `app_settings/plans` realtime — offline / doc missing par bundled default nahi, pehle localStorage me last online snapshot.
  * Static build (`NEXT_PUBLIC_STATIC_BUILD`): bundled `plans-seed-raw.json` jo build pe canonical site se fetch hua — koi tier key ho to state + cache update; khali `{}` aur purana cache ho to cache rakho.
@@ -24,9 +39,8 @@ export function useLivePlans(): Record<PlanId, Plan> {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/plans-seed-raw.json", { cache: "no-cache" });
-        if (!res.ok || cancelled) return;
-        const raw = (await res.json()) as Record<string, unknown>;
+        const raw = await loadStaticPlansSeedOnce();
+        if (!raw || cancelled) return;
         if (!raw || typeof raw !== "object" || cancelled) return;
         const hasAnyTier = ["basic", "advance", "pro", "pro-plus"].some(
           (k) => raw[k] != null && typeof raw[k] === "object"

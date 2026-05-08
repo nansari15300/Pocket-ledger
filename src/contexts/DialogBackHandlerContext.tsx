@@ -28,38 +28,50 @@ const DialogBackHandlerContext = createContext<DialogBackHandlerContextType | nu
  * Provider mount ma set hunchha; master–detail back bhanda AGADI call garnu.
  */
 let globalTryConsumeDialogHardwareBack: (() => boolean) | null = null;
+let globalRegisterDialogHardwareBack:
+  | ((close: () => void, opts?: { urlModal?: boolean }) => () => void)
+  | null = null;
 
 export function tryConsumeDialogHardwareBack(): boolean {
   return globalTryConsumeDialogHardwareBack?.() ?? false;
+}
+
+/** Out-of-tree modal (e.g. `createRoot`) ko bhi same dialog-back stack me register karne ka imperative helper. */
+export function registerImperativeDialogBack(
+  close: () => void,
+  opts?: { urlModal?: boolean }
+): () => void {
+  return globalRegisterDialogHardwareBack?.(close, opts) ?? (() => {});
 }
 
 export function DialogBackHandlerProvider({ children }: { children: React.ReactNode }) {
   const stackRef = useRef<StackItemWithOpts[]>([]);
   const idCounterRef = useRef(0);
 
-  const register = useCallback((close: () => void) => {
+  const pushStackItem = useCallback((close: () => void, urlModal: boolean) => {
     if (typeof window === "undefined") return () => {};
-    const id = `db-${++idCounterRef.current}`;
-    stackRef.current.push({ id, close, urlModal: false });
+    const idPrefix = urlModal ? "db-url" : "db";
+    const id = `${idPrefix}-${++idCounterRef.current}`;
+    stackRef.current.push({ id, close, urlModal });
+    return () => {
+      stackRef.current = stackRef.current.filter((item) => item.id !== id);
+    };
+  }, []);
+
+  const register = useCallback((close: () => void) => {
+    const unregister = pushStackItem(close, false);
     // APK/static: pushState nagarnu — dummy entry pachhi `tryConsumeMasterDetailHardwareBack` agadi run hunchha ra ekai back ma list ma janchha
     if (!isStaticAppBuild()) {
       try {
         window.history.pushState({ [DIALOG_STATE_KEY]: true }, "", window.location.href);
       } catch (_) {}
     }
-    return () => {
-      stackRef.current = stackRef.current.filter((item) => item.id !== id);
-    };
-  }, []);
+    return unregister;
+  }, [pushStackItem]);
 
   const registerUrlModal = useCallback((close: () => void) => {
-    if (typeof window === "undefined") return () => {};
-    const id = `db-url-${++idCounterRef.current}`;
-    stackRef.current.push({ id, close, urlModal: true });
-    return () => {
-      stackRef.current = stackRef.current.filter((item) => item.id !== id);
-    };
-  }, []);
+    return pushStackItem(close, true);
+  }, [pushStackItem]);
 
   // Capacitor back: popstate handler jastai — non–urlModal ma sirf close(); go(-1) le Next.js detail route pani pop garera list ma fijkinchha
   useEffect(() => {
@@ -81,10 +93,22 @@ export function DialogBackHandlerProvider({ children }: { children: React.ReactN
       }
       return true;
     };
+    // Imperative modals: provider tree ke bahar render hone par bhi same top-most dialog stack use ho.
+    globalRegisterDialogHardwareBack = (close, opts) => {
+      const urlModal = opts?.urlModal === true;
+      const unregister = pushStackItem(close, urlModal);
+      if (!urlModal && !isStaticAppBuild()) {
+        try {
+          window.history.pushState({ [DIALOG_STATE_KEY]: true }, "", window.location.href);
+        } catch (_) {}
+      }
+      return unregister;
+    };
     return () => {
       globalTryConsumeDialogHardwareBack = null;
+      globalRegisterDialogHardwareBack = null;
     };
-  }, []);
+  }, [pushStackItem]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

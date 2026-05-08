@@ -49,6 +49,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 type DisplayUnitState = Record<string, string>;
 
@@ -149,7 +150,10 @@ function ItemsPageContent() {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as Item | ItemGroup;
     const name = selectedEntity.name || "Item";
-    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    /** Items master photo `fileUrls[0]` — purana bug: khali `fileUrl` field par preview spin */
+    const attachmentUrl = trimEntityFileUrlForPreview(
+      (selectedEntity as Item).fileUrls?.[0] ?? (selectedEntity as any).fileUrl
+    );
     const initials = name
       .split(" ")
       .filter(Boolean)
@@ -159,12 +163,12 @@ function ItemsPageContent() {
       .toUpperCase() || "NA";
     const openPreview = () => {
       // Item mobile header avatar: tap to open full preview.
-      if (!fileUrl) return;
-      void openAttachmentInApp(fileUrl, { title: name });
+      if (!attachmentUrl) return;
+      void openAttachmentInApp(attachmentUrl, { title: name });
     };
     return (
       <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
           <button
             type="button"
             className="inline-flex h-full w-full items-center justify-center rounded-full"
@@ -173,7 +177,7 @@ function ItemsPageContent() {
           >
             <ResolvedEntityAvatar
               className="h-full w-full text-xs"
-              src={fileUrl}
+              src={attachmentUrl ?? undefined}
               alt={name}
               fallbackText={initials}
             />

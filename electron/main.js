@@ -110,6 +110,17 @@ function startStaticServer() {
     return handler(request, response, {
       public: staticPublicDir,
       cleanUrls: true,
+      headers: [
+        {
+          source: "**/*.mjs",
+          headers: [
+            {
+              key: "Content-Type",
+              value: "text/javascript; charset=utf-8",
+            },
+          ],
+        },
+      ],
     });
   });
 
@@ -163,10 +174,26 @@ function toggleQuickActionsRibbonInActiveTab(win) {
   wc.executeJavaScript(script, true).catch(() => {});
 }
 
+/** Tab strip ↻ → active BrowserView: full reload nahi, sirf CustomEvent (React `triggerSync`) */
+function dispatchTabStripBackgroundSyncToActiveTab(win) {
+  const wc = getFocusedTabContents(win);
+  if (!wc || wc.isDestroyed()) return Promise.reject(new Error("no-active-tab"));
+  const script = `(function(){try{window.dispatchEvent(new CustomEvent('pocket-ledger-tab-strip-sync'));}catch(e){}})();true`;
+  return wc.executeJavaScript(script, true);
+}
+
+function notifyTabStripSyncDone(win) {
+  const state = windowTabs.get(win.id);
+  if (!state?.stripView?.webContents || state.stripView.webContents.isDestroyed()) return;
+  try {
+    state.stripView.webContents.send("pl-tab-strip-sync-done-ack");
+  } catch (_) {}
+}
+
 function updateWindowTitle(win) {
   const state = windowTabs.get(win.id);
   const count = state?.tabs.length ?? 0;
-  // Merged title bar: OS caption short rakho — poori string tab strip me `#titleBarLabel` par (duplicate na ho).
+  // Merged title bar: OS caption short — tab-strip me sirf draggable strip tooltip (`titleBarLabel` IPC) rakho.
   if (USE_MERGED_TITLEBAR) {
     win.setTitle("Pocket Ledger");
   } else {
@@ -260,7 +287,7 @@ function resolveWindowForTabStripIpc(sender) {
   return null;
 }
 
-/** Tab titles / active state + title bar label (merged chrome) → strip UI */
+/** Tab titles / active state + tooltip string (merged strip `#dragFill` title + optional future use) → strip UI */
 function pushTabStripState(win) {
   const state = windowTabs.get(win.id);
   if (!state?.stripView?.webContents || state.stripView.webContents.isDestroyed()) return;
@@ -381,6 +408,7 @@ async function openNewTab(win) {
   const entryUrl = await getAppEntryUrl();
   const view = new BrowserView({
     webPreferences: {
+      preload: path.join(__dirname, "app-content-preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -717,6 +745,24 @@ app.whenReady().then(async () => {
       return { ok: false, error: String(e?.message || e) };
     }
     return { ok: false, error: "bad-action" };
+  });
+
+  /** Tab strip ↻ — active tab pe CustomEvent; React `triggerSync`; khali login par preload ack nahi bhejta */
+  ipcMain.handle("pl-request-background-sync", async (event) => {
+    const win = resolveWindowForTabStripIpc(event.sender);
+    if (!win || win.isDestroyed()) return { ok: false, error: "no-window" };
+    try {
+      await dispatchTabStripBackgroundSyncToActiveTab(win);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  });
+
+  ipcMain.on("pl-tab-strip-sync-done-from-app", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    notifyTabStripSyncDone(win);
   });
 
   buildAppMenu();

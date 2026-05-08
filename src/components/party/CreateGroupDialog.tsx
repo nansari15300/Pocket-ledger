@@ -30,6 +30,7 @@ import {
   apkCloudCompanyOfflineViewOnly,
   apkEntityWriteUsesLocalSqliteMirror,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox, isLikelyOfflineFirestoreError } from "@/lib/localVoucherOutbox";
@@ -67,10 +68,11 @@ export function CreateGroupDialog({ onGroupCreated, children, groups = [], isOpe
   const isLocalGuestUser = user?.uid === "local_guest_user";
   const backupSyncEnabled = process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "1";
   const navigatorOnline = useNavigatorOnline();
-  /** APK + Firestore company offline: voucher jaisa Create Group / Save & New band. */
+  const { directServerWrites } = useServerDirectWrites();
+  /** Server writes ON + offline: view-only; OFF: SQLite save (`apkEmbeddedSqliteFirstWritesPreferred`). */
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline]
+    [company, navigatorOnline, directServerWrites]
   );
 
   const isOpen = parentIsOpen !== undefined ? parentIsOpen : internalIsOpen;

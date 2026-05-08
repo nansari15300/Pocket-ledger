@@ -53,6 +53,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 function IncomeExpensePageContent() {
   const CORE_EXPENSE_GROUP_IDS = useMemo(
@@ -164,7 +165,7 @@ function IncomeExpensePageContent() {
     if (!isMobile || !selected) return null;
     const selectedEntity = selected as ExpenseAccount | ExpenseGroup;
     const name = selectedEntity.name || "Account";
-    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
     const initials = name
       .split(" ")
       .filter(Boolean)
@@ -174,12 +175,12 @@ function IncomeExpensePageContent() {
       .toUpperCase() || "NA";
     const openPreview = () => {
       // Income/Expense mobile header avatar: tap opens full preview.
-      if (!fileUrl) return;
-      void openAttachmentInApp(fileUrl, { title: name });
+      if (!attachmentUrl) return;
+      void openAttachmentInApp(attachmentUrl, { title: name });
     };
     return (
       <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
           <button
             type="button"
             className="inline-flex h-full w-full items-center justify-center rounded-full"
@@ -188,7 +189,7 @@ function IncomeExpensePageContent() {
           >
             <ResolvedEntityAvatar
               className="h-full w-full text-xs"
-              src={fileUrl}
+              src={attachmentUrl ?? undefined}
               alt={name}
               fallbackText={initials}
             />

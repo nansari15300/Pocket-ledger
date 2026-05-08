@@ -5,7 +5,8 @@
  * Browser canvas height limit (~16k px) — zarurat par scale down.
  */
 import { importPdfJsDist } from "@/lib/importPdfJsDist";
-import { PDFJS_WORKER_VERSION_FALLBACK, setPdfJsWorkerSrc } from "@/lib/pdfjsWorkerSrc";
+import { isPdfLikeUint8Header } from "@/lib/pdfToImage";
+import { PDFJS_WORKER_VERSION_FALLBACK, ensurePdfJsWorker } from "@/lib/pdfjsWorkerSrc";
 
 const DEFAULT_MAX_PAGES = 48;
 /** Chrome/canvas practical cap — neeche sab pages scale ho kar fit */
@@ -50,12 +51,14 @@ export async function convertPdfToStitchedJpegFile(
     (pdfjsLib as { version?: string }).version ??
     pdfjs.version ??
     PDFJS_WORKER_VERSION_FALLBACK;
-  setPdfJsWorkerSrc(pdfjs as never, version);
+  await ensurePdfJsWorker(pdfjs as never, version);
 
-  const data = await pdfInput.arrayBuffer();
-  // PdfJsDocumentLike ↔ PdfJsDocLike compatible — stitched export paths
+  const pdfBytes = new Uint8Array(await pdfInput.arrayBuffer());
+  if (!isPdfLikeUint8Header(pdfBytes.subarray(0, Math.min(pdfBytes.byteLength, 256)))) {
+    throw new Error("Invalid PDF: missing header");
+  }
   const loadingTask = pdfjs.getDocument({
-    data,
+    data: pdfBytes,
   }) as { promise: Promise<PdfJsDocLike>; destroy?: () => void };
   const pdfSrc = await loadingTask.promise;
 
@@ -109,6 +112,8 @@ export async function convertPdfToStitchedJpegFile(
     pageCanvas.height = ph;
     const pctx = pageCanvas.getContext("2d");
     if (!pctx) continue;
+    pctx.fillStyle = "#ffffff";
+    pctx.fillRect(0, 0, pw, ph);
     await page.render({ canvasContext: pctx, viewport } as Parameters<typeof page.render>[0]).promise;
 
     const drawH = ph;

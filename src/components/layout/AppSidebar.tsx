@@ -46,7 +46,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -67,6 +67,11 @@ import { collectItemIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesIt
 import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesStaffLedger";
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 
 
 type MenuItem = {
@@ -78,6 +83,7 @@ type MenuItem = {
   permissionAny?: Permission[];
 };
 
+/** Sidebar primary nav — menu items yahan; EXE tab titles: `getDashboardDocumentTitle` */
 const allMenuItems: MenuItem[] = [
   { id: 'dashboard', href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: 'party', href: "/party", label: "Parties", icon: Users },
@@ -94,7 +100,7 @@ const allMenuItems: MenuItem[] = [
   { id: 'quotations', href: "/quotations", label: "Quotations", icon: FilePenLine },
 ];
 
-export const bottomMenuItems: MenuItem[] = [
+const bottomMenuItems: MenuItem[] = [
     { id: 'messages', href: "/messages", label: "Messages", icon: Mail },
     { id: 'billing', href: "/billing", label: "Billing & Plans", icon: CreditCard, permission: "configure_company_settings" },
     { id: 'distributor-signup', href: "/distributor-signup", label: "Be a Distributor", icon: UserPlus },
@@ -138,6 +144,7 @@ const CORE_NAV_IDS = new Set<string>([
   "tax",
   "incomes",
 ]);
+const SIDEBAR_PENDING_BADGE_HARD_CAP = 1200;
 
 export function AppSidebar() {
   const pathname = usePathname();
@@ -157,6 +164,15 @@ export function AppSidebar() {
   const { isOpen, isMobile, setIsOpen } = useSidebar();
   /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
   const isStaticApp = isStaticAppBuild();
+  const { directServerWrites, setDirectServerWrites } = useServerDirectWrites();
+  /**
+   * Pehle sirf `static build && mobile` — `npm run dev` par `NEXT_PUBLIC_STATIC_BUILD` off rehta hai, switch kabhi nahi dikhta.
+   * Ab: APK | mobile + (static | local-only mode | dev) taaki web mobile / dev me bhi row dikhe; asar `shouldForceFirestoreWritesOnStaticOrApk` se sirf APK/static par.
+   */
+  const showServerWriteSwitch =
+    isCapacitorNativeApp() ||
+    (isMobile &&
+      (isStaticApp || isLocalOnlyMode() || process.env.NODE_ENV === "development"));
   const onNavLinkClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
       if (isStaticApp) {
@@ -226,6 +242,10 @@ export function AppSidebar() {
   const pendingCountByEntity = useMemo(() => {
     const out: Record<string, number> = {};
     if (!showApproveInSidebar || !vouchers?.length) return out;
+    if (vouchers.length > SIDEBAR_PENDING_BADGE_HARD_CAP) {
+      // Large ledgers: per-voucher entity badge walk can freeze nav clicks; skip expensive sidebar counts.
+      return out;
+    }
     const pending = vouchers.filter((v: any) => v.isApproved !== true);
     const staffIdSet = new Set((processedStaff || []).map((s: any) => s.id));
     const taxIdSet = new Set((processedTaxes || []).map((t: any) => t.id));
@@ -462,7 +482,7 @@ export function AppSidebar() {
     const tooltipText = pendingCount > 0 ? `${item.label} (${pendingCount} pending approval)` : item.label;
     return (
       <SidebarMenuItem key={item.href}>
-        <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+        <Link prefetch={false} href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
           <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={tooltipText} data-theme-nav={item.id}>
             <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
               <item.icon />
@@ -493,7 +513,7 @@ export function AppSidebar() {
     const showBadge = badgeCount > 0;
     return (
       <SidebarMenuItem key={item.href}>
-        <Link href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
+        <Link prefetch={false} href={appNavHref(item.href)} passHref onClick={(e) => onNavLinkClick(e, item.href)}>
           <SidebarMenuButton isActive={isMenuItemActive(item)} tooltip={item.label} data-theme-nav={item.id}>
             <span className="relative flex shrink-0 items-center justify-center [&_svg]:size-5">
               <item.icon />
@@ -545,32 +565,28 @@ export function AppSidebar() {
         {/* User request: top brand card ko green tone me dikhana */}
         <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-emerald w-full flex items-center justify-center gap-2 p-2">
           {/* Web + static desktop/APK: ek hi jagah bada icon — Electron tab strip ka chhota OS logo alag cheez hai. */}
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30">
-                  <img
-                    src="/app-icon.png"
-                    alt=""
-                    className="h-full w-full object-contain"
-                    loading="eager"
-                    decoding="async"
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                      const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                      if (fallback) fallback.style.display = "flex";
-                    }}
-                  />
-                  <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
-                    <Flame />
-                  </span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={8} className="max-w-[200px] rounded-md border p-2 text-xs">
-                Pocket Ledger
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <EntityFileAttachmentHover fileUrl="/app-icon.png" triggerClassName="inline-flex shrink-0 rounded-lg">
+            <div
+              className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-muted/30"
+              title="Pocket Ledger"
+            >
+              <img
+                src="/app-icon.png"
+                alt="Pocket Ledger"
+                className="h-full w-full object-contain"
+                loading="eager"
+                decoding="async"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                  if (fallback) fallback.style.display = "flex";
+                }}
+              />
+              <span className="hidden h-full w-full items-center justify-center text-primary [&_svg]:size-6">
+                <Flame />
+              </span>
+            </div>
+          </EntityFileAttachmentHover>
           {isOpen && (
             <h1 className="font-headline min-w-0 truncate text-center text-base font-semibold leading-tight sm:text-lg">
               Pocket Ledger
@@ -597,7 +613,7 @@ export function AppSidebar() {
                     {combinedDashboardNavItems.map(renderMainNavRow)}
                     {showAdminNavLink && (
                       <SidebarMenuItem>
-                        <Link href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
+                        <Link prefetch={false} href={appNavHref("/admin")} onClick={(e) => onNavLinkClick(e, "/admin")}>
                           <SidebarMenuButton
                             isActive={pathname.startsWith("/admin".replace(/\/$/, ""))}
                             tooltip="Admin Panel"
@@ -619,6 +635,27 @@ export function AppSidebar() {
               <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-amber w-full shrink-0 p-2">
                 {isOpen ? (
                   <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
+                ) : null}
+                {showServerWriteSwitch ? (
+                  <div
+                    className="mb-2 flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2 py-1.5"
+                    title="ON: Save/update vouchers, masters, groups → Firestore turant. OFF: SQLite + outbox (online par sync). Reads list/detail SQLite mirror se. Sirf APK/static build par asar; dev mobile par UI dikh sakta hai."
+                  >
+                    {isOpen ? (
+                      <Label htmlFor="pl-server-writes-switch" className="max-w-[70%] cursor-pointer text-[11px] font-medium leading-snug">
+                        Server writes
+                      </Label>
+                    ) : (
+                      <span className="sr-only">Server writes</span>
+                    )}
+                    <Switch
+                      id="pl-server-writes-switch"
+                      checked={directServerWrites}
+                      onCheckedChange={setDirectServerWrites}
+                      aria-label="ON: direct server save; OFF: local SQLite first then sync"
+                      className={cn(!isOpen && "mx-auto")}
+                    />
+                  </div>
                 ) : null}
                 <SidebarMenu className="gap-0.5 py-1">{visibleBottomMenuItems.map(renderBottomNavRow)}</SidebarMenu>
               </div>

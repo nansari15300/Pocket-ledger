@@ -61,6 +61,35 @@ export function packFlatListByDataLineBudgetFromEnd(
   return pageRanges;
 }
 
+/** Oldest-first paging: page 1 = pehle `maxDataRows` data lines (Book OB is page par). */
+export function packFlatListByDataLineBudgetFromStart(
+  list: any[],
+  maxDataRows: number
+): { start: number; end: number }[] {
+  if (maxDataRows <= 0 || !list.length) {
+    return list.length ? [{ start: 0, end: list.length }] : [];
+  }
+  const dataIdx: number[] = [];
+  for (let i = 0; i < list.length; i++) {
+    if (!(list[i] as any)?._spendWiseSpacer) dataIdx.push(i);
+  }
+  if (dataIdx.length === 0) {
+    return [{ start: 0, end: list.length }];
+  }
+  const pageRanges: { start: number; end: number }[] = [];
+  let offset = 0;
+  let remaining = dataIdx.length;
+  while (remaining > 0) {
+    const take = Math.min(maxDataRows, remaining);
+    const fromDataIdx = dataIdx[offset]!;
+    const toDataIdx = dataIdx[offset + take - 1]!;
+    pageRanges.push({ start: fromDataIdx, end: toDataIdx + 1 });
+    offset += take;
+    remaining -= take;
+  }
+  return pageRanges;
+}
+
 /** Split-group box: which horizontal edges to draw on this page (open toward other pages). */
 export function attachSpendWisePageEdgeFlags(
   full: any[],

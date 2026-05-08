@@ -38,6 +38,7 @@ import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
@@ -987,11 +988,16 @@ export function AddVoucherDialog(props: any) {
   }, [editCompanyId, allCompanies, ctxCompany]);
   const navigatorOnline = useNavigatorOnline();
   /** Dialog company lane: APK local ⇒ SQLite/live snapshot; APK Firestore ⇒ onSnapshot taaki stale mirror `/company` na khenche. */
-  const voucherSqlMirrorFirst = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const voucherSqlMirrorFirst = useMemo(
+    () => apkEntityWriteUsesLocalSqliteMirror(company),
+    [company, directServerWrites]
+  );
   /** Offline + Firestore-mode company: sirf dekho — Save / Copy / Approve band (`editingDisabled` merge). */
+  /** Switch OFF par offline bhi save — policy andar `readServerDirectWritesPreferredSync`; context se memo dubale. */
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline]
+    [company, navigatorOnline, directServerWrites]
   );
   const { user, customUser } = useAuth();
   const router = useRouter();
@@ -1669,8 +1675,9 @@ export function AddVoucherDialog(props: any) {
         cleaned,
         allCompanies
       );
+      const { id: _sourceVoucherDocId, ...remappedSansId } = remapped as Record<string, unknown>;
       const copyPayload = {
-        ...remapped,
+        ...remappedSansId,
         voucherNumber: nextVoucherNumber,
         // Cross-company create me stale approval carry na ho; target voucher fresh pending/editable rahe.
         isApproved: false,
@@ -2107,13 +2114,23 @@ export function AddVoucherDialog(props: any) {
     };
   }, [apkLedgerPinsShellCompanyContext, outerCompanyContext, targetCompanyId, allCompanies, ctxCompany]);
 
-  const bodyBlock = (
-    <>
-    <CompanyContext.Provider value={overriddenCompanyContextValue}>
-     {/* Dialog-scope VoucherProvider: target company ke parties/accounts/staff/items/vouchers ke listeners
-         dialog ke andar attach hote hain — outer page ki useVouchers context unaffected rehti hai. */}
-     <VoucherProvider>
-     <VoucherAttachmentFallbackContext.Provider value={voucherAttachmentFallbackValue}>
+  /**
+   * Copy-to / compare-edit: dialog company ≠ shell → nested `VoucherProvider` se doosri company ke masters.
+   * Plain same-company edit/add: outer layout ka `useVouchers` pehle se sahi — dubara poori company load mat chalao (open freeze kam).
+   */
+  const needsNestedVoucherProvider = useMemo(() => {
+    const shellId = String(ctxCompanyId || "").trim();
+    if (apkLedgerPinsShellCompanyContext) return false;
+    if (postCopyNewFormSeed) {
+      const dest = String(targetCompanyId || shellId).trim();
+      return dest !== shellId;
+    }
+    const dialogCo = String(companyId || shellId).trim();
+    return dialogCo !== shellId;
+  }, [apkLedgerPinsShellCompanyContext, postCopyNewFormSeed, targetCompanyId, ctxCompanyId, companyId]);
+
+  const voucherDialogFormTree = (
+    <VoucherAttachmentFallbackContext.Provider value={voucherAttachmentFallbackValue}>
       <>
         <VoucherDialogContent
           {...rest}
@@ -2159,8 +2176,17 @@ export function AddVoucherDialog(props: any) {
           onRefreshCopyMismatch={postCopyNewFormSeed ? refreshCopyMismatchAfterMasterSave : undefined}
         />
       </>
-     </VoucherAttachmentFallbackContext.Provider>
-     </VoucherProvider>
+    </VoucherAttachmentFallbackContext.Provider>
+  );
+
+  const bodyBlock = (
+    <>
+    <CompanyContext.Provider value={overriddenCompanyContextValue}>
+      {needsNestedVoucherProvider ? (
+        <VoucherProvider>{voucherDialogFormTree}</VoucherProvider>
+      ) : (
+        voucherDialogFormTree
+      )}
     </CompanyContext.Provider>
     {/* HistoryDialog source voucher (jis company me wo save hai) ka history dikhata/edit karta hai —
         isliye dialog-scope target override ke BAHAR rakha hai taaki outer source company context use ho. */}

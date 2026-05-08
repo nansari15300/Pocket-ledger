@@ -4,7 +4,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef, useMemo } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "./useAuth";
-import { onSnapshot, collection, query, where, Timestamp, getDocs, doc } from "firebase/firestore";
+import { onSnapshot, collection, query, where, Timestamp, getDocs, doc, getDoc } from "firebase/firestore";
 import { auth, firestore } from "@/lib/firebase";
 import type { PermissionConfig } from "./usePermissions";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -38,7 +38,9 @@ import { clearSelectedCompanyId, readSelectedCompanyId, writeSelectedCompanyId }
 import { shouldSuppressTransientCompanyClear, shouldDeferMissingCompanyRedirectNative } from "@/lib/apkLedgerRouteShield";
 import { plDbgCompanyRecovery } from "@/lib/plDebugCompanyRecovery";
 import { plNavDbg, plNavDbgCritical, plNavDbgIdHint } from "@/lib/plNavRedirectDebug";
-
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
 
 export type DisplaySettings = {
     showDebit?: boolean;
@@ -356,8 +358,19 @@ function shouldSkipMissingCompanyRedirect(pathA: string, pathB: string): boolean
   return false;
 }
 
-/** Local-first: company switch pe turant SQLite hydrate; yeh delay ke baad Firestore global mirror (doosre device delete / share revoke). ~1.5 min user ke range ke kareeb. */
+/** Local-first: company switch pe turant SQLite hydrate; Firestore global mirror default ~1.5 min (delete/share revoke). */
 const LOCAL_REGISTRY_GLOBAL_MIRROR_DELAY_MS = 90_000;
+
+/** APK/`build:static`/Capacitor: shared companies bhi jaldi registry me — 90s defer se pehle sirf ek row dikhne jaisa UX. */
+function embeddedStaticRegistryDeferMs(): number {
+  if (isStaticAppBuild()) return 1_600;
+  if (typeof window !== "undefined" && isCapacitorNativeApp()) return 1_600;
+  return LOCAL_REGISTRY_GLOBAL_MIRROR_DELAY_MS;
+}
+
+/** Online shared: list/SQLite race — khali list par 0ms grace = turant clear */
+const LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS = 4500;
+const LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS = 3200;
 
 export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [companyId, setCompanyIdState] = useState<string | null>(null);
@@ -372,6 +385,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   const [localRegistryEpoch, setLocalRegistryEpoch] = useState(0);
   const router = useRouter();
   const pathname = usePathname();
+  /** Route change par hook deps stable rakhne ke liye — filter + ref; warna local/snapshot effect dubara + setLoading (header company chooser hide). */
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
+  /** SuperAdmin: merge pehle; pathname sirf filter — alag effect. */
+  const latestOnlineMergedUnfilteredRef = useRef<Company[]>([]);
+  const latestLocalNormalizedCompaniesRef = useRef<Company[]>([]);
   const { user, customUser, loading: authLoading } = useAuth();
   const ownedSnapRef = useRef<any>(null);
   const sharedSnapRef = useRef<any>(null);
@@ -664,11 +683,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
           .map((c) => normalizeLocalCompany(c as unknown as Company))
           .filter(isCompanyVisibleInMainApp);
         await Promise.all(normalizedLocalCompanies.map((c) => upsertLocalCompany(c as any)));
+        latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
         const filteredLocals = filterSharedOnlyCompaniesForSuperAdminInMainApp(
           normalizedLocalCompanies,
           user,
           isSuperAdminUser,
-          pathname
+          pathnameRef.current
         );
         plDbgCompanyRecovery("performLocalRegistryFirestoreMirror:setList", {
           mode: opts.mode,
@@ -699,7 +719,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
             hasNormRow: Boolean(norm),
           });
           clearCompanyId();
-          const p = normalizeAppPath(pathname ?? "");
+          const p = normalizeAppPath(pathnameRef.current ?? "");
           if (!pathExemptFromAutoSelectCompanyPush(p)) {
             plNavDbgCritical("useCompany.router.push./company [performLocalRegistry]", {
               pathname: p,
@@ -714,7 +734,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         if (touchLoading) setLoading(false);
       }
     },
-    [user, normalizeLocalCompany, isSuperAdminUser, pathname, clearCompanyId, router]
+    [user, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
   );
 
   /** Login + selected company: server → local plan + offline license; `normalizeLocalCompany` ke baad hook order safe. */
@@ -760,39 +780,71 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     };
 
     planSyncBurstRef.current = 0;
-    // Startup responsiveness: plan sync API compile heavy ho sakta hai, isliye first call idle par queue karo.
-    // Fallback: SSR/edge pe `window` undefined ho sakta hai — Node/global `setTimeout` use karo taaki TS18048 na aaye.
-    const idleId =
-      typeof window !== "undefined" && "requestIdleCallback" in window
-        ? (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => number })
-            .requestIdleCallback(() => runSyncNow(), { timeout: 2500 })
-        : setTimeout(() => runSyncNow(), 1200);
+    // APK/static: pehli full warm ke baad startup par `getIdToken`/plan API attachment prefetch se race na karein — sync sirf `online` + deferred.
+    const embeddedClient =
+      isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+    const skipIdlePlanSyncBoot =
+      isLocalOnlyMode() &&
+      embeddedClient &&
+      shouldSkipEmbeddedStartupAuthChurn(user?.uid, auth.currentUser?.uid);
+    // Embedded local-first: offline→online transition par immediate plan-sync rerender ko avoid karo (refresh-like jump).
+    const skipOnlinePlanSyncForEmbeddedLocal =
+      isLocalOnlyMode() && embeddedClient;
+
+    // Browser timer ids — `NodeJS.Timeout` union avoid (tsc DOM vs @types/node)
+    let planSyncIdleCallbackId: number | undefined;
+    let planSyncIdleFallbackTimerId: number | undefined;
+    let deferredLazyPlanTimer: number | null = null;
+    if (typeof window === "undefined") {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const win = window;
+
+    if (!skipIdlePlanSyncBoot) {
+      // Startup responsiveness: plan sync API compile heavy ho sakta hai, isliye first call idle par queue karo.
+      if ("requestIdleCallback" in win && typeof win.requestIdleCallback === "function") {
+        planSyncIdleCallbackId = win.requestIdleCallback(() => runSyncNow(), { timeout: 2500 });
+      } else {
+        planSyncIdleFallbackTimerId = win.setTimeout(() => runSyncNow(), 1200);
+      }
+    } else {
+      // Continuous online par `online` event nahi aata — ~1 min baad background plan sync (attachment window clear)
+      deferredLazyPlanTimer = win.setTimeout(() => runSyncNow(), 60_000);
+    }
 
     // Mount + go-online only — tab `visibilitychange` hata: doosre tab se wapas aane par plan sync se poora tree re-render = "page refresh" jaisa.
 
     const onOnline = () => {
+      if (skipOnlinePlanSyncForEmbeddedLocal) return;
       planSyncBurstRef.current = 0;
       runSyncNow();
     };
 
-    window.addEventListener("online", onOnline);
+    win.addEventListener("online", onOnline);
 
     return () => {
       cancelled = true;
-      if (typeof window !== "undefined" && "cancelIdleCallback" in window) {
+      if (deferredLazyPlanTimer != null) {
+        win.clearTimeout(deferredLazyPlanTimer);
+        deferredLazyPlanTimer = null;
+      }
+      if (planSyncIdleCallbackId !== undefined && "cancelIdleCallback" in win) {
         try {
-          (window as Window & { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(Number(idleId));
+          win.cancelIdleCallback(planSyncIdleCallbackId);
         } catch {
           /* ignore */
         }
-      } else {
-        clearTimeout(Number(idleId));
       }
-      window.removeEventListener("online", onOnline);
+      if (planSyncIdleFallbackTimerId !== undefined) {
+        win.clearTimeout(planSyncIdleFallbackTimerId);
+      }
+      win.removeEventListener("online", onOnline);
     };
   }, [user, companyId, authLoading, normalizeLocalCompany]);
 
-  // Local-only: turant sirf SQLite se list + selected row (click→dashboard fast); Firestore full mirror ~`LOCAL_REGISTRY_GLOBAL_MIRROR_DELAY_MS` baad (cross-device delete/share revoke).
+  // Local-only: turant sirf SQLite se list + selected row; defer mirror default 90s, static/APK/`build:static` par ~1.6s (shared jaldi dikhen).
   useEffect(() => {
     if (!isLocalOnlyMode()) return;
     let cancelled = false;
@@ -810,11 +862,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         const normalizedLocalCompanies = rawLocals
           .map((c) => normalizeLocalCompany(c as unknown as Company))
           .filter(isCompanyVisibleInMainApp);
+        latestLocalNormalizedCompaniesRef.current = normalizedLocalCompanies;
         const filteredFast = filterSharedOnlyCompaniesForSuperAdminInMainApp(
           normalizedLocalCompanies,
           user,
           isSuperAdminUser,
-          pathname
+          pathnameRef.current
         );
         plDbgCompanyRecovery("localOnlyRegistry:SQLite:setList", {
           count: filteredFast.length,
@@ -854,7 +907,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         deferredLocalRegistryMirrorTimerRef.current = setTimeout(() => {
           deferredLocalRegistryMirrorTimerRef.current = null;
           void performLocalRegistryFirestoreMirror({ mode: "deferred" }).catch(() => {});
-        }, LOCAL_REGISTRY_GLOBAL_MIRROR_DELAY_MS);
+        }, embeddedStaticRegistryDeferMs());
       }
     })();
 
@@ -865,7 +918,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         deferredLocalRegistryMirrorTimerRef.current = null;
       }
     };
-  }, [user, companyId, normalizeLocalCompany, isSuperAdminUser, pathname, performLocalRegistryFirestoreMirror]);
+  }, [user, companyId, normalizeLocalCompany, isSuperAdminUser, performLocalRegistryFirestoreMirror]);
 
   // `reloadLocalCompanyRegistry` bump: turant Firestore mirror (Stripe/demote) + deferred timer cancel taaki double-sync na ho.
   useEffect(() => {
@@ -964,11 +1017,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     let mergedCompanies = Array.from(companyMap.values());
+    latestOnlineMergedUnfilteredRef.current = mergedCompanies;
     mergedCompanies = filterSharedOnlyCompaniesForSuperAdminInMainApp(
       mergedCompanies,
       user,
       isSuperAdminUser,
-      pathname
+      pathnameRef.current
     );
     plDbgCompanyRecovery("handleSnapshotUpdate:setList", {
       mergedCount: mergedCompanies.length,
@@ -1012,7 +1066,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       // Background mirror failure se foreground company load block nahi karna.
       console.warn("Background company mirror sync failed:", error);
     });
-  }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser, pathname]);
+  }, [user?.uid, user?.email, normalizeLocalCompany, isSuperAdminUser]);
 
   useEffect(() => {
     if (isLocalOnlyMode()) {
@@ -1236,8 +1290,11 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     // List settle: `loading` ref se (deps me `loading` nahi — HMR stable); `loadingPulse` se false transition par re-run.
     if (loading) return;
 
-    // Firestore list ke saath race: non-empty list ke liye 2s grace; khali list + loading false = turant SQLite try.
-    const graceMs = allCompanies.length === 0 ? 0 : 2000;
+    // Online shared: khali list par bhi grace (sidebar nav)
+    let graceMs = allCompanies.length === 0 ? 0 : 2000;
+    if (user?.uid && !isLocalOnlyMode()) {
+      graceMs = allCompanies.length === 0 ? LIST_RECOVERY_ONLINE_EMPTY_GRACE_MS : LIST_RECOVERY_ONLINE_NONEMPTY_GRACE_MS;
+    }
     if (Date.now() - mountedAtRef.current < graceMs) return;
 
     let cancelled = false;
@@ -1287,6 +1344,34 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         listRecoverySyncForIdRef.current = companyId;
         return;
       }
+      // Shared user: SQLite mirror baad me — Firestore doc se recover + upsert (sidebar /company clear kam)
+      if (!localRow && user?.uid && !isLocalOnlyMode()) {
+        try {
+          const snap = await getDoc(doc(firestore, "companies", companyId));
+          if (snap.exists()) {
+            const data = snap.data() || {};
+            if (data.isDeleted !== true && data.movedToAdminRecycleAt == null) {
+              const raw = { id: snap.id, ...data } as Company;
+              const normalized = normalizeLocalCompany(raw);
+              if (isCompanyVisibleInMainApp(normalized)) {
+                plDbgCompanyRecovery("listRecovery:firestoreFallbackMerge", { companyId });
+                setCompany(normalized);
+                setAllCompanies((prev) => {
+                  if (prev.some((c) => c.id === companyId)) return prev;
+                  return [...prev, normalized];
+                });
+                listRecoverySyncForIdRef.current = companyId;
+                void upsertLocalCompany(
+                  normalized as unknown as import("@/lib/localCompanyStore").LocalCompanyDoc
+                ).catch(() => undefined);
+                return;
+              }
+            }
+          }
+        } catch {
+          plDbgCompanyRecovery("listRecovery:firestoreFallbackDeniedOrErr", { companyId });
+        }
+      }
       console.log("Company not found in user's list, clearing local state.");
       if (shouldSuppressTransientCompanyClear()) {
         plDbgCompanyRecovery("listRecovery:notInSqlite:deferPulse", { companyId });
@@ -1300,7 +1385,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [companyId, allCompanies, loadingPulse, clearCompanyId, normalizeLocalCompany]);
+  }, [companyId, allCompanies, loadingPulse, clearCompanyId, normalizeLocalCompany, user?.uid]);
 
   useEffect(() => {
     if (companyId) return;
@@ -1413,6 +1498,18 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
     }
   }, [companyId, pathname, router, user, authLoading, loading]);
+
+  /** SuperAdmin: /admin vs main app — list sirf filter se update; Firestore/SQLite route pe dubara nahi. */
+  useEffect(() => {
+    if (!user) return;
+    const raw = isLocalOnlyMode()
+      ? latestLocalNormalizedCompaniesRef.current
+      : latestOnlineMergedUnfilteredRef.current;
+    if (raw.length === 0) return;
+    setAllCompanies(
+      filterSharedOnlyCompaniesForSuperAdminInMainApp(raw, user, isSuperAdminUser, pathname)
+    );
+  }, [pathname, user, isSuperAdminUser]);
 
   const companyWithLocalFiscal = useMemo(
     () => mergeCompanyWithLocalFiscal(company, companyId),

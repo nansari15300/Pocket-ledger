@@ -33,6 +33,7 @@ import { firestore } from "@/lib/firebase";
 import { useCompany } from "@/hooks/useCompany";
 import { useVouchers } from "@/hooks/useVouchers";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
@@ -108,7 +109,8 @@ export function EditStaffDialog({ staff, allGroups = [], allStaff, onStaffUpdate
   const { toast } = useToast();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
     [localSqlMirror, company]

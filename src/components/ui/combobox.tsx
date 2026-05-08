@@ -20,6 +20,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 type ComboboxProps = {
   // Option-level disabled is used by voucher account dropdowns to block non-selectable accounts.
@@ -56,6 +57,13 @@ type ComboboxProps = {
   triggerLabelMinCh?: number;
   /** Optional: cap visible filtered options (useful for mobile dropdown performance/clarity). */
   maxVisibleOptions?: number;
+  /** Popover panel extra classes; agar set ho to default trigger-width inline style skip (mobile width jaise). */
+  popoverContentClassName?: string;
+  /**
+   * Mobile par default 80vw list + ek-line option — band karo jahan wrap chahiye (`mobileWideOptionList={false}`).
+   * Web + APK/Capacitor dono: `useIsMobile()` breakpoint.
+   */
+  mobileWideOptionList?: boolean;
 };
 
 export function Combobox({
@@ -79,11 +87,34 @@ export function Combobox({
   triggerLabelScrollable = false,
   triggerLabelMinCh,
   maxVisibleOptions,
+  popoverContentClassName,
+  mobileWideOptionList = true,
 }: ComboboxProps) {
+  const isMobile = useIsMobile();
+  /** Voucher / sab combo: mobile par list ~80vw jab tak caller ne `popoverContentClassName` na di ho. */
+  const useMobileWideList =
+    mobileWideOptionList !== false && isMobile && !popoverContentClassName;
+  /** Mobile: naam ek row + horizontal scroll; `noWrapOptions={false}` se purana wrap behaviour. */
+  const effectiveNoWrap = isMobile ? noWrapOptions !== false : noWrapOptions;
+  const effectiveShowFull = isMobile ? showFullOptionText !== false : showFullOptionText;
+  const skipPopoverInlineWidth = Boolean(popoverContentClassName) || useMobileWideList;
+  const mergedPopoverContentClassName = cn(
+    useMobileWideList &&
+      "w-[80vw] max-w-[80vw] sm:min-w-[var(--radix-popover-trigger-width)] sm:w-auto sm:max-w-md",
+    popoverContentClassName
+  );
+
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
+  /** cmdk highlighted row = form `value` jab dropdown khule — pehla item galat “selected” na dikhe. */
+  const [cmdkListValue, setCmdkListValue] = React.useState("");
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+  /** List scroll / drag: accidental onSelect rokne (mobile touch scroll). */
+  const listGestureStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const blockSelectFromGestureRef = React.useRef(false);
+  /** Khulte hi programmatic scroll se `onScroll` pehli tap block na kare. */
+  const ignoreListScrollRef = React.useRef(false);
 
   // Dialog + Popover: default preventDefault se search input focus nahi milta — optional rAF se focus
   React.useEffect(() => {
@@ -91,7 +122,30 @@ export function Combobox({
     const id = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => cancelAnimationFrame(id);
   }, [open, autoFocusSearchOnOpen]);
-  
+
+  React.useEffect(() => {
+    if (!open || isMultiSelect) return;
+    const v = Array.isArray(value) ? "" : (value ?? "");
+    setCmdkListValue(typeof v === "string" ? v : "");
+  }, [open, value, isMultiSelect]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    ignoreListScrollRef.current = true;
+    const t = window.setTimeout(() => {
+      ignoreListScrollRef.current = false;
+    }, 220);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
+  const runIfNotScrollGesture = (fn: () => void) => {
+    if (blockSelectFromGestureRef.current) {
+      blockSelectFromGestureRef.current = false;
+      return;
+    }
+    fn();
+  };
+
   const handleSingleSelect = (val: string) => {
     onChange?.(val);
     setOpen(false);
@@ -159,8 +213,9 @@ export function Combobox({
     // Keep list row text single-line when caller requests no-wrap options.
     const labelClassName = cn(
       "flex-1 min-w-0",
-      noWrapOptions && "whitespace-nowrap",
-      noWrapOptions && !showFullOptionText && "truncate"
+      effectiveNoWrap && "whitespace-nowrap",
+      effectiveNoWrap && effectiveShowFull && "overflow-x-auto [scrollbar-width:thin]",
+      effectiveNoWrap && !effectiveShowFull && "truncate"
     );
     if (!highlightBalanceInOptions) return <span className={labelClassName}>{label}</span>;
     const balanceIdx = label.indexOf("Balance:");
@@ -239,15 +294,18 @@ export function Combobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        // Allow desktop dropdowns to expand while keeping minimum trigger width.
+        // Custom / mobile-80vw: inline width mat lagao — radix trigger var list ko patla kar deta tha.
         style={
-          contentWidthMode === "auto"
-            ? { minWidth: `var(--radix-popover-trigger-width)` }
-            : { width: `var(--radix-popover-trigger-width)` }
+          skipPopoverInlineWidth
+            ? undefined
+            : contentWidthMode === "auto"
+              ? { minWidth: `var(--radix-popover-trigger-width)` }
+              : { width: `var(--radix-popover-trigger-width)` }
         }
         className={cn(
           "p-0 z-[9999]",
-          contentWidthMode === "auto" && "w-auto max-w-[calc(100vw-2rem)]"
+          !skipPopoverInlineWidth && contentWidthMode === "auto" && "w-auto max-w-[calc(100vw-2rem)]",
+          mergedPopoverContentClassName
         )}
         sideOffset={4}
         onOpenAutoFocus={(e) => {
@@ -255,21 +313,48 @@ export function Combobox({
         }}
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
-        <Command shouldFilter={false}>
+        <Command
+          shouldFilter={false}
+          {...(!isMultiSelect
+            ? {
+                value: cmdkListValue,
+                onValueChange: setCmdkListValue,
+              }
+            : {})}
+        >
           <CommandInput
             ref={searchInputRef}
             placeholder={searchPlaceholder}
             value={search}
             onValueChange={setSearch}
           />
-          <CommandList>
+          <CommandList
+            onPointerDownCapture={(e) => {
+              listGestureStartRef.current = { x: e.clientX, y: e.clientY };
+              blockSelectFromGestureRef.current = false;
+            }}
+            onPointerMoveCapture={(e) => {
+              const s = listGestureStartRef.current;
+              if (!s) return;
+              if (Math.hypot(e.clientX - s.x, e.clientY - s.y) > 12) {
+                blockSelectFromGestureRef.current = true;
+              }
+            }}
+            onPointerUpCapture={() => {
+              listGestureStartRef.current = null;
+            }}
+            onScroll={() => {
+              if (ignoreListScrollRef.current) return;
+              blockSelectFromGestureRef.current = true;
+            }}
+          >
             <CommandEmpty>{showAddNew ? null : "No results found."}</CommandEmpty>
             <CommandGroup>
               {isMultiSelect && (
                   <CommandItem
                     key="all"
                     value="all"
-                    onSelect={() => handleMultiSelect("all")}
+                    onSelect={() => runIfNotScrollGesture(() => handleMultiSelect("all"))}
                     className="w-full"
                   >
                     {/* pointer-events-none: hit cmdk-item root — full row select (child text svg pe narrow hit fix) */}
@@ -287,10 +372,15 @@ export function Combobox({
                   disabled={option.disabled}
                   onSelect={() => {
                     if (option.disabled) return;
-                    return isMultiSelect ? handleMultiSelect(option.value) : handleSingleSelect(option.value);
+                    runIfNotScrollGesture(() => {
+                      if (isMultiSelect) handleMultiSelect(option.value);
+                      else handleSingleSelect(option.value);
+                    });
                   }}
                   className={cn(
                     "flex w-full min-w-0 items-center",
+                    // Sirf Check = form selection; aria-selected sirf halka hover (scroll pe galat “selected” na lage).
+                    "[&[aria-selected=true]]:!bg-muted/25 [&[aria-selected=true]]:!text-foreground",
                     option.isSpecial && "text-amber-600 font-medium",
                     option.disabled && "opacity-50 cursor-not-allowed"
                   )}
@@ -323,7 +413,9 @@ export function Combobox({
                             <CommandItem
                                 key={item.value}
                                 value={item.value}
-                                onSelect={() => handleAddNew(item.value, search.trim())}
+                                onSelect={() =>
+                                  runIfNotScrollGesture(() => handleAddNew(item.value, search.trim()))
+                                }
                                 className="w-full min-w-0 text-green-600 font-medium focus:text-green-700 focus:bg-green-50 dark:focus:bg-green-950/30"
                             >
                                 <span className="pointer-events-none flex w-full min-w-0 items-center">

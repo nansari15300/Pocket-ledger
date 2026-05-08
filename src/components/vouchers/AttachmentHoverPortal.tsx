@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ZoomIn, ZoomOut, X } from "lucide-react";
+import { ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
@@ -17,6 +17,28 @@ const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
 /** Fit Width/Height: natural-size layout × scale — chhoti scale allowed (lamba stitched JPG) */
 const FIT_ZOOM_MIN = 0.02;
+
+/** Fit window: `z` jis se layout ke baad poora content (sab images) viewport ke andar ho */
+function computeFitWindowZoomFromImages(root: HTMLElement, cw: number, ch: number): number | null {
+  const imgs = [...root.querySelectorAll("img")].filter(
+    (n): n is HTMLImageElement =>
+      n instanceof HTMLImageElement && n.naturalWidth >= 2 && n.naturalHeight >= 1
+  );
+  if (imgs.length === 0) return null;
+  const innerW = Math.max(cw - 16, 1);
+  const innerH = Math.max(ch - 16, 1);
+  let maxNw = 0;
+  let sumNh = 0;
+  for (const im of imgs) {
+    maxNw = Math.max(maxNw, im.naturalWidth);
+    sumNh += im.naturalHeight;
+  }
+  // Har img par same `zoom`: width ≈ nw*z → total scroll width maxNw*z; vertical stack → height ≈ sumNh*z
+  const zw = innerW / maxNw;
+  const zh = innerH / Math.max(sumNh, 1);
+  const z = Math.min(zw, zh);
+  return Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, z));
+}
 
 /** Multi-attachment preview: pehli decode hui image se zoom ratio (sab img par same factor) */
 function getFirstSizedImg(root: HTMLElement): HTMLImageElement | null {
@@ -50,7 +72,8 @@ function useTapInteractionMode(): boolean {
   return tap;
 }
 
-type FitMode = "width" | "height";
+/** Default `window` = poora image scroll viewport ke andar fit (zoom change se chhota panel + mouse leave wala bug kam) */
+type FitMode = "window" | "width" | "height";
 
 type AttachmentHoverPortalProps = {
   /** Hover trigger (icon / thumbnail) */
@@ -76,8 +99,10 @@ export function AttachmentHoverPortal({
   const useTapMode = useTapInteractionMode();
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
-  /** Neeche Width / Height — active = blue, doosra gray */
-  const [fitMode, setFitMode] = React.useState<FitMode>("width");
+  /** Neeche Window / Width / Height — `window` default */
+  const [fitMode, setFitMode] = React.useState<FitMode>("window");
+  /** Ek baar panel andar click → trigger/pointer-leave auto-close band + backdrop se bahar click = close */
+  const [stickOpen, setStickOpen] = React.useState(false);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const triggerRef = React.useRef<HTMLSpanElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -176,22 +201,85 @@ export function AttachmentHoverPortal({
     attempt(0);
   }, []);
 
+  /** Poori preview (multi-image stack bhi) scroll area ke andar fit */
+  const applyFitWindow = React.useCallback(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+
+    const attempt = (n: number) => {
+      if (n > 60) return;
+      if (root.clientWidth < 2 || root.clientHeight < 2) {
+        requestAnimationFrame(() => attempt(n + 1));
+        return;
+      }
+      const cw = Math.max(root.clientWidth, 1);
+      const ch = Math.max(root.clientHeight, 1);
+      let z = computeFitWindowZoomFromImages(root, cw, ch);
+      if (z == null) {
+        const img = getFirstSizedImg(root);
+        if (!img || img.naturalWidth < 2) return;
+        const nw = img.naturalWidth;
+        const nh = Math.max(img.naturalHeight, 1);
+        const innerW = Math.max(cw - 16, 1);
+        const innerH = Math.max(ch - 16, 1);
+        z = Math.min(ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(innerW / nw, innerH / nh)));
+      }
+      setZoom(z);
+      setFitMode("window");
+      /** Pehli paint ke baad scrollWidth/Height — flex `gap` + rounding; analytical `z` kabhi thoda chhota */
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const r = scrollRef.current;
+          if (!r) return;
+          const ratio = Math.min(
+            r.clientHeight / Math.max(r.scrollHeight, 1),
+            r.clientWidth / Math.max(r.scrollWidth, 1),
+            1
+          );
+          const z2 = Math.max(FIT_ZOOM_MIN, Math.min(ZOOM_MAX, z * ratio));
+          if (ratio < 0.995) {
+            setZoom(z2);
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                const r2 = scrollRef.current;
+                if (!r2) return;
+                const sl = Math.max(0, (r2.scrollWidth - r2.clientWidth) / 2);
+                const st = Math.max(0, (r2.scrollHeight - r2.clientHeight) / 2);
+                r2.scrollTo({ left: sl, top: st, behavior: "auto" });
+              });
+            });
+          } else {
+            const sl = Math.max(0, (r.scrollWidth - r.clientWidth) / 2);
+            const st = Math.max(0, (r.scrollHeight - r.clientHeight) / 2);
+            r.scrollTo({ left: sl, top: st, behavior: "auto" });
+          }
+        });
+      });
+    };
+    attempt(0);
+  }, []);
+
   const handleOpen = React.useCallback(() => {
     if (effectiveDisabled) return;
     cancelClose();
+    setStickOpen(false);
     updatePosition();
     setOpen(true);
   }, [effectiveDisabled, cancelClose, updatePosition]);
 
   /** Global switch OFF: khula preview turant band (header toggle). */
   React.useEffect(() => {
-    if (effectiveDisabled) setOpen(false);
+    if (effectiveDisabled) {
+      setOpen(false);
+      setStickOpen(false);
+    }
   }, [effectiveDisabled]);
 
   React.useEffect(() => {
     if (!open) {
       setZoom(1);
-      setFitMode("width");
+      setFitMode("window");
+      setStickOpen(false);
       return;
     }
     if (useTapMode) return;
@@ -205,14 +293,14 @@ export function AttachmentHoverPortal({
     };
   }, [open, updatePosition, useTapMode]);
 
-  /** Default: fit to width — `preview` dep mat rakho (har render naya ref = loop) */
+  /** Default: fit to window — `preview` dep mat rakho (har render naya ref = loop) */
   React.useLayoutEffect(() => {
     if (!open) return;
     const root = scrollRef.current;
     if (!root) return;
     let cancelled = false;
     const run = () => {
-      if (!cancelled) applyFitWidth();
+      if (!cancelled) applyFitWindow();
     };
     const imgs = root.querySelectorAll("img");
     const onLoad = () => {
@@ -229,7 +317,7 @@ export function AttachmentHoverPortal({
         if (!im.complete) im.removeEventListener("load", onLoad);
       });
     };
-  }, [open, applyFitWidth]);
+  }, [open, applyFitWindow]);
 
   /**
    * Har `<img>` ko `width = naturalW * zoom` — multi-file stack + PDF thumb baad me aaye to MutationObserver.
@@ -301,14 +389,20 @@ export function AttachmentHoverPortal({
 
   React.useEffect(() => () => cancelClose(), [cancelClose]);
 
+  const closePanel = React.useCallback(() => {
+    cancelClose();
+    setOpen(false);
+    setStickOpen(false);
+  }, [cancelClose]);
+
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") closePanel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, closePanel]);
 
   /**
    * Dialog open hone par Radix / react-remove-scroll wheel ko lock karta hai; portal `body` par hai isliye
@@ -378,8 +472,15 @@ export function AttachmentHoverPortal({
   };
 
   const handleTriggerPointerLeave = () => {
-    if (effectiveDisabled || useTapMode) return;
+    if (effectiveDisabled || useTapMode || stickOpen) return;
     scheduleClose();
+  };
+
+  /** Panel andar click: hover auto-close off — `stopPropagation` mat (toolbar / zoom buttons ko event chahiye) */
+  const handlePanelPointerDownCapture = () => {
+    if (stickOpen) return;
+    setStickOpen(true);
+    cancelClose();
   };
 
   /** Mobile / touch: ek baar tap = khula rahe; hover enter–leave se band nahi (pehle open + turant close ka bug) */
@@ -388,7 +489,11 @@ export function AttachmentHoverPortal({
     e.preventDefault();
     e.stopPropagation();
     setOpen((prev) => {
-      if (prev) return false;
+      if (prev) {
+        setStickOpen(false);
+        return false;
+      }
+      setStickOpen(false);
       updatePosition();
       return true;
     });
@@ -399,14 +504,15 @@ export function AttachmentHoverPortal({
     typeof document !== "undefined" &&
     createPortal(
       <>
-        {useTapMode ? (
+        {/* Tap mode: hamesha backdrop; desktop: sirf `stickOpen` — bahar click = close */}
+        {(useTapMode || stickOpen) ? (
           <div
-            className="fixed inset-0 bg-black/45"
+            className={cn("fixed inset-0", useTapMode ? "bg-black/45" : "bg-transparent")}
             style={{ zIndex: BACKDROP_Z }}
             data-attachment-preview-backdrop=""
             onPointerDown={(e) => {
               e.preventDefault();
-              setOpen(false);
+              closePanel();
             }}
             aria-hidden
           />
@@ -431,27 +537,16 @@ export function AttachmentHoverPortal({
           }
           data-attachment-preview-portal=""
           onPointerEnter={useTapMode ? undefined : cancelClose}
-          onPointerLeave={useTapMode ? undefined : scheduleClose}
+          onPointerLeave={useTapMode || stickOpen ? undefined : scheduleClose}
+          onPointerDownCapture={useTapMode ? undefined : handlePanelPointerDownCapture}
           /* Bubble par hi stop — capture par mat (warna toolbar button / img tak event pahunchta hi nahi) */
           onPointerDown={(e) => e.stopPropagation()}
           /* Portal DOM body par hai lekin React bubble table row tak jata hai — dblclick se voucher edit na khule */
           onDoubleClick={(e) => e.stopPropagation()}
         >
-          {/* Title center; tap mode me X dayein (absolute) taaki label geometric center rahe */}
+          {/* Title center — close: neeche toolbar + backdrop / Escape (user: header par X nahi) */}
           <div className="relative flex shrink-0 items-center justify-center border-b border-blue-600/25 px-2 py-1.5">
             <span className="text-xs font-medium text-muted-foreground">Preview</span>
-            {useTapMode ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute right-1 top-1/2 h-8 w-8 shrink-0 -translate-y-1/2"
-                aria-label="Close preview"
-                onClick={() => setOpen(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            ) : null}
           </div>
 
           <div
@@ -506,7 +601,20 @@ export function AttachmentHoverPortal({
               type="button"
               size="sm"
               className={cn(
-                "h-9 shrink-0 border-0 px-3 text-xs",
+                "h-9 shrink-0 border-0 px-2.5 text-xs sm:px-3",
+                fitMode === "window"
+                  ? "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700"
+                  : "bg-muted text-muted-foreground hover:bg-muted/90 dark:bg-muted"
+              )}
+              onClick={applyFitWindow}
+            >
+              Fit window
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className={cn(
+                "h-9 shrink-0 border-0 px-2.5 text-xs sm:px-3",
                 fitMode === "width"
                   ? "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700"
                   : "bg-muted text-muted-foreground hover:bg-muted/90 dark:bg-muted"
@@ -519,7 +627,7 @@ export function AttachmentHoverPortal({
               type="button"
               size="sm"
               className={cn(
-                "h-9 shrink-0 border-0 px-3 text-xs",
+                "h-9 shrink-0 border-0 px-2.5 text-xs sm:px-3",
                 fitMode === "height"
                   ? "bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-700"
                   : "bg-muted text-muted-foreground hover:bg-muted/90 dark:bg-muted"
@@ -527,6 +635,17 @@ export function AttachmentHoverPortal({
               onClick={applyFitHeight}
             >
               Height
+            </Button>
+            {/* Sirf label — header X se overlap avoid; icon hata user request */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0 px-4 text-xs font-semibold border-red-300 bg-red-50 text-red-800 hover:bg-red-100 dark:border-red-700 dark:bg-red-950/50 dark:text-red-100 dark:hover:bg-red-900/50"
+              aria-label="Close preview"
+              onClick={() => closePanel()}
+            >
+              Close
             </Button>
           </div>
         </div>

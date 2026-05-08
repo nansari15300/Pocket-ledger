@@ -51,6 +51,17 @@ export function parseFirestoreDateFieldToJsDate(raw: unknown): Date | null {
 }
 
 /**
+ * Master opening "As on" (party/bank/tax/staff): SQLite/cache se kabhi sirf `{ seconds, nanoseconds }` aata hai —
+ * `new Date(obj)` Invalid hota; `parseFirestoreDateFieldToJsDate` se sahi `Date`.
+ * Local din par noon (12:00) — BsDatePicker / `nepali-date-converter` ke saath UTC-midnight drift se BS display khali/AD fallback na ho.
+ */
+export function parseOpeningBalanceDateToLocalNoon(raw: unknown): Date | null {
+  const d = parseFirestoreDateFieldToJsDate(raw);
+  if (!d) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+}
+
+/**
  * List / mobile card ke "• time" line ke liye: pehle `createdAt`, phir `lastEditedAt` / `updatedAt`, ant mein voucher `date`.
  * `Date` + `date-fns/format` device ki **local** timezone mein dikhte hain.
  */

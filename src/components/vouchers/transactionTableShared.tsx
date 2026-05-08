@@ -33,6 +33,7 @@ import { FISCAL_YEAR_PARTITION_ROW_TYPE } from "@/lib/fiscalPartitionRows";
 import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
 export type Context =
   | "party"
@@ -63,6 +64,7 @@ export function OpeningBalanceFileCellContent({
   if (urls.length === 0) {
     return <span>-</span>;
   }
+  // Hover preview stays enabled; dbl-click on single PDF opens full viewer quickly.
   const singlePdfOpen =
     urls.length === 1 && getAttachmentFormatLabel(urls[0]!) === "PDF"
       ? (e: React.MouseEvent<HTMLDivElement>) => {
@@ -76,7 +78,7 @@ export function OpeningBalanceFileCellContent({
       triggerClassName="inline-flex cursor-help"
       onPreviewDoubleClick={singlePdfOpen}
       preview={
-        // w-max: portal ke andar width-fit — max-w-full se chhoti strip + side margins na aaye
+        // Keep preview width tight so portal does not add side whitespace strips.
         <div className="flex w-max max-w-none flex-col gap-3">
           {urls.map((url, idx) => (
             <SingleAttachmentHoverPreviewBody
@@ -675,6 +677,8 @@ export const TransactionRow = React.memo(
     highlightPendingApproval = true,
     /** Bill-wise + fiscal divider: full table colspan for banner row. */
     fullRowColSpan,
+    /** Recent search: daybook rows me visible text highlight (mobile/table dono). */
+    textSearchHighlight,
   }: any) => {
     // Merge fiscal mode: FY ke beech full-width divider — amounts / row actions nahi.
     if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
@@ -823,6 +827,9 @@ export const TransactionRow = React.memo(
       (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
       "N/A";
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
+    const hlQ = String(textSearchHighlight ?? "").trim();
+    const hl = (s: string) =>
+      context === "daybook" && hlQ ? (highlightQueryInText(s, hlQ) as React.ReactNode) : s;
     const isItemPartyContext = context === "item" || (context === "group" && groupEntityType === "item");
 
     const mainRowContent = (
@@ -830,29 +837,37 @@ export const TransactionRow = React.memo(
         {showCol("date") &&
           (dateSystem === "Both" ? (
             <>
-              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? formatDateBS(d) : ""}</TableCell>
+              <TableCell className={ensureMinGaps ? "min-w-[95px] px-[5px]" : undefined}>{d ? hl(formatDateBS(d)) : ""}</TableCell>
               <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-                {d ? formatDate(d) : ""}
-                {entryClock ? <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+                {d ? hl(formatDate(d)) : ""}
+                {entryClock ? (
+                  <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hl(entryClock)}</span>
+                ) : null}
               </TableCell>
             </>
           ) : (
             <TableCell className={ensureMinGaps ? "min-w-[112px] px-[5px]" : undefined}>
-              {d ? (dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
-              {entryClock ? <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {entryClock}</span> : null}
+              {d ? hl(dateSystem === "AD" ? formatDate(d) : formatDateBS(d)) : ""}
+              {entryClock ? (
+                <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">• {hl(entryClock)}</span>
+              ) : null}
             </TableCell>
           ))}
         {showCol("type") && (
           <TableCell className={cn("align-middle", ensureMinGaps && "min-w-[75px] px-[5px]")}>
             <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
-              {getDisplayType(transaction)}
+              {hl(getDisplayType(transaction))}
             </Badge>
           </TableCell>
         )}
-        {showCol("voucherNo") && <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>{transaction.voucherNumber ?? transaction.voucher_number ?? ""}</TableCell>}
+        {showCol("voucherNo") && (
+          <TableCell className={ensureMinGaps ? "min-w-[105px] px-[5px]" : undefined}>
+            {hl(String(transaction.voucherNumber ?? transaction.voucher_number ?? ""))}
+          </TableCell>
+        )}
         {context === "daybook" && (
           <TableCell className="max-w-[200px] truncate">
-            {getParticularsText(transaction, names)}
+            {hl(getParticularsText(transaction, names))}
           </TableCell>
         )}
         {/* Item + Item-group page: Party/Entity column should respect page-level show/hide toggle. */}
@@ -861,7 +876,9 @@ export const TransactionRow = React.memo(
             {getOppositeAccountLabel(transaction, names, context, contextId, groupEntityType)}
           </TableCell>
         )}
-        {showCol("user") && context !== "note" && <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined}>{displayName}</TableCell>}
+        {showCol("user") && context !== "note" && (
+          <TableCell className={ensureMinGaps ? "min-w-[85px] px-[5px]" : undefined}>{hl(displayName)}</TableCell>
+        )}
         {showFileColumn && (
           <TableCell className={cn("text-center", ensureMinGaps && "min-w-[44px] px-[5px]")} onClick={(e) => e.stopPropagation()}>
             {Array.isArray(transaction.fileUrls) && transaction.fileUrls.length > 0 ? (
@@ -869,6 +886,7 @@ export const TransactionRow = React.memo(
                 const rowUrls = (transaction.fileUrls as string[])
                   .map((x) => String(x).trim())
                   .filter((s) => s.length > 0);
+                // Shared table rows: hover preview + double-click open for single PDF.
                 const singlePdfOpen =
                   rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
                     ? (e: React.MouseEvent<HTMLDivElement>) => {
@@ -905,12 +923,12 @@ export const TransactionRow = React.memo(
         )}
         {showCol("dr") && (
           <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {formatAmountCell(debit)}
+            {hl(String(formatAmountCell(debit)))}
           </TableCell>
         )}
         {showCol("cr") && (
           <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {formatAmountCell(credit)}
+            {hl(String(formatAmountCell(credit)))}
           </TableCell>
         )}
         {showCol("status") && !hideStatusColumn &&
@@ -953,7 +971,7 @@ export const TransactionRow = React.memo(
                             : "text-muted-foreground"
                     )}
                   >
-                    {statusLabel || "-"}
+                    {hl(statusLabel || "-")}
                   </Badge>
                   {showStatusDetailUnderBadge && (
                     // Keep status voucher-detail text pure black as requested.
@@ -961,7 +979,9 @@ export const TransactionRow = React.memo(
                   )}
                   {/* When narration is hidden, keep overdue hint under status badge. */}
                   {!showNarration && !isBillWise && isOverdueRow && overdueDays > 0 && (
-                    <span className="text-[10px] text-red-600 font-medium">{overdueDays} {overdueDays === 1 ? "day" : "days"}</span>
+                    <span className="text-[10px] text-red-600 font-medium">
+                      {hl(`${overdueDays} ${overdueDays === 1 ? "day" : "days"}`)}
+                    </span>
                   )}
                 </div>
               </TableCell>
@@ -1274,7 +1294,7 @@ export const TransactionRow = React.memo(
         >
           {narrationText ? (
             <span className="block min-w-0 overflow-hidden break-words font-normal" style={{ overflowWrap: "anywhere" }}>
-              <span className="not-italic">{narrationLabel}:</span> {narrationText}
+              <span className="not-italic">{narrationLabel}:</span> {hl(String(narrationText))}
             </span>
           ) : null}
         </TableCell>
@@ -1290,7 +1310,9 @@ export const TransactionRow = React.memo(
           >
             <div className="flex flex-col items-center gap-[1px]">
               <LinkedVouchersColored vouchers={statusDetailVouchers} align="center" billWisePink={isBillWise} />
-              {overdueSubText ? <span className="block font-medium text-red-600">{overdueSubText}</span> : null}
+              {overdueSubText ? (
+                <span className="block font-medium text-red-600">{hl(overdueSubText)}</span>
+              ) : null}
             </div>
           </TableCell>
         )}

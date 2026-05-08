@@ -9,7 +9,7 @@
  * **`StaleWhileRevalidate` + navigate** prepend: offline pe **cached shell** turant mile (fresh tab online flush).
  */
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { Serwist, ExpirationPlugin, StaleWhileRevalidate } from "serwist";
+import { Serwist, ExpirationPlugin, StaleWhileRevalidate, NetworkOnly } from "serwist";
 import { defaultCache } from "@serwist/next/worker";
 
 declare global {
@@ -24,10 +24,16 @@ const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
   // `skipWaiting: true` naya SW activate hote hi purane tab control le leta — APK/Capacitor me online aane par navigate/shell mismatch se “restart” feel aata tha.
   skipWaiting: false,
-  clientsClaim: true,
+  // Reconnect/update par open clients turant claim karne se app "refresh/restart" feel de sakta hai; manual next navigation par takeover hone do.
+  clientsClaim: false,
   /** `true` kabhi‑kabhi preload response fail hone par offline navigate `~offline` fallback de deta (Capacitor WebView). */
   navigationPreload: false,
   runtimeCaching: [
+    {
+      matcher: ({ url, sameOrigin }) =>
+        Boolean(sameOrigin && url.pathname.endsWith("/pdf.worker.min.mjs")),
+      handler: new NetworkOnly(),
+    },
     {
       matcher: ({ request, sameOrigin }) =>
         Boolean(sameOrigin && request.mode === "navigate"),

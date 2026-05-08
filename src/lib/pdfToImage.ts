@@ -28,6 +28,13 @@
  */
 
 import { importPdfJsDist } from "@/lib/importPdfJsDist";
+import { Capacitor } from "@capacitor/core";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import {
+  attachmentFileExistsInDataDir,
+  getAttachmentFileUriFromDataDir,
+  writeAttachmentBlobToDataDir,
+} from "@/lib/capacitorAttachmentFs";
 
 export interface PdfThumbnailResult {
   thumbnailUrl: string;
@@ -48,6 +55,17 @@ export interface ConvertPdfOptions {
 const DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 const PDF_MAGIC = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
 
+/** Native thumbnail cache path: source key hash -> jpg file on DataDirectory. */
+async function nativeThumbPathFromKey(key: string): Promise<string> {
+  const k = String(key || "").trim() || "default";
+  const enc = new TextEncoder().encode(k);
+  const hash = await crypto.subtle.digest("SHA-256", enc);
+  const hex = Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `attachments/pdf-thumbs/${hex}.jpg`;
+}
+
 function getSize(pdfFile: File | ArrayBuffer | Blob): number {
   if (pdfFile instanceof File) return pdfFile.size;
   if (pdfFile instanceof ArrayBuffer) return pdfFile.byteLength;
@@ -55,18 +73,26 @@ function getSize(pdfFile: File | ArrayBuffer | Blob): number {
   return 0;
 }
 
-/** Returns true if the blob looks like a PDF (magic bytes %PDF-). */
-async function validatePdfMagic(pdfFile: File | ArrayBuffer | Blob): Promise<boolean> {
-  let buf: ArrayBuffer;
-  if (pdfFile instanceof File || pdfFile instanceof Blob) {
-    buf = await pdfFile.slice(0, 5).arrayBuffer();
-  } else {
-    buf = pdfFile.byteLength ? pdfFile.slice(0, 5) : new ArrayBuffer(0);
+/** Header scan — File/Blob peek ya poora `Uint8Array` pe (buffer pool se `byteOffset` avoid) */
+function pdfHeaderLooksValid(a: Uint8Array): boolean {
+  let i = 0;
+  const len = Math.min(a.length, 64);
+  if (len < 4) return false;
+  if (i + 3 <= len && a[i] === 0xef && a[i + 1] === 0xbb && a[i + 2] === 0xbf) i += 3;
+  while (
+    i < len &&
+    (a[i] === 0x09 || a[i] === 0x0a || a[i] === 0x0d || a[i] === 0x20 || a[i] === 0x00)
+  ) {
+    i++;
   }
-  if (buf.byteLength < 4) return false;
-  const a = new Uint8Array(buf);
-  for (let i = 0; i < PDF_MAGIC.length; i++) if (a[i] !== PDF_MAGIC[i]) return false;
+  if (i + PDF_MAGIC.length > len) return false;
+  for (let j = 0; j < PDF_MAGIC.length; j++) if (a[i + j] !== PDF_MAGIC[j]) return false;
   return true;
+}
+
+/** Voucher stitched export / tests: bytes pe header check (duplicate read avoid) */
+export function isPdfLikeUint8Header(bytes: Uint8Array): boolean {
+  return pdfHeaderLooksValid(bytes);
 }
 
 /**
@@ -89,25 +115,29 @@ export async function convertPdfFirstPageToImage(
   const effectiveQuality = useReducedScale ? 0.75 : quality;
 
   const { pdfjsLib, pdfjs } = await importPdfJsDist();
-  const { setPdfJsWorkerSrc, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
+  const { ensurePdfJsWorker, PDFJS_WORKER_VERSION_FALLBACK } = await import("@/lib/pdfjsWorkerSrc");
   const version =
     (pdfjsLib as { version?: string }).version ??
     pdfjs.version ??
     PDFJS_WORKER_VERSION_FALLBACK;
-  setPdfJsWorkerSrc(pdfjs, version);
+  await ensurePdfJsWorker(pdfjs, version);
 
-  let pdfData: { data: ArrayBuffer };
+  /** Copy buffer — WebKit/Electron kabhi same ArrayBuffer pdf.js ke baad detach kar deta hai */
+  let pdfBytes: Uint8Array;
   if (pdfFile instanceof File) {
-    pdfData = { data: await pdfFile.arrayBuffer() };
+    pdfBytes = new Uint8Array(await pdfFile.arrayBuffer());
   } else if (pdfFile instanceof Blob) {
-    pdfData = { data: await pdfFile.arrayBuffer() };
+    pdfBytes = new Uint8Array(await pdfFile.arrayBuffer());
   } else {
-    pdfData = { data: pdfFile };
+    pdfBytes = new Uint8Array(pdfFile);
   }
+
+  let pdfData: { data: Uint8Array };
+  pdfData = { data: pdfBytes };
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  const valid = await validatePdfMagic(pdfFile);
+  const valid = pdfHeaderLooksValid(pdfBytes);
   if (!valid) throw new Error("Invalid PDF: missing or invalid header");
 
   const loadingTask = pdfjs.getDocument(pdfData);
@@ -134,6 +164,9 @@ export async function convertPdfFirstPageToImage(
 
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Could not get canvas context");
+  // Transparent vector PDF → JPEG: kuch engines (desktop WebView) black thumb; web jaisa safed pehle
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
 
   await page.render({
     canvasContext: context,
@@ -177,4 +210,34 @@ export async function uploadPdfThumbnail(
   const storageRef = ref(storage, thumbnailPath);
   await uploadBytes(storageRef, thumbnailBlob);
   return await getDownloadURL(storageRef);
+}
+
+/** Native/APK: previously generated thumb exist ho to direct URL (`convertFileSrc`) return. */
+export async function getNativePdfThumbnailDisplayUrl(cacheKey: string): Promise<string | null> {
+  if (!isCapacitorNativeApp()) return null;
+  try {
+    const path = await nativeThumbPathFromKey(cacheKey);
+    const exists = await attachmentFileExistsInDataDir(path);
+    if (!exists) return null;
+    const uri = await getAttachmentFileUriFromDataDir(path);
+    if (!uri) return null;
+    return Capacitor.convertFileSrc(uri);
+  } catch {
+    return null;
+  }
+}
+
+/** Native/APK: pdf thumb blob ko disk par persist karke future previews me read-avoid. */
+export async function saveNativePdfThumbnail(cacheKey: string, thumbnailBlob: Blob): Promise<string | null> {
+  if (!isCapacitorNativeApp()) return null;
+  try {
+    const path = await nativeThumbPathFromKey(cacheKey);
+    const ok = await writeAttachmentBlobToDataDir(path, thumbnailBlob);
+    if (!ok) return null;
+    const uri = await getAttachmentFileUriFromDataDir(path);
+    if (!uri) return null;
+    return Capacitor.convertFileSrc(uri);
+  } catch {
+    return null;
+  }
 }

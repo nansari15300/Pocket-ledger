@@ -31,6 +31,7 @@ import AdCalendar from "../ui/ad-calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { useDate } from "@/hooks/useDate";
+import { perfDebugLog, perfNow } from "@/lib/perfDebug";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { useCompany } from "@/hooks/useCompany";
 import { EditAccountGroupDialog } from "@/components/bank-cash/EditAccountGroupDialog";
@@ -216,10 +217,23 @@ export function AccountGroupDetails({
 
   // Spend Wise: never show notes. Statement: PC preference / mobile hamesha notes (includeNotesInTable).
   const baseTransactions = useMemo(() => {
-    if (spendWiseView) return processedTransactions.filter((t: any) => t.type !== "note");
-    return includeNotesInTable ? processedTransactions : processedTransactions.filter((t: any) => t.type !== "note");
+    const perfStart = perfNow();
+    const result = spendWiseView
+      ? processedTransactions.filter((t: any) => t.type !== "note")
+      : includeNotesInTable
+        ? processedTransactions
+        : processedTransactions.filter((t: any) => t.type !== "note");
+    // Perf debug: group base transaction shaping cost trace.
+    perfDebugLog("bank.groupDetails.baseTransactions", perfStart, {
+      processedCount: processedTransactions.length,
+      resultCount: result.length,
+      spendWiseView,
+      includeNotesInTable,
+    });
+    return result;
   }, [processedTransactions, spendWiseView, includeNotesInTable]);
   const displayTransactions = useMemo(() => {
+    const perfStart = perfNow();
     if (!spendWiseView || !vouchers?.length) return baseTransactions;
     // Date range overwrite: if any transaction in a group is in range, show full group (all linked rows)
     const inRangeIds = new Set(baseTransactions.map((t: any) => t.id));
@@ -452,7 +466,15 @@ export function AccountGroupDetails({
       rows.push(remainderRow);
       if (idx < unlinked.length - 1) rows.push({ _spendWiseSpacer: true, id: `spend-wise-spacer-unlinked-${t.id}`, _rowKey: `spacer-unlinked-${t.id}` });
     });
-    return rows.length ? rows : baseTransactions;
+    const result = rows.length ? rows : baseTransactions;
+    // Perf debug: group spend-wise builder duration + row expansion visibility.
+    perfDebugLog("bank.groupDetails.displayTransactions", perfStart, {
+      vouchersCount: vouchers.length,
+      baseCount: baseTransactions.length,
+      resultCount: result.length,
+      spendWiseView,
+    });
+    return result;
   }, [spendWiseView, baseTransactions, vouchers, accountIdsInGroup, openingBalanceForPeriod]);
 
   const [sortBy, setSortBy] = useState<TransactionSortBy>("date");
@@ -476,28 +498,40 @@ export function AccountGroupDetails({
     [sortedTransactions, spendWiseView]
   );
 
-  const { totalPages, paginatedTransactions } = useMemo(() => {
+  const { totalPages, paginatedTransactions, desktopLedgerSliceFlatStart } = useMemo(() => {
     if (rowsPerPage <= 0) {
-      return { totalPages: 1, paginatedTransactions: sortedTransactions };
+      return {
+        totalPages: 1,
+        paginatedTransactions: sortedTransactions,
+        desktopLedgerSliceFlatStart: 0,
+      };
     }
     if (spendWiseView) {
       const full = sortedTransactions as any[];
       const pageRanges = packFlatListByDataLineBudgetFromEnd(full, rowsPerPage);
       if (pageRanges.length === 0) {
-        return { totalPages: 1, paginatedTransactions: [] as any[] };
+        return { totalPages: 1, paginatedTransactions: [] as any[], desktopLedgerSliceFlatStart: 0 };
       }
       const totalPages = pageRanges.length;
       const safePage = Math.min(Math.max(1, currentPage), totalPages);
       const { start, end } = pageRanges[safePage - 1]!;
       const { list } = attachSpendWisePageEdgeFlags(full, start, end);
-      return { totalPages, paginatedTransactions: list as any[] };
+      return {
+        totalPages,
+        paginatedTransactions: list as any[],
+        desktopLedgerSliceFlatStart: start,
+      };
     }
     const total = sortedTransactions.length;
     const totalPages = Math.max(1, Math.ceil(total / rowsPerPage));
     const safePage = Math.min(Math.max(1, currentPage), totalPages);
     const end = total - (safePage - 1) * rowsPerPage;
     const start = Math.max(0, end - rowsPerPage);
-    return { totalPages, paginatedTransactions: sortedTransactions.slice(start, Math.max(start, end)) };
+    return {
+      totalPages,
+      paginatedTransactions: sortedTransactions.slice(start, Math.max(start, end)),
+      desktopLedgerSliceFlatStart: start,
+    };
   }, [sortedTransactions, spendWiseView, rowsPerPage, currentPage]);
   // Page-break opening: first visible data row + pehle non-spacer ka running balance (AccountDetails jaisa).
   const desktopPageLedgerStats = useMemo(() => {
@@ -545,6 +579,9 @@ export function AccountGroupDetails({
   }, [processedTransactions]);
 
   const isFilterActive = dateRange !== undefined || Object.values(filters).some(v => v);
+  /** Party/bank ledger: dated opening row ke liye range-from. */
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+  const booksOpeningForAccountGroup = Number((group as any).openingBalance) || 0;
   
   const clearFilters = () => {
     onDateRangeChange(undefined);
@@ -707,17 +744,21 @@ export function AccountGroupDetails({
     [filteredMobileTransactions, spendWiseView]
   );
 
-  const mobileTransactionsToShow = useMemo(() => {
+  const { mobileTransactionsToShow, mobileLedgerSliceFlatStart } = useMemo(() => {
     const list = filteredMobileTransactions;
-    if (rowsPerPage <= 0) return list;
+    if (rowsPerPage <= 0) {
+      return { mobileTransactionsToShow: list, mobileLedgerSliceFlatStart: 0 };
+    }
     if (spendWiseView) {
       const pageRanges = packFlatListByDataLineBudgetFromEnd(list as any[], rowsPerPage);
-      if (pageRanges.length === 0) return [] as any[];
+      if (pageRanges.length === 0) {
+        return { mobileTransactionsToShow: [] as any[], mobileLedgerSliceFlatStart: 0 };
+      }
       const totalPagesLocal = pageRanges.length;
       const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
       const { start, end } = pageRanges[safePage - 1]!;
       const { list: withFlags } = attachSpendWisePageEdgeFlags(list as any[], start, end);
-      return withFlags;
+      return { mobileTransactionsToShow: withFlags, mobileLedgerSliceFlatStart: start };
     }
     const blocks = mobileFilterBlocks;
     const n = blocks.length;
@@ -725,7 +766,11 @@ export function AccountGroupDetails({
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     const endB = n - (safePage - 1) * rowsPerPage;
     const startB = Math.max(0, endB - rowsPerPage);
-    return blocks.slice(startB, endB).flat();
+    const flatStart = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
+    return {
+      mobileTransactionsToShow: blocks.slice(startB, endB).flat(),
+      mobileLedgerSliceFlatStart: flatStart,
+    };
   }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, currentPage, rowsPerPage]);
 
   const mobilePagerEdgeCounts = useMemo(() => {
@@ -739,13 +784,16 @@ export function AccountGroupDetails({
       const { start, end } = pageRanges[safePage - 1]!;
       return { before: start, after: Math.max(0, list.length - end) };
     }
-    const total = list.length;
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const blocks = mobileFilterBlocks;
+    const n = blocks.length;
+    const totalPagesLocal = Math.max(1, Math.ceil(n / rowsPerPage));
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return { before: start, after: Math.max(0, total - end) };
-  }, [filteredMobileTransactions, spendWiseView, currentPage, rowsPerPage]);
+    const endB = n - (safePage - 1) * rowsPerPage;
+    const startB = Math.max(0, endB - rowsPerPage);
+    const before = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
+    const pageLen = blocks.slice(startB, endB).reduce((acc, b) => acc + b.length, 0);
+    return { before, after: Math.max(0, list.length - before - pageLen) };
+  }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, currentPage, rowsPerPage]);
 
   const mobilePageLedgerStats = useMemo(() => {
     const list = filteredMobileTransactions as any[];
@@ -776,7 +824,10 @@ export function AccountGroupDetails({
       const pageSlice = list.slice(start, end);
       const pageRows = pageSlice.filter((t: any) => !t?._spendWiseSpacer);
       let openingForPage = openingBalanceForPeriod;
-      const previousTx = start > 0 ? (list[start - 1] as any) : null;
+      /* OB: spacers skip */
+      let scan = start - 1;
+      while (scan >= 0 && (list[scan] as any)?._spendWiseSpacer) scan--;
+      const previousTx = scan >= 0 ? (list[scan] as any) : null;
       const previousRunningBalance =
         previousTx != null
           ? (typeof previousTx.balance === "number"
@@ -807,7 +858,10 @@ export function AccountGroupDetails({
     const start = startB > 0 ? blocks.slice(0, startB).reduce((acc, b) => acc + b.length, 0) : 0;
     const pageRows = pageSlice.filter((t: any) => !(t as any)?._spendWiseSpacer);
     let openingForPage = openingBalanceForPeriod;
-    const previousTx = start > 0 ? (list[start - 1] as any) : null;
+    /* OB: statement mobile — non-spacer prev */
+    let scanStmt = start - 1;
+    while (scanStmt >= 0 && (list[scanStmt] as any)?._spendWiseSpacer) scanStmt--;
+    const previousTx = scanStmt >= 0 ? (list[scanStmt] as any) : null;
     const previousRunningBalance =
       previousTx != null
         ? (typeof previousTx.balance === "number"
@@ -828,6 +882,35 @@ export function AccountGroupDetails({
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,
     };
   }, [filteredMobileTransactions, mobileFilterBlocks, spendWiseView, rowsPerPage, currentPage, openingBalanceForPeriod]);
+
+  /** AccountDetails / Party jaisa: pehli flat row index se OB date continuity. */
+  const ledgerOpeningPeriodStartDate = useMemo(() => {
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const fullList = (isMobile ? filteredMobileTransactions : sortedTransactions) as any[];
+    const flatStart = isMobile ? mobileLedgerSliceFlatStart : desktopLedgerSliceFlatStart;
+    if (flatStart === 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    let idx = flatStart - 1;
+    while (idx >= 0 && fullList[idx]?._spendWiseSpacer) idx--;
+    if (idx < 0) return undefined;
+    const t = fullList[idx];
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [
+    rowsPerPage,
+    hasLedgerDateFilter,
+    dateRange?.from,
+    isMobile,
+    filteredMobileTransactions,
+    sortedTransactions,
+    mobileLedgerSliceFlatStart,
+    desktopLedgerSliceFlatStart,
+  ]);
 
   const effectiveMobilePageCount = useMemo(() => {
     if (rowsPerPage <= 0) return 1;
@@ -1054,8 +1137,14 @@ export function AccountGroupDetails({
               groupEntityType="account"
               forceBalanceMode="statement"
               openingBalance={isBalanceMasked ? 0 : mobilePageLedgerStats.openingForPage}
+              booksOpeningBalance={isBalanceMasked ? undefined : booksOpeningForAccountGroup}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobileLedgerSliceFlatStart === 0}
+              openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
+              dateRange={dateRange}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={(group as any).openingBalanceNarration}
               openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={undefined}
               showNarration={showNarration}
@@ -1447,8 +1536,14 @@ export function AccountGroupDetails({
               showNarration={showNarration}
               visibleColumns={visibleColumns}
               openingBalance={isBalanceMasked ? 0 : desktopPageLedgerStats.openingForPage}
+              booksOpeningBalance={isBalanceMasked ? undefined : booksOpeningForAccountGroup}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopLedgerSliceFlatStart === 0}
+              openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
+              dateRange={dateRange}
               openingBalanceOutstanding={isBalanceMasked ? undefined : openingBalanceOutstanding}
               openingBalanceLinkedVoucherNos={isBalanceMasked ? undefined : openingBalanceLinkedVoucherNos}
+              openingBalanceNarration={(group as any).openingBalanceNarration}
               openingBalanceDate={(group as any).openingBalanceDate}
               openingBalanceActions={
                 group.id !== "ungrouped" ? (

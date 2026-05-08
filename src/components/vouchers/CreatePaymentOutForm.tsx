@@ -64,6 +64,7 @@ import {
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { LinkPaymentOutToSalaryDialog } from "@/components/vouchers/LinkPaymentOutToSalaryDialog";
@@ -328,6 +329,14 @@ export function CreatePaymentOutForm({
   }, [onEffectiveLinksChange]);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
 
+  /** Copy-to draft: pehli save insert; stale savedVoucherId se purana voucher overwrite na ho (same-company Copy To). */
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
+
   const isEditingAndConverting = voucher && (voucher.type !== 'payment_out' && voucher.type !== 'direct_expense');
   
   const form = useForm<PaymentOutFormValues>({
@@ -506,6 +515,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** Dusri tab/me master delete hone par selected ID stale ho to toast + clear (ghost label avoid). */
   useEffect(() => {
     if (loading || !companyId) return;
+    // APK/EXE: company switch baad masters hydrate hone se pehle lists kabhi‑kabhi []; edit IDs mat wipe karo (Payment In jaisa race).
+    if (
+      voucher?.id &&
+      processedParties.length === 0 &&
+      processedAccounts.length === 0 &&
+      processedStaff.length === 0 &&
+      processedTaxes.length === 0 &&
+      expenseAccounts.length === 0
+    ) {
+      return;
+    }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
     if (pid && !processedParties.some((p: any) => p.id === pid)) {
@@ -1001,7 +1021,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         return;
       }
       if (linkedPaymentInIds?.length) {
-        const currentId = voucher?.id ?? savedVoucherId;
+        // Copy-draft pehli save: "current" PO abhi persist nahi — stale id hata ke link math sahi rahe.
+        const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
         const linkedByPi = new Map<string, number>();
         allVouchers
           ?.filter(
@@ -1050,8 +1071,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     
     try {
-      // Permission check: create or edit
-      const isEdit = !!voucher?.id || !!savedVoucherId;
+      // Permission check: create or edit (copy draft ki pehli save = create, chahe stale savedVoucherId ho)
+      const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherId);
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
       if (isEdit) {
@@ -1101,14 +1122,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
 
     try {
-      if (!savedVoucherId || data.voucherNumber !== voucher?.voucherNumber) {
+      const originalVoucherIdToDelete: string | null =
+        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const idArgForFirestore = resolveVoucherIdForSave({
+        savedVoucherId,
+        originalVoucherIdToDelete,
+      });
+
+      if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
         const q = query(
           collection(firestore, `companies/${companyId}/vouchers`),
           where("voucherNumber", "==", data.voucherNumber),
           where("type", "==", voucherType)
         );
         const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;
@@ -1184,6 +1212,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
   
       const sanitizedData = JSON.parse(JSON.stringify(submissionData));
+      if (!idArgForFirestore) delete (sanitizedData as { id?: string }).id;
       let preGeneratedVoucherId: string | undefined;
       const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
 
@@ -1196,10 +1225,11 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           return;
         }
         if (isLocalOnlyMode()) {
+          // Copy-draft pehli insert: idArgForFirestore null — local placeholder bhi naya doc id (stale pass-through na ho).
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
-              : (savedVoucherId ?? voucher?.id ?? null);
+              : idArgForFirestore ?? null;
           const { fileUrls: merged, preGeneratedVoucherId: preGen } =
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
@@ -1228,10 +1258,6 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
 
-      let originalVoucherIdToDelete: string | null = null;
-      if (isEditingAndConverting && voucher.id) {
-        originalVoucherIdToDelete = voucher.id;
-      }
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       // Keep a stable "before save" snapshot so target voucher unlink/remove sync works even when props are stale.
@@ -1240,12 +1266,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         companyId,
         user.uid,
         sanitizedData,
-        originalVoucherIdToDelete ? null : savedVoucherId,
+        idArgForFirestore,
         approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
+          markCopiedDraftPersisted();
           setSavedVoucherId(savedDoc.id);
           const savedLinkIds = Array.isArray(sanitizedData.linkedPaymentInIds) ? [...sanitizedData.linkedPaymentInIds] : [];
           initialLinkedPaymentInIdsRef.current = savedLinkIds;

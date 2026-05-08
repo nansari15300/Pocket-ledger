@@ -2,9 +2,8 @@
 
 import { importPdfJsDist } from "@/lib/importPdfJsDist";
 import {
-  alternatePdfJsWorkerSrc,
+  ensurePdfJsWorker,
   PDFJS_WORKER_VERSION_FALLBACK,
-  setPdfJsWorkerSrc,
 } from "@/lib/pdfjsWorkerSrc";
 
 /**
@@ -268,9 +267,9 @@ async function tryRasterizePdfToSmaller(file: File, maxBytes: number): Promise<F
       pdfjs.version ??
       PDFJS_WORKER_VERSION_FALLBACK;
 
-    setPdfJsWorkerSrc(pdfjs as never, version);
+    await ensurePdfJsWorker(pdfjs as never, version);
 
-    const data = await file.arrayBuffer();
+    const data = new Uint8Array(await file.arrayBuffer());
     const loadingTask = pdfjs.getDocument({
       data,
     }) as { promise: Promise<PdfJsDocLike>; destroy?: () => void };
@@ -311,6 +310,9 @@ async function tryRasterizePdfToSmaller(file: File, maxBytes: number): Promise<F
 
         const ctx = canvas.getContext("2d");
         if (!ctx) continue;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         await page.render({ canvasContext: ctx, viewport } as Parameters<typeof page.render>[0]).promise;
 

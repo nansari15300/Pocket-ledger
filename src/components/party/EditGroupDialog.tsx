@@ -6,7 +6,7 @@ import { Loader2, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
@@ -19,7 +19,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGr
 import type { Group } from "@/components/party/types";
 import { useCompany } from "@/hooks/useCompany";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
-import { apkCloudCompanyOfflineViewOnly } from "@/lib/apkOnlineFirestoreWritePolicy";
+import {
+  apkCloudCompanyOfflineViewOnly,
+  apkEntityWriteUsesLocalSqliteMirror,
+} from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
+import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
+import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   MASTER_ALERT_DIALOG_CANCEL_GRAY_CLASS,
@@ -54,10 +60,12 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  /** APK + Firestore-backed company offline: Save/Delete voucher jaisa band (local-storage company nahin). */
+  const { directServerWrites } = useServerDirectWrites();
+  /** Server writes OFF: offline par bhi group update/delete SQLite + outbox. */
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   const apkOfflineViewOnly = useMemo(
     () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline]
+    [company, navigatorOnline, directServerWrites]
   );
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -91,6 +99,31 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     void (async () => {
       setIsLoading(true);
       try {
+        if (localSqlMirror) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "groups", gid);
+          const base: Record<string, unknown> =
+            (fromDb as Record<string, unknown> | null) ?? {
+              id: gid,
+              companyId,
+              ownerId: user?.uid ?? "",
+              name: group.name,
+              parentId: group.parentId || "",
+              isDeleted: false,
+            };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: gid,
+            companyId,
+            name: values.name.trim(),
+            parentId: values.parentId,
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "groups", gid, payload);
+          await enqueueCompanyDocOutbox(companyId, "groups", "update", gid, payload);
+          toast({ title: "Group Updated!", description: `"${values.name}" saved locally — will sync when online.` });
+          onGroupUpdated();
+          return;
+        }
+
         const groupRef = doc(firestore, `companies/${companyId}/groups`, gid);
         await updateDoc(groupRef, {
           name: values.name,
@@ -125,11 +158,34 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
     }
     setIsLoading(true);
     try {
-        await updateDoc(doc(firestore, `companies/${companyId}/groups`, group.id), {
+        if (localSqlMirror) {
+          const fromDb = await getCompanyDocFromBrowserDb(companyId, "groups", group.id);
+          const base: Record<string, unknown> =
+            (fromDb as Record<string, unknown> | null) ?? {
+              id: group.id,
+              companyId,
+              ownerId: user?.uid ?? "",
+              name: group.name,
+              parentId: group.parentId || "",
+              isDeleted: false,
+            };
+          const payload: Record<string, unknown> = {
+            ...base,
+            id: group.id,
+            companyId,
+            isDeleted: true,
+            deletedAt: Timestamp.now(),
+            deletedBy: user?.uid || "",
+          };
+          await upsertCompanyDocInBrowserDb(companyId, "groups", group.id, payload);
+          await enqueueCompanyDocOutbox(companyId, "groups", "update", group.id, payload);
+        } else {
+          await updateDoc(doc(firestore, `companies/${companyId}/groups`, group.id), {
             isDeleted: true,
             deletedAt: serverTimestamp(),
             deletedBy: user?.uid || "",
-        });
+          });
+        }
         toast({ title: "Group Moved to Recycle Bin", description: `"${group.name}" has been moved.`});
         onGroupDeleted();
         setIsOpen(false); // Only close the main dialog

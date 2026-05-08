@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 
 export type PrintOptionsResult = {
   printIncludeLogo: boolean;
@@ -52,6 +53,15 @@ export function promptPrintOptions(): Promise<PrintOptionsResult | null> {
       const [printUserColumn, setPrintUserColumn] = React.useState(false);
       const [printFileColumn, setPrintFileColumn] = React.useState(false);
       const [printNotes, setPrintNotes] = React.useState(false);
+
+      React.useEffect(() => {
+        if (!open) return;
+        // Android device back: is print options dialog ko pehle close karo; peeche ka page route back consume na ho.
+        return registerImperativeDialogBack(() => {
+          setOpen(false);
+          finish(null);
+        });
+      }, [open]);
 
       return (
         <Dialog

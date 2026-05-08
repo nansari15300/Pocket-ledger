@@ -2,7 +2,13 @@
 
 import * as React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { getBlobFromLocalFileRef, isLocalFileRef } from "@/lib/localPendingFiles";
+import {
+  getBlobFromLocalFileRef,
+  getLocalFileRefMeta,
+  getLocalFileRefMetaSync,
+  isLocalFileRef,
+} from "@/lib/localPendingFiles";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 type Props = {
   src?: string | null;
@@ -37,7 +43,22 @@ export function ResolvedEntityAvatar({
       return;
     }
     void (async () => {
-      const blob = await getBlobFromLocalFileRef(src);
+      if (isCapacitorNativeApp()) {
+        // Native avatar fast-path: local pending image ko `convertFileSrc` URI se turant dikhao.
+        const meta = getLocalFileRefMetaSync(src) ?? (await getLocalFileRefMeta(src));
+        if (cancelled) return;
+        const ct = String(meta?.contentType || "").toLowerCase();
+        if (!meta?.displayUrl || !ct.startsWith("image/")) {
+          setLocalBlobUrl(null);
+          return;
+        }
+        setLocalBlobUrl(meta.displayUrl);
+        return;
+      }
+      const blob = await getBlobFromLocalFileRef(src, {
+        allowNativeRead: false,
+        context: "ResolvedEntityAvatar",
+      });
       if (cancelled) return;
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
@@ -53,7 +74,7 @@ export function ResolvedEntityAvatar({
     })();
     return () => {
       cancelled = true;
-      if (blobUrlRef.current) {
+      if (blobUrlRef.current && !isCapacitorNativeApp()) {
         URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = null;
       }

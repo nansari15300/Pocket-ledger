@@ -52,6 +52,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 function BankCashPageContent() {
   const { user } = useAuth();
@@ -160,7 +161,7 @@ function BankCashPageContent() {
       activeView === "accounts"
         ? (String((selectedEntity as Account).accountName || "").trim() || "Account")
         : (String((selectedEntity as AccountGroup).name || "").trim() || "Account");
-    const fileUrl = String((selectedEntity as any).fileUrl || "").trim();
+    const attachmentUrl = trimEntityFileUrlForPreview((selectedEntity as any).fileUrl);
     const initials = String(name)
       .split(" ")
       .filter(Boolean)
@@ -170,12 +171,12 @@ function BankCashPageContent() {
       .toUpperCase() || "NA";
     const openPreview = () => {
       // Bank/Cash mobile header avatar: tap for full preview.
-      if (!fileUrl) return;
-      void openAttachmentInApp(fileUrl, { title: String(name) });
+      if (!attachmentUrl) return;
+      void openAttachmentInApp(attachmentUrl, { title: String(name) });
     };
     return (
       <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
           <button
             type="button"
             className="inline-flex h-full w-full items-center justify-center rounded-full"
@@ -184,7 +185,7 @@ function BankCashPageContent() {
           >
             <ResolvedEntityAvatar
               className="h-full w-full text-xs"
-              src={fileUrl}
+              src={attachmentUrl ?? undefined}
               alt={String(name)}
               fallbackText={initials}
             />

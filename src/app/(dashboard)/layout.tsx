@@ -36,12 +36,16 @@ import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/dev
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { ServerDirectWritesProvider } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
+import { toast } from "sonner";
 import { apkCloudCompanyOfflineViewOnly, apkCloudFirestoreMasterWriteFromCompanyShape } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { countSyncOutboxRowsForCompany } from "@/lib/localVoucherOutbox";
 import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 // APK par `[PL-NAV]` traces screen pe — adb/browser ki zarurat kam (flags: `plNavRedirectDebug.ts` header)
 import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
+import { DashboardDocumentTitleSync } from "@/components/layout/DashboardDocumentTitleSync";
+import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStripSyncBridge";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -87,15 +91,13 @@ function ApkCloudOfflineViewBanner() {
 }
 
 /**
- * Offline → online transition: SQLite outbox pending ho **ya** APK cloud company ho (warm mirror sync),
- * bina navigation reload — user ko acknowledgement strip.
+ * Offline → online: pehle emerald strip layout shift karti thi (`border-b` neeche content dhakel deta).
+ * Sonner toast = same acknowledgement, scroll/layout stable (`StaticFastResumeSyncManager` defer ke saath).
  */
-function ApkCloudOnlineSyncAckBanner() {
+function ApkCloudOnlineSyncToast() {
   const online = useNavigatorOnline();
   const { companyId, company } = useCompany();
   const prevOnlineRef = useRef(online);
-  const [visible, setVisible] = useState(false);
-  const [text, setText] = useState("");
 
   useEffect(() => {
     const wasOffline = prevOnlineRef.current === false;
@@ -105,8 +107,6 @@ function ApkCloudOnlineSyncAckBanner() {
     if (!cid) return;
 
     let cancelled = false;
-    /** Explicit `number` — DOM timers; avoids Node `Timer` vs `number` clash when libs merge */
-    let dismissTimer: number | null = null;
 
     void (async () => {
       const pending = await countSyncOutboxRowsForCompany(cid);
@@ -120,26 +120,16 @@ function ApkCloudOnlineSyncAckBanner() {
         msg = "You're online — local data sync starting.";
       }
       if (!msg) return;
-      setText(msg);
-      setVisible(true);
-      dismissTimer = window.setTimeout(() => {
-        setVisible(false);
-        setText("");
-      }, 4500);
+      // Fixed `id` = duplicate reconnect burst me ek hi toast update
+      toast.success(msg, { id: "pl-apk-online-sync-ack", duration: 4200 });
     })();
 
     return () => {
       cancelled = true;
-      if (dismissTimer != null) clearTimeout(dismissTimer);
     };
   }, [online, companyId, company]);
 
-  if (!visible || !text) return null;
-  return (
-    <div className="border-b border-border/60 bg-emerald-500/15 py-1.5 text-center text-[11px] font-medium text-emerald-950 dark:text-emerald-100 sm:text-xs">
-      {text}
-    </div>
-  );
+  return null;
 }
 
 function DeviceLimitBanner() {
@@ -822,7 +812,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <CompanyDemotedBanner />
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />
-                      <ApkCloudOnlineSyncAckBanner />
+                      <ApkCloudOnlineSyncToast />
                       <DashboardMainWithEdgeSwipe
                         className={cn(
                           "flex-1 min-h-0",
@@ -853,17 +843,21 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <MobileViewProvider>
-      <SidebarProvider>
-        <DashboardProvider>
-          {/* Global file + avatar hover preview — header pill se ON/OFF (AttachmentHoverPortal). */}
-          <FileHoverPreviewProvider>
-            {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
-            <PlNavDebugOnDeviceOverlay />
-            <LayoutContent>{children}</LayoutContent>
-          </FileHoverPreviewProvider>
-        </DashboardProvider>
-      </SidebarProvider>
-    </MobileViewProvider>
+    <ServerDirectWritesProvider>
+      <MobileViewProvider>
+        <SidebarProvider>
+          <DashboardProvider>
+            {/* Global file + avatar hover preview — header pill se ON/OFF (AttachmentHoverPortal). */}
+            <FileHoverPreviewProvider>
+              {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
+              <DashboardDocumentTitleSync />
+              <ElectronTabStripSyncBridge />
+              <PlNavDebugOnDeviceOverlay />
+              <LayoutContent>{children}</LayoutContent>
+            </FileHoverPreviewProvider>
+          </DashboardProvider>
+        </SidebarProvider>
+      </MobileViewProvider>
+    </ServerDirectWritesProvider>
   );
 }

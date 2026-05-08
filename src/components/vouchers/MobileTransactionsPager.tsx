@@ -12,7 +12,7 @@ type Props = {
   onPageChange: (nextPage: number) => void;
   onRowsPerPageChange: (nextRowsPerPage: number) => void;
   className?: string;
-  /** Party-style newest-first slice: pehle kitne vouchers window se pehle, kitne baad (dropdown = page size). */
+  /** Left of Prev / left of Next — parent decides meaning (party ledger latest-first = newer pool left, older pool right). */
   edgeCounts?: { before: number; after: number };
   /** Bank statement: "Showing / Trxn Of total" line hata — sirf page-size select + Prev/Next (count clutter avoid). */
   trimSummary?: boolean;
@@ -43,16 +43,17 @@ export function MobileTransactionsPager({
               variant="default"
               size="sm"
               className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-              onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
-              disabled={safePage >= totalPages}
+              // Page − 1 — party ledger me latest-first: yahi «naye» taraf
+              onClick={() => onPageChange(Math.max(1, safePage - 1))}
+              disabled={safePage <= 1}
             >
               Prev
             </Button>
             {edgeCounts != null && rowsPerPage > 0 ? (
               <span
                 className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                title="Older vouchers before this page"
-                aria-label={`${edgeCounts.before} vouchers before this page`}
+                title="Count beside Prev (parent slice)"
+                aria-label={`${edgeCounts.before} transactions beside Prev`}
               >
                 {edgeCounts.before}
               </span>
@@ -97,8 +98,8 @@ export function MobileTransactionsPager({
             {edgeCounts != null && rowsPerPage > 0 ? (
               <span
                 className="min-w-[1.25rem] shrink-0 text-center text-[10px] font-bold tabular-nums text-muted-foreground"
-                title="Newer vouchers after this page"
-                aria-label={`${edgeCounts.after} vouchers after this page`}
+                title="Count beside Next (parent slice)"
+                aria-label={`${edgeCounts.after} transactions beside Next`}
               >
                 {edgeCounts.after}
               </span>
@@ -108,8 +109,9 @@ export function MobileTransactionsPager({
               variant="default"
               size="sm"
               className="h-5 shrink-0 px-1.5 text-[10px] font-bold bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-200 disabled:text-gray-500"
-              onClick={() => onPageChange(Math.max(1, safePage - 1))}
-              disabled={safePage <= 1}
+              // Page + 1 — party latest-first: «purane» chunk
+              onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
+              disabled={safePage >= totalPages}
             >
               Next
             </Button>

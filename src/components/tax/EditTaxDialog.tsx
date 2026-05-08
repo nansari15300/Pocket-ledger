@@ -59,6 +59,7 @@ import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@
 import { toast as sonnerToast } from "sonner";
 import { isSystemParentGroup } from "@/lib/system-groups";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { useVouchers } from "@/hooks/useVouchers";
@@ -91,7 +92,8 @@ export function EditTaxDialog({ tax, allTaxes, onTaxUpdated, onTaxDeleted, child
   const { toast } = useToast();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const { directServerWrites } = useServerDirectWrites();
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
     [localSqlMirror, company]

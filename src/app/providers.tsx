@@ -1,6 +1,7 @@
 
 "use client";
 
+import { useEffect } from "react";
 import { AuthProvider } from "@/hooks/useAuth";
 import { CompanyProvider } from "@/hooks/useCompany";
 import { DateProvider } from "@/hooks/useDate";
@@ -18,6 +19,9 @@ import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncMa
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
+import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
+import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
+import { isPerfDebugEnabled } from "@/lib/perfDebug";
 
 function PresenceManager() {
     usePresence();
@@ -25,11 +29,38 @@ function PresenceManager() {
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
+    useEffect(() => {
+      // Native startup warm: pending local file refs runtime cache prefill so sync fast-path null-hit kam ho.
+      void primeLocalFileRefMetaRuntimeCache();
+    }, []);
+    useEffect(() => {
+      if (!isPerfDebugEnabled()) return;
+      if (typeof window === "undefined" || typeof PerformanceObserver === "undefined") return;
+      // Freeze diagnostics: long tasks (>50ms) console me print karo taaki blocking source correlate ho.
+      const obs = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration < 40) continue;
+          console.warn("[PL-PERF] long-task", {
+            durationMs: Math.round(entry.duration * 10) / 10,
+            startMs: Math.round(entry.startTime * 10) / 10,
+            route: window.location.pathname,
+          });
+        }
+      });
+      try {
+        obs.observe({ type: "longtask", buffered: true } as PerformanceObserverInit);
+      } catch {
+        // Browser without longtask support: skip silently.
+      }
+      return () => obs.disconnect();
+    }, []);
     return (
       <ThemeProvider>
         <AuthProvider>
             <FirebaseErrorListener />
             <CompanyProvider>
+                {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
+                <FirstLoginWarmGateProvider>
                 <CapacitorAndroidBackButton />
                 <StaticFastResumeSyncManager />
                 {/* Online par masters/vouchers/plans SQLite + IndexedDB attachments preload */}
@@ -49,8 +80,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         </DialogBackHandlerProvider>
                     </BalanceModeProvider>
                 </DateProvider>
-                {/* Pehli device login: company naam + % (min 2s) — localStorage se dubara nahi */}
+                {/* Pehli device login: web = short hydrate; APK/static = poora data + attachment rows tak */}
                 <FirstDeviceCompanyHydrationOverlay />
+                </FirstLoginWarmGateProvider>
             </CompanyProvider>
         </AuthProvider>
       </ThemeProvider>

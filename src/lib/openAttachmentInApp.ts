@@ -4,13 +4,26 @@ import { shouldUseInAppPdfPreviewOverlay } from "@/lib/shouldUseInAppPdfPreview"
 import { showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 import {
   openHttpPdfInExternalBrowser,
+  openLocalFileUriInExternalViewer,
   openPdfBlobInExternalViewer,
   shouldOpenPdfInExternalViewer,
 } from "@/lib/openPdfExternal";
 import { showInAppImagePreview } from "@/lib/inAppImagePreview";
 import { openAttachmentGalleryInApp } from "@/lib/inAppAttachmentGallery";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
-import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
+import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
+import {
+  getOfflineCachedAttachmentBlob,
+  getOfflineCachedAttachmentNativeRef,
+  getRemoteAttachmentBlobPreferOfflineCache,
+} from "@/lib/offlineAttachmentUrlCache";
+import {
+  isLocalFileRef,
+  getBlobFromLocalFileRef,
+  getLocalFileRefMeta,
+  getLocalFileRefMetaSync,
+} from "@/lib/localPendingFiles";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 
 /** UI se pata ho to sniffing kam: pdf / image / unknown */
@@ -46,6 +59,13 @@ function pathLooksPdf(pathLower: string): boolean {
   }
 }
 
+/** Click-open cache path: HTTPS download URL + raw Firebase object-path (`voucher-files/...`) dono ko remote-cacheable treat karo. */
+function isRemoteCacheableAttachmentSource(value: string): boolean {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  return /^https?:\/\//i.test(v) || looksLikeFirebaseStorageObjectPath(v);
+}
+
 function showInAppPdfOpenError(sourceUrl: string): void {
   // Native/static flow: show clear English error and optional external-app open fallback.
   if (typeof window !== "undefined") {
@@ -59,7 +79,7 @@ function showInAppPdfOpenError(sourceUrl: string): void {
 }
 
 /**
- * APK / static / mobile: file PDF ya image app ke andar overlay me; desktop wide = nayi tab.
+ * File PDF ya image: overlay / gallery; HTTP URL par fetch + blob (CORS allow ho to) — web par bhi bahar tab kam.
  */
 export async function openAttachmentInApp(
   url: string,
@@ -86,6 +106,30 @@ export async function openAttachmentInApp(
   // Local-first: blob IndexedDB me — SQLite/Firestore me sirf `local:uuid` string
   if (isLocalFileRef(u)) {
     const kindHint = opts?.kind ?? "other";
+    // Native/APK: local file URI direct open/preview — byte read bridge skip.
+    if (isCapacitorNativeApp()) {
+      // Click hot-path: pehle sync runtime cache, miss par async lookup.
+      const meta = getLocalFileRefMetaSync(u) ?? (await getLocalFileRefMeta(u));
+      if (meta?.fileUri) {
+        const ct = String(meta.contentType || "").toLowerCase();
+        const isPdf = kindHint === "pdf" || ct.includes("pdf");
+        const isImg = kindHint === "image" || ct.startsWith("image/");
+        if (isImg && meta.displayUrl) {
+          showInAppImagePreview(meta.displayUrl, () => {}, { title: opts?.title ?? "Image" });
+          return;
+        }
+        if (isPdf) {
+          await openLocalFileUriInExternalViewer(meta.fileUri, "application/pdf", opts?.title ?? "PDF");
+          return;
+        }
+        await openLocalFileUriInExternalViewer(
+          meta.fileUri,
+          meta.contentType || "application/octet-stream",
+          opts?.title ?? "File"
+        );
+        return;
+      }
+    }
     const blob = await getBlobFromLocalFileRef(u);
     if (!blob) {
       const sf = opts?.serverFallback;
@@ -155,6 +199,53 @@ export async function openAttachmentInApp(
   const isDataPdf = u.startsWith("data:application/pdf") || u.toLowerCase().startsWith("data:application%2fpdf");
 
   if (kind === "image" || isDataImage || pathLooksImage(pathOnly)) {
+    // Capacitor/mobile: click-open ko instant rakho; warm cache fetch ko blocking mat banao.
+    if (isCapacitorNativeApp()) {
+      if (isRemoteCacheableAttachmentSource(u)) {
+        try {
+          // Native local-first: cached file URI ho to direct convertFileSrc se kholo (offline/restart stable).
+          const cachedRef = await getOfflineCachedAttachmentNativeRef(u);
+          if (cachedRef?.displayUrl) {
+            showInAppImagePreview(cachedRef.displayUrl, () => {}, {
+              title: opts?.title ?? "Image",
+            });
+            return;
+          }
+        } catch {
+          /* fall back to blob check */
+        }
+        try {
+          // Native offline/restart reliability: cached blob mile to remote URL ke bajaay local object URL hi kholo.
+          const cached = await getOfflineCachedAttachmentBlob(u);
+          if (cached && cached.size > 0) {
+            const bUrl = URL.createObjectURL(cached);
+            showInAppImagePreview(bUrl, () => URL.revokeObjectURL(bUrl), {
+              title: opts?.title ?? "Image",
+            });
+            return;
+          }
+        } catch {
+          /* fall back to remote URL */
+        }
+        // Native instant open + background persist: next offline/restart par bhi image local cache se mile.
+        void getRemoteAttachmentBlobPreferOfflineCache(u).catch(() => undefined);
+      }
+      showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
+      return;
+    }
+    // Web/Electron offline: HTTPS/object-path dono me pehle warm cache blob use karo, phir overlay kholna.
+    if (!isDataImage && isRemoteCacheableAttachmentSource(u)) {
+      try {
+        const cached = await getRemoteAttachmentBlobPreferOfflineCache(u);
+        if (cached && cached.size > 0) {
+          const bUrl = URL.createObjectURL(cached);
+          showInAppImagePreview(bUrl, () => URL.revokeObjectURL(bUrl), { title: opts?.title ?? "Image" });
+          return;
+        }
+      } catch {
+        /* fall through remote URL */
+      }
+    }
     showInAppImagePreview(u, () => {}, { title: opts?.title ?? "Image" });
     return;
   }
@@ -210,9 +301,40 @@ export async function openAttachmentInApp(
 
 async function openPdfFromUrl(u: string, title?: string): Promise<void> {
   const fileName = title ? `${title.replace(/[/\\?%*:|"<>]/g, "_")}.pdf` : "document.pdf";
+  const isHttp = /^https?:\/\//i.test(u);
+
+  if (isHttp) {
+    try {
+      // Native/exe offline reliability: network se pehle local cache try karo.
+      const cachedRef = await getOfflineCachedAttachmentNativeRef(u);
+      if (cachedRef?.fileUri && shouldOpenPdfInExternalViewer()) {
+        await openLocalFileUriInExternalViewer(
+          cachedRef.fileUri,
+          cachedRef.contentType || "application/pdf",
+          fileName
+        );
+        return;
+      }
+      const cachedBlob = await getOfflineCachedAttachmentBlob(u);
+      if (cachedBlob && cachedBlob.size > 0) {
+        if (shouldOpenPdfInExternalViewer()) {
+          await openPdfBlobInExternalViewer(cachedBlob, fileName);
+          return;
+        }
+        const cachedUrl = URL.createObjectURL(cachedBlob);
+        showInAppPdfPreview(cachedUrl, () => URL.revokeObjectURL(cachedUrl), {
+          title: title ?? "PDF",
+          fileName: "document.pdf",
+        });
+        return;
+      }
+    } catch {
+      /* cache miss / read fail → network path */
+    }
+  }
 
   // HTTP(S) pe seedha browser / Custom Tab — fetch + blob duplicate load bachta hai
-  if (shouldOpenPdfInExternalViewer() && /^https?:\/\//i.test(u)) {
+  if (shouldOpenPdfInExternalViewer() && isHttp) {
     await openHttpPdfInExternalBrowser(u);
     return;
   }

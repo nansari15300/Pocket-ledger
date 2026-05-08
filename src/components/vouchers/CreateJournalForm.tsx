@@ -55,6 +55,7 @@ import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentU
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 
 import { firestore, storage } from "@/lib/firebase";
 import {
@@ -405,6 +406,12 @@ export function CreateJournalForm({
     setActiveJournalLinkSide(null);
   }, []);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
 
   const isEditing = !!voucher;
   const isEditingAndConverting = voucher && voucher.type !== 'journal';
@@ -1277,7 +1284,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
     try {
       // Permission check: create or edit
-      const isEdit = !!voucher?.id || !!savedVoucherId;
+      const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherId);
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
       if (isEdit) {
@@ -1343,14 +1350,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
 
     try {
-      if (!savedVoucherId || data.voucherNumber !== voucher?.voucherNumber) {
+      const originalVoucherIdToDelete: string | null =
+        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const idArgForFirestore = resolveVoucherIdForSave({
+        savedVoucherId,
+        originalVoucherIdToDelete,
+      });
+
+      if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
         const q = query(
           collection(firestore, `companies/${companyId}/vouchers`),
           where("voucherNumber", "==", data.voucherNumber),
           where("type", "==", "journal")
         );
         const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;
@@ -1386,7 +1400,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
-              : (savedVoucherId ?? voucher?.id ?? null);
+              : idArgForFirestore ?? null;
           const { fileUrls: merged, preGeneratedVoucherId: preGen } =
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
@@ -1439,22 +1453,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         fileUrls,
       };
 
-      let originalVoucherIdToDelete: string | null = null;
-      if (isEditingAndConverting && voucher.id) {
-          originalVoucherIdToDelete = voucher.id;
-      }
-      const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
+      if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
+
+      const isEditForApprove = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
         submissionData,
-        originalVoucherIdToDelete ? null : savedVoucherId,
-        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+        idArgForFirestore,
+        approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
+          markCopiedDraftPersisted();
           if (isMounted.current) setSavedVoucherId(savedDoc.id);
           if (originalVoucherIdToDelete) {
               // Converted source voucher ko local/offline me bhi recycle-bin mark karo.
@@ -1470,12 +1483,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
         if (approveAfterSave && savedDoc?.id) {
-          if (!isEdit) {
+          if (!isEditForApprove) {
             await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
           }
-          sonnerToast.success(isEdit ? "Journal updated and approved." : "Journal saved and approved.", { id: toastId });
+          sonnerToast.success(isEditForApprove ? "Journal updated and approved." : "Journal saved and approved.", { id: toastId });
         } else {
-          sonnerToast.success(isEdit ? "Journal updated!" : "Journal voucher created!", { id: toastId });
+          sonnerToast.success(isEditForApprove ? "Journal updated!" : "Journal voucher created!", { id: toastId });
         }
         if (companyId && company) {
           const isEdit = !!voucher?.id;

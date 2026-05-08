@@ -65,6 +65,7 @@ import {
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
@@ -339,6 +340,14 @@ export function CreatePaymentInForm({
   }, [onEffectiveLinksChange]);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
 
+  /** Copy draft: pehli save insert — stale savedVoucherId se source doc overwrite na ho. */
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
+
     useEffect(() => {
         setLoading(vouchersLoading);
 
@@ -482,6 +491,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** Dusri tab/me master delete hone par stale ID toast + clear (ghost label avoid); naya party listeners ke aaane tak ref se clear mat karo. */
   useEffect(() => {
     if (loading || !companyId) return;
+    // APK/EXE static: company switch ke baad masters SQLite/Firestore se thodi der baad; `loading` false + lists [] short window me
+    // edit voucher ke party/bank IDs false "missing" na maano (toast + blank dropdowns).
+    if (
+      voucher?.id &&
+      processedParties.length === 0 &&
+      processedAccounts.length === 0 &&
+      processedStaff.length === 0 &&
+      processedTaxes.length === 0 &&
+      expenseAccounts.length === 0
+    ) {
+      return;
+    }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
     if (pid && !processedParties.some((p: any) => p.id === pid)) {
@@ -615,7 +636,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   // Outgoing: RCPT allocated to Sale/Payment Out/Journal. Incoming: Journal allocated to RCPT (from Journal form Link to Dr).
   const linkedToRows = useMemo(() => {
     const all = allVouchers ?? [];
-    const currentId = voucher?.id ?? savedVoucherId;
+    const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
     const outgoing = (allocations || []).map((a) => {
       if (a.voucherId === OPENING_BALANCE_VOUCHER_ID) {
         return { voucherId: a.voucherId, voucherNumber: "Opening Balance", amount: getAllocationTotal(a), date: null as Date | null, typeLabel: "Opening Balance" };
@@ -664,7 +685,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       else byId.set(row.voucherId, { ...row });
     }
     return Array.from(byId.values()).sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0));
-  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId]);
+  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId, isCopiedDraftFirstInsert]);
 
   /** For Link to Dr dialog: show existing links from both RCPT.allocations and incoming (journals that allocated to this RCPT). Use max, not sum, when same voucher appears in both (bilateral sync) to avoid double count. */
   const existingAllocationsForLinkDialog = useMemo(() => {
@@ -674,7 +695,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       const total = getAllocationTotal(a);
       if (total > 0) byId.set(a.voucherId, Math.max(byId.get(a.voucherId) ?? 0, total));
     }
-    const currentId = voucher?.id ?? savedVoucherId;
+    const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
     if (currentId && allVouchers?.length) {
       const touchesParty = (v: any) => !partyId || String((v as any)?.partyId ?? "") === String(partyId) ||
         (Array.isArray((v as any)?.entries) && (v as any).entries.some((e: any) => String(e?.accountId ?? "") === String(partyId)));
@@ -691,16 +712,20 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     }
     return Array.from(byId.entries(), ([voucherId, amount]) => ({ voucherId, amount }));
-  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId]);
+  }, [allocations, allVouchers, voucher?.id, savedVoucherId, partyId, isCopiedDraftFirstInsert]);
 
-  const paymentInAlloc = usePaymentAllocations(partyId, allVouchers ?? [], voucher?.id ?? savedVoucherId ?? undefined);
+  const paymentInAlloc = usePaymentAllocations(
+    partyId,
+    allVouchers ?? [],
+    isCopiedDraftFirstInsert ? undefined : (voucher?.id ?? savedVoucherId ?? undefined)
+  );
   /** Bill wise: same count as Link to Dr popup (sales + payment outs + OB with linkable amount). */
   const billWiseLinkableCount = useLinkPaymentToTxnsLinkableCount(
     "payment_in",
     partyId,
     allVouchers ?? [],
     {
-      paymentInId: voucher?.id ?? savedVoucherId ?? undefined,
+      paymentInId: isCopiedDraftFirstInsert ? undefined : (voucher?.id ?? savedVoucherId ?? undefined),
       existingAllocations: allocations,
       partyOpeningBalance: processedParties.find((p) => p.id === partyId)?.openingBalance ?? 0,
     }
@@ -709,10 +734,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   const totalLinked = useMemo(() => linkedToRows.reduce((s, r) => s + r.amount, 0), [linkedToRows]);
   /** Per sale voucher: amount already linked from other payment_ins (for "Linked on others" column). */
   const linkedOnOthersByVoucherId = useMemo(() => {
-    const currentId = voucher?.id ?? savedVoucherId;
+    const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
     const others = (allVouchers ?? []).filter((v: any) => (v.type === "payment_in" || v.type === "direct_income") && v.id !== currentId);
     return getAllocatedByVoucherId(others);
-  }, [allVouchers, voucher?.id, savedVoucherId]);
+  }, [allVouchers, voucher?.id, savedVoucherId, isCopiedDraftFirstInsert]);
   const amountReceived = Number(form.watch("amount")) || 0;
   const remainingToLink = Math.max(0, amountReceived - totalLinked);
 
@@ -1095,8 +1120,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
 
     try {
-      // Permission check: create or edit
-      const isEdit = !!voucher?.id || !!savedVoucherId;
+      // Permission check: create or edit (copy draft pehli save = create)
+      const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherId);
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
       if (isEdit) {
@@ -1146,21 +1171,28 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     setIsLoading(true);
 
     try {
-      if (!savedVoucherId || data.voucherNumber !== voucher?.voucherNumber) {
+      const originalVoucherIdToDelete: string | null =
+        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const idArgForFirestore = resolveVoucherIdForSave({
+        savedVoucherId,
+        originalVoucherIdToDelete,
+      });
+
+      if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
         const q = query(
           collection(firestore, `companies/${companyId}/vouchers`),
           where("voucherNumber", "==", data.voucherNumber),
           where("type", "==", voucherType)
         );
         const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherId) {
+        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;
         }
       }
   
-      let docId = savedVoucherId;
+      let docId: string | null = idArgForFirestore;
       const { 
         date, 
         files: formFiles, 
@@ -1204,6 +1236,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
   
       const sanitizedData = JSON.parse(JSON.stringify(submissionData));
+      if (!idArgForFirestore) delete (sanitizedData as { id?: string }).id;
       let preGeneratedVoucherId: string | undefined;
 
       const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
@@ -1219,7 +1252,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
-              : (savedVoucherId ?? voucher?.id ?? null);
+              : idArgForFirestore ?? null;
           const { fileUrls: merged, preGeneratedVoucherId: preGen } =
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
@@ -1248,23 +1281,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
   
-      let originalVoucherIdToDelete: string | null = null;
-      if (isEditingAndConverting && voucher.id) {
-        originalVoucherIdToDelete = voucher.id;
-      }
-      
       const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
         sanitizedData,
-        originalVoucherIdToDelete ? null : docId,
+        idArgForFirestore,
         approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
+          markCopiedDraftPersisted();
           docId = savedDoc.id;
           setSavedVoucherId(docId);
           if (originalVoucherIdToDelete) {

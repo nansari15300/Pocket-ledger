@@ -62,6 +62,7 @@ import {
 import { useAccountBalance } from "@/hooks/useAccountBalance";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { hasPaymentLinks } from "@/lib/payment-allocation-utils";
 import { LinkPaymentInToPaymentOutDialog } from "@/components/vouchers/LinkPaymentInToPaymentOutDialog";
@@ -181,6 +182,12 @@ export function CreateContraForm({
     setIsLinkPaymentOutDialogOpen(false);
   }, []);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
 
@@ -260,7 +267,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const map = new Map<string, number>();
     // Compute already-linked amounts using the same opposite account used by Link Pay In.
     if (!allVouchers?.length || !spendWiseInAccountId) return map;
-    const currentId = voucher?.id ?? savedVoucherId;
+    const currentId = isCopiedDraftFirstInsert ? null : (voucher?.id ?? savedVoucherId);
     allVouchers
       .filter(
         (v: any) => {
@@ -287,7 +294,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         });
       });
     return map;
-  }, [allVouchers, spendWiseInAccountId, voucher?.id, savedVoucherId]);
+  }, [allVouchers, spendWiseInAccountId, voucher?.id, savedVoucherId, isCopiedDraftFirstInsert]);
   const linkedPaymentInTotal = useMemo(() => {
     if (!allVouchers?.length || !linkedPaymentInIds?.length || !spendWiseInAccountId) return 0;
     return linkedPaymentInIds.reduce((sum, id) => {
@@ -793,8 +800,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     }
     
     try {
-      // Permission check: create or edit
-      const isEdit = !!voucher?.id || !!savedVoucherId;
+      // Permission check: create or edit (copy-draft pehli save = create)
+      const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherId);
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
       if (isEdit) {
@@ -934,6 +941,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           ? allocatePaymentInAmounts(amount, linkIds, allVouchers ?? [], (data as any).fromAccountId, linkedAmountByPaymentInId, spendWiseInAccountOpeningBalance)
           : {};
       
+      const originalVoucherIdToDelete: string | null =
+        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const idArgForFirestore = resolveVoucherIdForSave({
+        savedVoucherId,
+        originalVoucherIdToDelete,
+      });
+
       const newFilesToUpload = filesForSave.filter(f => typeof f !== 'string') as File[];
       let preGeneratedVoucherId: string | undefined;
       if (newFilesToUpload.length > 0) {
@@ -948,7 +962,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
-              : (savedVoucherId ?? voucher?.id ?? null);
+              : idArgForFirestore ?? null;
           const { fileUrls: merged, preGeneratedVoucherId: preGen } =
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
@@ -977,22 +991,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
       }
 
-      let originalVoucherIdToDelete: string | null = null;
-      if (isEditingAndConverting && voucher.id) {
-          originalVoucherIdToDelete = voucher.id;
-      }
-      const isEdit = !!voucher?.id && !originalVoucherIdToDelete;
+      if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
+
+      const isEditForApprove = !!voucher?.id && !originalVoucherIdToDelete;
       const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
         submissionData,
-        originalVoucherIdToDelete ? null : savedVoucherId,
-        approveAfterSave && isEdit ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
+        idArgForFirestore,
+        approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
+          markCopiedDraftPersisted();
           setSavedVoucherId(savedDoc.id);
           const savedLinkIds = Array.isArray(submissionData.linkedPaymentInIds) ? [...submissionData.linkedPaymentInIds] : [];
           initialLinkedPaymentInIdsRef.current = savedLinkIds;
@@ -1040,12 +1053,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
 
         if (approveAfterSave && savedDoc?.id) {
-          if (!isEdit) {
+          if (!isEditForApprove) {
             await approveVoucherWithHistory(companyId, savedDoc.id, user.uid, approverName);
           }
-          sonnerToast.success(isEdit ? "Contra updated and approved." : "Contra saved and approved.", { id: toastId });
+          sonnerToast.success(isEditForApprove ? "Contra updated and approved." : "Contra saved and approved.", { id: toastId });
         } else {
-          sonnerToast.success(isEdit ? "Contra updated!" : "Contra entry created!", { id: toastId });
+          sonnerToast.success(isEditForApprove ? "Contra updated!" : "Contra entry created!", { id: toastId });
         }
         if (companyId && company) {
           const isEdit = !!voucher?.id;

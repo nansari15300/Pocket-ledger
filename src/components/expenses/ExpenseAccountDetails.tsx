@@ -74,6 +74,7 @@ import { EditExpenseAccountDialog } from "./EditExpenseAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import {
   Dialog,
   DialogDescription,
@@ -200,6 +201,11 @@ export function ExpenseAccountDetails({
     if (!allAccounts) return initialAccount;
     return allAccounts.find(a => a.id === initialAccount.id) || initialAccount;
   }, [allAccounts, initialAccount]);
+
+  const accountHeaderAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(account.fileUrl),
+    [account.fileUrl, account.id]
+  );
 
   useEffect(() => {
     setCurrentPage(1);
@@ -634,10 +640,10 @@ export function ExpenseAccountDetails({
                 </Button>
               )}
               {/* `fileUrl` pehle kabhi render hi nahi hota tha; local IndexedDB refs ke liye ResolvedEntityAvatar */}
-              <EntityFileAttachmentHover fileUrl={account.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+              <EntityFileAttachmentHover fileUrl={accountHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
                 <ResolvedEntityAvatar
                   className="h-12 w-12 text-lg flex-shrink-0"
-                  src={account.fileUrl}
+                  src={accountHeaderAttachmentUrl ?? undefined}
                   alt={account.name}
                   fallbackSlot={
                     (account as any).isSystemReserved ? (

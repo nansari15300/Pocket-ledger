@@ -129,6 +129,7 @@ import { useUrlModalBack } from "@/contexts/DialogBackHandlerContext";
 import { getLocalAuthUser } from "@/lib/localApiClient";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 const getInitials = (name: string) => {
   if (!name) return "NA";
@@ -232,6 +233,12 @@ export function PartyDetails({
     if (!processedParties || !initialParty) return initialParty;
     return processedParties.find(p => p.id === initialParty.id) || initialParty;
   }, [processedParties, initialParty]);
+
+  /** Header avatar hover — `fileUrl: "null"` / khali par PDF spinner na kholo */
+  const partyHeaderAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(party.fileUrl),
+    [party.fileUrl, party.id]
+  );
 
   /** Mobile AddVoucher — inline `{ partyId }` har render = naya object → dialog `initialVoucherData` + sale form date reset; stable deps */
   const addVoucherDefaultPartyOnly = useMemo(() => ({ partyId: party.id }), [party.id]);
@@ -604,8 +611,8 @@ export function PartyDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames, mobileSearchNames, party.id]);
 
-  const totalPages = rowsPerPage > 0 ? Math.ceil(searchFilteredTransactions.length / rowsPerPage) : 1;
-  // Desktop pagination: default latest-side page (page 1 = newest chunk), so first open me recent side dikhai de.
+  // Tail-window paging: page 1 = list ke ant (latest txn) — MobileTransactionsPager + useStatementReportMobilePaging jaisa; PC/mobile ek hi slice.
+  const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(searchFilteredTransactions.length / rowsPerPage)) : 1;
   const desktopPaginationMeta = useMemo(() => {
     const list = searchFilteredTransactions;
     const total = list.length;
@@ -616,6 +623,7 @@ export function PartyDetails({
         pageTransactions: list,
         beforeCount: 0,
         afterCount: 0,
+        sliceStart: 0,
         openingForPage: ledgerOpeningForRunning,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
@@ -647,6 +655,7 @@ export function PartyDetails({
       pageTransactions,
       beforeCount: start,
       afterCount: Math.max(0, total - end),
+      sliceStart: start,
       openingForPage,
       periodDrForPage,
       periodCrForPage,
@@ -655,17 +664,7 @@ export function PartyDetails({
   }, [searchFilteredTransactions, rowsPerPage, currentPage, ledgerOpeningForRunning]);
   const paginatedTransactions = desktopPaginationMeta.pageTransactions;
 
-  const mobileTransactions = useMemo(() => {
-    if (rowsPerPage <= 0) return searchFilteredTransactions;
-    const total = searchFilteredTransactions.length;
-    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
-    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
-    const end = total - (safePage - 1) * rowsPerPage;
-    const start = Math.max(0, end - rowsPerPage);
-    return searchFilteredTransactions.slice(start, Math.max(start, end));
-  }, [searchFilteredTransactions, currentPage, rowsPerPage]);
-
-  /** Mobile pager: slice [start,end) — left = purane (low index), right = naye (high index) count. */
+  /** Tail window: `before` = purane txn (kam index) abhi slice me nahi; `after` = naye (zyada index) hidden — MobileTransactionsPager ke count */
   const mobilePagerEdgeCounts = useMemo(() => {
     const total = searchFilteredTransactions.length;
     if (rowsPerPage <= 0) return { before: 0, after: 0 };
@@ -673,8 +672,27 @@ export function PartyDetails({
     const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
     const end = total - (safePage - 1) * rowsPerPage;
     const start = Math.max(0, end - rowsPerPage);
-    return { before: start, after: total - end };
+    return { before: start, after: Math.max(0, total - end) };
   }, [searchFilteredTransactions.length, currentPage, rowsPerPage]);
+
+  /** Book OB row: sirf jab slice me list[0] shamil ho (chronological shuru); Dated OB = slice se turant pehle txn ki date. */
+  const ledgerOpeningPeriodStartDate = useMemo(() => {
+    const list = searchFilteredTransactions as any[];
+    const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+    const start = desktopPaginationMeta.sliceStart;
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    if (start === 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const t = list[start - 1] as any;
+    if (!t) return undefined;
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [searchFilteredTransactions, rowsPerPage, desktopPaginationMeta.sliceStart, dateRange?.from, dateRange?.to]);
 
   // Party dropdown: hide Owners Capital and Opening Balance (keep current party so selection shows)
   const partyDropdownOptions = useMemo(() => {
@@ -913,7 +931,7 @@ export function PartyDetails({
             {/* Unapproved (`isApproved` !== true): pink row tint — TransactionsTable default highlightPendingApproval */}
             {/* Book/Dated opening pills table row me; subtitle "Books opening" hata diya */}
             <TransactionsTable
-              transactions={mobileTransactions}
+              transactions={paginatedTransactions}
               context="party"
               contextId={party.id}
               openingBalance={desktopPaginationMeta.openingForPage}
@@ -924,8 +942,8 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={currentPage === 1}
-              openingBalancePeriodStartDate={dateRange?.from}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+              openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={undefined}
               showNarration={showNarration}
@@ -1191,10 +1209,10 @@ export function PartyDetails({
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <EntityFileAttachmentHover fileUrl={party.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+              <EntityFileAttachmentHover fileUrl={partyHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
                 {(party as any).isSystemAccount ? (
                   <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                    <AvatarImage src={party.fileUrl} alt={party.name} />
+                    <AvatarImage src={partyHeaderAttachmentUrl ?? undefined} alt={party.name} />
                     <AvatarFallback className="bg-muted text-muted-foreground">
                       <FileDigit className="h-6 w-6" />
                     </AvatarFallback>
@@ -1202,7 +1220,7 @@ export function PartyDetails({
                 ) : (
                   <ResolvedEntityAvatar
                     className="h-12 w-12 text-lg flex-shrink-0"
-                    src={party.fileUrl}
+                    src={partyHeaderAttachmentUrl ?? undefined}
                     alt={party.name}
                     fallbackText={getInitials(party.name)}
                   />
@@ -1357,8 +1375,8 @@ export function PartyDetails({
               openingBalanceAttachmentUrls={party.documentFileUrls}
               openingBalanceDate={(party as any).openingBalanceDate}
               ledgerDateFilterActive={hasLedgerDateFilter}
-              ledgerShowBookOpeningRow={currentPage === 1}
-              openingBalancePeriodStartDate={dateRange?.from}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+              openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               dateRange={dateRange}
               openingBalanceActions={
                 party.id !== "all" && !(party as any).isSystemAccount ? (
@@ -1461,12 +1479,13 @@ export function PartyDetails({
                 }}
                 viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
               />
-              {/* Pager shape requested: (xx) << < [rows] > >> (xx) */}
-              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
+              {/* Tail paging: page 1 = latest; chevrons (<< oldest page #, < older chunk, > newer, >> newest page 1) */}
+              <p className="text-sm font-medium flex-shrink-0">
+                Page {currentPage} of {totalPages}
+              </p>
               <Button
                 variant="outline"
                 className="h-8 w-8 p-0"
-                // Left side = older pages; jump to oldest end.
                 onClick={() => setCurrentPage(totalPages)}
                 disabled={currentPage === totalPages}
               >
@@ -1475,7 +1494,6 @@ export function PartyDetails({
               <Button
                 variant="outline"
                 className="h-8 w-8 p-0"
-                // Left single step = move toward older records.
                 onClick={() => setCurrentPage(currentPage + 1)}
                 disabled={currentPage === totalPages}
               >
@@ -1501,7 +1519,6 @@ export function PartyDetails({
               <Button
                 variant="outline"
                 className="h-8 w-8 p-0"
-                // Right single step = move back toward newest records.
                 onClick={() => setCurrentPage(currentPage - 1)}
                 disabled={currentPage === 1}
               >
@@ -1510,14 +1527,11 @@ export function PartyDetails({
               <Button
                 variant="outline"
                 className="h-8 w-8 p-0"
-                // Right side = newest end (page 1 in latest-first pagination).
                 onClick={() => setCurrentPage(1)}
                 disabled={currentPage === 1}
               >
                 <ChevronsRight className="h-4 w-4" />
               </Button>
-              <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.afterCount})</p>
-              {/* Footer count right-side short controls ke paas hi rahe. */}
               <p className="text-sm font-medium flex-shrink-0 tabular-nums">Total Trxn {statusFilteredTransactions.length}</p>
             </div>
           </div>

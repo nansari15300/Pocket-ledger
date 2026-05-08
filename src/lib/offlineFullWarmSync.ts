@@ -20,13 +20,16 @@ import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } fr
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { prefetchHttpsAttachmentUrls } from "@/lib/offlineAttachmentUrlCache";
+import { auth } from "@/lib/firebase";
+import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 /** `_firestore_company_root` SQLite row — authoritative company snapshot for offline dashboards */
 export const COMPANY_ROOT_MIRROR_COLLECTION = "_firestore_company_root";
 export const COMPANY_ROOT_MIRROR_DOC_ID = "_snapshot";
 
-/** `useVouchers`/billing jaisi shape — Pull + mirror Firestore realtime ke liye */
-function isCloudBackedCompanyShape(c: Company | null): boolean {
+/** `useVouchers`/billing jaisi shape — Pull + mirror Firestore realtime ke liye (`OfflineWarmSyncManager` multi-company warm bhi yahi filter). */
+export function isCloudBackedCompanyShape(c: Company | null): boolean {
   if (!c) return false;
   const so = String((c as { storageOption?: string }).storageOption || "").toLowerCase();
   if (so === "local") return false;
@@ -146,18 +149,36 @@ export type OfflineFullWarmSyncResult = {
   prefetchFailures: number;
 };
 
+/** First-login overlay: SQLite subcollection pull + attachment URL queue progress */
+export type OfflineFullWarmProgressEvent =
+  | { kind: "data_subcollection"; localCompanyId: string; path: string; completed: number; total: number }
+  | { kind: "attachment_item"; localCompanyId: string; done: number; total: number };
+
 export async function runOfflineFullWarmSync(options: {
   company: Company | null;
   localCompanyId: string;
   /** AbortController — tab switch ya app background par cancel */
   signal?: AbortSignal;
+  /** Startup responsiveness mode: keep attachment prefetch off unless explicitly enabled. */
+  includeAttachmentPrefetch?: boolean;
+  /** Pehli-login loading rows — har subcollection / har attachment attempt */
+  onProgress?: (e: OfflineFullWarmProgressEvent) => void;
 }): Promise<OfflineFullWarmSyncResult | null> {
-  const { company, localCompanyId, signal } = options;
+  const {
+    company,
+    localCompanyId,
+    signal,
+    onProgress,
+    includeAttachmentPrefetch = false,
+  } = options;
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;
   if (!localCompanyId?.trim()) return null;
   if (!isCloudBackedCompanyShape(company)) return null;
 
   const fsCompanyId = String((company as { authoritativeCompanyId?: string }).authoritativeCompanyId || localCompanyId).trim();
+  const isEmbeddedClient =
+    (typeof window !== "undefined" && isCapacitorNativeApp()) ||
+    (typeof window !== "undefined" && window.location.protocol === "file:");
 
   const result: OfflineFullWarmSyncResult = {
     plansOk: false,
@@ -179,36 +200,85 @@ export async function runOfflineFullWarmSync(options: {
 
   if (signal?.aborted) return result;
 
+  const localTrim = localCompanyId.trim();
   result.subcollections = await pullAllCompanySubcollectionsFromFirestoreToLocalDb(
     fsCompanyId,
-    localCompanyId.trim(),
-    company
+    localTrim,
+    company,
+    {
+      onSubcollectionDone: (info) => {
+        onProgress?.({
+          kind: "data_subcollection",
+          localCompanyId: localTrim,
+          path: info.path,
+          completed: info.completed,
+          total: info.total,
+        });
+      },
+    }
   );
 
   if (signal?.aborted) return result;
 
-  const urls = await scrapeLocalMirrorAttachmentUrls(localCompanyId.trim());
-  result.attachmentUrlsSeen = urls.size;
+  if (!includeAttachmentPrefetch) {
+    // Explicit startup policy: skip global attachment crawl/download and mark stage complete.
+    result.attachmentUrlsSeen = 0;
+    result.prefetchCachedNew = 0;
+    result.prefetchSkippedCache = 0;
+    result.prefetchFailures = 0;
+    onProgress?.({ kind: "attachment_item", localCompanyId: localTrim, done: 1, total: 1 });
+  } else {
+    const urls = await scrapeLocalMirrorAttachmentUrls(localTrim);
+    result.attachmentUrlsSeen = urls.size;
 
-  const prefetch = await prefetchHttpsAttachmentUrls(urls, {
-    concurrency: 6,
-    maxTotalBytesApprox: 350 * 1024 * 1024,
-    maxUrls: 2600,
-    signal,
-  });
-  result.prefetchCachedNew = prefetch.cachedNew;
-  result.prefetchSkippedCache = prefetch.skippedAlreadyCached;
-  result.prefetchFailures = prefetch.failed + prefetch.skippedBudget;
+    const prefetch = await prefetchHttpsAttachmentUrls(urls, {
+      concurrency: 6,
+      // Auto-full cache mode: embedded app me strict warm caps se files offline miss ho rahi thi; upper budget badhao.
+      maxTotalBytesApprox: isEmbeddedClient ? 2_500 * 1024 * 1024 : 350 * 1024 * 1024,
+      maxUrls: isEmbeddedClient ? 20_000 : 2600,
+      signal,
+      onItemDone: (done, total) => {
+        onProgress?.({ kind: "attachment_item", localCompanyId: localTrim, done, total });
+      },
+      // Attachment sync diagnostics: specific URL failures / retries ko trace karne ke liye concise item logs.
+      onItemLog: (ev) => {
+        if (ev.ok) {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[offlineFullWarmSync:item]", { ok: true, attempt: ev.attempt, status: ev.status, note: ev.note, url: ev.url });
+          }
+        } else {
+          console.warn("[offlineFullWarmSync:item]", {
+            ok: false,
+            attempt: ev.attempt,
+            status: ev.status,
+            retryable: ev.retryable,
+            note: ev.note,
+            url: ev.url,
+          });
+        }
+      },
+    });
+    result.prefetchCachedNew = prefetch.cachedNew;
+    result.prefetchSkippedCache = prefetch.skippedAlreadyCached;
+    result.prefetchFailures = prefetch.failed + prefetch.skippedBudget;
+  }
 
   try {
     if (process.env.NODE_ENV === "development") {
       console.debug("[offlineFullWarmSync] done", {
         fsCompanyId,
         vouchersApprox: result.subcollections.find((s) => s.path === "vouchers")?.count,
-        urls: urls.size,
+        urls: result.attachmentUrlsSeen,
         cachedNew: result.prefetchCachedNew,
       });
     }
+  } catch {
+    /* ignore */
+  }
+
+  // APK/EXE: agli cold start par idle `getIdToken`/plan-sync attachment race kam kare — sirf tab jab Firebase session maujood ho
+  try {
+    markEmbeddedFullWarmSucceeded(auth.currentUser?.uid ?? null);
   } catch {
     /* ignore */
   }

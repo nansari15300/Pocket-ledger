@@ -39,6 +39,10 @@ import {
     voucherCountsAsDashboardPaymentOutExcludingPaySalary,
 } from "@/lib/dashboardPaySalaryStat";
 import { dashboardStatCardReportHref } from "@/lib/dashboardStatCardReportHref";
+import {
+    computeReceivablesPayablesFinancialSummary,
+} from "@/lib/receivablesPayablesFinancialSummary";
+import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
 import Link from "next/link";
 import {
     ShoppingBag,
@@ -462,6 +466,20 @@ export function FinancialSummaryCards({
 
     // Date ranges for filtering
     const [receivablesDateRange, setReceivablesDateRange] = useState<DateRange | undefined>(undefined);
+
+    /** Cloud: R/P totals server aggregation — vouchers par local reduce tabhi jab API use nahi ho sakti. */
+    const {
+        summary: serverRpSummary,
+        loading: serverRpLoading,
+        useClientFallback: serverRpClientFb,
+        preferServer: preferServerRp,
+    } = useServerReceivablesPayablesSummary({
+        companyId: company?.id,
+        storageOption: company?.storageOption,
+        receivablesDateRange,
+        enabled: true,
+    });
+
     const [cashFlowDateRange, setCashFlowDateRange] = useState<DateRange | undefined>(undefined);
     const [taxDateRange, setTaxDateRange] = useState<DateRange | undefined>(undefined);
     const [stockDateRange, setStockDateRange] = useState<DateRange | undefined>(undefined);
@@ -619,90 +637,67 @@ export function FinancialSummaryCards({
     }, [bankCashSummaryOpen, isMobile]);
 
     // ---------- FINANCIAL SUMMARY CALCULATION (Grouped) ----------
-    const financialSummary = useMemo(() => {
-        if (loading) return { 
-            totalReceivable: 0, 
-            totalPayable: 0, 
-            receivables: { parties: [], staff: [], taxes: [] }, 
-            payables: { parties: [], staff: [], taxes: [] },
-            recCount: 0,
-            payCount: 0
-        };
-        
-        let filteredVouchers = vouchers;
-        if (receivablesDateRange?.from) {
-            const fromDate = startOfDay(receivablesDateRange.from);
-            const toDate = receivablesDateRange.to ? endOfDay(receivablesDateRange.to) : endOfDay(fromDate);
-            filteredVouchers = vouchers.filter(v => {
-                const txDate = safeToDate(v.date);
-                return txDate && txDate >= fromDate && txDate <= toDate;
+    const needClientRp =
+        !preferServerRp ||
+        serverRpClientFb ||
+        (!serverRpSummary && !serverRpLoading);
+
+    const clientFinancialSummary = useMemo(() => {
+        if (!needClientRp) {
+            return computeReceivablesPayablesFinancialSummary({
+                vouchers,
+                processedParties,
+                processedStaff,
+                processedTaxes,
+                receivablesDateRange,
+                loading: true,
             });
         }
+        return computeReceivablesPayablesFinancialSummary({
+            vouchers,
+            processedParties,
+            processedStaff,
+            processedTaxes,
+            receivablesDateRange,
+            loading: !!loading,
+        });
+    }, [
+        needClientRp,
+        loading,
+        vouchers,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        receivablesDateRange,
+    ]);
 
-        const receivables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
-        const payables = { parties: [] as any[], staff: [] as any[], taxes: [] as any[] };
-
-        const processEntity = (entity: any, type: 'party' | 'staff' | 'tax') => {
-            let balance = Number(entity.openingBalance) || 0;
-
-            filteredVouchers.forEach(v => {
-                const amount = v.total || v.amount || 0;
-
-                if (v.type === 'journal') {
-                    const entry = v.entries?.find((e: any) => e.accountId === entity.id);
-                    if (entry) {
-                        balance += (Number(entry.debit) || 0) - (Number(entry.credit) || 0);
-                    }
-                } else {
-                     if (v.partyId === entity.id && type === 'party') {
-                        if (["sale", "payment_out", "direct_income"].includes(v.type)) balance += amount;
-                        else if (["purchase", "payment_in", "direct_expense"].includes(v.type)) balance -= amount;
-                    } else if (v.staffId === entity.id && type === 'staff') {
-                        if (v.type === 'payment_out') balance += amount;
-                        else if (v.type === 'payment_in') balance -= amount;
-                    } else if (v.taxAccountId === entity.id && type === 'tax') {
-                        if (v.type === 'payment_out') balance += amount;
-                        else if (v.type === 'payment_in') balance -= amount;
-                    } else if (v.lineItems?.some((li: any) => li.taxAccountId === entity.id) && type === 'tax') {
-                        const taxAmount = v.lineItems.reduce(
-                            (sum: number, li: any) => li.taxAccountId === entity.id ? sum + Number(li.taxAmount || 0) : sum,
-                            0
-                        );
-                        if (v.type === 'purchase') balance += taxAmount;
-                        else if (v.type === 'sale') balance -= taxAmount;
-                    }
-                }
+    const financialSummary = useMemo(() => {
+        if (preferServerRp && !serverRpClientFb && serverRpSummary) {
+            return serverRpSummary;
+        }
+        if (preferServerRp && !serverRpClientFb && serverRpLoading) {
+            return computeReceivablesPayablesFinancialSummary({
+                vouchers,
+                processedParties,
+                processedStaff,
+                processedTaxes,
+                receivablesDateRange,
+                loading: true,
             });
-
-            const entityData = { party: entity.name, balance: balance, fileUrl: (entity as any).fileUrl };
-            if (balance > 0.01) {
-                if (type === 'party') receivables.parties.push(entityData);
-                if (type === 'staff') receivables.staff.push(entityData);
-                if (type === 'tax') receivables.taxes.push(entityData);
-            } else if (balance < -0.01) {
-                if (type === 'party') payables.parties.push(entityData);
-                if (type === 'staff') payables.staff.push(entityData);
-                if (type === 'tax') payables.taxes.push(entityData);
-            }
-        };
-        
-        processedParties.forEach(p => processEntity(p, 'party'));
-        processedStaff.forEach(s => processEntity(s, 'staff'));
-        processedTaxes.forEach(t => processEntity(t, 'tax'));
-        
-        const sortFn = (a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance);
-        receivables.parties.sort(sortFn); receivables.staff.sort(sortFn); receivables.taxes.sort(sortFn);
-        payables.parties.sort(sortFn); payables.staff.sort(sortFn); payables.taxes.sort(sortFn);
-
-        const calcSum = (arr: any[]) => arr.reduce((sum, item) => sum + item.balance, 0);
-        const totalReceivable = calcSum(receivables.parties) + calcSum(receivables.staff) + calcSum(receivables.taxes);
-        const totalPayable = calcSum(payables.parties) + calcSum(payables.staff) + calcSum(payables.taxes);
-
-        const recCount = receivables.parties.length + receivables.staff.length + receivables.taxes.length;
-        const payCount = payables.parties.length + payables.staff.length + payables.taxes.length;
-
-        return { totalReceivable, totalPayable, receivables, payables, recCount, payCount };
-    }, [processedParties, processedStaff, processedTaxes, loading, vouchers, receivablesDateRange]);
+        }
+        return clientFinancialSummary;
+    }, [
+        preferServerRp,
+        serverRpClientFb,
+        serverRpSummary,
+        serverRpLoading,
+        clientFinancialSummary,
+        vouchers,
+        processedParties,
+        processedStaff,
+        processedTaxes,
+        receivablesDateRange,
+    ]);
 
     /** Dialog table footer: sirf wahi rows jinki list filter ke saath dikh rahi hai (card / print totals same). */
     const receivablesPayablesDialogListTotals = useMemo(() => {
@@ -2530,93 +2525,8 @@ export function FinancialSummaryCards({
         formatDateBS,
     ]);
 
-    return (
-        <div className={`${compact ? 'financial-summary-grid' : `grid ${gridCols}`} ${cardSpacing} ${compact ? 'w-full' : ''}`}>
-            <Dialog
-                open={!!dashboardChartFullView}
-                onOpenChange={(open) => {
-                    if (!open) {
-                        setDashboardChartFullView(null);
-                        setChartFullRangePreset("all");
-                    }
-                }}
-            >
-                <DialogContent
-                    className={cn(
-                        /* dashboard-financial-popup: modal ke andar horizontal dividers globals.css se patle */
-                        "dashboard-financial-popup",
-                        "flex w-full max-w-[100vw] flex-col gap-0 overflow-hidden rounded-lg border p-0",
-                        "h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] sm:max-w-[90vw]",
-                        "pt-[env(safe-area-inset-top)]"
-                    )}
-                >
-                    <DialogHeader className="shrink-0 space-y-2 border-b px-3 py-3 text-left sm:space-y-1 sm:px-4">
-                        <DialogTitle className="pr-10 text-sm font-semibold leading-snug sm:text-base">
-                            {dashboardChartFullView?.subtitle ?? "Chart"}
-                        </DialogTitle>
-                        {/* Month=din-wise columns; 3/6/Year=month columns; All=sare months; All par sirf forward chipka hua nahi. */}
-                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 pr-10 sm:pr-8">
-                            {CHART_FULL_RANGE_OPTIONS.map((opt) => (
-                                <Button
-                                    key={opt.id}
-                                    type="button"
-                                    size="sm"
-                                    variant={chartFullRangePreset === opt.id ? "default" : "outline"}
-                                    className="h-8 min-w-0 shrink px-2 text-[10px] sm:text-xs"
-                                    onClick={() => setChartFullRangePreset(opt.id)}
-                                >
-                                    {opt.label}
-                                </Button>
-                            ))}
-                            {/* All preset: forward hidden only; rewind dikhao (All par shift band — disabled). */}
-                            <Button
-                                type="button"
-                                variant="outline"
-                                size="icon"
-                                className="h-8 w-8 shrink-0"
-                                disabled={!canShiftChartBack}
-                                onClick={() => shiftChartAnchor(-1)}
-                                aria-label="Previous period"
-                            >
-                                <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            {chartFullRangePreset !== "all" && (
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="icon"
-                                    className="h-8 w-8 shrink-0"
-                                    disabled={!canShiftChartForward}
-                                    onClick={() => shiftChartAnchor(1)}
-                                    aria-label="Next period"
-                                >
-                                    <ChevronRight className="h-4 w-4" />
-                                </Button>
-                            )}
-                        </div>
-                    </DialogHeader>
-                    <div className="min-h-0 flex-1 overflow-hidden p-2 sm:p-4">
-                        {dashboardChartFullView && fullViewFilteredChart.length > 0 ? (
-                            <div
-                                className={cn(
-                                    "h-[min(calc(100dvh-11rem),85vh)] w-full min-h-[200px] sm:h-[min(calc(90vh-10rem),80vh)] sm:min-h-[280px]"
-                                )}
-                            >
-                                {renderBarChartInner(
-                                    fullViewFilteredChart,
-                                    dashboardChartFullView.barColor,
-                                    dashboardChartFullView.tooltipIsCount,
-                                    "full"
-                                )}
-                            </div>
-                        ) : (
-                            <p className="text-muted-foreground flex h-48 items-center justify-center text-sm">
-                                No data for this chart.
-                            </p>
-                        )}
-                    </div>
-                </DialogContent>
-            </Dialog>
+    /** Stock card: compact report = pehle; full dashboard = Sales stat card ke baad DOM order (2-col me right). */
+    const renderStockSummaryDashboardCard = () => (
             <Card className={`${compact ? 'financial-summary-stock-card' : 'col-span-1 lg:col-span-2'} transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(0)}`}>
                 <CardHeader className={`flex flex-row items-center justify-between p-4 space-y-0 ${headerClass} overflow-hidden`}>
                     <CardTitle className={`text-base whitespace-nowrap ${titleClass} min-w-0`}>Stock Summary</CardTitle>
@@ -2771,6 +2681,96 @@ export function FinancialSummaryCards({
                     )}
                 </CardContent>
             </Card>
+    );
+
+    return (
+        <div className={`${compact ? 'financial-summary-grid' : `grid ${gridCols}`} ${cardSpacing} ${compact ? 'w-full' : ''}`}>
+            <Dialog
+                open={!!dashboardChartFullView}
+                onOpenChange={(open) => {
+                    if (!open) {
+                        setDashboardChartFullView(null);
+                        setChartFullRangePreset("all");
+                    }
+                }}
+            >
+                <DialogContent
+                    className={cn(
+                        /* dashboard-financial-popup: modal ke andar horizontal dividers globals.css se patle */
+                        "dashboard-financial-popup",
+                        "flex w-full max-w-[100vw] flex-col gap-0 overflow-hidden rounded-lg border p-0",
+                        "h-[100dvh] max-h-[100dvh] sm:h-[90vh] sm:max-h-[90vh] sm:max-w-[90vw]",
+                        "pt-[env(safe-area-inset-top)]"
+                    )}
+                >
+                    <DialogHeader className="shrink-0 space-y-2 border-b px-3 py-3 text-left sm:space-y-1 sm:px-4">
+                        <DialogTitle className="pr-10 text-sm font-semibold leading-snug sm:text-base">
+                            {dashboardChartFullView?.subtitle ?? "Chart"}
+                        </DialogTitle>
+                        {/* Month=din-wise columns; 3/6/Year=month columns; All=sare months; All par sirf forward chipka hua nahi. */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 pr-10 sm:pr-8">
+                            {CHART_FULL_RANGE_OPTIONS.map((opt) => (
+                                <Button
+                                    key={opt.id}
+                                    type="button"
+                                    size="sm"
+                                    variant={chartFullRangePreset === opt.id ? "default" : "outline"}
+                                    className="h-8 min-w-0 shrink px-2 text-[10px] sm:text-xs"
+                                    onClick={() => setChartFullRangePreset(opt.id)}
+                                >
+                                    {opt.label}
+                                </Button>
+                            ))}
+                            {/* All preset: forward hidden only; rewind dikhao (All par shift band — disabled). */}
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 shrink-0"
+                                disabled={!canShiftChartBack}
+                                onClick={() => shiftChartAnchor(-1)}
+                                aria-label="Previous period"
+                            >
+                                <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            {chartFullRangePreset !== "all" && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-8 w-8 shrink-0"
+                                    disabled={!canShiftChartForward}
+                                    onClick={() => shiftChartAnchor(1)}
+                                    aria-label="Next period"
+                                >
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                            )}
+                        </div>
+                    </DialogHeader>
+                    <div className="min-h-0 flex-1 overflow-hidden p-2 sm:p-4">
+                        {dashboardChartFullView && fullViewFilteredChart.length > 0 ? (
+                            <div
+                                className={cn(
+                                    "h-[min(calc(100dvh-11rem),85vh)] w-full min-h-[200px] sm:h-[min(calc(90vh-10rem),80vh)] sm:min-h-[280px]"
+                                )}
+                            >
+                                {renderBarChartInner(
+                                    fullViewFilteredChart,
+                                    dashboardChartFullView.barColor,
+                                    dashboardChartFullView.tooltipIsCount,
+                                    "full"
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-muted-foreground flex h-48 items-center justify-center text-sm">
+                                No data for this chart.
+                            </p>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
+            {compact && renderStockSummaryDashboardCard()}
 
             {can("view_receivable_payable_summary") && (
                 <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>
@@ -4075,55 +4075,61 @@ export function FinancialSummaryCards({
                 const canClickTxns =
                     !!deepHref && (deepHref.startsWith("/reports") ? can("export_data") : true);
                 return (
-                <Card key={stat.type} className={`hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 5)}`}>
-                    <CardHeader className="p-3 flex-row items-center justify-between">
-                        <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
-                        <stat.icon className="h-5 w-5 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent className="p-3 pt-0">
-                        {/* Journal / Add Salary / Contra: entries se debit total; baaki cards amount field */}
-                        {stat.type === 'journal' || stat.type === 'add_salary' || stat.type === 'contra' ? (
-                            <div className='text-xl font-bold text-blue-600'>{formatCurrency(stat.total, { noSuffix: true, duration: 2 })}</div>
-                        ) : (
-                            <div className={cn('text-xl font-bold', stat.isCredit ? 'text-green-600' : 'text-red-600')}>
-                                {formatCurrency(stat.total, { noSuffix: true, duration: 2 })}
-                            </div>
-                        )}
-                        {/* Click → Reports me usi type ka "All Vouchers" view (`allVouchers=1`); Payment Out + voucherScope dashboard ke hisaab se */}
-                        {canClickTxns ? (
-                            <Link
-                                href={deepHref}
-                                // Voucher count link is intentionally blue to make dashboard/report drill-down obvious.
-                                className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5"
-                            >
-                                {stat.count} transaction(s)
-                            </Link>
-                        ) : (
-                            <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
-                        )}
-                        {showVoucherDateCharts && (
-                            <div className="mt-2 h-[104px] w-full min-w-0">
-                                {voucherStatDateChartData[stat.type]?.length ? (
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={voucherStatDateChartData[stat.type]} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                                            <CartesianGrid strokeDasharray="3 3" className="opacity-40" />
-                                            <XAxis dataKey="name" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
-                                            <YAxis tick={{ fontSize: 9 }} width={32} />
-                                            <Tooltip
-                                                formatter={(value: number) => [formatCurrency(value, { noSuffix: true, duration: 2 }), "Amount"]}
-                                                labelFormatter={(l) => `Date: ${l}`}
-                                            />
-                                            <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                ) : (
-                                    <p className="text-[10px] text-muted-foreground pt-2">No dated rows for chart</p>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                <React.Fragment key={stat.type}>
+                    <Card className={`hover:bg-muted/50 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${ribbonTone(idx + 5)}`}>
+                        <CardHeader className="p-3 flex-row items-center justify-between">
+                            <CardTitle className="text-sm whitespace-nowrap">{stat.title}</CardTitle>
+                            <stat.icon className="h-5 w-5 text-muted-foreground" />
+                        </CardHeader>
+                        <CardContent className="p-3 pt-0">
+                            {/* Journal / Add Salary / Contra: entries se debit total; baaki cards amount field */}
+                            {stat.type === 'journal' || stat.type === 'add_salary' || stat.type === 'contra' ? (
+                                <div className='text-xl font-bold text-blue-600'>{formatCurrency(stat.total, { noSuffix: true, duration: 2 })}</div>
+                            ) : (
+                                <div className={cn('text-xl font-bold', stat.isCredit ? 'text-green-600' : 'text-red-600')}>
+                                    {formatCurrency(stat.total, { noSuffix: true, duration: 2 })}
+                                </div>
+                            )}
+                            {/* Click → Reports me usi type ka "All Vouchers" view (`allVouchers=1`); Payment Out + voucherScope dashboard ke hisaab se */}
+                            {canClickTxns ? (
+                                <Link
+                                    href={deepHref}
+                                    // Voucher count link is intentionally blue to make dashboard/report drill-down obvious.
+                                    className="text-xs text-blue-600 underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded inline-block mt-0.5"
+                                >
+                                    {stat.count} transaction(s)
+                                </Link>
+                            ) : (
+                                <p className="text-xs text-muted-foreground">{stat.count} transaction(s)</p>
+                            )}
+                            {showVoucherDateCharts && (
+                                <div className="mt-2 h-[104px] w-full min-w-0">
+                                    {voucherStatDateChartData[stat.type]?.length ? (
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={voucherStatDateChartData[stat.type]} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                                                <CartesianGrid strokeDasharray="3 3" className="opacity-40" />
+                                                <XAxis dataKey="name" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                                                <YAxis tick={{ fontSize: 9 }} width={32} />
+                                                <Tooltip
+                                                    formatter={(value: number) => [formatCurrency(value, { noSuffix: true, duration: 2 }), "Amount"]}
+                                                    labelFormatter={(l) => `Date: ${l}`}
+                                                />
+                                                <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    ) : (
+                                        <p className="text-[10px] text-muted-foreground pt-2">No dated rows for chart</p>
+                                    )}
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                    {/* Mobile 2-col: Sales ke turant baad Stock — same row me right tile. */}
+                    {stat.type === 'sale' && renderStockSummaryDashboardCard()}
+                </React.Fragment>
             );})}
+            {/* Voucher summary cards band ho to bhi Stock pehle jaisa dashboard par dikhe. */}
+            {!compact && !can("view_voucher_type_summaries") && renderStockSummaryDashboardCard()}
 
             {can("view_entity_counts_summary") && !compact && (
                 <>

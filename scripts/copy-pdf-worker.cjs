@@ -6,7 +6,8 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.join(__dirname, "..");
-const src = path.join(root, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs");
+// `importPdfJsDist` / thumbnail — `pdfjs-dist/legacy/build/pdf.mjs`; worker bhi **legacy** hona chahiye warna worker↔main mismatch = preview hamesha fail
+const src = path.join(root, "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.min.mjs");
 const dest = path.join(root, "public", "pdf.worker.min.mjs");
 
 if (!fs.existsSync(src)) {

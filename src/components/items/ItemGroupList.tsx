@@ -131,7 +131,8 @@ export function ItemGroupList({
                   }}
                 >
                   {href ? (
-                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                    // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+                    <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
                       <Card className={cardClassName}>{cardContent}</Card>
                     </Link>
                   ) : (

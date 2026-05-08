@@ -663,7 +663,7 @@ export async function saveVoucher(
   beginApkLedgerAsyncWriteShield({ pinCompanyId: companyId });
   const cleanVoucherData = removeUndefined(voucherData);
   const voucherPath = `companies/${companyId}/vouchers`;
-  /** APK Firebase company: SQLite-first mat — Firestore writes (redirect race mitigation). Local row `storageOption: local` = purana behaviour. */
+  /** Sidebar OFF (embedded): SQLite/outbox-first; ON: Firestore direct (`shouldForceFirestoreWritesOnStaticOrApk`). */
   const sqliteFirst = await apkCloudCompanyUsesSqliteFirstWrites(companyId);
 
   // Edit: form/outbox se `date` key missing ho to purani voucher date merge — static/APK offline me pehla `getDoc` hang/slow kar sakta tha (“Saving…” chipka)

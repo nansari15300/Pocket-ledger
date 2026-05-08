@@ -67,7 +67,10 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { cn } from "@/lib/utils";
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, subDays } from "date-fns";
 import { FilePreview, prewarmPdfThumbnailsForGallery } from "@/components/vouchers/FilePreview";
-import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
+import {
+  looksLikeFirebaseStorageObjectPath,
+  tryGetStoragePathFromFirebaseDownloadUrl,
+} from "@/lib/firebaseStorageDownloadUrl";
 import { Combobox } from "@/components/ui/combobox";
 import { useDropzone } from "react-dropzone";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -181,6 +184,15 @@ function openKindFromGalleryCaption(caption: string, url: string): "pdf" | "imag
   )
     return "image";
   return "other";
+}
+
+/** Raw Storage object-path (`voucher-files/...`) ko direct `<img src>` me mat bhejo; `FilePreview` resolver handle karega. */
+function canRenderDirectGalleryImageUrl(rawUrl: string): boolean {
+  const value = String(rawUrl || "").trim();
+  if (!value) return false;
+  if (looksLikeFirebaseStorageObjectPath(value)) return false;
+  if (isLocalFileRef(value)) return false;
+  return true;
 }
 
 /** Footer card ke andar, Per page ke niche — chhota pager taaki poora footer patla rahe */
@@ -788,9 +800,9 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                           >
                             {(() => {
                               const cleanU = String(url).split("?")[0].toLowerCase();
-                              // `local:` par <img src> tuta; FilePreview andar object URL banata hai
+                              // `local:` / raw storage-path par <img src> toot sakta hai; FilePreview fallback resolver se stable preview.
                               const isDirectImg =
-                                !isLocalFileRef(String(url)) &&
+                                canRenderDirectGalleryImageUrl(String(url)) &&
                                 formatCaption !== "PDF" &&
                                 (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG"].includes(formatCaption) ||
                                   String(url).startsWith("data:image/") ||
@@ -1818,7 +1830,9 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                         {(() => {
                           const cleanU = String(file.url).split("?")[0].toLowerCase();
                           const isImage =
-                            /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/");
+                            // Company tab jaisa guard: storage object path pe direct `<img>` avoid, warna broken tile dikhta hai.
+                            canRenderDirectGalleryImageUrl(file.url) &&
+                            (/\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/"));
                           return isImage ? (
                             // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
                             <img
@@ -2131,10 +2145,10 @@ function GalleryPageContent() {
     localStorage.setItem('galleryPreviewSize', String(previewSize));
   }, [previewSize]);
 
-  // PDF hover pe pdf.js pehli baar ~few sec — gallery open hote hi chunk load karke pehle PDF thoda jaldi
+  // PDF hover: pehli load thodi jaldi — sirf `@/lib/pdfToImage` → `importPdfJsDist` se pdf.js load karo.
+  // Alag `import("pdfjs-dist/build/pdf.mjs")` mat lagao: Webpack do chunk banata hai aur `__webpack_require__.r` par `Object.defineProperty` crash ho sakta hai.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    void import("pdfjs-dist/build/pdf.mjs");
     void import("@/lib/pdfToImage");
   }, []);
 

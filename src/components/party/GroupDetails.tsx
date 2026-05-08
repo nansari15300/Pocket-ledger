@@ -409,6 +409,8 @@ export function GroupDetails({
 
   const isFilterActive =
     dateRange !== undefined || Object.values(filters).some((v) => v);
+  /** Party ledger jaisa dated opening row: filter lagne par range-from dikhao. */
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
 
   // For staff groups, use the group's balance directly if no date range is set
   // This ensures consistency with the list view
@@ -752,6 +754,7 @@ export function GroupDetails({
         pageTransactions: list,
         beforeCount: 0,
         afterCount: 0,
+        sliceStart: 0,
         openingForPage: openingBalanceForPeriod,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
@@ -784,6 +787,7 @@ export function GroupDetails({
       pageTransactions,
       beforeCount: start,
       afterCount: Math.max(0, total - end),
+      sliceStart: start,
       openingForPage,
       periodDrForPage,
       periodCrForPage,
@@ -792,6 +796,26 @@ export function GroupDetails({
   }, [sortedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
   const totalPages = desktopPaginationMeta.totalPages;
   const paginatedTransactions = desktopPaginationMeta.pageTransactions;
+
+  /** Desktop table: Book OB sirf jab slice chronological shuru se (PartyDetails jaisa). */
+  const desktopLedgerOpeningPeriodStartDate = useMemo(() => {
+    const list = sortedTransactions as any[];
+    const start = desktopPaginationMeta.sliceStart;
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    if (start === 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const t = list[start - 1] as any;
+    if (!t) return undefined;
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [sortedTransactions, rowsPerPage, desktopPaginationMeta.sliceStart, hasLedgerDateFilter, dateRange?.from]);
+
+  const booksOpeningForGroup = Number(group.openingBalance) || 0;
 
   const handleOpenNoteDialog = (partyId?: string) => {
     if (partiesInGroup.length === 1) {
@@ -909,12 +933,6 @@ export function GroupDetails({
     });
   }, [sortedTransactions, mobileSearchTerm, formatDate, formatDateBS, mobileSearchNames, group.id]);
 
-  const totalPagesMobile = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
-  const paginatedMobileTransactions = filteredMobileTransactions.slice(
-    (currentPage - 1) * rowsPerPage,
-    currentPage * rowsPerPage
-  );
-
   // Keep page in valid range when list size/page-size changes.
   useEffect(() => {
     const total = Math.max(1, Math.ceil(filteredMobileTransactions.length / rowsPerPage));
@@ -946,6 +964,7 @@ export function GroupDetails({
       const pageDr = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
       const pageCr = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
       return {
+        sliceStart: 0,
         openingForPage: openingBalanceForPeriod,
         periodDrForPage: pageDr,
         periodCrForPage: pageCr,
@@ -973,12 +992,31 @@ export function GroupDetails({
     const periodDrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
     const periodCrForPage = pageTransactions.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
     return {
+      sliceStart: start,
       openingForPage,
       periodDrForPage,
       periodCrForPage,
       closingForPage: openingForPage + periodDrForPage - periodCrForPage,
     };
   }, [filteredMobileTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+
+  /** Mobile search list: tail slice ke hisaab se dated OB (desktop se alag list ho sakti hai). */
+  const mobileLedgerOpeningPeriodStartDate = useMemo(() => {
+    const list = filteredMobileTransactions as any[];
+    const start = mobilePaginationMeta.sliceStart;
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    if (start === 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const t = list[start - 1] as any;
+    if (!t) return undefined;
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [filteredMobileTransactions, rowsPerPage, mobilePaginationMeta.sliceStart, hasLedgerDateFilter, dateRange?.from]);
 
   const dateRangeLabel = buildDateRangeText() || "All Time";
 
@@ -1147,6 +1185,12 @@ export function GroupDetails({
             openingBalanceOutstanding={groupOpeningOutstandingForTable}
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
             openingBalanceDate={(group as any).openingBalanceDate}
+            openingBalanceNarration={(group as any).openingBalanceNarration}
+            booksOpeningBalance={booksOpeningForGroup}
+            ledgerDateFilterActive={hasLedgerDateFilter}
+            ledgerShowBookOpeningRow={rowsPerPage <= 0 || mobilePaginationMeta.sliceStart === 0}
+            openingBalancePeriodStartDate={mobileLedgerOpeningPeriodStartDate}
+            dateRange={dateRange}
             openingBalanceActions={undefined}
             showNarration={showNarration}
             visibleColumns={balanceMode === "bill_wise" ? { ...visibleColumns, status: true } : visibleColumns}
@@ -1502,6 +1546,12 @@ export function GroupDetails({
             openingBalanceOutstanding={groupOpeningOutstandingForTable}
             openingBalanceLinkedVoucherNos={openingBalanceLinkedVoucherNos}
             openingBalanceDate={(group as any).openingBalanceDate}
+            openingBalanceNarration={(group as any).openingBalanceNarration}
+            booksOpeningBalance={booksOpeningForGroup}
+            ledgerDateFilterActive={hasLedgerDateFilter}
+            ledgerShowBookOpeningRow={rowsPerPage <= 0 || desktopPaginationMeta.sliceStart === 0}
+            openingBalancePeriodStartDate={desktopLedgerOpeningPeriodStartDate}
+            dateRange={dateRange}
             openingBalanceActions={
               group.id !== "ungrouped" ? (
                 <EditGroupDialog
@@ -1598,7 +1648,7 @@ export function GroupDetails({
               onSortChange={(by, order) => { setSortBy(by); setSortOrder(order); }}
               viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
             />
-            {/* Pager format synced with Party: (xx) << < [rows] > >> (xx) */}
+            {/* Tail paging (page1=latest): (xx) << < [rows] > >> (xx) — PartyDetails jaisa */}
             <p className="text-sm font-medium flex-shrink-0 tabular-nums">({desktopPaginationMeta.beforeCount})</p>
             <Button
               variant="outline"

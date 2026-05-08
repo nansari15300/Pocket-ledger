@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { tryConsumeMasterDetailHardwareBack } from "@/hooks/useRegisterMasterDetailHardwareBack";
 import { tryConsumeDialogHardwareBack } from "@/contexts/DialogBackHandlerContext";
+import { tryConsumeAttachmentPreviewHardwareBack } from "@/lib/inAppAttachmentPreviewOpen";
 
 /**
  * APK: Android hardware back — dialogs/master-detail pehle, phir normal stack.
@@ -23,6 +24,8 @@ export function CapacitorAndroidBackButton() {
       .then(({ App }) => {
         if (cancelled) return;
         void App.addListener("backButton", ({ canGoBack }) => {
+          // In-app attachment preview/gallery sabse pehle close ho — peeche ka route/history consume na ho.
+          if (tryConsumeAttachmentPreviewHardwareBack()) return;
           // Voucher / Dialog khula cha bhane pehle tyo band — natra party detail → list galat hunchha
           if (tryConsumeDialogHardwareBack()) return;
           // Master–detail: detail → list (replace)

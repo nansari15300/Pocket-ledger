@@ -8,6 +8,24 @@
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { readServerDirectWritesPreferredSync } from "@/lib/serverDirectWritesPreference";
+
+/** Sidebar "Server writes" ON: static bundle ya APK par Firestore seedha; reads SQLite mirror alag flags se. */
+export function shouldForceFirestoreWritesOnStaticOrApk(): boolean {
+  if (!readServerDirectWritesPreferredSync()) return false;
+  return isCapacitorNativeApp() || isStaticAppBuild();
+}
+
+/**
+ * APK/static: switch OFF = vouchers/masters/groups SQLite + outbox (ya mirror-first) se save;
+ * ON = `shouldForceFirestoreWritesOnStaticOrApk` → seedha Firestore.
+ * Reads UI me SQLite/warm mirror pe rehte hain — yeh sirf **write** routing.
+ */
+export function apkEmbeddedSqliteFirstWritesPreferred(): boolean {
+  if (!isCapacitorNativeApp() && !isStaticAppBuild()) return false;
+  return !readServerDirectWritesPreferredSync();
+}
 
 /** True sirf Capacitor + company row explicitly `storageOption: local` nahi */
 export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageOption?: string } | null | undefined): boolean {
@@ -20,6 +38,9 @@ export function apkCloudFirestoreMasterWriteFromCompanyShape(company: { storageO
  * APK par cloud company = false taaki turant mirror/outbox reload race na khule.
  */
 export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): Promise<boolean> {
+  if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
+  /** Mobile APK / static: OFF par cloud company bhi voucher save SQLite-first (`saveVoucher` outbox branch). */
+  if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
   if (!isLocalOnlyMode()) return false;
   if (!isCapacitorNativeApp()) return true;
   try {
@@ -32,6 +53,9 @@ export async function apkCloudCompanyUsesSqliteFirstWrites(companyId: string): P
 
 /** Master/item forms: mirror `EditItemDialog` / party — `company` sync available */
 export function apkEntityWriteUsesLocalSqliteMirror(company: { storageOption?: string } | null | undefined): boolean {
+  if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
+  /** APK/static + Server writes OFF: party/staff/tax… save local + outbox (Firestore seedha nahi). */
+  if (apkEmbeddedSqliteFirstWritesPreferred()) return true;
   if (!isLocalOnlyMode()) return false;
   if (!company || !isCapacitorNativeApp()) return true;
   return String(company.storageOption ?? "").toLowerCase() === "local";
@@ -57,5 +81,7 @@ export function apkCloudCompanyOfflineViewOnly(
 ): boolean {
   if (!isCapacitorNativeApp() || !company) return false;
   if (String(company.storageOption ?? "").toLowerCase() === "local") return false;
+  /** Server writes OFF: offline par bhi SQLite/outbox save — Save band mat karo. */
+  if (apkEmbeddedSqliteFirstWritesPreferred()) return false;
   return !navigatorOnline;
 }

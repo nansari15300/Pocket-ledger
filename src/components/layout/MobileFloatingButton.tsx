@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
 import { useReportList } from "@/contexts/ReportListContext";
+import { useDashboard } from "@/hooks/useDashboard";
 
 function isCompanySelectOrCreatePath(pathname: string | null): boolean {
   if (!pathname) return false;
@@ -19,6 +20,11 @@ function isCompanySelectOrCreatePath(pathname: string | null): boolean {
 export function MobileFloatingButton() {
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const { visibleCard } = useDashboard();
+  /** Recent tab: fixed violet strip (Change date / Unapproved) + footer — `bottom-20` par FAB Unapproved par chadh jata tha. */
+  const isDashboardPath = (pathname?.replace(/\/+$/, "") || "") === "/dashboard";
+  const liftFabAboveRecentStrip =
+    isMobile && isDashboardPath && visibleCard === "recent-transactions";
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showButton, setShowButton] = useState(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -128,12 +134,22 @@ export function MobileFloatingButton() {
 
   return (
     <>
-      <div className={cn(
-        "fixed left-1/2 -translate-x-1/2 z-50",
-        "transition-opacity duration-300",
-        "bottom-20",
-        showButton ? "opacity-100" : "opacity-0 pointer-events-none"
-      )}>
+      <div
+        className={cn(
+          "fixed left-1/2 -translate-x-1/2 z-50",
+          "transition-[opacity,bottom] duration-300",
+          !liftFabAboveRecentStrip && "bottom-20",
+          showButton ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+        style={
+          liftFabAboveRecentStrip
+            ? {
+                // ~footer (38px) + 2-row strip (~74px reserve) + chhota gap — Unapproved / row clear
+                bottom: "calc(8.5rem + env(safe-area-inset-bottom, 0px))",
+              }
+            : undefined
+        }
+      >
         <Button
           size="lg"
           className={cn(

@@ -1,24 +1,10 @@
 
 import type { Metadata, Viewport } from 'next';
-import { Inter, Space_Grotesk } from 'next/font/google';
 import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 import { Providers } from './providers';
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { PocketSerwistProvider } from "@/components/serwist/PocketSerwistProvider";
-
-/** CDN fonts hata kar bundle + `swap` — pehla load par 20s+ jaisi block kam (slow Google Fonts / dns) */
-const fontInter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-});
-const fontSpaceGrotesk = Space_Grotesk({
-  subsets: ['latin'],
-  weight: ['500', '600', '700'],
-  variable: '--font-space-grotesk',
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   applicationName: 'Pocket Ledger',
@@ -49,7 +35,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${fontInter.variable} ${fontSpaceGrotesk.variable}`}>
+    <html lang="en">
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
         <meta name="color-scheme" content="light only" />

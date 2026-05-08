@@ -5,6 +5,11 @@
 
 /* Chromium/Android WebView + Samsung S25: `only` se UA "auto-darken" mix na kare; ribbon/card gradients browser jaisa rahein */
 @layer base {
+  /* Offline/static build: `next/font/google` ke bina bhi Tailwind `font-body`/`font-headline` vars define rahein. */
+  :root {
+    --font-inter: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-space-grotesk: "Space Grotesk", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
   html {
     color-scheme: light only;
   }

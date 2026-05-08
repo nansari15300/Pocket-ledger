@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * pdf.js ek hi jagah se load — `next.config` me pdfjs-dist rules ke saath mismatch kam.
- * Root `import("pdfjs-dist")` kabhi Next/webpack double-bundle se `Object.defineProperty called on non-object` deta hai.
+ * pdf.js ek hi jagah se load — `legacy/build/pdf.mjs` = nested Webpack runtime;
+ * Next/Turbopack us par dobara bundle karke `Object.defineProperty called on non-object` dete hain.
+ * **`pdf.min.mjs`** = min prebundle (Webpack+turbopack friendly).
  */
 
 /** Page API — thumbnail / stitched JPEG render */
@@ -35,7 +36,7 @@ export async function importPdfJsDist(): Promise<{
   pdfjs: PdfJsMainThreadApi;
 }> {
   const pdfjsLib = (await import(
-    "pdfjs-dist/build/pdf.mjs"
+    "pdfjs-dist/legacy/build/pdf.min.mjs"
   )) as Record<string, unknown> & { version?: string; default?: unknown };
   const raw = pdfjsLib.default ?? pdfjsLib;
   const pdfjs = raw as PdfJsMainThreadApi;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Stable dev launcher:
- * - Clears stale `.next/dev` cache that can trigger slow compaction loops on Windows.
- * - Forces webpack dev server to avoid Turbopack panic/reload churn in this project.
+ * - Clears stale `.next/dev` cache (Windows slow compaction).
+ * - Next.js 16 default = Turbopack; purana `--webpack` hata — pdf.js + HMR zyada consistent.
  * - Disables source maps in dev to reduce CPU spikes on heavy pages.
  */
 const fs = require("fs");
@@ -52,11 +52,11 @@ if (lanIps.length) {
 }
 
 const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
-const args = [nextBin, "dev", "--webpack", "--disable-source-maps", "--hostname", "0.0.0.0"];
+// Explicit `--turbopack` (Next 16 default bhi yahi); `--webpack` mat — user/Turbopack-first
+const args = [nextBin, "dev", "--turbopack", "--disable-source-maps", "--hostname", "0.0.0.0"];
 
 const child = spawn(process.execPath, args, {
   stdio: "inherit",
-  // Keep parent env as-is; only CLI `--webpack` selects bundler to avoid flag conflicts.
   env: { ...process.env },
 });
 

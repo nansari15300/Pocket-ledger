@@ -602,6 +602,21 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, []);
 
+  /** Welcome card clock line: `dateSystem` ke mutabiq AD/BS label — Pocket-Ledger welcome card parity. */
+  const welcomeSystemDateTimeLine = useMemo(() => {
+    const d = liveTime;
+    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+    const weekday = format(d, "EEEE");
+    const timePart = d.toLocaleTimeString();
+    if (dateSystem === "AD") {
+      return `${weekday}, ${formatDate(d)} (AD) | ${timePart}`;
+    }
+    if (dateSystem === "BS") {
+      return `${weekday}, ${formatDateBS(d)} (BS) | ${timePart}`;
+    }
+    return `${weekday} · AD ${formatDate(d)} · BS ${formatDateBS(d)} | ${timePart}`;
+  }, [liveTime, dateSystem, formatDate, formatDateBS]);
+
   const newYearInfo = useMemo(() => {
     const now = new Date();
     const today = startOfDay(now);
@@ -2202,7 +2217,7 @@ export default function DashboardPage() {
           )}
 
           <p className="text-sm text-muted-foreground font-mono">
-            {liveTime.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} | {liveTime.toLocaleTimeString()}
+            {welcomeSystemDateTimeLine}
           </p>
         </CardHeader>
       </Card>

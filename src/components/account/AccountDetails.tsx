@@ -233,13 +233,81 @@ export function AccountDetails({
 
   const totalPages =
     rowsPerPage > 0 ? Math.ceil(processedTransactions.length / rowsPerPage) : 1;
-  const paginatedTransactions =
-    rowsPerPage > 0
-      ? processedTransactions.slice(
-          (currentPage - 1) * rowsPerPage,
-          currentPage * rowsPerPage
-        )
-      : processedTransactions;
+
+  /** Oldest-first pages: page1 = shuru wale txn (1–10) Book OB; page2+ Dated. rowsPerPage=0 = sab ek page. */
+  const hasLedgerDateFilter = Boolean(dateRange?.from != null || dateRange?.to != null);
+
+  const ledgerPagination = useMemo(() => {
+    const list = processedTransactions as any[];
+    const total = list.length;
+    if (rowsPerPage <= 0) {
+      const periodDrForPage = list.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+      const periodCrForPage = list.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+      return {
+        pageRows: list,
+        openingForPage: openingBalanceForPeriod,
+        periodDrForPage,
+        periodCrForPage,
+        closingForPage: openingBalanceForPeriod + periodDrForPage - periodCrForPage,
+      };
+    }
+    const totalPagesLocal = Math.max(1, Math.ceil(total / rowsPerPage));
+    const safePage = Math.min(Math.max(1, currentPage), totalPagesLocal);
+    const startIdx = (safePage - 1) * rowsPerPage;
+    const endIdx = Math.min(startIdx + rowsPerPage, total);
+    const pageRows = list.slice(startIdx, endIdx);
+    const previousTx = startIdx > 0 ? list[startIdx - 1] : null;
+    const previousRunningBalance =
+      previousTx != null
+        ? (typeof previousTx.balance === "number"
+            ? previousTx.balance
+            : typeof previousTx.runningBalance === "number"
+              ? previousTx.runningBalance
+              : undefined)
+        : undefined;
+    const openingForPage =
+      typeof previousRunningBalance === "number" && !Number.isNaN(previousRunningBalance)
+        ? previousRunningBalance
+        : openingBalanceForPeriod;
+    const periodDrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.debit) || 0), 0);
+    const periodCrForPage = pageRows.reduce((sum, t: any) => sum + (Number(t?.credit) || 0), 0);
+    return {
+      pageRows,
+      openingForPage,
+      periodDrForPage,
+      periodCrForPage,
+      closingForPage: openingForPage + periodDrForPage - periodCrForPage,
+    };
+  }, [processedTransactions, rowsPerPage, currentPage, openingBalanceForPeriod]);
+
+  const paginatedTransactions = ledgerPagination.pageRows;
+  const ledgerPageStats = {
+    openingForPage: ledgerPagination.openingForPage,
+    periodDrForPage: ledgerPagination.periodDrForPage,
+    periodCrForPage: ledgerPagination.periodCrForPage,
+    closingForPage: ledgerPagination.closingForPage,
+  };
+
+  /** Page2+ Dated date = pichle page ki last txn (#10 on page2); page1+filter = range-from. */
+  const ledgerOpeningPeriodStartDate = useMemo(() => {
+    const list = processedTransactions as any[];
+    if (rowsPerPage <= 0) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    if (currentPage === 1) {
+      if (hasLedgerDateFilter) return dateRange?.from;
+      return undefined;
+    }
+    const prevLastIdx = (currentPage - 1) * rowsPerPage - 1;
+    const t = list[prevLastIdx] as any;
+    if (!t) return undefined;
+    const raw = t.date?.toDate ? t.date.toDate() : t.date ? new Date(t.date) : undefined;
+    return raw instanceof Date && !isNaN(raw.getTime()) ? raw : undefined;
+  }, [processedTransactions, rowsPerPage, currentPage, hasLedgerDateFilter, dateRange?.from]);
+
+  /** Master books OB — Book Opening pill / stacked card (form se). */
+  const masterAccountOpening = Number(account.openingBalance) || 0;
 
   const buildDateRangeText = () => {
     const from = dateRange?.from;
@@ -598,6 +666,7 @@ export function AccountDetails({
             </div>
             <div className="flex items-center gap-2">
               <div className="flex-1">
+                {/* Mobile: list 80vw + single-line names; green border; scroll pe select nahi (combobox gesture guard). */}
                 <Combobox
                   options={allAccounts?.map((p) => ({ value: p.id, label: p.accountName })) ?? []}
                   value={account?.id || ""}
@@ -607,6 +676,11 @@ export function AccountDetails({
                     }
                   }}
                   placeholder="Select an account"
+                  noWrapOptions
+                  showFullOptionText
+                  contentWidthMode="auto"
+                  popoverContentClassName="w-[80vw] max-w-[80vw] sm:min-w-[var(--radix-popover-trigger-width)] sm:w-auto sm:max-w-md"
+                  triggerClassName="w-full min-w-0 border-2 border-green-600 focus-visible:ring-2 focus-visible:ring-green-600/35"
                 />
               </div>
               <div className="relative">
@@ -816,14 +890,20 @@ export function AccountDetails({
           </div>
         </div>
 
-        {/* TABLE AREA */}
+        {/* TABLE: page1=oldest block (1–10); Book OB; p2+ Dated w/ date=prev page last txn */}
         <ScrollArea className="flex-1">
           <div className="p-4">
             <TransactionsTable
               transactions={paginatedTransactions}
               context="account"
               contextId={account.id}
-              openingBalance={openingBalanceForPeriod}
+              dateRange={dateRange}
+              openingBalance={ledgerPageStats.openingForPage}
+              booksOpeningBalance={masterAccountOpening}
+              openingBalanceDate={(account as any).openingBalanceDate}
+              ledgerDateFilterActive={hasLedgerDateFilter}
+              ledgerShowBookOpeningRow={rowsPerPage <= 0 || currentPage === 1}
+              openingBalancePeriodStartDate={ledgerOpeningPeriodStartDate}
               showNarration={showNarration}
               visibleColumns={visibleColumns}
               userNames={userNames}
@@ -832,9 +912,9 @@ export function AccountDetails({
               setFilters={setFilters}
               activeFilter={activeFilter}
               setActiveFilter={setActiveFilter}
-              periodDr={periodDr}
-              periodCr={periodCr}
-              closingBalance={closingBalance}
+              periodDr={ledgerPageStats.periodDrForPage}
+              periodCr={ledgerPageStats.periodCrForPage}
+              closingBalance={ledgerPageStats.closingForPage}
             />
           </div>
           <ScrollBar orientation="horizontal" />

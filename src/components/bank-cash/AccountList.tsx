@@ -3,6 +3,8 @@
 
 import type { Account } from "@/components/bank-cash/types";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
@@ -86,6 +88,7 @@ export function AccountList({
               const isSelected = selectedAccount?.id === account.id;
               const isSpecial = account.isSpecial;
               const href = getItemHref?.(account);
+              const attachmentPreviewUrl = trimEntityFileUrlForPreview(account.fileUrl);
               const cardClassName = cn(
                 "min-w-0 max-w-full overflow-hidden p-1.5 cursor-pointer border rounded-md transition-all duration-200",
                 isSelected
@@ -96,18 +99,23 @@ export function AccountList({
                 <div className="pl-master-list-row">
                   <div className="pl-master-list-row-leading">
                     <div className="relative flex-shrink-0">
-                      <ResolvedEntityAvatar
-                        className="h-8 w-8 text-xs"
-                        src={account.fileUrl}
-                        alt={account.accountName}
-                        fallbackSlot={
-                          isSpecial ? (
-                            <Crown className="h-4 w-4 text-amber-500" />
-                          ) : (
-                            <Landmark className="h-4 w-4 text-muted-foreground" />
-                          )
-                        }
-                      />
+                      <EntityFileAttachmentHover
+                        fileUrl={attachmentPreviewUrl}
+                        triggerClassName="inline-flex shrink-0 rounded-full"
+                      >
+                        <ResolvedEntityAvatar
+                          className="h-8 w-8 text-xs"
+                          src={attachmentPreviewUrl ?? undefined}
+                          alt={account.accountName}
+                          fallbackSlot={
+                            isSpecial ? (
+                              <Crown className="h-4 w-4 text-amber-500" />
+                            ) : (
+                              <Landmark className="h-4 w-4 text-muted-foreground" />
+                            )
+                          }
+                        />
+                      </EntityFileAttachmentHover>
                       {(pendingApprovalByAccountId[account.id] ?? 0) > 0 && (
                         <span
                           className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
@@ -161,7 +169,8 @@ export function AccountList({
                   transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                 >
                   {href ? (
-                    <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                    // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+                    <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
                       <Card className={cardClassName}>{cardContent}</Card>
                     </Link>
                   ) : (

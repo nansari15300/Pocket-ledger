@@ -9,8 +9,9 @@
     "dev:electron": "wait-on http://localhost:3000 && electron .",
     "build:web": "cd .. && npm run build:static",
     "gen-icon": "node scripts/gen-win-icon.mjs",
-    "build": "npm run gen-icon && electron-builder --win --projectDir .",
-    "build:win": "npm run gen-icon && electron-builder --win --projectDir .",
+    "clean-dist": "node scripts/clean-dist.cjs",
+    "build": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
+    "build:win": "npm run clean-dist && npm run gen-icon && electron-builder --win --projectDir .",
     "build:linux": "electron-builder --linux --projectDir ."
   },
   "build": {
@@ -25,6 +26,7 @@
       "tab-strip.html",
       "tab-strip.js",
       "tab-strip-preload.js",
+    "app-content-preload.js",
       {
         "from": "../out",
         "to": "out",
@@ -51,8 +53,9 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "include": "installer.nsh"
     },
     "icon": "../public/app-icon.png"
   },

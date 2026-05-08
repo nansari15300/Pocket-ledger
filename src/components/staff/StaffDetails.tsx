@@ -4,7 +4,6 @@
 import * as React from "react";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Staff, StaffGroup } from "@/components/staff/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -65,6 +64,9 @@ import {
 import { useDate } from "@/hooks/useDate";
 import { EditStaffDialog } from "./EditStaffDialog";
 import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { CreateNoteForm } from "../vouchers/CreateNoteForm";
@@ -172,6 +174,11 @@ export function StaffDetails({
     if (!processedStaff) return initialStaff;
     return processedStaff.find(s => s.id === initialStaff.id) || initialStaff;
   }, [processedStaff, initialStaff]);
+
+  const staffHeaderAttachmentUrl = useMemo(
+    () => trimEntityFileUrlForPreview(staff.fileUrl),
+    [staff.fileUrl, staff.id]
+  );
 
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...(userNames || {}) }),
@@ -1042,12 +1049,14 @@ export function StaffDetails({
                 <ArrowLeft className="h-5 w-5" />
               </Button>
             )}
-            <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-              <AvatarImage src={staff.fileUrl} alt={staff.name} />
-              <AvatarFallback className="bg-muted text-muted-foreground">
-                <Briefcase className="h-6 w-6" />
-              </AvatarFallback>
-            </Avatar>
+            <EntityFileAttachmentHover fileUrl={staffHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+              <ResolvedEntityAvatar
+                className="h-12 w-12 text-lg flex-shrink-0"
+                src={staffHeaderAttachmentUrl ?? undefined}
+                alt={staff.name}
+                fallbackSlot={<Briefcase className="h-6 w-6 text-muted-foreground" />}
+              />
+            </EntityFileAttachmentHover>
             <div className="flex flex-col min-w-0 gap-0.5">
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{staff.name}</h2>

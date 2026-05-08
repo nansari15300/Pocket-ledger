@@ -26,6 +26,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
+import { Virtuoso } from "react-virtuoso";
 import { VoucherTypeFilter } from "@/components/vouchers/VoucherTypeFilter";
 import {
   type Context,
@@ -45,7 +46,11 @@ import { Badge } from "@/components/ui/badge";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Card } from "@/components/ui/card";
 import { differenceInDays, format, startOfDay } from "date-fns";
-import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
+import {
+  formatVoucherEntryTimeLocal,
+  parseFirestoreDateFieldToJsDate,
+  parseOpeningBalanceDateToLocalNoon,
+} from "@/lib/voucherDateNormalize";
 import { useCompany } from "@/hooks/useCompany";
 import type { SpendWiseBlinkMode } from "@/components/vouchers/transactionColumnVisibility";
 import { useAuth } from "@/hooks/useAuth";
@@ -58,6 +63,8 @@ import {
   FISCAL_YEAR_PARTITION_ROW_TYPE,
 } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
+import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { prewarmHoverPreviewHttpsUrls } from "@/components/vouchers/attachmentHoverPreviewBody";
 
 export type { Context, Transaction };
 
@@ -66,20 +73,9 @@ export type VisibleColumns = Partial<Record<TransactionColumnKey, boolean>>;
 
 export { TransactionRow, getConversionFactor, formatQuantity };
 
-/** Firestore Timestamp | Date | string — opening / period row date columns ke liye */
+/** Firestore Timestamp | plain `{seconds}` | Date | string — opening / period row; OB noon parse shared helper */
 function normalizeLedgerObDateField(v: unknown): Date | null {
-  if (v == null || v === undefined) return null;
-  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-  if (typeof (v as { toDate?: () => Date }).toDate === "function") {
-    try {
-      const d = (v as { toDate: () => Date }).toDate();
-      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-    } catch {
-      return null;
-    }
-  }
-  const p = new Date(v as string | number);
-  return isNaN(p.getTime()) ? null : p;
+  return parseOpeningBalanceDateToLocalNoon(v);
 }
 
 /** Form "As on" date ledger query range (from/to days, inclusive) ke andar? — andar: stacked Book row / single-row Book pill; bahar: sirf Dated. */
@@ -192,9 +188,11 @@ interface TransactionsTableProps {
   highlightPendingApproval?: boolean;
   /** Entity ledger: pills on when set; dated vs book wording `dateRange` + master OB date se decide. */
   ledgerDateFilterActive?: boolean;
+  /** Recent tab footer search: mobile card lines me is query ka pink highlight (sirf in cards). */
+  transactionCardSearchHighlight?: string;
   /** Page-1: upar stacked Book row (jab master OB nonzero + OB date range me); page>1 sirf dated carry. */
   ledgerShowBookOpeningRow?: boolean;
-  /** Range `from` — Dated Opening row ki Date column (BS/AD). */
+  /** Range `from` — period-carry opening row ki Date column (BS/AD). */
   openingBalancePeriodStartDate?: unknown;
 }
 
@@ -263,6 +261,7 @@ export function TransactionsTable({
   ledgerDateFilterActive,
   ledgerShowBookOpeningRow = true,
   openingBalancePeriodStartDate,
+  transactionCardSearchHighlight,
 }: TransactionsTableProps) {
   const { company, companyId } = useCompany();
   // FY merge: neela divider row — company par local fiscal merge `useCompany` se aa chuka hai.
@@ -593,7 +592,7 @@ export function TransactionsTable({
   const displayTotalDr = (displayPeriodDr || 0) + displayOpeningBalanceDr;
   const displayTotalCr = (displayPeriodCr || 0) + displayOpeningBalanceCr;
 
-  // Book vs Dated opening — header `EntityLedgerOpeningHints` ki jagah Type-column pill (`Book Opening` / `Dated Opening`).
+  // Ledger contexts: Type-column pill ab hamesha "Opening Balance" (neeche Book/Dated date logic same).
   const ledgerOpeningPillsEnabled =
     typeof ledgerDateFilterActive === "boolean" &&
     ["party", "account", "staff", "tax", "item", "expense", "group"].includes(context);
@@ -634,6 +633,57 @@ export function TransactionsTable({
   const showFileColumn = canAddFileImagePdf === true;
   const showCol = (key: string) => visibleColumns == null || visibleColumns[key] !== false;
   const showFileBySelection = showFileColumn && showCol("file");
+  const visibleAttachmentUrls = useMemo(() => {
+    // Shared entity ledgers: only currently rendered rows' attachment URLs are warmed for instant hover preview.
+    const urls: string[] = [];
+    if (showFileBySelection && Array.isArray(tableTransactions)) {
+      for (const row of tableTransactions as any[]) {
+        const rowUrls = Array.isArray((row as any)?.fileUrls) ? ((row as any).fileUrls as unknown[]) : [];
+        for (const candidate of rowUrls) {
+          const url = String(candidate ?? "").trim();
+          if (url) urls.push(url);
+        }
+      }
+    }
+    if (showFileBySelection && Array.isArray(openingBalanceAttachmentUrls)) {
+      for (const candidate of openingBalanceAttachmentUrls) {
+        const url = String(candidate ?? "").trim();
+        if (url) urls.push(url);
+      }
+    }
+    return urls;
+  }, [showFileBySelection, tableTransactions, openingBalanceAttachmentUrls]);
+  useEffect(() => {
+    if (visibleAttachmentUrls.length === 0) return;
+    if (typeof window === "undefined") return;
+    const browserWindow = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const ac = new AbortController();
+    let idleHandle: number | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const runWarm = () => {
+      // Idle-time warm keeps row mount responsive while making first hover near-instant.
+      void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 60 });
+    };
+    if (typeof browserWindow.requestIdleCallback === "function") {
+      idleHandle = browserWindow.requestIdleCallback(runWarm, { timeout: 450 });
+    } else {
+      // Browser-only timer fallback keeps TS/SSR-safe path explicit.
+      // Keep timeout handle separate from idle callback id to avoid Node-vs-browser timeout type mismatch.
+      timeoutHandle = globalThis.setTimeout(runWarm, 80);
+    }
+    return () => {
+      ac.abort();
+      if (idleHandle != null) {
+        if (typeof browserWindow.cancelIdleCallback === "function") {
+          browserWindow.cancelIdleCallback(idleHandle);
+        }
+      }
+      if (timeoutHandle != null) globalThis.clearTimeout(timeoutHandle);
+    };
+  }, [visibleAttachmentUrls]);
   const dateCols = dateSystem === "Both" ? 2 : 1;
   const userCol = context === 'note' ? 0 : 1;
   const fileCol = showFileBySelection ? 1 : 0;
@@ -663,12 +713,12 @@ export function TransactionsTable({
   const hasOpeningBalanceNarrationSubRow = showNarration && Boolean(openingBalanceNarrationTrimmed);
   /** Firestore Timestamp | Date | string — entity form ki "As on" date */
   const openingBalanceRowDate = useMemo(() => normalizeLedgerObDateField(openingBalanceDate), [openingBalanceDate]);
-  /** Date filter start — sirf `Dated Opening` row ki date column */
+  /** Date filter start — period-carry row ki Date column (BS/AD) */
   const periodOpeningRowDate = useMemo(
     () => normalizeLedgerObDateField(openingBalancePeriodStartDate),
     [openingBalancePeriodStartDate]
   );
-  /** Form "As on" date range ke andar ho to Book labels + upar wali master row; bahar ho to sirf Dated. */
+  /** Form "As on" range ke andar ho to stacked master row + dated row; bahar ho to sirf ek OB row. */
   const masterOpeningDateWithinLedgerRange = useMemo(
     () => isMasterOpeningDateInLedgerQueryRange(dateRange, openingBalanceRowDate),
     [dateRange, openingBalanceRowDate]
@@ -680,18 +730,8 @@ export function TransactionsTable({
     booksObScaled != null &&
     Math.abs(booksObScaled) >= BOOK_OB_EPS &&
     masterOpeningDateWithinLedgerRange;
-  /** Date filter + page-1: Book/Dated pill — range me master OB na ho to hamesha Dated; page>1 = Dated carry row. */
-  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled
-    ? !ledgerDateFilterActive
-      ? "Book Opening"
-      : showBookOpeningAboveDatedRow
-        ? "Dated Opening"
-        : !ledgerShowBookOpeningRow
-          ? "Dated Opening"
-          : masterOpeningDateWithinLedgerRange
-            ? "Book Opening"
-            : "Dated Opening"
-    : openingBalanceLabel;
+  /** Reports/daybook: `openingBalanceLabel`; party-account-staff… ledger: ek hi label "Opening Balance". */
+  const primaryOpeningRowPillText = ledgerOpeningPillsEnabled ? "Opening Balance" : openingBalanceLabel;
 
   /** Narration sub-row: date se credit tak — `transactionTableShared` colsThroughCredit jaisa */
   const openingBalanceNarrationColSpan =
@@ -723,9 +763,22 @@ export function TransactionsTable({
   // Prevent header/amount overlap — opening row cells helpers
   const ensureMinGaps = true;
 
-  /** Book row = entity "As on"; Dated row = range `from` (filter) ya phir same as book. */
-  const datedOpeningBalanceRowDate =
-    ledgerOpeningPillsEnabled && ledgerDateFilterActive ? periodOpeningRowDate : openingBalanceRowDate;
+  /** Dated row Date column: filter from, ya page 2+ continuation (openingBalancePeriodStartDate); Book row = master OB date. */
+  const datedOpeningBalanceRowDate = useMemo(() => {
+    if (ledgerOpeningPillsEnabled && ledgerDateFilterActive) {
+      return periodOpeningRowDate;
+    }
+    if (ledgerOpeningPillsEnabled && !ledgerShowBookOpeningRow && periodOpeningRowDate) {
+      return periodOpeningRowDate;
+    }
+    return openingBalanceRowDate;
+  }, [
+    ledgerOpeningPillsEnabled,
+    ledgerDateFilterActive,
+    ledgerShowBookOpeningRow,
+    periodOpeningRowDate,
+    openingBalanceRowDate,
+  ]);
 
   /** Opening row dates — normal transaction row jaisa */
   const renderOpeningBalanceDateCells = (rowDate: Date | null) =>
@@ -960,6 +1013,8 @@ export function TransactionsTable({
   }, [hasSpendWiseGroups, tableTransactions]);
 
   if (useMobileCardView) {
+    const highlightQ = (transactionCardSearchHighlight ?? "").trim();
+    const hl = (s: string) => highlightQueryInText(s, highlightQ);
     const renderMobileCard = (t: any, key: string, insideGroup: boolean) => {
       if (t.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
         const label =
@@ -1084,16 +1139,16 @@ export function TransactionsTable({
         >
           <div className="flex justify-between items-start gap-2 min-w-0">
             <div className="min-w-0 flex-1 overflow-hidden">
-              <p className="font-bold text-sm truncate">{titleLabel}</p>
+              <p className="font-bold text-sm truncate">{hl(titleLabel)}</p>
             </div>
             <p className={cn("font-bold text-sm shrink-0", mainAmountClass)}>
-              {amount > 0 ? formatAmountOrQty(amount) : "-"}
+              {amount > 0 ? hl(String(formatAmountOrQty(amount))) : "-"}
             </p>
           </div>
           <div className="flex justify-between items-start gap-2 min-w-0 mt-0.5">
             <p className="text-xs text-muted-foreground break-words whitespace-normal line-clamp-none min-w-0 flex-1">
               <span className="font-semibold">{mobileNarrationLabel} : </span>
-              {mobileNarrationValue}
+              {hl(mobileNarrationValue)}
             </p>
             {showStatusInCard && (statusLabel || showStatusDetailInCard) ? (
               <div className="shrink-0 flex flex-col items-end gap-0.5">
@@ -1105,7 +1160,7 @@ export function TransactionsTable({
                       useNeutralStatus ? "text-muted-foreground border-muted-foreground/40" : isPaidStatus ? "text-green-600 border-green-600/50" : isUnpaidStatus ? "text-red-600 border-red-600/50" : "text-muted-foreground border-muted-foreground/40"
                     )}
                   >
-                    {statusLabel}
+                    {hl(statusLabel)}
                   </Badge>
                 ) : null}
                 {showStatusDetailInCard ? (
@@ -1113,7 +1168,9 @@ export function TransactionsTable({
                 ) : null}
                 {overdueDaysInCard > 0 ? (
                   <span className="text-[10px] font-medium text-red-600">
-                    {overdueDaysInCard} {overdueDaysInCard === 1 ? "day" : "days"}
+                    {hl(
+                      `${overdueDaysInCard} ${overdueDaysInCard === 1 ? "day" : "days"}`
+                    )}
                   </span>
                 ) : null}
               </div>
@@ -1125,16 +1182,21 @@ export function TransactionsTable({
                   balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
                 )}
               >
-                Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+                {hl(`Bal:${formatAmountOrQty(balanceAbs)}${isItemQty ? "" : ` ${balanceSuffix}`}`)}
               </Badge>
             ) : null}
           </div>
           <div className="flex justify-between items-end gap-2 min-w-0 mt-0.5">
             <div className="min-w-0 flex-1 overflow-hidden">
-              {groupAccountName ? <p className="text-xs text-muted-foreground truncate font-medium">Account: {groupAccountName}</p> : null}
+              {groupAccountName ? (
+                <p className="text-xs text-muted-foreground truncate font-medium">{hl(`Account: ${groupAccountName}`)}</p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
-                {d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}
-                {entryClock ? ` • ${entryClock}` : ""}
+                {hl(
+                  `${d ? (dateSystem === "BS" ? formatDateBS(d) : formatDate(d)) : ""}${
+                    entryClock ? ` • ${entryClock}` : ""
+                  }`
+                )}
               </p>
             </div>
             <div className="text-right shrink-0 flex flex-col items-end gap-0.5 flex-shrink-0">
@@ -1146,10 +1208,12 @@ export function TransactionsTable({
                     balance >= 0 ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200" : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200"
                   )}
                 >
-                  Bal:{formatAmountOrQty(balanceAbs)}{isItemQty ? "" : ` ${balanceSuffix}`}
+                  {hl(`Bal:${formatAmountOrQty(balanceAbs)}${isItemQty ? "" : ` ${balanceSuffix}`}`)}
                 </Badge>
               )}
-              <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">User: {userName}</p>
+              <p className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                {hl(`User: ${userName}`)}
+              </p>
             </div>
           </div>
         </Card>
@@ -1170,13 +1234,13 @@ export function TransactionsTable({
       <div className={cn("w-full min-w-0 space-y-1 pb-4 overflow-hidden", context === "daybook" ? "" : "px-0.5")}>
         {showOpeningBalance && (
           <>
-            {/* Date filter + alag master OB: pehle Book Opening card (search/search slot sirf neeche wale Dated card par) */}
+            {/* Date filter + master OB: pehla card (stacked); search slot sirf neeche wale card par */}
             {showBookOpeningAboveDatedRow ? (
               <Card className="p-2.5 min-h-9 min-w-0 overflow-hidden bg-card border border-border/80 shadow-sm">
                 <div className="flex justify-between items-start gap-2 min-w-0">
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5 min-h-9 justify-center">
                     <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium w-fit">
-                      Book Opening
+                      Opening Balance
                     </Badge>
                     {showCol("date") && openingBalanceRowDate ? (
                       <p className="text-sm font-medium text-foreground">
@@ -1218,7 +1282,7 @@ export function TransactionsTable({
                   <div className="flex items-center gap-2 min-w-0">
                     {openingBalanceLeftContent}
                     {openingBalanceSearch}
-                    {/* Table ke Type column pill: Book/Dated/`openingBalanceLabel` (reports) */}
+                    {/* Table ke Type column pill: ledger = "Opening Balance"; reports = `openingBalanceLabel` */}
                     <Badge variant="outline" className="inline-flex h-6 items-center rounded-xl px-2.5 font-medium">
                       {primaryOpeningRowPillText}
                     </Badge>
@@ -1307,44 +1371,84 @@ export function TransactionsTable({
           </Card>
           </>
         )}
-        {mobileBlocks.map((block, blockIdx) => {
-          if (block.type === "spacer") {
-            return <div key={`spacer-${blockIdx}`} className="shrink-0 w-full" style={{ height: 20 }} aria-hidden />;
-          }
-          if (block.type === "group") {
-            const groupKey = `group-${blockIdx}-${block.items[0]?.id ?? block.items.map((t: any) => t.id).join("-")}`;
-            return (
-              <motion.div
-                key={groupKey}
-                layout
-                initial={false}
-                transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-                className={cn("space-y-1", groupContainerClass(block.colorIndex))}
-              >
-                {block.items.map((t: any, itemIdx: number) => (
+        {(() => {
+          // Large mobile ledgers: blocks ko virtualize karo; poori list map karne se WebView freeze spikes aate hain.
+          const mobileVirtualizationEnabled = mobileBlocks.length > 80;
+          if (!mobileVirtualizationEnabled) {
+            return mobileBlocks.map((block, blockIdx) => {
+              if (block.type === "spacer") {
+                return <div key={`spacer-${blockIdx}`} className="shrink-0 w-full" style={{ height: 20 }} aria-hidden />;
+              }
+              if (block.type === "group") {
+                const groupKey = `group-${blockIdx}-${block.items[0]?.id ?? block.items.map((t: any) => t.id).join("-")}`;
+                return (
                   <motion.div
-                    key={`${blockIdx}-${itemIdx}-${t.id ?? (t as any)._rowKey ?? ""}`}
+                    key={groupKey}
                     layout
                     initial={false}
                     transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                    className={cn("space-y-1", groupContainerClass(block.colorIndex))}
                   >
-                    {renderMobileCard(t, t.id, true)}
+                    {block.items.map((t: any, itemIdx: number) => (
+                      <motion.div
+                        key={`${blockIdx}-${itemIdx}-${t.id ?? (t as any)._rowKey ?? ""}`}
+                        layout
+                        initial={false}
+                        transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                      >
+                        {renderMobileCard(t, t.id, true)}
+                      </motion.div>
+                    ))}
                   </motion.div>
-                ))}
-              </motion.div>
-            );
+                );
+              }
+              return (
+                <motion.div
+                  key={block.item.id}
+                  layout
+                  initial={false}
+                  transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
+                >
+                  {renderMobileCard(block.item, block.item.id, false)}
+                </motion.div>
+              );
+            });
           }
+
           return (
-            <motion.div
-              key={block.item.id}
-              layout
-              initial={false}
-              transition={isRowAnimationEnabled ? { duration: rowAnimationDuration, ease: "easeInOut" } : { duration: 0 }}
-            >
-              {renderMobileCard(block.item, block.item.id, false)}
-            </motion.div>
+            <Virtuoso
+              // Mobile long ledgers: only visible cards mount (plus overscan) to reduce freeze.
+              style={{
+                height: Math.min(
+                  760,
+                  Math.max(320, (typeof window !== "undefined" ? window.innerHeight : 760) - 220)
+                ),
+                width: "100%",
+              }}
+              totalCount={mobileBlocks.length}
+              overscan={400}
+              itemContent={(index) => {
+                const block = mobileBlocks[index];
+                if (!block) return null;
+                if (block.type === "spacer") {
+                  return <div className="w-full" style={{ height: 20 }} aria-hidden />;
+                }
+                if (block.type === "group") {
+                  return (
+                    <div className={cn("space-y-1 pr-1", groupContainerClass(block.colorIndex))}>
+                      {block.items.map((t: any, itemIdx: number) => (
+                        <div key={`${index}-${itemIdx}-${t.id ?? (t as any)._rowKey ?? ""}`}>
+                          {renderMobileCard(t, t.id, true)}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+                return <div>{renderMobileCard(block.item, block.item.id, false)}</div>;
+              }}
+            />
           );
-        })}
+        })()}
       </div>
     );
   }
@@ -1414,7 +1518,7 @@ export function TransactionsTable({
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
-                      {renderOpeningBalanceMiddleCells("Book Opening", false)}
+                      {renderOpeningBalanceMiddleCells("Opening Balance", false)}
                       {showFileBySelection && (
                         <TableCell
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1559,7 +1663,7 @@ export function TransactionsTable({
                       )}
                     >
                       {renderOpeningBalanceDateCells(openingBalanceRowDate)}
-                      {renderOpeningBalanceMiddleCells("Book Opening", false)}
+                      {renderOpeningBalanceMiddleCells("Opening Balance", false)}
                       {showFileBySelection && (
                         <TableCell
                           className={cn("text-center align-top", ensureMinGaps && "min-w-[44px] px-[5px]")}
@@ -1790,6 +1894,7 @@ export function TransactionsTable({
                                         showFileColumn={showFileBySelection}
                                         statusBillWiseOnly={statusBillWiseOnly}
                                         highlightPendingApproval={highlightPendingApproval}
+                                        textSearchHighlight={transactionCardSearchHighlight}
                                       />
                                     );
                                   })}
@@ -1848,6 +1953,7 @@ export function TransactionsTable({
                           showFileColumn={showFileBySelection}
                           statusBillWiseOnly={statusBillWiseOnly}
                           highlightPendingApproval={highlightPendingApproval}
+                          textSearchHighlight={transactionCardSearchHighlight}
                         />
                       </React.Fragment>
                     );
@@ -1915,6 +2021,7 @@ export function TransactionsTable({
                         showFileColumn={showFileBySelection}
                         statusBillWiseOnly={statusBillWiseOnly}
                         highlightPendingApproval={highlightPendingApproval}
+                        textSearchHighlight={transactionCardSearchHighlight}
                       />
                     );
                   })

@@ -57,6 +57,7 @@ import { useDate } from "@/hooks/useDate";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVoucherFields, softDeleteVoucherMoveToRecycleBin, voucherRecycleBinDeletedAt } from "@/lib/voucherActionsClient";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
@@ -360,6 +361,12 @@ export function CreatePurchaseForm({
     onEffectiveLinksChange?.(false);
   }, [onEffectiveLinksChange]);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
   // Keep "Read me" help controlled from this form so purchase link section can open the shared multilingual guide.
   const [linkSectionInfoOpen, setLinkSectionInfoOpen] = useState(false);
   const isEditing = !!voucher;
@@ -472,7 +479,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     [companyId, reloadLocalCompanyRegistry, triggerSync, toast]
   );
 
-  const voucherIdForLinks = voucher?.id ?? savedVoucherId;
+  const voucherIdForLinks = isCopiedDraftFirstInsert ? undefined : (voucher?.id ?? savedVoucherId ?? undefined);
   // Incoming: who allocated to us. Outgoing: we allocated to Sale (purchase return). When pending is set, show only pending so unlink reflects immediately.
   const effectiveLinkedRows = useMemo(() => {
     const incoming = pendingLinkAllocations != null && vouchers?.length
@@ -484,7 +491,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       outgoing = outgoing.filter((r) => r.paymentVoucherId && pendingIds.has(r.paymentVoucherId));
     }
     return mergeLinkedRows(incoming, outgoing);
-  }, [vouchers, voucherIdForLinks, pendingLinkAllocations]);
+  }, [vouchers, voucherIdForLinks, pendingLinkAllocations, isCopiedDraftFirstInsert]);
   const linkedAmountRows = effectiveLinkedRows;
   const totalLinked = useMemo(() => linkedAmountRows.reduce((s, r) => s + r.amount, 0), [linkedAmountRows]);
   // Report effective link state to dialog so banner/fields follow local unlink (pending = {} → no links → enable edit)
@@ -898,7 +905,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
 
       try {
         // Permission check: create or edit
-        const isEdit = !!voucher?.id || !!savedVoucherId;
+        const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherId);
         const voucherDateRaw = data.date;
         const voucherDate =
           voucherDateRaw instanceof Date ? voucherDateRaw : new Date(voucherDateRaw as unknown as string);
@@ -968,6 +975,13 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           }
         }
 
+        const originalVoucherIdToDelete: string | null =
+          isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+        const idArgForFirestore = resolveVoucherIdForSave({
+          savedVoucherId,
+          originalVoucherIdToDelete,
+        });
+
         let existingFileUrls = filesForSave.filter(
           (f): f is string => typeof f === "string"
         );
@@ -994,7 +1008,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
             const voucherIdForLocalAttachments =
               isEditingAndConverting && voucher?.id
                 ? null
-                : (savedVoucherId ?? voucher?.id ?? null);
+                : idArgForFirestore ?? null;
             const { fileUrls: mergedUrls, preGeneratedVoucherId: preGen } =
               await appendLocalOnlyVoucherFilesToUrls({
                 companyId,
@@ -1032,20 +1046,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           unassignedFile: data.unassignedFile || voucher?.unassignedFile || null,
           isApproved: isCompanyAdmin ? true : (data.isApproved ?? voucher?.isApproved ?? false),
         };
-        // Keep opening balance link from current voucher (set by Link to Txns); form does not edit this
-        const currentPurchase = (savedVoucherId && vouchers) ? vouchers.find((v: any) => v.id === savedVoucherId) : voucher;
+        // Keep opening balance link from current voucher (set by Link to Txns); copy-draft pehli save par purani row na uthao
+        const currentPurchase = isCopiedDraftFirstInsert
+          ? null
+          : (savedVoucherId && vouchers ? vouchers.find((v: any) => v.id === savedVoucherId) : voucher);
         const obAlloc = currentPurchase != null ? (currentPurchase as any).openingBalanceAllocated : undefined;
         if (obAlloc !== undefined && obAlloc !== null && Number(obAlloc) >= 0) {
           (finalData as any).openingBalanceAllocated = Number(obAlloc) || 0;
         }
         
-        let docId: string | null | undefined = savedVoucherId;
-        let originalVoucherIdToDelete: string | null = null;
-        
-        if (isEditingAndConverting && voucher.id) {
-            originalVoucherIdToDelete = voucher.id;
-            docId = null; // Force creation of new voucher
-        }
+        if (!idArgForFirestore) delete (finalData as { id?: string }).id;
 
         const isEditForApprove = !!voucher?.id && !originalVoucherIdToDelete;
         const approverName = customUser?.displayName || user?.displayName || user?.email || user?.uid;
@@ -1053,12 +1063,14 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           companyId,
           user.uid,
           finalData,
-          originalVoucherIdToDelete ? null : docId,
+          idArgForFirestore,
           approveAfterSave && isEditForApprove ? { approvedByUserId: user.uid, approvedByName: approverName } : undefined,
           preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
         );
 
+        let docId: string | null | undefined;
         if (savedDoc && savedDoc.id) {
+            markCopiedDraftPersisted();
             docId = savedDoc.id;
             if (isMounted.current) setSavedVoucherId(docId);
             if (originalVoucherIdToDelete) {
@@ -1198,7 +1210,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       }
     },
     // pendingLinkAllocations, vouchers, processedParties: required so link data is persisted to server on Save (avoids stale closure)
-    [companyId, user, files, savePdfAsImage, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties]
+    [companyId, user, files, savePdfAsImage, onVoucherAction, form, savedVoucherId, company, voucher, isEditingAndConverting, fetchVoucherNumber, pendingLinkAllocations, vouchers, processedParties, resolveVoucherIdForSave, isPermissionEdit, markCopiedDraftPersisted, isCopiedDraftFirstInsert]
   );
 
 
@@ -1524,6 +1536,16 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   /** Dusra tab/item delete hone par stale master IDs toast + clear. */
   useEffect(() => {
     if (vouchersLoading || !companyId) return;
+    // Static APK/EXE: sale jaisa — masters hydrate se pehle khali lists par edit voucher mat todho.
+    if (
+      voucher?.id &&
+      processedParties.length === 0 &&
+      items.length === 0 &&
+      processedTaxes.length === 0 &&
+      expenseAccounts.length === 0
+    ) {
+      return;
+    }
     const missing: string[] = [];
     const pid = String(partyId || "").trim();
     if (pid && !processedParties.some((p: any) => p.id === pid)) {

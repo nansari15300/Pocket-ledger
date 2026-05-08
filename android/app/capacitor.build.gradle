@@ -17,6 +17,7 @@ dependencies {
     implementation project(':capacitor-share')
     implementation project(':capawesome-capacitor-file-picker')
     implementation project(':codetrix-studio-capacitor-google-auth')
+    implementation project(':capacitor-blob-writer')
 
 }
 

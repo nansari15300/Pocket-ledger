@@ -2,7 +2,9 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo, useRef, useCallback } from "react";
-import { collectionGroup, query, where, onSnapshot, orderBy, collection, DocumentData, Query, getDoc, getDocs, getDocFromServer, doc } from "firebase/firestore";
+import { usePathname } from "next/navigation";
+// Full collection queries: web cloud bhi pura voucher list (no orderBy/limit window).
+import { collectionGroup, query, where, onSnapshot, collection, getDoc, getDocs, getDocFromServer, doc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
@@ -20,6 +22,7 @@ import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import {
   BROWSER_DB_COLLECTION_BUMP,
   listCompanyDocsFromBrowserDb,
+  listVoucherSummaryProjectionFromBrowserDb,
   mirrorCollectionDocsToBrowserDbSilent,
   type BrowserDbCollectionBumpDetail,
 } from "@/lib/localCompanyDocMirror";
@@ -322,9 +325,19 @@ const VoucherContext = createContext<VoucherContextType>({
 type StateSetter<T> = React.Dispatch<React.SetStateAction<T[]>>;
 /** Recycle Bin safety: isDeleted=true row app ke normal screens par kabhi na dikhe. */
 const isAliveDoc = (row: any) => row?.isDeleted !== true;
+const HEAVY_LEDGER_SKIP_ROUTE_PREFIXES = ["/company", "/admin", "/distributor-signup"] as const;
+const HEAVY_LEDGER_SKIP_ROUTES = new Set(["/", ""]);
+
+function shouldSkipHeavyVoucherBootstrap(pathname: string): boolean {
+  const route = String(pathname || "").trim().toLowerCase();
+  // Keep voucher provider idle on non-ledger routes so startup/select-company clicks stay responsive.
+  if (HEAVY_LEDGER_SKIP_ROUTES.has(route)) return true;
+  return HEAVY_LEDGER_SKIP_ROUTE_PREFIXES.some((prefix) => route.startsWith(prefix));
+}
 
 export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   const { companyId, company, clearCompanyId } = useCompany();
+  const pathname = usePathname() || "";
   const { user, customUser, loading: authLoading } = useAuth();
   const { can } = usePermissions();
   // Selected company may be local even when user is online; treat it as local-data mode.
@@ -409,10 +422,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     setAccountGroups([]);
     setStaffGroups([]);
     setTaxGroups([]);
-      setExpenseGroups([]);
-      setJournalAccountNames({});
-      setUserNames({});
-      setLoading(true);
+    setExpenseGroups([]);
+    setJournalAccountNames({});
+    setUserNames({});
+    setLoading(true);
     lastCompanyIdRef.current = companyId ?? null;
   }, [companyId]);
 
@@ -486,7 +499,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   // --- Data Fetching Logic ---
   useEffect(() => {
     if (authLoading) {
-      setLoading(true);
+    setLoading(true);
       return;
     }
 
@@ -498,6 +511,13 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       setItemGroups([]); setGroups([]); setAccountGroups([]);
       setStaffGroups([]); setTaxGroups([]); setExpenseGroups([]);
     };
+
+    if (shouldSkipHeavyVoucherBootstrap(pathname)) {
+      // Route-level hard stop: background listeners/pulls off on selection/admin shells.
+      resetAllStates();
+      setLoading(false);
+      return;
+    }
 
     // सिंक पेन्डिङ भए वा कम्पनी अपूर्ण भए listener नलगाउने (permission denied रोक्न)।
     // Local/offline company: sharedWithEmails Firebase share hai — SQLite wale users ke liye valid local session kaafi.
@@ -553,18 +573,47 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     let cancelled = false;
 
     if (isExplicitLocalRegistryRow) {
-      setLoading(true);
-      // Tier-1: dashboard + party list feel fast; tier-2 fills rest without blocking global `loading`.
-      const CRITICAL_SQLITE_PATHS = new Set(["vouchers", "parties", "bank_accounts"]);
+    setLoading(true);
+      // Tier-1: masters only — `vouchers` SQLite read (JSON parse) hazaar+ rows par EXE me 30–90s lagata; spinner tab tak band na ho.
+      // Vouchers secondary chunk me: parties list pehle paint, totals snapshot/listeners ke baad refresh.
+      const CRITICAL_SQLITE_PATHS = new Set(["parties", "groups", "bank_accounts", "expense_accounts"]);
       const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
-            listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-              .then((cached) => {
-                if (cancelled) return;
-                setter(sqliteCachedRowsForSetter(cached, orderByField));
-              })
-              .catch(() => {})
+            (path === "vouchers"
+              ? // Fast-first vouchers: projection table se lite rows pehle; full JSON parse background me.
+                listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
+                  .then((lite) => {
+                    if (cancelled || !lite.length) return;
+                    setter((prev) =>
+                      prev.length
+                        ? prev
+                        : sqliteCachedRowsForSetter(
+                            lite.map((r) => ({
+                              id: r.id,
+                              type: r.type || "sale",
+                              date: r.date || null,
+                              amount: Number(r.amount || 0),
+                            })),
+                            orderByField
+                          )
+                    );
+                  })
+                  .catch(() => {})
+                  .then(() =>
+                    listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                      .then((cached) => {
+                        if (cancelled) return;
+                        setter(sqliteCachedRowsForSetter(cached, orderByField));
+                      })
+                      .catch(() => {})
+                  )
+              : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                  .then((cached) => {
+                    if (cancelled) return;
+                    setter(sqliteCachedRowsForSetter(cached, orderByField));
+                  })
+                  .catch(() => {}))
           )
         );
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
@@ -580,18 +629,54 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
 
     // Local APK: har online / ambiguous row ke liye pehle SQLite, phir server doc check — purane SQLite me syncedFromCloud missing ho to bhi cloud data milega
     if (shouldUseLocalCompanyData) {
-      setLoading(true);
-      // Fast app open: dashboard/party totals need these first; other masters can hydrate after first paint.
-      const CRITICAL_SQLITE_PATHS = new Set(["vouchers", "parties", "bank_accounts", "staff", "taxes"]);
+    setLoading(true);
+      // EXE/static: `vouchers` mirror = sabse bada table — ise critical me mat rakho warna Promise.all yahi pe minute leta hai.
+      // Pehle parties/groups/staff/taxes/banks + expense_accounts; vouchers + items baaki secondary chunk (loading tab tak band).
+      const CRITICAL_SQLITE_PATHS = new Set([
+        "parties",
+        "groups",
+        "bank_accounts",
+        "staff",
+        "taxes",
+        "expense_accounts",
+      ]);
       const loadSqliteChunk = (items: typeof collectionsToPrefetch) =>
         Promise.all(
           items.map(({ path, setter, orderByField }) =>
-            listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
-              .then((cached) => {
-                if (cancelled) return;
-                setter(sqliteCachedRowsForSetter(cached, orderByField));
-              })
-              .catch(() => {})
+            (path === "vouchers"
+              ? // Local/APK cold load: projection rows se pehle paint; heavy voucher JSON parse baad me merge.
+                listVoucherSummaryProjectionFromBrowserDb(companyId, { forBackupMerge: true })
+                  .then((lite) => {
+                    if (cancelled || !lite.length) return;
+                    setter((prev) =>
+                      prev.length
+                        ? prev
+                        : sqliteCachedRowsForSetter(
+                            lite.map((r) => ({
+                              id: r.id,
+                              type: r.type || "sale",
+                              date: r.date || null,
+                              amount: Number(r.amount || 0),
+                            })),
+                            orderByField
+                          )
+                    );
+                  })
+                  .catch(() => {})
+                  .then(() =>
+                    listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                      .then((cached) => {
+                        if (cancelled) return;
+                        setter(sqliteCachedRowsForSetter(cached, orderByField));
+                      })
+                      .catch(() => {})
+                  )
+              : listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true })
+                  .then((cached) => {
+                    if (cancelled) return;
+                    setter(sqliteCachedRowsForSetter(cached, orderByField));
+                  })
+                  .catch(() => {}))
           )
         );
       const critical = collectionsToPrefetch.filter((c) => CRITICAL_SQLITE_PATHS.has(c.path));
@@ -668,10 +753,16 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       { path: 'expense_groups', setter: setExpenseGroups },
     ];
 
+      /** Full-collection listener — web cloud par bhi poori voucher list (50-cap window hataya). */
+      const collectionListenerQuery = (path: string, isGroup: boolean | undefined) => {
+        if (isGroup) {
+          return query(collectionGroup(firestore, path), where("companyId", "==", fsCompanyId));
+        }
+        return query(collection(firestore, `companies/${fsCompanyId}/${path}`));
+      };
+
       const unsubscribers = collectionsToFetch.map(({ path, setter, isGroup, orderByField }) => {
-        const q = isGroup
-          ? query(collectionGroup(firestore, path), where("companyId", "==", fsCompanyId))
-          : query(collection(firestore, `companies/${fsCompanyId}/${path}`));
+        const q = collectionListenerQuery(path, isGroup);
         return onSnapshot(q, (snapshot) => {
           if (cancelled) return;
           const co = companyRef.current;
@@ -702,7 +793,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
                 preferLocalSqliteWhenIdsConflict: preferLocal,
               });
             }
-            setter(Array.isArray(dataForUi) ? dataForUi.map(stripMirrorMetaForEntityListRow) : dataForUi);
+            const rowsForSetter = Array.isArray(dataForUi)
+              ? dataForUi.map(stripMirrorMetaForEntityListRow)
+              : dataForUi;
+            // Snapshot = puri subcollection (Recent / dashboard dono ke liye sahi totals).
+            setter(rowsForSetter);
             // Har synced cloud company ke liye `company_docs` me debounced bake — airplane mode par pura ledger/masters SQLite se (sirf jo screen kholi thi wala data nahi).
             const persistSqliteFromSnap =
               !isGroup &&
@@ -784,11 +879,9 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
         }
       }
 
-      const initialFetches = collectionsToFetch.map(({ path, isGroup }) =>
+      const initialFetches = collectionsToFetch.map(({ path, isGroup, orderByField }) =>
         new Promise((resolve) => {
-          const q = isGroup
-            ? query(collectionGroup(firestore, path), where("companyId", "==", fsCompanyId))
-            : query(collection(firestore, `companies/${fsCompanyId}/${path}`));
+          const q = collectionListenerQuery(path, isGroup);
           const unsub = onSnapshot(q, () => { unsub(); resolve(true); }, (err: any) => {
             if (err?.code === 'permission-denied' || err?.code === 'PERMISSION_DENIED' || String(err?.message || '').includes('permission')) {
               console.warn('[PERMISSION_DENIED TRACK] source=useVouchers initialFetches path=companies/' + companyId + '/' + path, { companyId, path });
@@ -884,7 +977,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       unsubRef.current.forEach(u => u());
       unsubRef.current = [];
     };
-  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch]);
+  }, [companyId, voucherListenerCompanyKey, user?.uid, user?.email, authLoading, localAuthEpoch, pathname]);
 
   // Single-doc / write-path upsert ke baad merge (notify) — collections ke hisaab se state update.
   useEffect(() => {
@@ -894,6 +987,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       (isLocalOnlyMode() ||
         String(co?.storageOption || "").toLowerCase() === "local" ||
         isCloudBackedCompany(co));
+    if (shouldSkipHeavyVoucherBootstrap(pathname)) return;
     if (!shouldListenSqliteBump) return;
     const onBump = (ev: Event) => {
       const d = (ev as CustomEvent<BrowserDbCollectionBumpDetail>).detail;
@@ -962,6 +1056,7 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
     company?.syncedFromCloud,
     company?.syncPolicy,
     company?.authoritativeCompanyId,
+    pathname
   ]);
 
   /** Voucher/account/user display names: masters se pehle, bounded Firestore chunk — `collection('users')` full scan hata (400+ vouchers / large user base = hang). */
@@ -1648,6 +1743,11 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
   /** Jis company ka data last stable render me dikha (same-company refresh vs company switch alag karte hain). */
   const lastStableDisplayCompanyIdRef = useRef<string | null>(null);
 
+  // Company badalte hi stable ref hatao — warna purani id se `sameCompany === true` ho kar display path galat ho (nested dialog / fast switch).
+  useEffect(() => {
+    lastStableDisplayCompanyIdRef.current = null;
+  }, [companyId]);
+
   // Update ref in useEffect to avoid accessing refs during render
   useEffect(() => {
     if (!loading) {
@@ -1669,7 +1769,10 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
       // Sirf same company par purana snapshot + loading: UI flicker kam. Company switch (e.g. voucher dialog target)
       // par purani company ke vouchers mat dikhayo — bill-wise/spend-wise counts + forms galat company ke ho jate the.
       if (sameCompany) {
-        setDisplayValue({ ...previousData.current, loading: true });
+        setDisplayValue({
+          ...previousData.current,
+          loading: true,
+        });
       } else {
         setDisplayValue(value);
       }

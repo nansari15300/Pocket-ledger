@@ -1,5 +1,7 @@
 "use client";
 
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+
 /** Shared IndexedDB for offline data (companies, pending files). */
 const BASE_DB_NAME = "pocket-ledger-pending";
 // Browser me pehle se zyada version ho to `open(..., 2)` fail: "requested version < existing".
@@ -15,9 +17,19 @@ export function openDB(): Promise<IDBDatabase> {
     const hostScope =
       typeof window === "undefined"
         ? "default"
-        : `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`
-            .replace(/[^a-zA-Z0-9_.-]/g, "_")
-            .toLowerCase();
+        : isCapacitorNativeApp()
+        ? // Native/app shell: port change ke baad bhi same IndexedDB naam chahiye, warna attachment cache restart pe "missing" dikhega.
+          "capacitor_native_embedded"
+        : (() => {
+            const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase();
+            if (ua.includes("electron")) {
+              // Electron shell me host/port drift (localhost vs 127.0.0.1, random port) par cache split na ho.
+              return "electron_embedded";
+            }
+            return `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`
+              .replace(/[^a-zA-Z0-9_.-]/g, "_")
+              .toLowerCase();
+          })();
     // Host-scoped pending DB prevents localhost/prod pending queues from mixing.
     const req = indexedDB.open(`${BASE_DB_NAME}__${hostScope}`, DB_VERSION);
     req.onerror = () => reject(req.error);

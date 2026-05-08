@@ -134,7 +134,8 @@ try {
     console.warn("[build-static] plans-seed step non-fatal:", e && e.message ? e.message : e);
   }
 
-  execSync("node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack", {
+  // Turbopack (Next 16 default); pdf alias `next.config` `turbopack.resolveAlias` me — purana `--webpack` hata
+  execSync("node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build", {
     cwd: root,
     stdio: "inherit",
     // NEXT_PUBLIC_* inlined into client bundle so static APK/Electron use query-based master-detail + Report header

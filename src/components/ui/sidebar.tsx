@@ -161,7 +161,13 @@ export const Sidebar = React.forwardRef<
             <SheetHeader>
               <SheetTitle className="sr-only">Main Menu</SheetTitle>
             </SheetHeader>
-            <div ref={ref} className="flex h-full min-h-0 flex-col gap-0.5 overflow-y-auto bg-sidebar p-0.5 text-sidebar-foreground" {...props}>
+            {/* Marker {...props} ke baad — hydration stable */}
+            <div
+              ref={ref}
+              className="flex h-full min-h-0 flex-col gap-0.5 overflow-y-auto bg-sidebar p-0.5 text-sidebar-foreground"
+              {...props}
+              data-pl-main-sidebar="1"
+            >
                {children}
             </div>
           </SheetContent>
@@ -170,11 +176,13 @@ export const Sidebar = React.forwardRef<
     )
   }
 
+  // data-pl-main-sidebar {...props} ke baad — parent spread null/undefined se hydration mismatch na ho
   return (
     <Comp
       ref={ref}
       className={cn(sidebarVariants({ isOpen }), className)}
       {...props}
+      data-pl-main-sidebar="1"
     >
       {children}
     </Comp>

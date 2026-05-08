@@ -62,6 +62,7 @@ import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentU
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
+import { useCopyDraftFirstSave } from "@/hooks/useCopyDraftFirstSave";
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { getPaymentOutRemaining, getTaxFromAllocation, getNetFromAllocation, hasPaymentLinks, getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-allocation-utils";
 import type { Allocation } from "@/lib/payment-allocation-utils";
@@ -419,6 +420,12 @@ export function SalaryForm({
     onEffectiveLinksChange?.(false);
   }, [onEffectiveLinksChange]);
   useResetLinkStateOnCopyTargetCompany(copySaveTargetCompanyId, resetLinksOnCopyTargetChange);
+  const {
+    resolveVoucherIdForSave,
+    isPermissionEdit,
+    markCopiedDraftPersisted,
+    isCopiedDraftFirstInsert,
+  } = useCopyDraftFirstSave(copySaveTargetCompanyId);
   /** Skip reset when same voucher updates (liveVoucher) and user has edits — fixes unlink → change fields → save. */
   const lastResetVoucherIdRef = useRef<string | null>(null);
 
@@ -1274,7 +1281,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
 
     try {
       // Permission check: create or edit
-      const isEdit = !!voucher?.id || !!savedVoucherIdRef;
+      const isEdit = isPermissionEdit(!!voucher?.id, savedVoucherIdRef);
       const voucherDate = data.date instanceof Date ? data.date : new Date(data.date);
       
       if (isEdit) {
@@ -1327,6 +1334,13 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
     }
 
     try {
+      const originalVoucherIdToDelete: string | null =
+        isEditingAndConverting && voucher?.id ? String(voucher.id) : null;
+      const idArgForFirestore = resolveVoucherIdForSave({
+        savedVoucherId: savedVoucherIdRef,
+        originalVoucherIdToDelete,
+      });
+
       const voucherType = isPaymentMode ? "payment_out" : "journal";
       const subType = isPaymentMode ? "pay_salary" : "add_salary";
 
@@ -1335,7 +1349,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           // Local-first mode me duplicate check local vouchers list se karo; network read avoid karo.
           const duplicateLocal = allVouchers.some((v: any) =>
             !v?.isDeleted &&
-            v?.id !== savedVoucherIdRef &&
+            v?.id !== idArgForFirestore &&
             v?.voucherNumber === data.voucherNumber &&
             v?.type === voucherType &&
             v?.subType === subType
@@ -1353,7 +1367,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
             where("subType", "==", subType)
           );
           const existingVoucherSnap = await getDocs(q);
-          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== savedVoucherIdRef) {
+          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
             sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already used." });
             setIsLoading(false);
             return;
@@ -1400,7 +1414,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
-              : (savedVoucherIdRef ?? voucher?.id ?? null);
+              : idArgForFirestore ?? null;
           const { fileUrls: merged, preGeneratedVoucherId: preGen } =
             await appendLocalOnlyVoucherFilesToUrls({
               companyId,
@@ -1476,27 +1490,25 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
 
         submissionData.entries = entries;
         // Preserve opening balance linked to this salary (from voucher or from Link payment dialog DONE so we don't overwrite before refetch)
-        if (voucher?.id || savedVoucherIdRef) {
+        if (!isCopiedDraftFirstInsert && (voucher?.id || savedVoucherIdRef)) {
           // Always persist the latest local OB link so edit-mode Save cannot restore stale voucher props.
           submissionData.openingBalanceAllocated = Number(latestOBAllocated) || 0;
         }
       }
 
-      let originalVoucherIdToDelete: string | null = null;
-      if (isEditingAndConverting && voucher.id) {
-          originalVoucherIdToDelete = voucher.id;
-      }
-      
+      if (!idArgForFirestore) delete (submissionData as { id?: string }).id;
+
       const savedDoc = await saveVoucher(
         companyId,
         user.uid,
         submissionData,
-        originalVoucherIdToDelete ? null : savedVoucherIdRef,
+        idArgForFirestore,
         undefined,
         preGeneratedVoucherId ? { preGeneratedVoucherId } : undefined
       );
 
       if (savedDoc && savedDoc.id) {
+          markCopiedDraftPersisted();
           if (isMounted.current) setSavedVoucherIdRef(savedDoc.id);
           // Bill-wise links are local-first; push them only after the salary voucher itself exists/saves successfully.
           if (!isPaymentMode) {

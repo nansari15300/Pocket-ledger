@@ -27,3 +27,16 @@ export function tryGetStoragePathFromFirebaseDownloadUrl(url: string): string | 
     return null;
   }
 }
+
+/** Voucher/entity attachment object path (without protocol) — e.g. `voucher-files/.../file.jpg`. */
+export function looksLikeFirebaseStorageObjectPath(value: string): boolean {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  if (/^(https?:|data:|blob:|local:|capacitor:|file:)/i.test(v)) return false;
+  // Firebase object path usually in these roots; relative UI paths avoid karne ke liye strict prefix match rakho.
+  return (
+    /^voucher-files\//i.test(v) ||
+    /^companies\//i.test(v) ||
+    /^entity-files\//i.test(v)
+  );
+}

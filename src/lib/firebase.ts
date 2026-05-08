@@ -13,6 +13,7 @@ import { getStorage } from 'firebase/storage';
 import { setLogLevel } from 'firebase/app';
 import { detachCompanyPickerFirestoreListenersIfAny } from '@/lib/companyPickerFirestoreDetach';
 import { computeIsLocalOnlyMode } from '@/lib/dataSourceModeDefaults';
+import { clearEmbeddedWarmBootstrapFlags } from '@/lib/embeddedWarmBootstrapFlags';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAtHvZ3PY50rwF5oqHjtRMjbec6NzMl6dM",
@@ -249,6 +250,12 @@ export async function enqueueSyncFirestoreNetworkFromLocalConfig(): Promise<void
 export async function signOutWithFirestoreTeardown(authInstance: Auth): Promise<void> {
   if (typeof window !== 'undefined') {
     firestoreWatchTeardownSuppressionUntil = Date.now() + 20_000;
+    // Logout: warm-ok flags hatao taaki agli login pe startup plan-sync/token dubara chale
+    try {
+      clearEmbeddedWarmBootstrapFlags();
+    } catch {
+      /* ignore */
+    }
   }
   // Company picker: dual onSnapshot (owned + shared) + signOut = Firestore 12.12 ca9/b815 — detach first.
   detachCompanyPickerFirestoreListenersIfAny();

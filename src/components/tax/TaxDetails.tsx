@@ -100,6 +100,7 @@ import {
 import { Input } from "../ui/input";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { getTaxTransactionAmounts, useTransactions } from "@/hooks/use-transactions";
 import { useVouchers } from "@/hooks/useVouchers";
 import { NotificationBell } from "../vouchers/NotificationBell";
@@ -165,6 +166,11 @@ export function TaxDetails({
     if (!initialTax) return undefined;
     return allTaxes.find((t) => t.id === initialTax.id) || initialTax;
   }, [allTaxes, initialTax]);
+
+  const taxHeaderAttachmentUrl = useMemo(
+    () => (tax ? trimEntityFileUrlForPreview(tax.fileUrl) : null),
+    [tax?.fileUrl, tax?.id]
+  );
 
   const [rowsPerPage, setRowsPerPage] = useRowsPerPage(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -814,10 +820,10 @@ export function TaxDetails({
                 </Button>
               )}
               {/* Local `local:…` refs + HTTPS URLs — same as bank/party; hover = voucher preview frame */}
-              <EntityFileAttachmentHover fileUrl={tax.fileUrl} triggerClassName="inline-flex shrink-0 rounded-full">
+              <EntityFileAttachmentHover fileUrl={taxHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
                 <ResolvedEntityAvatar
                   className="h-12 w-12 text-lg flex-shrink-0"
-                  src={tax.fileUrl}
+                  src={taxHeaderAttachmentUrl ?? undefined}
                   alt={tax.name}
                   fallbackSlot={<Receipt className="h-6 w-6 text-muted-foreground" />}
                 />

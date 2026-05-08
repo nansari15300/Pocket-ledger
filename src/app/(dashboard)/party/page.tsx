@@ -64,6 +64,7 @@ import { PendingApprovalListFilterBadge } from "@/components/layout/PendingAppro
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 
 function PartyPageContent() {
   const { user } = useAuth();
@@ -192,7 +193,8 @@ function PartyPageContent() {
   const mobileDetailHeaderAvatar = useMemo(() => {
     if (!isMobile || !selectedParty) return null;
     // Fixed 8x8 slot: keep box size same, avatar sits with 1px inset on all sides.
-    const fileUrl = String((selectedParty as any).fileUrl || "").trim();
+    // `"null"` string / khali fileUrl — bina file ke hover PDF na kholo
+    const attachmentUrl = trimEntityFileUrlForPreview((selectedParty as any).fileUrl);
     const initials = (selectedParty.name || "NA")
       .split(" ")
       .filter(Boolean)
@@ -202,12 +204,12 @@ function PartyPageContent() {
       .toUpperCase();
     const openPreview = () => {
       // Mobile header avatar tap: open full in-app attachment preview.
-      if (!fileUrl) return;
-      void openAttachmentInApp(fileUrl, { title: selectedParty.name });
+      if (!attachmentUrl) return;
+      void openAttachmentInApp(attachmentUrl, { title: selectedParty.name });
     };
     return (
       <div className="h-8 w-8 border-l border-border flex items-center justify-center p-px">
-        <EntityFileAttachmentHover fileUrl={fileUrl} triggerClassName="inline-flex rounded-full">
+        <EntityFileAttachmentHover fileUrl={attachmentUrl} triggerClassName="inline-flex rounded-full">
           <button
             type="button"
             className="inline-flex h-full w-full items-center justify-center rounded-full"
@@ -216,7 +218,7 @@ function PartyPageContent() {
           >
             <ResolvedEntityAvatar
               className="h-full w-full text-xs"
-              src={fileUrl}
+              src={attachmentUrl ?? undefined}
               alt={selectedParty.name}
               fallbackText={initials || "NA"}
             />

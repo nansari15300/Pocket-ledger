@@ -3,6 +3,9 @@
 import { useEffect, useRef } from "react";
 import { auth } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapFlags";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { useCompany } from "@/hooks/useCompany";
 
@@ -10,6 +13,9 @@ import { useCompany } from "@/hooks/useCompany";
 export function StaticFastResumeSyncManager() {
   const { triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const lastRunRef = useRef(0);
+  /** Online/offline flap: defer timer cleanup; airplane par pehle `triggerSync()` turant listeners chhedta tha ("refresh" feel). */
+  // Deferred reload timer id — browser number; TS `@types/node` conflicts Timeout vs number; `number` keeps next build happy with window.setTimeout.
+  const deferredRegistryTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!isLocalOnlyMode()) return;
@@ -25,16 +31,52 @@ export function StaticFastResumeSyncManager() {
 
       window.setTimeout(() => {
         if (cancelled) return;
-        // Local registry reload cheap hai and restored/uploaded companies ko next paint me fresh karta hai.
-        reloadLocalCompanyRegistry();
-        triggerSync();
+        const embeddedClient =
+          isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
+        const uid = auth.currentUser?.uid ?? null;
+        // Pehli full warm ke baad cold `mount` par token + registry tick mat chhedo — attachment warm / SQLite ko priority; sync `online`/resume par
+        const skipAuthChurnOnMount =
+          reason === "mount" &&
+          isLocalOnlyMode() &&
+          embeddedClient &&
+          shouldSkipEmbeddedStartupAuthChurn(null, uid);
+
         void flushVoucherOutbox();
-        void auth.currentUser?.getIdToken(false).catch(() => {
-          // Offline APK startup ko slow/blocked mat karo; Firebase token next online event pe retry hoga.
-        });
+        if (!skipAuthChurnOnMount) {
+          void auth.currentUser?.getIdToken(false).catch(() => {
+            // Offline APK startup ko slow/blocked mat karo; Firebase token next online event pe retry hoga.
+          });
+        }
         if (process.env.NODE_ENV !== "production") {
           console.debug("[StaticFastResumeSyncManager] background refresh", reason);
         }
+
+        if (skipAuthChurnOnMount) {
+          return;
+        }
+
+        // **Offline → online:** user ko "app refresh" feel aa raha tha; online event par registry/listener tick ko skip rakho.
+        // Outbox flush + token warm-up upar ho chuka hota hai, isliye data sync background me chalta rahega bina UI jump ke.
+        if (reason === "online") {
+          if (deferredRegistryTimerRef.current != null) {
+            clearTimeout(deferredRegistryTimerRef.current);
+            deferredRegistryTimerRef.current = null;
+          }
+          return;
+        }
+
+        // Visibility/resume: listener tick abhi; SQLite mirror thoda defer (scroll na hile).
+        triggerSync();
+        if (deferredRegistryTimerRef.current != null) {
+          clearTimeout(deferredRegistryTimerRef.current);
+          deferredRegistryTimerRef.current = null;
+        }
+        const delayMs = isCapacitorNativeApp() ? 4_000 : 2_500;
+        deferredRegistryTimerRef.current = window.setTimeout(() => {
+          deferredRegistryTimerRef.current = null;
+          if (cancelled) return;
+          reloadLocalCompanyRegistry();
+        }, delayMs);
       }, 350);
     };
 
@@ -64,6 +106,10 @@ export function StaticFastResumeSyncManager() {
 
     return () => {
       cancelled = true;
+      if (deferredRegistryTimerRef.current != null) {
+        clearTimeout(deferredRegistryTimerRef.current);
+        deferredRegistryTimerRef.current = null;
+      }
       window.removeEventListener("online", onOnline);
       document.removeEventListener("visibilitychange", onVisibility);
       removeAppStateListener?.();

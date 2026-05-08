@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useDate } from "@/hooks/useDate";
-import { useRouter, useSearchParams, useParams } from "next/navigation";
+import { useRouter, useSearchParams, useParams, usePathname } from "next/navigation";
 import { AccountList } from "@/components/bank-cash/AccountList";
 import { AccountDetails } from "@/components/bank-cash/AccountDetails";
 import { AccountGroupList } from "@/components/bank-cash/AccountGroupList";
@@ -32,8 +32,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import { ResponsiveMasterDetail } from "@/components/layout/ResponsiveMasterDetail";
 import { LoadingSpinner } from "@/components/layout/LoadingSpinner";
-import { doc, getDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { DateRange } from "@/components/ui/ad-calendar";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -43,8 +41,15 @@ export default function BankCashPage() {
   const { user } = useAuth();
   const { company, companyId } = useCompany();
   const { formatCurrency } = useDate();
-  const { vouchers, loading: vouchersLoading, processedAccounts, processedAccountGroups: initialProcessedAccountGroups } = useVouchers();
+  const {
+    vouchers,
+    loading: vouchersLoading,
+    processedAccounts,
+    processedAccountGroups: initialProcessedAccountGroups,
+    userNames: vouchersUserNames,
+  } = useVouchers();
   const router = useRouter();
+  const pathname = usePathname() || "";
   const searchParams = useSearchParams();
   const params = useParams();
   
@@ -86,53 +91,48 @@ export default function BankCashPage() {
   }, [processedAccounts, initialProcessedAccountGroups, companyId]);
 
   
-  const fetchUserName = useCallback(async (userId: string): Promise<string> => {
-    if (isLocalOnlyMode()) {
-      // Local-only mode: skip Firestore users lookup to avoid offline runtime errors.
-      return "N/A";
-    }
-    if (userNames[userId] && userNames[userId] !== "Unknown") return userNames[userId];
-    try {
-        const userDoc = await getDoc(doc(firestore, 'users', userId));
-        if (userDoc.exists()) {
-            const data = userDoc.data();
-            // Get actual name, not UID
-            const userName = data.displayName || data.name || data.email || null;
-            // Only return actual name, never UID
-            if (userName && userName !== userId && !userName.match(/^[a-zA-Z0-9_-]{20,}$/)) {
-                return userName;
-            }
-        }
-    } catch (e) {}
-    return "N/A"; // Return N/A instead of Unknown
-  }, [userNames]);
-
   useEffect(() => {
-    const uids = new Set(vouchers.map((t) => t.userId).filter(Boolean));
-    uids.forEach(async (uid) => {
-        if (!userNames[uid as any]) {
-            const name = await fetchUserName(uid as any);
-            setUserNames((prev) => ({ ...prev, [uid as any]: name }));
+    // Bank/Cash page: rely on shared voucher user-name map; avoid per-row Firestore user doc fetch loops.
+    setUserNames((prev) => {
+      const merged = { ...prev };
+      let changed = false;
+      for (const [uid, name] of Object.entries(vouchersUserNames || {})) {
+        const safe = String(name || "").trim();
+        if (!safe) continue;
+        if (merged[uid] !== safe) {
+          merged[uid] = safe;
+          changed = true;
         }
+      }
+      return changed ? merged : prev;
     });
-  }, [vouchers, userNames, fetchUserName]);
+  }, [vouchersUserNames]);
 
   useEffect(() => {
     const savedView = localStorage.getItem("bankCashActiveView");
     if (savedView) setActiveView(savedView);
   }, []);
 
+  const lastAutoRouteSyncViewRef = useRef<string | null>(null);
   useEffect(() => {
+    if (lastAutoRouteSyncViewRef.current === activeView) return;
+    lastAutoRouteSyncViewRef.current = activeView;
     localStorage.setItem("bankCashActiveView", activeView);
     setSelected(null);
     const list = activeView === 'accounts' ? processedAccounts : processedAccountGroups;
     if (list.length > 0 && !isMobile) {
       const newPath = activeView === 'accounts' ? `/bank-cash/${list[0].id}` : (list[0].id === 'ungrouped' ? `/bank-cash?view=groups&id=ungrouped` : `/bank-cash/group/${list[0].id}`);
-      router.replace(newPath);
+      // Prevent redundant route replace on list refresh; only navigate when target URL differs.
+      const currentPathWithQuery =
+        pathname + (searchParams.toString() ? `?${searchParams.toString()}` : "");
+      if (currentPathWithQuery !== newPath) router.replace(newPath);
     } else {
-      router.replace(`/bank-cash?view=${activeView}`);
+      const fallbackPath = `/bank-cash?view=${activeView}`;
+      const currentPathWithQuery =
+        pathname + (searchParams.toString() ? `?${searchParams.toString()}` : "");
+      if (currentPathWithQuery !== fallbackPath) router.replace(fallbackPath);
     }
-  }, [activeView, router, processedAccounts, processedAccountGroups, isMobile]);
+  }, [activeView, router, processedAccounts, processedAccountGroups, isMobile, pathname, searchParams]);
 
   useEffect(() => {
     if (vouchersLoading) return;

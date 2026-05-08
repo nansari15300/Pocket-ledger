@@ -12,6 +12,8 @@ import React, { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import {
   EntityListQuickFilterBar,
   type EntityListQuickFilter,
@@ -110,17 +112,24 @@ export const PartyList = React.memo(({
               {filteredAndSortedParties.map((party) => {
                 const isSelected = selectedParty?.id === party.id;
                 const href = getItemHref?.(party);
+                const attachmentPreviewUrl = trimEntityFileUrlForPreview(party.fileUrl);
                 const cardContent = (
                   <div className="pl-master-list-row">
                         {/* बायाँ: avatar + naam (flex-1 truncate — mobile ma amount clip hundaina) */}
                         <div className="pl-master-list-row-leading">
                           <div className="relative flex-shrink-0">
-                            <ResolvedEntityAvatar
-                              className="h-8 w-8 border text-xs"
-                              src={party.fileUrl}
-                              alt={party.name}
-                              fallbackText={getInitials(party.name)}
-                            />
+                            {/* Master row: voucher file-column jaisa `AttachmentHoverPortal` — pehle sirf thumbnail tha */}
+                            <EntityFileAttachmentHover
+                              fileUrl={attachmentPreviewUrl}
+                              triggerClassName="inline-flex shrink-0 rounded-full"
+                            >
+                              <ResolvedEntityAvatar
+                                className="h-8 w-8 border text-xs"
+                                src={attachmentPreviewUrl ?? undefined}
+                                alt={party.name}
+                                fallbackText={getInitials(party.name)}
+                              />
+                            </EntityFileAttachmentHover>
                             {(pendingApprovalByPartyId[party.id] ?? 0) > 0 && (
                               <span
                                 className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-pink-500 text-white text-[10px] font-bold origin-center"
@@ -189,7 +198,8 @@ export const PartyList = React.memo(({
                     transition={{ duration: rowAnimationDuration, ease: "easeInOut" }}
                   >
                     {href ? (
-                      <Link href={href} className="block min-w-0 max-w-full overflow-hidden">
+                      // Master list navigation: per-row auto-prefetch off rakho to avoid repeat background bursts on revisit.
+                      <Link prefetch={false} href={href} className="block min-w-0 max-w-full overflow-hidden">
                         <Card className={cardClassName}>{cardContent}</Card>
                       </Link>
                     ) : (

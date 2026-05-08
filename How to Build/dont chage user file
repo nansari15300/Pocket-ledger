@@ -1,5 +1,3 @@
-Tumhare steps ab:
-
 Zarurat ho to npm run build:static (fresh out/).
 npm run cap:sync:bundled (remote APK nahi chahiye to yahi use karo;
  plain cap:copy:android tab bhi OK hai agar env me remote vars set nahi hain).
@@ -8,3 +6,66 @@ Note: Agar PowerShell session me CAP_USE_REMOTE_WEB=1 permanent set hai
  to normal npx cap sync phir se remote inject kar sakta hai — 
  isliye bundled ke liye npm run cap:sync:bundled use karna safe hai.
   Remote test ke liye phir npm run cap:sync:remote chalao.
+
+
+---------------------------------------------------------------------------------------------------
+PWA / static website (Serwist 
+1st — npm run build:static
+2nd — npm run cap:sync:remote
+     if need to change URL: npm run cap:sync:remote -- https://staging.pocket-ledger.com)
+      
+3rd — Gradle: .\android\gradlew.bat assembleDebug  
+----------------------------------------------------------------------------------------------------
+
+
+
+------------------------------------------------------------------------------------------------
+Android APK Native/static
+
+1st — npm run build:static
+2nd — npm run cap:sync
+  or  npm run cap:copy:android
+   Or npm run cap:sync:bundled 
+3rd — android folder: .\gradlew.bat assembleDebug  
+  Or  (release ke liye assembleRelease)
+---------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------
+===== iOS =====
+
+1st — npm run build:static
+
+2nd — npm run cap:copy:ios
+
+3rd — Xcode se open karke Run / Archive
+----------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------
+===== Desktop Windows (.exe) =====
+
+1st — npm run build:static
+
+2nd — npm run electron:build:win
+----------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------
+===== Desktop Linux =====
+
+1st — npm run build:static
+
+2nd — npm run electron:build:linux
+
+----------------------------------------------------------------------------------------------------
+
+
+----------------------------------------------------------------------------------------------------
+===== Sab ek baar me (static + cap android/ios copy + Electron win+linux) =====
+
+1st — npm run build:static:all       (ye hi poore chain ko chalata hai — alag steps manually nahi)
+----------------------------------------------------------------------------------------------------
