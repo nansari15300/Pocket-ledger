@@ -112,6 +112,8 @@ export function CreateContraForm({
   onCopyMissingCategory,
   isCopyingMissingMasters = false,
   copyMasterDraftRequest,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -129,6 +131,8 @@ export function CreateContraForm({
   onCopyMissingCategory?: (category: string, opts?: CopyMissingMasterOpts) => void;
   isCopyingMissingMasters?: boolean;
   copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
@@ -232,7 +236,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     linkedPaymentInIds.some((id, i) => id !== initialLinkedPaymentInIdsRef.current[i]);
   /** Link Pay Out (spend wise To side) changed in dialog but not saved — show Save & Approve. */
   const _isSpendWiseLinkOutDirty = !!pendingLinkedPaymentOut;
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isLinkDirty || _isSpendWiseLinkOutDirty;
+  const isFormDirty =
+    _isFormFieldsDirty || _isFileDirty || _isLinkDirty || _isSpendWiseLinkOutDirty || recurringVoucherAuxiliaryDirty;
   const fromAccountId = form.watch("fromAccountId");
   const toAccountId = form.watch("toAccountId");
   const amount = Number(form.watch("amount")) || 0;
@@ -1991,7 +1996,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
@@ -2044,7 +2049,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

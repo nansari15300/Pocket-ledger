@@ -101,10 +101,24 @@ export async function reconcileOnlineMirrorsWithServer(user: {
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       if (code === "permission-denied" || code === "PERMISSION_DENIED") {
-        const did = await demoteCompanyToLocal(id, "permission_denied");
-        if (did) {
+        // Missing doc `getDoc` throw nahi karta — ye deny = doc hai lekin rules me `ownerId` / share match nahi.
+        // Chhota retry: auth token race pe galat demote kam ho.
+        await new Promise((r) => setTimeout(r, 700));
+        try {
+          const snapRetry = await getDoc(doc(firestore, "companies", id));
+          if (snapRetry.exists()) continue;
+          await removeLocalCompanyById(id, { firebaseUid: user.uid });
+          removedIds.push(id);
           changed = true;
-          demotedIds.push(id);
+        } catch (e2: unknown) {
+          const c2 = (e2 as { code?: string })?.code;
+          if (c2 === "permission-denied" || c2 === "PERMISSION_DENIED") {
+            const did = await demoteCompanyToLocal(id, "permission_denied");
+            if (did) {
+              changed = true;
+              demotedIds.push(id);
+            }
+          }
         }
       }
     }

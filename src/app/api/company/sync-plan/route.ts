@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
-import type { PlanId } from "@/config/plans";
+import { type PlanId, normalizePlanIdForClient } from "@/config/plans";
 
 /** `companyId` = Firestore doc id; `localCompanyId` = SQLite row id jab alag ho (offline-first) */
 type Body = { companyId?: string; localCompanyId?: string };
@@ -47,12 +47,6 @@ async function withFirestoreTransientRetry<T>(fn: () => Promise<T>): Promise<T> 
     }
   }
   throw last;
-}
-
-function normalizeCompanyPlanId(raw: unknown): PlanId {
-  const s = String(raw ?? "basic").trim();
-  if (s === "basic" || s === "advance" || s === "pro" || s === "pro-plus") return s;
-  return "basic";
 }
 
 /** Owner ya shared email — plan entitlements sabko same company doc se */
@@ -115,7 +109,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    const planId = normalizeCompanyPlanId(data.planId);
+    const planId = normalizePlanIdForClient(data.planId != null ? String(data.planId) : undefined);
     let planExpiryMs: number | null = null;
     if (typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs)) {
       planExpiryMs = data.planExpiryMs;

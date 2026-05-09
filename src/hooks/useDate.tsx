@@ -48,6 +48,13 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     setIsClient(true);
+    // Company Display settings: calendar AD / BS / Both — sabse pehle yahi (system-wide reference).
+    const companyCal = company?.displaySettings?.calendarDateSystem as DateSystem | undefined;
+    if (companyCal && ["AD", "BS", "Both"].includes(companyCal)) {
+      setDateSystemState(companyCal);
+      localStorage.setItem("dateSystem", companyCal);
+      return;
+    }
     // If company country is not Nepal, default to AD
     if (company?.country && company.country !== "Nepal") {
       setDateSystemState("AD");
@@ -58,7 +65,7 @@ export const DateProvider = ({ children }: { children: ReactNode }) => {
     if (storedDateSystem && ["AD", "BS", "Both"].includes(storedDateSystem)) {
       setDateSystemState(storedDateSystem);
     }
-  }, [company?.country]);
+  }, [company?.country, company?.displaySettings?.calendarDateSystem]);
 
   useEffect(() => {
     if (!isClient) return;

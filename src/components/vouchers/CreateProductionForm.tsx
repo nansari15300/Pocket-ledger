@@ -147,6 +147,8 @@ export function CreateProductionForm({
   showSaveAndApproveOnCreate = false,
   onApprove,
   isApproving = false,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -156,6 +158,8 @@ export function CreateProductionForm({
   showSaveAndApproveOnCreate?: boolean;
   onApprove?: () => void;
   isApproving?: boolean;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
@@ -206,7 +210,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || recurringVoucherAuxiliaryDirty;
   const approveAfterSaveRef = useRef(false);
 
   const { fields: rawMaterialFields, append: appendRawMaterial, remove: removeRawMaterial } = useFieldArray({
@@ -1294,7 +1298,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+              <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                 {isLoading ? "..." : "Save"}
               </Button>
               {voucher?.id ? (
@@ -1337,7 +1341,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 </Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>
                 <Button type="button" disabled className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                   {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                   Save
                 </Button>

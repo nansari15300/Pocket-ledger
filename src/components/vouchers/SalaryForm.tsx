@@ -325,6 +325,8 @@ export function SalaryForm({
   copyMasterDraftRequest,
   onRefreshCopyMismatch,
   isCopyingMissingMasters = false,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -346,6 +348,10 @@ export function SalaryForm({
   copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
   onRefreshCopyMismatch?: () => void | Promise<void>;
   isCopyingMissingMasters?: boolean;
+  /** Auto Monthly ON bina Settings save: main Save / Save&Approve block (AddVoucherDialog se). */
+  recurringVoucherSaveBlocked?: boolean;
+  /** Header switch committed template se alag ho to form pristine ho tab bhi Save enable (e.g. ON→OFF). */
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const isMounted = useRef(true);
 
@@ -1102,7 +1108,8 @@ export function SalaryForm({
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
   })();
-  const isAnyDirty = isFormDirty || isFileDirty || billWiseLinkDirty;
+  // recurringVoucherAuxiliaryDirty: Auto Monthly header ON↔OFF (committed se mismatch) par Save enable.
+  const isAnyDirty = isFormDirty || isFileDirty || billWiseLinkDirty || recurringVoucherAuxiliaryDirty;
   const debitAccountId = form.watch("debitAccountId");
   const debitAccountBalance = useMemo(() => {
     if (!debitAccountId) return null;
@@ -2694,10 +2701,10 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
-                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
+                <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
                   {isApproving ? "..." : "Save & Approve"}
                 </Button>
               </div>
@@ -2739,11 +2746,11 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherIdRef) && !isAnyDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>
-                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
+                  <Button type="button" onClick={async (e) => { e.preventDefault(); if (showSaveAndApproveOnCreate && !voucher?.id) { await handleFormSubmit(e, { approveAfterSave: true }); } else if (isAnyDirty) { await handleFormSubmit(e, { approveAfterSave: true }); } else { onApprove?.(); } }} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled || recurringVoucherSaveBlocked) : (editingDisabled || !showApproveButton || !onApprove || isApproving || recurringVoucherSaveBlocked || (!!voucher?.isApproved && !isAnyDirty))} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                     {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
                     Save & Approve
                   </Button>

@@ -222,6 +222,8 @@ export function CreatePaymentOutForm({
   isCopyingMissingMasters = false,
   copyMasterDraftRequest,
   onRefreshCopyMismatch,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -244,6 +246,8 @@ export function CreatePaymentOutForm({
   copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
   /** Save & Copy mismatch list dubara ginti party/bank create ke baad — Copy-* buttons hide hone ke liye. */
   onRefreshCopyMismatch?: () => void | Promise<void>;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
@@ -362,7 +366,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialAllocationsRef.current.slice().sort((a, b) => a.voucherId.localeCompare(b.voucherId));
     return cur.some((c, i) => c.voucherId !== init[i]?.voucherId || c.amount !== init[i]?.amount);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isLinkDirty || _isBillWiseLinkDirty;
+  const isFormDirty =
+    _isFormFieldsDirty || _isFileDirty || _isLinkDirty || _isBillWiseLinkDirty || recurringVoucherAuxiliaryDirty;
   const payeeType = form.watch('payeeType');
   /** Copy-draft (Save & Copy To) aur target company selected — red Copy_* buttons dikha sakte hain. */
   const copyDraftMasterHelpersEnabled = Boolean(copySaveTargetCompanyId && onCopyMissingCategory);
@@ -2987,7 +2992,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                    <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                       {isLoading ? "..." : "Save"}
                     </Button>
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={linkPayOthersDisabled || editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3024,7 +3029,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Button type="button" onClick={() => { setAllocations(initialAllocationsRef.current.map((a) => ({ voucherId: a.voucherId, amount: a.amount }))); setLinkedPaymentInIds(initialLinkedPaymentInIdsRef.current); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                       Cancel
                     </Button>
-                    <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                    <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                       {isLoading ? "..." : "Save"}
                     </Button>
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3073,7 +3078,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Printer className="mr-2 h-4 w-4" />
                         Save & Print
                       </Button>
-                      <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                      <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                         {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         Save
                       </Button>
@@ -3128,7 +3133,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <Printer className="mr-2 h-4 w-4" />
                         Save & Print
                       </Button>
-                      <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                      <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                         {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                         Save
                       </Button>

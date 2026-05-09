@@ -247,6 +247,8 @@ export function CreateJournalForm({
   isCopyingMissingMasters = false,
   copyMasterDraftRequest,
   onRefreshCopyMismatch,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -267,6 +269,8 @@ export function CreateJournalForm({
   isCopyingMissingMasters?: boolean;
   copyMasterDraftRequest?: CopyMasterDraftRequestPayload | null;
   onRefreshCopyMismatch?: () => void | Promise<void>;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const isMounted = useRef(true);
 
@@ -440,7 +444,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const norm = (a: Allocation[]) => JSON.stringify((a || []).map((x) => ({ v: x.voucherId, a: x.amount, l: x.linkedAccountId })).sort((p, q) => String(p.v).localeCompare(String(q.v))));
     return norm(journalAllocationsBySide.debit || []) !== norm(init.debit || []) || norm(journalAllocationsBySide.credit || []) !== norm(init.credit || []);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isAllocationsDirty;
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isAllocationsDirty || recurringVoucherAuxiliaryDirty;
   
   const isAutoVoucherEnabled = company?.autoVoucherNumbering?.journal ?? true;
   const isVoucherEditingAllowed = company?.allowVoucherNumberEditing?.journal ?? false;
@@ -2741,7 +2745,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {/* Pehle save ke baad `savedVoucherId` — tab bhi bina change Save band */}
-                <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
@@ -2794,7 +2798,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || ((!!voucher?.id || !!savedVoucherId) && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

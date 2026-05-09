@@ -99,6 +99,8 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
       { online: "maxStorageGB", local: "maxStorageGBLocal", label: "Max storage (GB)" },
       { online: "dailyVoucherLimit", local: "dailyVoucherLimitLocal", label: "Daily voucher limit" },
       { online: "monthlyVoucherLimit", local: "monthlyVoucherLimitLocal", label: "Monthly voucher limit" },
+      // Multi-device switch off = dono 1; on = online/local alag caps (billing chart rows).
+      { online: "maxDevices", local: "maxDevicesLocal", label: "Max devices" },
     ];
     const entitlementBooleanFields: EntitlementKey[] = ["hasPrioritySupport", "hasAuditLogs", "hasRoleBasedAccess", "allowCompanyAdminRecycleBin", "canAddAvatar"];
 
@@ -203,6 +205,8 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                         const localVal = editablePlan.entitlements[local];
                         const onlineNum = typeof onlineVal === "number" ? onlineVal : Number(onlineVal ?? 0);
                         const localNum = typeof localVal === "number" ? localVal : Number(localVal ?? 0);
+                        const isMaxDevicesPair = online === "maxDevices" && local === "maxDevicesLocal";
+                        const pairDisabled = isMaxDevicesPair && !editablePlan.entitlements.hasMultiDeviceSync;
                         return (
                             <div key={`${online}-${local}`} className="rounded-lg border bg-card/50 p-3 space-y-2 md:col-span-1">
                                 <div className="text-sm font-medium">{label}</div>
@@ -218,6 +222,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 handleEntitlementChange(online, raw === "" ? 0 : Number(raw));
                                             }}
                                             placeholder="0 = unlimited"
+                                            disabled={pairDisabled}
                                         />
                                     </div>
                                     <div className="space-y-1">
@@ -231,6 +236,7 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                                 handleEntitlementChange(local, raw === "" ? 0 : Number(raw));
                                             }}
                                             placeholder="0 = unlimited"
+                                            disabled={pairDisabled}
                                         />
                                     </div>
                                 </div>
@@ -244,28 +250,19 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                             checked={!!editablePlan.entitlements.hasMultiDeviceSync}
                             onCheckedChange={(checked) => {
                                 handleEntitlementChange('hasMultiDeviceSync', checked);
-                                const currentDevices = editablePlan.entitlements.maxDevices as number;
+                                const dOn = Number(editablePlan.entitlements.maxDevices) || 1;
+                                const dLoc = Number(editablePlan.entitlements.maxDevicesLocal) || 1;
                                 if (!checked) {
                                     handleEntitlementChange('maxDevices', 1);
+                                    handleEntitlementChange('maxDevicesLocal', 1);
                                 } else {
-                                    if (currentDevices <= 1) {
-                                        handleEntitlementChange('maxDevices', 3); 
-                                    }
+                                    const next = Math.max(dOn, dLoc) <= 1 ? 3 : Math.max(dOn, dLoc);
+                                    handleEntitlementChange('maxDevices', next);
+                                    handleEntitlementChange('maxDevicesLocal', next);
                                 }
                             }}
                         />
                         <Label htmlFor={`${plan.id}-hasMultiDeviceSync`} className="flex-1">Multi-Device Sync</Label>
-                        <div className="flex items-center gap-2">
-                            <Label htmlFor={`${plan.id}-maxDevices`} className="text-sm">Max Devices</Label>
-                            <Input 
-                                id={`${plan.id}-maxDevices`}
-                                type="number"
-                                className="w-20 h-8"
-                                value={editablePlan.entitlements.maxDevices as number || 1}
-                                onChange={(e) => handleEntitlementChange('maxDevices', Number(e.target.value))}
-                                disabled={!editablePlan.entitlements.hasMultiDeviceSync}
-                            />
-                        </div>
                     </div>
 
                     <div className="flex items-center gap-2 p-3 border rounded-lg bg-muted/30 col-span-1 md:col-span-2 flex-wrap">

@@ -26,6 +26,7 @@ import {
   Monitor,
   FileText,
   Settings,
+  RefreshCw,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -47,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { createPortal } from "react-dom";
 import { useDate } from "@/hooks/useDate";
+import { useToast } from "@/hooks/use-toast";
 import { DateFormatSettingsDialog } from "@/components/settings/DateFormatSettingsDialog";
 import { CreatePartyDialog } from "../party/CreatePartyDialog";
 import { CreateItemDialog } from "../items/CreateItemDialog";
@@ -64,9 +66,9 @@ import type { Company } from "@/hooks/useCompany";
 import {
   DEFAULT_PLANS,
   getNextPaidUpgrade,
+  normalizePlanIdForClient,
   numericEntitlement,
   companyStorageIsLocal,
-  PLAN_TIER_ORDER,
   type PlanId,
 } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
@@ -82,7 +84,6 @@ import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession"
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
-import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
@@ -547,11 +548,14 @@ function ProfileDropdownPlanCard({
 function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
-  const { company, allCompanies } = useCompany();
+  const { company, allCompanies, refreshAuthoritativePlan } = useCompany();
+  const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
   const livePlans = useLivePlans();
   const [profileOpen, setProfileOpen] = useState(false);
   const [userStorageUsedBytes, setUserStorageUsedBytes] = useState<number | null>(null);
+  /** Avatar menu: manual Firestore → local plan sync (SQLite/cache align). */
+  const [planManualSyncing, setPlanManualSyncing] = useState(false);
   /** Delayed close so mouse can move from avatar to portaled menu without flashing shut. */
   const profileHoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -605,6 +609,40 @@ function UserProfileButton() {
     router.replace("/");
   };
 
+  /** Avatar menu: POST `/api/company/sync-plan` — SQLite + plan cache ko Firestore authoritative row se align (checkout/profile mismatch fix). */
+  const handleManualPlanSync = async () => {
+    if (!company || planManualSyncing || !isOnline) return;
+    clearProfileHoverClose();
+    setPlanManualSyncing(true);
+    try {
+      const r = await refreshAuthoritativePlan();
+      if (r.ok && r.applied) {
+        toast({
+          title: "Plan synced",
+          description: "Local row updated from the server for this company.",
+        });
+      } else if (r.ok && !r.applied) {
+        toast({
+          title: "Already aligned",
+          description:
+            r.reason === "no_local_sqlite_row"
+              ? "No offline copy of this company to patch."
+              : "Server responded; nothing to change locally.",
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Could not sync plan",
+          description: r.reason?.includes("offline")
+            ? "Go online and try again."
+            : r.reason || "Check billing API / Firebase.",
+        });
+      }
+    } finally {
+      setPlanManualSyncing(false);
+    }
+  };
+
   useEffect(() => {
     if (!profileOpen || allCompanies.length === 0) {
       setUserStorageUsedBytes(null);
@@ -616,10 +654,12 @@ function UserProfileButton() {
       .catch(() => setUserStorageUsedBytes(null));
   }, [profileOpen, allCompanies.length, allCompanies.map((c) => c.id).join(",")]);
 
+  // Shared / no-owned fallback ke liye aggregate; **owner + apni company** par badge & caps = `selectedCompanyPlan*` (Billing page jaisa — doosri owned row ka pro-plus yahan mix na ho).
   const accountPlanId = user?.uid
     ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId)
     : ((company?.planId as PlanId) || "basic");
-  const planName = DEFAULT_PLANS[accountPlanId]?.name ?? String(accountPlanId);
+  const selectedCompanyPlanId: PlanId = normalizePlanIdForClient(company?.planId);
+  const selectedCompanyPlanName = DEFAULT_PLANS[selectedCompanyPlanId]?.name ?? String(selectedCompanyPlanId);
   // Profile dropdown: selected company local ho to uske liye *Local caps dikhao (admin Plans).
   const storageIsLocal = companyStorageIsLocal(company?.storageOption);
   const ownedForUsage = React.useMemo(
@@ -640,9 +680,9 @@ function UserProfileButton() {
     return best ?? "basic";
   })();
 
-  /** Shared company open + aapki khud ki companies: caps aapke owned plan se — shared wale `storageOption` se nahi. */
+  /** Shared company: aapke account ka best owned SKU; **khud ki company** open ho to isi row ka `planId` (Firestore/Billing ke saath match). */
   const limitsPlanId: PlanId =
-    !isSelectedCompanyOwned && hasOwnedCompanies ? ownedOnlyPlanId : accountPlanId;
+    !isSelectedCompanyOwned && hasOwnedCompanies ? ownedOnlyPlanId : selectedCompanyPlanId;
   const limitsPlan = getPlanFromPlans(livePlans, limitsPlanId);
   const limitsUseLocalForSelected =
     isSelectedCompanyOwned ? storageIsLocal : hasOwnedCompanies ? false : storageIsLocal;
@@ -671,13 +711,15 @@ function UserProfileButton() {
   const totalMaxStorMB = accountMaxStorGB * GB_TO_MB;
   const storFreeMB = Math.max(0, totalMaxStorMB - userStorUsedMB);
   const maxStorGB = accountMaxStorGB;
-  const onlineSlotMax = maxOnlineCompaniesForPlan(accountPlanId, getPlanFromPlans(livePlans, accountPlanId));
+  const onlineSlotMax = maxOnlineCompaniesForPlan(
+    selectedCompanyPlanId,
+    getPlanFromPlans(livePlans, selectedCompanyPlanId)
+  );
   const onlineSlotUsed =
     user?.uid != null && user.uid !== "" ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
-  /** Pro Plus ke upar koi paid tier nahi — "Upgrade" mat dikhao */
-  const accountCanUpgradeToPaidTier = getNextPaidUpgrade(accountPlanId) != null;
+  /** Owner apni company dekh raha ho to upgrade ladder isi SKU se — aggregate `accountPlanId` se mat bandho. */
+  const selectedCompanyCanUpgradeToPaidTier = getNextPaidUpgrade(selectedCompanyPlanId) != null;
 
-  const ownedOnlyPlanName = DEFAULT_PLANS[ownedOnlyPlanId]?.name ?? String(ownedOnlyPlanId);
   const ownedPlanLive = getPlanFromPlans(livePlans, ownedOnlyPlanId);
   const ownedMaxUsersOnline = Math.max(
     1,
@@ -690,11 +732,12 @@ function UserProfileButton() {
   const ownedOnlineSlotMax = maxOnlineCompaniesForPlan(ownedOnlyPlanId, ownedPlanLive);
   const ownedCanUpgrade = getNextPaidUpgrade(ownedOnlyPlanId) != null;
 
-  const selectedCompanyPlanId: PlanId = (() => {
-    const cur = String(company?.planId ?? "basic").trim();
-    return (PLAN_TIER_ORDER as readonly string[]).includes(cur) ? (cur as PlanId) : "basic";
-  })();
-  const selectedCompanyPlanName = DEFAULT_PLANS[selectedCompanyPlanId]?.name ?? String(selectedCompanyPlanId);
+  /** Shared: "Your account" = best owned tier; zero-owned shared = `resolveEffectiveAccountPlanId` fallback. */
+  const sharedProfilePlanId: PlanId = hasOwnedCompanies ? ownedOnlyPlanId : accountPlanId;
+  const sharedProfilePlanName =
+    DEFAULT_PLANS[sharedProfilePlanId]?.name ?? String(sharedProfilePlanId);
+  const sharedProfileCanUpgrade = getNextPaidUpgrade(sharedProfilePlanId) != null;
+
   const selectedCompanyPlanLive = getPlanFromPlans(livePlans, selectedCompanyPlanId);
   const selectedCompanyMaxDevices =
     selectedCompanyPlanLive.entitlements.hasMultiDeviceSync === true
@@ -726,29 +769,17 @@ function UserProfileButton() {
             onMouseEnter={openProfileFromHover}
             onMouseLeave={scheduleProfileHoverClose}
           >
-            {/* Profile pic: dropdown + `AttachmentHoverPortal` (global hover ON) — Firebase/Google URL bhi hydrate body fix */}
+            {/* Sirf plan dropdown — avatar par `EntityFileAttachmentHover` mat lagao warna hover pe Preview modal + dropdown dono fight karte hain. */}
             <div
               className={cn(
                 "relative h-9 w-9 rounded-full inline-flex [&:focus-visible]:outline-none",
                 isOnline ? "ring-2 ring-green-500 ring-offset-0" : "ring-2 ring-black ring-offset-0"
               )}
             >
-              {user.photoURL?.trim() ? (
-                <EntityFileAttachmentHover
-                  fileUrl={user.photoURL}
-                  triggerClassName="inline-flex h-full w-full rounded-full"
-                >
-                  <Avatar className="h-full w-full">
-                    <AvatarImage src={user.photoURL ?? undefined} alt={user.displayName ?? "User"} />
-                    <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
-                  </Avatar>
-                </EntityFileAttachmentHover>
-              ) : (
-                <Avatar className="h-full w-full">
-                  <AvatarImage src={undefined} alt={user.displayName ?? "User"} />
-                  <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
-                </Avatar>
-              )}
+              <Avatar className="h-full w-full">
+                <AvatarImage src={user.photoURL?.trim() ? user.photoURL : undefined} alt={user.displayName ?? "User"} />
+                <AvatarFallback>{getInitials(user.displayName ?? user.email)}</AvatarFallback>
+              </Avatar>
             </div>
           </Button>
         </DropdownMenuTrigger>
@@ -790,7 +821,24 @@ function UserProfileButton() {
                   ) : null}
                   <div className="text-xs text-muted-foreground mb-1">Current Plan</div>
                   <div className="flex items-center justify-between gap-2">
-                    <Badge variant="secondary" className="shrink-0">{planName}</Badge>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Badge variant="secondary" className="shrink-0">{selectedCompanyPlanName}</Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        title="Sync plan from server"
+                        aria-label="Sync plan from server"
+                        disabled={!isOnline || planManualSyncing || !company}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void handleManualPlanSync();
+                        }}
+                      >
+                        <RefreshCw className={cn("h-3.5 w-3.5", planManualSyncing && "animate-spin")} />
+                      </Button>
+                    </div>
                     <Button
                       type="button"
                       variant="outline"
@@ -802,7 +850,7 @@ function UserProfileButton() {
                         router.push("/billing");
                       }}
                     >
-                      {accountCanUpgradeToPaidTier ? "Upgrade" : "Billing"}
+                      {selectedCompanyCanUpgradeToPaidTier ? "Upgrade" : "Billing"}
                     </Button>
                   </div>
                   {company?.planExpiry && (() => {
@@ -855,9 +903,10 @@ function UserProfileButton() {
                       )}
                     </div>
                   )}
+                  <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem
                     onClick={handleLogout}
-                    className="mt-3 py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
+                    className="py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
                   >
                     <LogOut className="mr-2 h-4 w-4 shrink-0" />
                     <span>Log out</span>
@@ -878,9 +927,28 @@ function UserProfileButton() {
                     {user.email ? (
                       <p className="text-xs text-muted-foreground break-words leading-snug mb-3">{user.email}</p>
                     ) : null}
-                    <div className="text-xs text-muted-foreground mb-1">Your account</div>
+                    <div className="text-xs text-muted-foreground mb-1">
+                      {hasOwnedCompanies ? "Your account" : "Plan while using this company"}
+                    </div>
                     <div className="flex items-center justify-between gap-2">
-                      <Badge variant="secondary" className="shrink-0">{ownedOnlyPlanName}</Badge>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Badge variant="secondary" className="shrink-0">{sharedProfilePlanName}</Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 shrink-0"
+                          title="Sync plan from server"
+                          aria-label="Sync plan from server"
+                          disabled={!isOnline || planManualSyncing || !company}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void handleManualPlanSync();
+                          }}
+                        >
+                          <RefreshCw className={cn("h-3.5 w-3.5", planManualSyncing && "animate-spin")} />
+                        </Button>
+                      </div>
                       <Button
                         type="button"
                         variant="outline"
@@ -892,12 +960,13 @@ function UserProfileButton() {
                           router.push("/billing");
                         }}
                       >
-                        {ownedCanUpgrade ? "Upgrade" : "Billing"}
+                        {sharedProfileCanUpgrade ? "Upgrade" : "Billing"}
                       </Button>
                     </div>
                     {!hasOwnedCompanies ? (
                       <p className="text-xs text-muted-foreground mt-1.5">
-                        You do not own any companies yet. Limits follow your account until you create one.
+                        You don&apos;t own a company yet. Limits in this workspace follow this company&apos;s
+                        subscription (see &quot;This company (shared)&quot; below).
                       </p>
                     ) : null}
                     {ownedPlanExpiryCompany?.planExpiry && (() => {
@@ -921,22 +990,25 @@ function UserProfileButton() {
                         </div>
                       );
                     })()}
-                    {ownedOnlineSlotMax > 0 && user?.uid ? (
+                    {/* Online slots sirf jab aapki khud ki companies hon — shared-only par 0/9 galat signal tha. */}
+                    {hasOwnedCompanies && ownedOnlineSlotMax > 0 && user?.uid ? (
                       <div className="text-xs text-muted-foreground mt-1.5">
                         Your online company slots:{" "}
                         <span className="font-medium text-foreground">{onlineSlotUsed}</span> /{" "}
                         <span className="font-medium text-foreground">{ownedOnlineSlotMax}</span>
                       </div>
                     ) : null}
-                    <div className="text-xs text-muted-foreground mt-1.5">
-                      Max users per company (your plan):{" "}
-                      <span className="font-medium text-foreground">{ownedMaxUsersOnline}</span> online
-                      {ownedMaxUsersLocal !== ownedMaxUsersOnline ? (
-                        <>
-                          , <span className="font-medium text-foreground">{ownedMaxUsersLocal}</span> local
-                        </>
-                      ) : null}
-                    </div>
+                    {hasOwnedCompanies ? (
+                      <div className="text-xs text-muted-foreground mt-1.5">
+                        Max users per company (your plan):{" "}
+                        <span className="font-medium text-foreground">{ownedMaxUsersOnline}</span> online
+                        {ownedMaxUsersLocal !== ownedMaxUsersOnline ? (
+                          <>
+                            , <span className="font-medium text-foreground">{ownedMaxUsersLocal}</span> local
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {hasOwnedCompanies && (maxAttGB > 0 || maxStorGB > 0) ? (
                       <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
                         {maxAttGB > 0 ? (
@@ -977,9 +1049,10 @@ function UserProfileButton() {
                         ) : null}
                       </div>
                     ) : null}
+                    <DropdownMenuSeparator className="my-2" />
                     <DropdownMenuItem
                       onClick={handleLogout}
-                      className="mt-3 py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
+                      className="py-2.5 px-2 mx-0 rounded-md cursor-pointer w-full focus:bg-accent/80"
                     >
                       <LogOut className="mr-2 h-4 w-4 shrink-0" />
                       <span>Log out</span>

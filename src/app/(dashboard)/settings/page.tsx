@@ -31,6 +31,29 @@ import { useSettingsList } from "@/contexts/SettingsListContext";
 import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
+/** Poora settings list panel — parties master list jaisa rounded + visible stroke (`PartyList` / `AccountList`). */
+const SETTINGS_LIST_SHELL =
+  "rounded-lg border-[1.5px] border-gray-300 bg-background overflow-hidden dark:border-gray-600";
+/** Header ↔ items split — row dividers ke saath same weight. */
+const SETTINGS_LIST_HEADER_RULE =
+  "border-b-[1.5px] border-gray-300 dark:border-gray-600";
+
+/**
+ * Ek nav row — `PartyList.tsx` `cardClassName` ke saath align (selected = primary border + secondary fill).
+ * Native `button` taake ghost/outline variant se border fight na ho.
+ */
+function settingsNavRowClass(isActive: boolean, isDanger?: boolean) {
+  return cn(
+    "min-w-0 max-w-full w-full overflow-hidden py-2 px-3 cursor-pointer border rounded-md transition-all duration-200",
+    "flex items-center gap-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+    isActive
+      ? "border-primary bg-secondary shadow-sm font-medium"
+      : "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-primary/40 hover:bg-muted/30",
+    isDanger && !isActive && "text-destructive hover:text-destructive",
+    isDanger && isActive && "text-destructive border-destructive/60"
+  );
+}
+
 const settingsNavItems = [
     { id: "company", title: "Company Profile", icon: Building, permission: "configure_company_settings" as const, href: null },
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
@@ -270,26 +293,26 @@ function SettingsPageContent() {
     );
 
     const renderNavButtons = (onPick?: () => void) => (
-        <div className="flex flex-col gap-1 p-2">
-            {availableNavItems.map((item) => (
-                <Button
-                    key={item.id}
-                    variant={activeView === item.id ? "secondary" : "ghost"}
-                    className={cn(
-                        "justify-start gap-3 w-full px-4",
-                        activeView === item.id && "bg-secondary font-medium",
-                        item.isDanger && "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    )}
-                    onClick={() => {
-                        setActiveViewWithUrl(item.id);
-                        onPick?.();
-                    }}
-                >
-                    <item.icon className="h-5 w-5 shrink-0" />
-                    <span>{item.title}</span>
-                </Button>
-            ))}
-        </div>
+        <ul className="list-none p-2 space-y-1" data-theme-list="account-list">
+            {availableNavItems.map((item) => {
+                const isActive = activeView === item.id;
+                return (
+                    <li key={item.id}>
+                        <button
+                            type="button"
+                            className={settingsNavRowClass(isActive, item.isDanger)}
+                            onClick={() => {
+                                setActiveViewWithUrl(item.id);
+                                onPick?.();
+                            }}
+                        >
+                            <item.icon className="h-5 w-5 shrink-0" />
+                            <span className="truncate">{item.title}</span>
+                        </button>
+                    </li>
+                );
+            })}
+        </ul>
     );
 
     if (companyId && !company) {
@@ -390,14 +413,16 @@ function SettingsPageContent() {
     if (mobileSettingsUx) {
         if (!activeView) {
             return (
-                <div className="h-full flex flex-col overflow-hidden min-h-0">
-                    <div className="flex-shrink-0 border-b px-4 py-3">
-                        <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                        <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                <div className="h-full flex flex-col overflow-hidden min-h-0 px-2 pt-2 pb-2">
+                    <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                        <div className={cn("flex-shrink-0 px-4 py-3", SETTINGS_LIST_HEADER_RULE)}>
+                            <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                            <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                        </div>
+                        <ScrollArea className="min-h-0 flex-1">
+                            {renderNavButtons()}
+                        </ScrollArea>
                     </div>
-                    <ScrollArea className="flex-1 min-h-0">
-                        {renderNavButtons()}
-                    </ScrollArea>
                 </div>
             );
         }
@@ -409,7 +434,7 @@ function SettingsPageContent() {
                     onTouchStart={settingsListSwipe.onTouchStart}
                     onTouchEnd={settingsListSwipe.onTouchEnd}
                 >
-                    <div className="flex-shrink-0 border-b px-2 py-2 flex items-center gap-2 min-h-[48px]">
+                    <div className={cn("flex-shrink-0 px-2 py-2 flex items-center gap-2 min-h-[48px]", SETTINGS_LIST_HEADER_RULE)}>
                         <Button
                             type="button"
                             variant="ghost"
@@ -442,7 +467,7 @@ function SettingsPageContent() {
                 </div>
                 <Sheet open={settingsListOpen} onOpenChange={setSettingsListOpen}>
                     <SheetContent side="right" className="w-[min(100vw-3rem,280px)] p-0 sm:max-w-[280px]">
-                        <SheetHeader className="p-4 pb-2 border-b">
+                        <SheetHeader className={cn("p-4 pb-2", SETTINGS_LIST_HEADER_RULE)}>
                             <SheetTitle>Settings</SheetTitle>
                         </SheetHeader>
                         <ScrollArea className="h-[calc(100dvh-5rem)]">
@@ -458,30 +483,16 @@ function SettingsPageContent() {
       <div className="h-full flex flex-col overflow-hidden">
         <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 p-4 sm:p-6 md:p-8 flex-1 min-h-0 overflow-hidden">
           
-          <aside className="flex flex-col min-h-0 overflow-hidden md:w-[280px] md:shrink-0 md:border-r md:border-border -mt-4 sm:-mt-6 md:-mt-8">
+          <aside className="flex flex-col min-h-0 overflow-hidden md:w-[280px] md:shrink-0 -mt-4 sm:-mt-6 md:-mt-8">
               <div className="flex flex-col min-h-0 h-full pt-4 sm:pt-6 md:pt-8">
-                  <div className="pb-4 flex-shrink-0 px-4">
-                      <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                      <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
-                  </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-0">
-                    <div className="flex flex-col gap-1">
-                        {availableNavItems.map((item) => (
-                         <Button
-                            key={item.id}
-                            variant={activeView === item.id ? "secondary" : "ghost"}
-                            className={cn(
-                                "justify-start gap-3 w-full px-4",
-                                activeView === item.id && "bg-secondary font-medium",
-                                item.isDanger && "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                            )}
-                            onClick={() => setActiveViewWithUrl(item.id)}
-                        >
-                            <item.icon className="h-5 w-5 shrink-0" />
-                            <span>{item.title}</span>
-                        </Button>
-                      ))}
-                    </div>
+                  <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                      <div className={cn("pb-4 flex-shrink-0 px-4 pt-1", SETTINGS_LIST_HEADER_RULE)}>
+                          <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                          <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                      </div>
+                      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0">
+                        {renderNavButtons()}
+                      </div>
                   </div>
               </div>
           </aside>

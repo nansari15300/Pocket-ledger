@@ -216,6 +216,8 @@ export function CreatePaymentInForm({
   isCopyingMissingMasters = false,
   copyMasterDraftRequest,
   onRefreshCopyMismatch,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -237,6 +239,8 @@ export function CreatePaymentInForm({
   onRefreshCopyMismatch?: () => void | Promise<void>;
   /** Report effective has-links (bill-wise or spend-wise) so dialog locks fields as soon as user links in this session. */
   onEffectiveLinksChange?: (hasLinks: boolean | undefined) => void;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   const { toast } = useToast();
   const { user, customUser } = useAuth();
@@ -615,7 +619,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
   })();
   /** Spend wise link changed (user confirmed link dialog but not saved) — so Save & Approve should show. */
   const _isSpendWiseLinkDirty = !!pendingLinkedPaymentOut;
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || _isAllocationLinkDirty || _isSpendWiseLinkDirty;
+  const isFormDirty =
+    _isFormFieldsDirty || _isFileDirty || _isAllocationLinkDirty || _isSpendWiseLinkDirty || recurringVoucherAuxiliaryDirty;
 
   const payeeBalance = useMemo(() => {
     if (payeeType === 'party' && partyId) return processedParties.find(p => p.id === partyId)?.balance;
@@ -2819,7 +2824,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                   Cancel
                 </Button>
                 {/* Edit + unchanged → Save off; chhota sa dirty → on (Approve jaisa) */}
-                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 {voucher?.id ? (
@@ -2872,7 +2877,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={linkPayOthersDisabled || isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

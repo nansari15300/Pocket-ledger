@@ -97,6 +97,15 @@ export function CompanyDemotedBanner() {
                 <p className="text-muted-foreground text-xs">
                   Vouchers and data can still be saved on this device; cloud sync resumes after you upload to the cloud manually.
                 </p>
+                {/* Demote = Firestore ne company root read roka — user ko “auto local” ka asli reason (rules / ownerId). */}
+                <p className="text-muted-foreground text-xs border-t border-border pt-2">
+                  <strong className="text-foreground">Agar baar‑baar ho:</strong> Firebase Console →{" "}
+                  <code className="rounded bg-muted px-1">companies / [aapki company id]</code> → field{" "}
+                  <code className="rounded bg-muted px-1">ownerId</code> bilkul usi user ke{" "}
+                  <code className="rounded bg-muted px-1">Authentication → User UID</code> se match hona chahiye. Alag project / purani
+                  rules deploy se bhi read deny ho sakta hai — latest <code className="rounded bg-muted px-1">firestore.rules</code> deploy
+                  karein.
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -116,7 +125,10 @@ export function CompanyDemotedBanner() {
               Close
             </Button>
             <Button asChild>
-              <Link href="/settings?view=company">Company settings</Link>
+              {/* Navigate + dialog band — warna portal overlay settings page ke upar chipka rehta hai */}
+              <Link href="/settings?view=company" onClick={() => setOpen(false)}>
+                Company settings
+              </Link>
             </Button>
           </div>
         </AlertDialogContent>

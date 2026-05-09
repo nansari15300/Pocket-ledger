@@ -9,8 +9,33 @@ import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { clearCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 
-/** ~7 min */
+/** ~7 min — interval timer ab useCompany me bandh (sirf calendar-day + online + manual); constant legacy docs ke liye. */
 export const PLAN_SERVER_SYNC_INTERVAL_MS = 7 * 60 * 1000;
+
+const DAILY_AUTH_PLAN_SYNC_YMD_KEY = (uid: string) =>
+  `pocket-ledger:dailyAuthoritativePlanSyncYmd:${uid.trim()}`;
+
+/** Calendar day (UTC `YYYY-MM-DD`) — idle par dubara POST tabhi jab aaj ka sync abhi tak successful na ho. */
+export function shouldRunDailyAuthoritativePlanSync(firebaseUid: string | undefined | null): boolean {
+  if (!firebaseUid?.trim() || typeof window === "undefined") return false;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    return window.localStorage.getItem(DAILY_AUTH_PLAN_SYNC_YMD_KEY(firebaseUid)) !== today;
+  } catch {
+    return true;
+  }
+}
+
+/** Successful `syncCompanyPlanFromServer` ke baad — aaj ke liye idle repeat band (manual/online alag se chal sakte hain). */
+export function markDailyAuthoritativePlanSyncDone(firebaseUid: string | undefined | null): void {
+  if (!firebaseUid?.trim() || typeof window === "undefined") return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    window.localStorage.setItem(DAILY_AUTH_PLAN_SYNC_YMD_KEY(firebaseUid), today);
+  } catch {
+    /* private mode */
+  }
+}
 
 /** Optional “plans doc verify” stale — banner alag 20-din wala primary */
 export const PLAN_SYNC_STALE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
@@ -223,16 +248,23 @@ export async function syncCompanyPlanFromServer(opts: {
     return { ok: true, applied: false, reason: "no_local_sqlite_row" };
   }
 
+  const storageLower = String((local as { storageOption?: string }).storageOption || "").toLowerCase();
+  const isDeviceLocalCompany = storageLower === "local";
+
   const offlineUntil =
     typeof data.offlineLicenseValidUntilMs === "number" && Number.isFinite(data.offlineLicenseValidUntilMs)
       ? data.offlineLicenseValidUntilMs
       : undefined;
 
+  // `syncedFromCloud !== true` pe `mergeOnlineCompanyWithLocalPlanOverlay` hamesha "local-first" maan leta tha → Firestore `basic` ke baad bhi SQLite purana paid `higherPlanByTier` se chipak sakta tha.
   const merged: Record<string, unknown> = {
     ...local,
     planId,
     planUpgradedAtMs: Date.now(),
     authoritativeCompanyId: firebaseCompanyId,
+    ...(!isDeviceLocalCompany
+      ? { syncedFromCloud: true, syncPolicy: "online", storageOption: "firebase" }
+      : { syncedFromCloud: true }),
     ...(offlineUntil != null ? { offlineLicenseValidUntilMs: offlineUntil } : {}),
     ...(data.stripeCustomerId != null && data.stripeCustomerId !== ""
       ? { stripeCustomerId: data.stripeCustomerId }

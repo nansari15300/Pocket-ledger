@@ -29,7 +29,7 @@ import {
   CardDescription,
   CardHeader,
 } from "@/components/ui/card";
-import { Bell, MessageSquare, AlarmPlus } from "lucide-react";
+import { Bell, MessageSquare, AlarmPlus, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCompany } from "@/hooks/useCompany";
@@ -72,7 +72,7 @@ const findUserByParticipantId = (users: any[], participantId: string) =>
   users.find((u: any) => u.id === participantId || u.uid === participantId);
 
 /** Valid tab values — keep in sync with TabsTrigger `value` props. */
-const MESSAGES_TAB_VALUES = ["alerts", "chat", "alarms"] as const;
+const MESSAGES_TAB_VALUES = ["alerts", "auto", "chat", "alarms"] as const;
 type MessagesTabValue = (typeof MESSAGES_TAB_VALUES)[number];
 const MESSAGES_TAB_STORAGE_KEY = "messagesActiveTab";
 
@@ -106,6 +106,8 @@ export default function MessagesPage() {
   
   // States for notification counts
   const [unreadAlerts, setUnreadAlerts] = useState(0);
+  // Auto-created vouchers ko separate tab badge dene ke liye dedicated unread state.
+  const [unreadAutoAlerts, setUnreadAutoAlerts] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [alarms, setAlarms] = React.useState<Alarm[]>([]);
   const [statuses, setStatuses] = React.useState<Record<string, { state: string, last_changed: number }>>({});
@@ -416,10 +418,15 @@ export default function MessagesPage() {
   }, [unreadCounts]);
 
    useEffect(() => {
-    if (!myUserIds.length) return;
+    if (!myUserIds.length) {
+      setUnreadAlerts(0);
+      setUnreadAutoAlerts(0);
+      return;
+    }
     // Sirf owner + selected company ke alerts — badge/count dusri company se mix na ho.
     if (company?.isOwned !== true || !companyId?.trim()) {
       setUnreadAlerts(0);
+      setUnreadAutoAlerts(0);
       return;
     }
     const unreadByRecipient: Record<string, Set<string>> = {};
@@ -427,7 +434,17 @@ export default function MessagesPage() {
     const recompute = () => {
       const merged = new Set<string>();
       Object.values(unreadByRecipient).forEach((set) => set.forEach((id) => merged.add(id)));
-      setUnreadAlerts(merged.size);
+      const auto = new Set<string>();
+      const regular = new Set<string>();
+      Object.values(unreadByRecipient).forEach((set) => {
+        set.forEach((rawIdAndKind) => {
+          const [idPart, kindPart] = rawIdAndKind.split("::");
+          if (kindPart === "auto_created") auto.add(idPart);
+          else regular.add(idPart);
+        });
+      });
+      setUnreadAlerts(regular.size);
+      setUnreadAutoAlerts(auto.size);
     };
 
     myUserIds.forEach((id) => {
@@ -442,7 +459,7 @@ export default function MessagesPage() {
         unreadByRecipient[id] = new Set(
           snapshot.docs
             .filter((d) => !isSuppressibleNewTransactionAlert(d.data() as any))
-            .map((d) => d.id)
+            .map((d) => `${d.id}::${String((d.data() as any)?.kind || "")}`)
         );
         recompute();
       });
@@ -742,6 +759,12 @@ export default function MessagesPage() {
                               <Badge className="ml-2">{unreadAlerts}</Badge>
                             )}
                         </TabsTrigger>
+                        <TabsTrigger value="auto" className="flex items-center gap-2">
+                            <Bot className="h-4 w-4"/>Auto Voucher
+                            {unreadAutoAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
+                              <Badge className="ml-2">{unreadAutoAlerts}</Badge>
+                            )}
+                        </TabsTrigger>
                         <TabsTrigger value="chat" className="flex items-center gap-2">
                             <MessageSquare className="h-4 w-4"/>Chat 
                             {unreadMessages > 0 && <Badge className="ml-2">{unreadMessages}</Badge>}
@@ -753,7 +776,21 @@ export default function MessagesPage() {
                     <CardDescription className="text-green-500 whitespace-nowrap text-right sm:text-left">Online from: <span className="font-semibold text-foreground">{company?.name || 'Personal Account'}</span></CardDescription>
                 </div>
                 <TabsContent value="alerts" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
-                    <AlertsTab onStartChat={handleStartChatFromAlert} onOpenVoucher={handleOpenVoucherFromAlert} onOpenHistory={handleOpenHistoryFromAlert} />
+                    <AlertsTab
+                      onStartChat={handleStartChatFromAlert}
+                      onOpenVoucher={handleOpenVoucherFromAlert}
+                      onOpenHistory={handleOpenHistoryFromAlert}
+                      kindFilter="exclude_auto"
+                    />
+                </TabsContent>
+                <TabsContent value="auto" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
+                    <AlertsTab
+                      onOpenVoucher={handleOpenVoucherFromAlert}
+                      onOpenHistory={handleOpenHistoryFromAlert}
+                      kindFilter="auto_only"
+                      headerTitle="Auto Created Vouchers"
+                      headerDescription="Monthly recurring vouchers generated by automation appear here."
+                    />
                 </TabsContent>
                 <TabsContent value="chat" className="h-full flex-1 min-h-0 w-full data-[state=inactive]:hidden">
                      <ChatTab 

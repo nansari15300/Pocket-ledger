@@ -31,10 +31,9 @@ export default {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
     // No Tailwind in route handlers; scanning avoids Windows EBUSY if api/ is locked (dev + build-static)
     '!./src/app/api/**',
-    // `build-static` me `(admin)` subtree temp remove hota hai; Tailwind tracker deleted file stat na kare (ENOENT fix).
-    '!./src/app/(admin)/**',
-    // `build-static` me `components/admin` bhi temp remove hota hai; same missing-file scan crash avoid.
-    '!./src/components/admin/**',
+    // Admin + components/admin yahan include zaroori: warna `md:grid-cols-[360px_1fr]` JIT me generate hi nahi hota
+    // aur panel hamesha single-column dikhta hai. `build-static` admin folder hata kar build karta hai — `./src/app/**`
+    // sirf maujooda files scan karta hai; missing subtree par ENOENT nahi.
   ],
   theme: {
     extend: {

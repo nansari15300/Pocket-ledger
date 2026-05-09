@@ -7,7 +7,7 @@ import { useCompany } from "./useCompany";
 import { useAuth } from "./useAuth";
 import { useLivePlans, getPlanFromPlans } from "./useLivePlans";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { PLAN_TIER_ORDER, type PlanId } from "@/config/plans";
+import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { registerDeviceAndCheckLimit, replaceMyOtherDevicesAndRegister, getOrCreateDeviceId, setKickedForCompany, clearKickedForCompany, getWasKicked, enforceDeviceLimitByPlan } from "@/lib/deviceLimitClient";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 
@@ -60,10 +60,7 @@ export function useDeviceLimit() {
       !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
 
     // Owner: account-level best owned plan (header / billing jaisa). Shared user: isi company ka planId (owner subscription pool).
-    const companyPlanIdNormalized: PlanId = (() => {
-      const cur = String(company?.planId ?? "basic").trim();
-      return (PLAN_TIER_ORDER as readonly string[]).includes(cur) ? (cur as PlanId) : "basic";
-    })();
+    const companyPlanIdNormalized: PlanId = normalizePlanIdForClient(company?.planId);
     const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
     const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
     const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);

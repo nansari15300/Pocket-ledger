@@ -2,16 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebaseAdmin";
-import { type PlanId } from "@/config/plans";
+import { type PlanId, normalizePlanIdForClient } from "@/config/plans";
 import { getEffectivePlanPrices, getEffectivePlanIsFree } from "@/lib/server/getEffectivePlanPrices";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import { classifyPlanChange, quoteDowngradeNewExpiry, daysLeftRounded } from "@/lib/subscriptionPlanMath";
-
-function normalizeCompanyPlanId(raw: unknown): PlanId {
-  const s = String(raw ?? "basic").trim();
-  if (s === "basic" || s === "advance" || s === "pro" || s === "pro-plus") return s;
-  return "basic";
-}
 
 type Body = {
   companyId?: string;
@@ -60,7 +54,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Only the company owner can change plans" }, { status: 403 });
     }
 
-    const currentPlanId = normalizeCompanyPlanId(cdata.planId);
+    const currentPlanId = normalizePlanIdForClient(cdata.planId != null ? String(cdata.planId) : undefined);
     if (currentPlanId === targetPlanId) {
       return NextResponse.json({ error: "Already on this plan" }, { status: 400 });
     }

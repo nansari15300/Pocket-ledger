@@ -49,6 +49,98 @@ function capitalizeFirst(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * Client Timestamp, `_seconds` export, ya `{ seconds, nanoseconds, type }` — history me raw metadata nahi, sirf readable date.
+ */
+function firestoreTimestampLikeToDate(value: unknown): Date | null {
+  if (value == null || typeof value !== "object") return null;
+  const v = value as Record<string, unknown> & { toDate?: () => Date };
+  if (typeof v.toDate === "function") {
+    try {
+      const d = v.toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  const sec =
+    typeof v._seconds === "number"
+      ? v._seconds
+      : typeof (v as { seconds?: unknown }).seconds === "number"
+        ? ((v as { seconds: number }).seconds as number)
+        : null;
+  if (sec == null || !Number.isFinite(sec)) return null;
+  const nsRaw =
+    typeof v._nanoseconds === "number"
+      ? v._nanoseconds
+      : typeof (v as { nanoseconds?: unknown }).nanoseconds === "number"
+        ? ((v as { nanoseconds: number }).nanoseconds as number)
+        : 0;
+  const ms = sec * 1000 + Math.floor(nsRaw / 1e6);
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+type HistoryValueFormat = { formatDateTime: (d: Date) => string };
+
+/** History Old/New: kabhi JSON / Firestore dump nahi — timestamp → date string, object → nested readable lines. */
+function renderHistoryValueNode(value: any, fmt: HistoryValueFormat, depth = 0): React.ReactNode {
+  if (value === null || value === undefined) return <span className="text-muted-foreground">N/A</span>;
+  if (depth > 8) return <span className="text-muted-foreground">…</span>;
+
+  const ts = firestoreTimestampLikeToDate(value);
+  if (ts) return <span className="break-words whitespace-normal">{fmt.formatDateTime(ts)}</span>;
+
+  if (typeof value === "boolean") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-medium whitespace-nowrap",
+          value ? "bg-green-600 text-white" : "bg-pink-500 text-white",
+        )}
+      >
+        {value ? "Yes" : "No"}
+      </span>
+    );
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return <span className="break-words whitespace-normal tabular-nums">{String(value)}</span>;
+  }
+  if (typeof value === "string") {
+    return <span className="break-words whitespace-normal">{value}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-muted-foreground">—</span>;
+    return (
+      <ul className="my-0 list-disc space-y-0.5 pl-4 text-sm">
+        {value.map((x, i) => (
+          <li key={i} className="break-words">
+            {renderHistoryValueNode(x, fmt, depth + 1)}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (typeof value === "object") {
+    const keys = Object.keys(value as object);
+    if (keys.length === 0) return <span className="text-muted-foreground">—</span>;
+    return (
+      <div className="space-y-0.5 break-words text-xs leading-snug">
+        {keys.map((k) => (
+          <div key={k}>
+            <span className="text-muted-foreground">{k}:</span>{" "}
+            {renderHistoryValueNode((value as Record<string, unknown>)[k], fmt, depth + 1)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <span className="break-words whitespace-normal">{String(value)}</span>;
+}
+
 const APPROVAL_FIELDS = new Set([
   'isApproved', 'IsApproved',
   'approvedAt', 'ApprovedAt',
@@ -324,24 +416,6 @@ function getMergedEntryBadge(changes: any): { label: string; className: string }
       : { label: 'Unapproved', className: 'bg-rose-600 text-white' };
   }
   return { label: 'Edited', className: 'bg-blue-600 text-white' };
-}
-
-function renderValue(value: any) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground">N/A</span>;
-  if (typeof value === "boolean") return (
-    <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-sm font-medium whitespace-nowrap", value ? "bg-green-600 text-white" : "bg-pink-500 text-white")}>
-      {value ? "Yes" : "No"}
-    </span>
-  );
-  
-  const isTimestamp = value?.toDate instanceof Function || (value?._seconds !== undefined && value?._nanoseconds !== undefined);
-  if (isTimestamp) {
-    const date = value.toDate ? value.toDate() : new Date(value._seconds * 1000);
-    return date.toLocaleString();
-  }
-
-  if (typeof value === "object") return <pre className="text-xs whitespace-pre-wrap break-words bg-muted/50 p-2 rounded-md max-w-full">{JSON.stringify(value, null, 2)}</pre>;
-  return <span className="break-words whitespace-normal">{String(value)}</span>;
 }
 
 function LineItemChangesRows({ from, to, renderValue }: { from: any[]; to: any[]; renderValue: (v: any) => React.ReactNode }) {
@@ -783,10 +857,8 @@ export function HistoryDialog({
 
   const getHistoryChangedAt = useCallback((changedAt: any): Date | null => {
     if (!changedAt) return null;
-    if (changedAt?.toDate instanceof Function) return changedAt.toDate();
-    // Handle serialized Firestore Timestamp { _seconds, _nanoseconds } or { seconds, nanoseconds }
-    if (changedAt?._seconds != null) return new Date(changedAt._seconds * 1000);
-    if (changedAt?.seconds  != null) return new Date(changedAt.seconds  * 1000);
+    const fromFs = firestoreTimestampLikeToDate(changedAt);
+    if (fromFs) return fromFs;
     const parsed = new Date(changedAt);
     return isNaN(parsed.getTime()) ? null : parsed;
   }, []);
@@ -879,18 +951,19 @@ export function HistoryDialog({
     return `${dateStr}, ${timeStr}`;
   }, [dateSystem, formatDate, formatDateBS, getHistoryChangedAt]);
 
-  /** Renders table cell values; dates use system date format (AD/BS/Both) with time. */
-  const renderCellValue = useCallback((value: any): React.ReactNode => {
-    if (value === null || value === undefined) return <span className="text-muted-foreground">N/A</span>;
-    const isTimestamp = value?.toDate instanceof Function || (value?._seconds !== undefined && value?._nanoseconds !== undefined);
-    if (isTimestamp) {
-      const date = value.toDate ? value.toDate() : new Date((value as any)._seconds * 1000);
-      const dateStr = dateSystem === "BS" || dateSystem === "Both" ? formatDateBS(date) : formatDate(date);
-      const timeStr = formatFns(date, "h:mm a");
-      return <span className="break-words whitespace-normal">{dateStr}, {timeStr}</span>;
-    }
-    return renderValue(value);
-  }, [dateSystem, formatDate, formatDateBS]);
+  /** Table Old/New: timestamps (sab Firestore shapes) + nested objects — kabhi raw JSON/metadata nahi. */
+  const formatHistoryDateTime = useCallback(
+    (d: Date) => {
+      const dateStr = dateSystem === "BS" || dateSystem === "Both" ? formatDateBS(d) : formatDate(d);
+      return `${dateStr}, ${formatFns(d, "h:mm a")}`;
+    },
+    [dateSystem, formatDate, formatDateBS],
+  );
+
+  const renderCellValue = useCallback(
+    (value: any): React.ReactNode => renderHistoryValueNode(value, { formatDateTime: formatHistoryDateTime }),
+    [formatHistoryDateTime],
+  );
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -917,12 +990,14 @@ export function HistoryDialog({
                   key={i}
                   ref={isHighlighted ? highlightRef : undefined}
                   className={cn(
-                    "border rounded-lg overflow-hidden transition-opacity duration-300",
+                    // History card frame — pehle 3px tha; ab ~50% patla (1.5px).
+                    "overflow-hidden rounded-lg border-[1.5px] border-foreground/80 transition-opacity duration-300",
                     isHighlighted && "ring-2 ring-offset-2 ring-blue-500 shadow-xl shadow-blue-200/60",
                     isDimmed && "opacity-30 pointer-events-none"
                   )}
                 >
-                  <div className="bg-muted p-3 flex flex-wrap items-start justify-between gap-2 text-sm shrink-0">
+                  {/* Header ↔ table divider — 3px se ~50% patla. */}
+                  <div className="flex shrink-0 flex-wrap items-start justify-between gap-2 border-b-[1.5px] border-foreground/80 bg-muted p-3 text-sm">
                     <div className="flex items-center gap-2 min-w-0 flex-wrap">
                       <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold shrink-0", badgeClass)}>
                         {badgeLabel}
@@ -973,7 +1048,11 @@ export function HistoryDialog({
                     </div>
                   </div>
 
-                  <Table className="w-full min-w-[480px]" scrollContainer={false}>
+                  {/* Table row lines — 3px se adha (1.5px) taaki zyada mota na lage. */}
+                  <Table
+                    className="w-full min-w-[480px] [&_tr]:!border-b-[1.5px] [&_tr]:!border-foreground/90 [&_tbody>tr:last-child]:!border-b-0"
+                    scrollContainer={false}
+                  >
                     <TableHeader>
                       <TableRow>
                         <TableHead className="text-left font-semibold min-w-[160px] w-1/3 pr-2.5">Field</TableHead>
@@ -1042,7 +1121,9 @@ export function HistoryDialog({
 
                         // --- hidden / internal fields ---
                         // Skip 'files' (form state with long preview URLs); we show only fileUrls (clickable links)
+                        // `__…` = client/SQLite mirror flags — user-facing history me nahi (purane entries bhi).
                         if (
+                          field.startsWith("__") ||
                           field === 'files' ||
                           field === 'approvedByUserId' || field === 'approvedBy' ||
                           field === 'lastEditedByUserName' ||
@@ -1069,7 +1150,7 @@ export function HistoryDialog({
 
                         // --- skip rows with no real change (always keep IsApproved) ---
                         const isApprovedField = field === 'IsApproved' || field === 'isApproved';
-                        const isTimestampLike = (v: any) => v?.toDate instanceof Function || (v?._seconds !== undefined);
+                        const isTimestampLike = (v: any) => firestoreTimestampLikeToDate(v) != null;
                         if (!isApprovedField && !isTimestampLike(values.from) && !isTimestampLike(displayTo) && JSON.stringify(values.from) === JSON.stringify(displayTo)) return null;
 
                         // --- label: entity name (Party, Bank/Cash, Staff) for account/party fields ---
@@ -1130,7 +1211,7 @@ export function HistoryDialog({
         </div>
 
         {(canReset || onMarkAsReadFromAlert) && (
-          <div className="flex items-center justify-between gap-2 pt-3 border-t shrink-0">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t-[1.5px] border-foreground/80 pt-3">
             <div className="flex items-center gap-2">
               {canReset && (
                 <Button

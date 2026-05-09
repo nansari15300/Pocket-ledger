@@ -7,7 +7,7 @@ import { getEffectiveNotificationSettings } from "@/lib/localUserNotificationSet
 
 const ONE_LAKH = 100000;
 
-export type TransactionAlertKind = "deleted" | "edited" | "large_amount";
+export type TransactionAlertKind = "deleted" | "edited" | "large_amount" | "auto_created";
 
 export type TransactionAlertPayload = {
   kind: TransactionAlertKind;
@@ -125,6 +125,10 @@ export async function sendTransactionAlert(
       message = `Large amount added: ${payload.voucherNumber || payload.voucherType || "Voucher"} — ${amt} (by ${by}).`;
       break;
     }
+    case "auto_created":
+      // Recurring monthly engine: owner ko dedicated "auto created voucher" message bhejo.
+      message = `Auto created voucher: ${payload.voucherNumber || payload.voucherType || "Voucher"} (by ${by}).`;
+      break;
     default:
       message = `Transaction activity (by ${by}).`;
   }

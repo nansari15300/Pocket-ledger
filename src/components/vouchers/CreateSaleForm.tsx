@@ -283,6 +283,8 @@ export function CreateSaleForm({
   onCopyMissingCategory,
   isCopyingMissingMasters = false,
   copyMasterDraftRequest,
+  recurringVoucherSaveBlocked = false,
+  recurringVoucherAuxiliaryDirty = false,
 }: {
   voucher?: any;
   onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void;
@@ -307,6 +309,8 @@ export function CreateSaleForm({
     sourceName: string;
     sourceRowPayload?: Record<string, unknown>;
   } | null;
+  recurringVoucherSaveBlocked?: boolean;
+  recurringVoucherAuxiliaryDirty?: boolean;
 }) {
   /* ------------------------------ HOOKS/STATE ----------------------------- */
   const isMounted = useRef(true);
@@ -393,7 +397,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u: any, i: number) => u !== init[i]);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null);
+  const isFormDirty =
+    _isFormFieldsDirty || _isFileDirty || (pendingLinkAllocations != null) || recurringVoucherAuxiliaryDirty;
   // Effect deps mein isFormDirty mat rakho — file/field dirty hote hi effect dubara chal kar naye voucher template ka khali partyId set kar deta tha
   const watchedLineItems = useWatch({ control: form.control, name: "lineItems", defaultValue: [] });
   const watchedDiscount = useWatch({ control: form.control, name: "discount" });
@@ -3014,6 +3019,41 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
               {/* Bottom: Narration + Attach / Totals */}
               {isMobile ? (
                 <div className="grid grid-cols-2 gap-3 w-[calc(100%-4px)] mx-auto px-[2px]">
+                  {/* Mobile UX: line items ke turant baad Sub Total / Discount / Tax / Total — pehle scroll me totals dikhe, phir narration / files */}
+                  <div className="col-span-2 bg-cyan-50 border-cyan-300/80 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs">Sub Total:</span>
+                      <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
+                    </div>
+                    <FormField
+                      control={form.control}
+                      name="discount"
+                      render={({ field }: any) => (
+                        <FormItem className="flex flex-row justify-between items-center gap-2 space-y-0">
+                          <FormLabel className="text-xs shrink-0">Discount:</FormLabel>
+                          <FormControl>
+                            <Input type="number" className="w-20 border rounded p-1 text-right text-xs h-7 shrink-0" {...field} disabled={deleteDisabledWhenLinked} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <div className="flex justify-between items-center pt-1 border-t">
+                      <div className="flex items-center gap-1">
+                        <FormLabel className="text-xs">Tax:</FormLabel>
+                        {selectedTax && (
+                          <FormLabel className={cn("text-[10px] font-semibold", selectedTax.balance < 0 ? "text-red-600" : "text-green-600")}>
+                            {selectedTax.balance < 0 ? `Pay: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Rec: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
+                          </FormLabel>
+                        )}
+                      </div>
+                      <span className="text-xs font-medium">{(tax || 0).toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t text-base font-bold">
+                      <span className="text-sm">Total:</span>
+                      <span className="text-green-600 text-sm">{(total || 0).toFixed(2)}</span>
+                    </div>
+                  </div>
+
                   {/* Narration + Due Date share one section color for clear grouping; fields stay white. */}
                   <div className="col-span-2 rounded-lg border border-amber-300/80 bg-amber-50 p-2">
                     <div className="px-[2px]">
@@ -3173,44 +3213,10 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       </RestrictedFileUploader>
                     </FormItem>
                   </div>
-                  
-                  {/* Mobile: two containers — (1) Sub total to Total, (2) Link for bill wise — 15px gap between */}
+
+                  {/* Bill wise link — totals ke baad narration/files; yahan sirf link UI */}
                   <div className="col-span-2 flex flex-col gap-[15px] w-full">
-                    {/* Container 1: Sub total se total tak */}
-                    <div className="bg-cyan-50 border-cyan-300/80 px-[2px] py-2 rounded-lg border space-y-1.5 w-full">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs">Sub Total:</span>
-                        <span className="text-xs font-medium">{(subTotal || 0).toFixed(2)}</span>
-                      </div>
-                      <FormField
-                        control={form.control}
-                        name="discount"
-                        render={({ field }: any) => (
-                          <FormItem className="flex flex-row justify-between items-center gap-2 space-y-0">
-                            <FormLabel className="text-xs shrink-0">Discount:</FormLabel>
-                            <FormControl>
-                              <Input type="number" className="w-20 border rounded p-1 text-right text-xs h-7 shrink-0" {...field} disabled={deleteDisabledWhenLinked} />
-                            </FormControl>
-                          </FormItem>
-                        )}
-                      />
-                      <div className="flex justify-between items-center pt-1 border-t">
-                        <div className="flex items-center gap-1">
-                          <FormLabel className="text-xs">Tax:</FormLabel>
-                          {selectedTax && (
-                            <FormLabel className={cn("text-[10px] font-semibold", selectedTax.balance < 0 ? "text-red-600" : "text-green-600")}>
-                              {selectedTax.balance < 0 ? `Pay: ${formatCurrencyForPrint(Math.abs(selectedTax.balance), { noSuffix: true, noAnimation: true })}` : `Rec: ${formatCurrencyForPrint(selectedTax.balance, { noSuffix: true, noAnimation: true })}`}
-                            </FormLabel>
-                          )}
-                        </div>
-                        <span className="text-xs font-medium">{(tax || 0).toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between items-center pt-1 border-t text-base font-bold">
-                        <span className="text-sm">Total:</span>
-                        <span className="text-green-600 text-sm">{(total || 0).toFixed(2)}</span>
-                      </div>
-                    </div>
-                    {/* Container 2: Link for bill wise — same table/style as Payment Out (header bold black, table alignment, Amount green). Shown for both new and edit so user can link before/after save. */}
+                    {/* Link for bill wise — same table/style as Payment Out (header bold black, table alignment, Amount green). Shown for both new and edit so user can link before/after save. */}
                     {shouldShowLinkButton && (
                       <div className="pb-1.5">
                         {/* Add mode: keep link sections collapsed until user explicitly opens via Show Link. */}
@@ -3624,7 +3630,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                 <Button type="button" onClick={() => { setPendingLinkAllocations(null); onVoucherAction?.('cancelled'); }} className={cn("w-full", BTN_CANCEL_CLASS)}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>
                   {isLoading ? "..." : "Save"}
                 </Button>
                 <Button type="button" onClick={showSaveAndApproveOnCreate && !voucher?.id ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (isFormDirty ? (e: React.MouseEvent) => handleFormSubmit(e as unknown as React.FormEvent, { approveAfterSave: true }) : (onApprove ?? (() => {})))} disabled={showSaveAndApproveOnCreate && !voucher?.id ? (isLoading || isApproving || editingDisabled) : (editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty))} className={cn("w-full", BTN_APPROVE_CLASS)}>
@@ -3669,7 +3675,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     <Printer className="mr-2 h-4 w-4" />
                     Save & Print
                   </Button>
-                  <Button type="submit" disabled={isLoading || editingDisabled || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
+                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>
                     {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     Save
                   </Button>

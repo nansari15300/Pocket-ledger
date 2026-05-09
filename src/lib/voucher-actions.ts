@@ -18,6 +18,7 @@ import { diff } from 'deep-object-diff';
 import { moveFilesToVoucherDate } from './storage'; // Import the move function
 import { getEffectiveHistorySettings } from './voucherHistoryUtils';
 import { coerceVoucherDateForStamp, toIsoDateStamp } from './voucherDateStamp';
+import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 
 /**
  * 1. Auto-setup function: Creates default groups and accounts for each menu.
@@ -122,7 +123,9 @@ function getChanges(oldData: any, newData: any) {
   const changes: Record<string, { from: any; to: any }> = {};
   const ignoredFields = [
     "history", "createdAt", "updatedAt", "id", "isDeleted",
-    "deletedAt", "balance", "credit", "debit"
+    "deletedAt", "balance", "credit", "debit",
+    LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY,
+    PL_CLIENT_OFFLINE_FIRST_PERSIST_MS,
   ];
 
   const keys = new Set([...Object.keys(oldData || {}), ...Object.keys(newData || {})]);
@@ -132,6 +135,17 @@ function getChanges(oldData: any, newData: any) {
 
     let oldVal = oldData?.[key];
     let newVal = newData?.[key];
+    if (
+      key === "amount" &&
+      String(newData?.type || "").toLowerCase() === "journal" &&
+      (newVal === undefined || newVal === null) &&
+      newData != null &&
+      newData.total !== undefined &&
+      newData.total !== null
+    ) {
+      const tn = Number(newData.total);
+      if (Number.isFinite(tn)) newVal = tn;
+    }
 
     // Handle Timestamps/Dates by converting to ISO strings for comparison
     if ((oldVal instanceof Date || (oldVal && oldVal.toDate instanceof Function)) && (newVal instanceof Date || (newVal && newVal.toDate instanceof Function))) {

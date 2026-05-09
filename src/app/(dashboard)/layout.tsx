@@ -46,6 +46,7 @@ import { PL_APK_LEDGER_WRITE_ARM_EVENT } from "@/lib/apkLedgerRouteShield";
 import { PlNavDebugOnDeviceOverlay } from "@/components/debug/PlNavDebugOnDeviceOverlay";
 import { DashboardDocumentTitleSync } from "@/components/layout/DashboardDocumentTitleSync";
 import { ElectronTabStripSyncBridge } from "@/components/layout/ElectronTabStripSyncBridge";
+import { RecurringVoucherAutoRunner } from "@/components/vouchers/RecurringVoucherAutoRunner";
 import { collection, doc, getDocs, getDoc, onSnapshot, deleteDoc, setDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { Settings, Monitor, Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -786,6 +787,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     return (
          <>
             <AlarmPopup />
+            {/* Month-end recurring vouchers: app-open trigger runner (company settings + user scope aware). */}
+            <RecurringVoucherAutoRunner />
             <ReportListProvider>
               <SettingsListProvider>
               <ReportPartyViewProvider>

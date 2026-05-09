@@ -4,8 +4,26 @@ export type PlanId = "basic" | "advance" | "pro" | "pro-plus";
 /** Monotonic order for upgrade / downgrade UI (basic is 0). */
 export const PLAN_TIER_ORDER: PlanId[] = ["basic", "advance", "pro", "pro-plus"];
 
+/**
+ * Firestore / admin / legacy strings → canonical SKU.
+ * `proplus`, `Pro Plus`, `pro_plus` waghera ko map karo — warna strict `PLAN_TIER_ORDER.includes` fail ho kar shared user ko "Basic" dikh jata hai.
+ * Core tier order + `higherPlanByTier` static build / web dono me yahi; ye helper har jagah ek hi canonical `planId` ensure karta hai.
+ * Next API routes (`plan-change-checkout`, `sync-plan`, …) bhi isi ko import karein — strict match se `proplus` manual Firestore = galat `basic`.
+ */
+export function normalizePlanIdForClient(raw?: string | null): PlanId {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/_/g, "-");
+  if (s === "proplus") return "pro-plus";
+  if (PLAN_TIER_ORDER.includes(s as PlanId)) return s as PlanId;
+  return "basic";
+}
+
 export function planTierIndex(planId?: string | null): number {
-  const i = PLAN_TIER_ORDER.indexOf((planId as PlanId) || "basic");
+  const id = normalizePlanIdForClient(planId);
+  const i = PLAN_TIER_ORDER.indexOf(id);
   return i >= 0 ? i : 0;
 }
 
@@ -17,12 +35,11 @@ export function higherPlanByTier(
   firestorePlanId?: string | null,
   sqliteOrOtherPlanId?: string | null
 ): PlanId {
-  const a = String(firestorePlanId || "").trim() as PlanId;
-  const b = String(sqliteOrOtherPlanId || "").trim() as PlanId;
+  const a = normalizePlanIdForClient(firestorePlanId);
+  const b = normalizePlanIdForClient(sqliteOrOtherPlanId);
   const ia = planTierIndex(a);
   const ib = planTierIndex(b);
-  const pick = ib > ia ? b || "basic" : a || b || "basic";
-  return (PLAN_TIER_ORDER.includes(pick as PlanId) ? pick : "basic") as PlanId;
+  return ib > ia ? b : a;
 }
 
 /** Next paid SKU above current (e.g. advance → pro). Null if already on top paid tier. */
@@ -53,6 +70,8 @@ export type EntitlementKey =
   | "monthlyVoucherLimitLocal"
   | "hasMultiDeviceSync"
   | "maxDevices"
+  /** Billing chart + admin: cloud vs SQLite-first company — abhi runtime limit same; alag SKU future ke liye. */
+  | "maxDevicesLocal"
   | "hasPrioritySupport"
   | "hasAuditLogs"
   | "hasRoleBasedAccess"
@@ -113,6 +132,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       monthlyVoucherLimitLocal: 500,
       hasMultiDeviceSync: false,
       maxDevices: 1,
+      maxDevicesLocal: 1,
       hasPrioritySupport: false,
       hasAuditLogs: false,
       hasRoleBasedAccess: false,
@@ -157,6 +177,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       monthlyVoucherLimitLocal: 2500,
       hasMultiDeviceSync: true,
       maxDevices: 3,
+      maxDevicesLocal: 3,
       hasPrioritySupport: false,
       hasAuditLogs: true,
       hasRoleBasedAccess: true,
@@ -203,6 +224,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       monthlyVoucherLimitLocal: 0,
       hasMultiDeviceSync: true,
       maxDevices: 10,
+      maxDevicesLocal: 10,
       hasPrioritySupport: true,
       hasAuditLogs: true,
       hasRoleBasedAccess: true,
@@ -248,6 +270,7 @@ export const DEFAULT_PLANS: Record<PlanId, Plan> = {
       monthlyVoucherLimitLocal: 0,
       hasMultiDeviceSync: true,
       maxDevices: 25,
+      maxDevicesLocal: 25,
       hasPrioritySupport: true,
       hasAuditLogs: true,
       hasRoleBasedAccess: true,
@@ -293,6 +316,7 @@ export function isFeatureEnabled(
     | "dailyVoucherLimitLocal"
     | "monthlyVoucherLimitLocal"
     | "maxDevices"
+    | "maxDevicesLocal"
     | "voucherHistoryLimit"
   >
 ): boolean {
@@ -319,6 +343,7 @@ export function limitFor(
     | "dailyVoucherLimitLocal"
     | "monthlyVoucherLimitLocal"
     | "maxDevices"
+    | "maxDevicesLocal"
     | "voucherHistoryLimit"
   >
 ): number {

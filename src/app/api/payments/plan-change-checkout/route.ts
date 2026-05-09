@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
 import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
-import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
+import { DEFAULT_PLANS, type PlanId, normalizePlanIdForClient } from "@/config/plans";
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import {
@@ -67,12 +67,6 @@ function stripeConfigHelpMessage(adminResult: AdminKeysResult): string {
 }
 
 const VALID_TERMS = new Set(BILLING_TERM_OPTIONS.map((o) => o.value));
-
-function normalizeCompanyPlanId(raw: unknown): PlanId {
-  const s = String(raw ?? "basic").trim();
-  if (s === "basic" || s === "advance" || s === "pro" || s === "pro-plus") return s;
-  return "basic";
-}
 
 type ProrationGateway = "stripe" | "khalti" | "esewa";
 
@@ -138,7 +132,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Only the company owner can change plans" }, { status: 403 });
     }
 
-    const currentPlanId = normalizeCompanyPlanId(cdata.planId);
+    const currentPlanId = normalizePlanIdForClient(cdata.planId != null ? String(cdata.planId) : undefined);
     // One-time proration builds on an active paid SKU; Basic → paid stays on recurring `/api/payments/initiate`.
     if (currentPlanId === "basic" || !PAID_PLAN_IDS.has(currentPlanId)) {
       return NextResponse.json(

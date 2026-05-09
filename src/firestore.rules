@@ -267,6 +267,22 @@ service cloud.firestore {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }
+
+      /**
+       * Auto Monthly / recurring voucher templates + per-period generation locks (Generate now + app-open runner).
+       * Pehle match missing tha — client par "Missing or insufficient permissions" (getDoc / setDoc / transaction).
+       * @path /companies/{companyId}/recurring_voucher_templates/{templateId}
+       * @path /companies/{companyId}/recurring_voucher_generation_locks/{lockId}
+       */
+      match /recurring_voucher_templates/{templateId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      match /recurring_voucher_generation_locks/{lockId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
       
       /**
        * @description Manages parties (customers/suppliers) for a company.

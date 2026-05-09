@@ -4,7 +4,7 @@
  *
  * **`resolveEffectivePlanIdForVoucherQuota`**: SQLite + yahi cache — vouchers save limit check UI jaisi plan tier use kare.
  */
-import { higherPlanByTier, type PlanId } from "@/config/plans";
+import { higherPlanByTier, normalizePlanIdForClient, type PlanId } from "@/config/plans";
 
 const PREFIX_TOKEN = "pocket-ledger:companyPlan:";
 
@@ -26,7 +26,8 @@ export function writeCompanyPlanLocalCache(
   if (typeof window === "undefined" || !companyId?.trim()) return;
   try {
     const entry: CompanyPlanLocalCacheEntry = {
-      planId: partial.planId.trim(),
+      // Stripe/admin kabhi `proplus` bheje — localStorage me canonical `pro-plus` taaki UI/device/voucher sab align rahein
+      planId: normalizePlanIdForClient(partial.planId.trim()),
       planExpiryMs: partial.planExpiryMs,
       lastStripeCheckoutSessionId: partial.lastStripeCheckoutSessionId,
       updatedAtMs: Date.now(),
@@ -76,7 +77,7 @@ export function resolveEffectivePlanIdForVoucherQuota(
       : null;
   const cached = readCompanyPlanLocalCache(companyId.trim());
   if (cached) {
-    const cp = String(cached.planId || "").trim() || "basic";
+    const cp = normalizePlanIdForClient(cached.planId);
     const sqliteBasic = planId === "basic";
     const cachePaid = cp !== "basic";
     const expBetter = sqliteMs == null || cached.planExpiryMs > sqliteMs;
@@ -84,8 +85,7 @@ export function resolveEffectivePlanIdForVoucherQuota(
       planId = cp;
     }
   }
-  const out = (planId || "basic") as PlanId;
-  return out ?? "basic";
+  return normalizePlanIdForClient(planId);
 }
 
 type PlanRowHint = { planId?: string | null; planExpiryMs?: unknown };

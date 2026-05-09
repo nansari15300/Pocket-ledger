@@ -8,6 +8,7 @@ import {
   Plan,
   formatPrice,
   EntitlementKey,
+  normalizePlanIdForClient,
 } from "@/config/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,6 @@ import {
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
 import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
 import {
   defaultPlansListFallback,
@@ -94,6 +94,9 @@ function toSafeDate(raw: unknown): Date | null {
 const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "maxUsers", label: "Max Users (online)" },
   { key: "maxUsersLocal", label: "Max Users (local)" },
+  // Row 3–4: devices (user request) — pehle companies/vouchers se upar.
+  { key: "maxDevices", label: "Max devices (online)" },
+  { key: "maxDevicesLocal", label: "Max devices (local)" },
   { key: "maxCompanies", label: "Max Companies (online)" },
   { key: "maxCompaniesLocal", label: "Max Companies (local)" },
   { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
@@ -104,11 +107,17 @@ const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "maxAttachmentsGBLocal", label: "Attachments GB (local)" },
   { key: "maxStorageGB", label: "Storage GB (online)" },
   { key: "maxStorageGBLocal", label: "Storage GB (local)" },
-  { key: "hasMultiDeviceSync", label: "Multi-device sync" },
   { key: "hasRoleBasedAccess", label: "Role-based access" },
   { key: "hasAuditLogs", label: "Audit logs" },
   { key: "hasPrioritySupport", label: "Priority support" },
 ];
+
+/** Bahar wale boxes: user ne “bold” maanga — `border-2` + thoda dark outline (patle 1.5px se zyada dikhe). */
+const BILLING_OUTLINE_CLASS = "border-2 border-foreground/30";
+
+/** Features column header — company vs account scope (English). */
+const BILLING_FEATURES_SCOPE_NOTE_EN =
+  "Per company: users, daily/monthly vouchers, attachment & storage GB, and registered devices apply to each company on this plan. Per owner account: max companies (online/local) is the total number of companies you may create. Online vs local rows match each company’s cloud-linked vs device-local storage mode.";
 
 /** Khalti success_url may already include `?pendingId=` — append token/amount with `&` when needed. */
 function withKhaltiProrationReturnParams(returnUrl: string, token: string, amount: number): string {
@@ -307,7 +316,14 @@ function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: Check
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { companyId, company, loading: companyLoading, allCompanies } = useCompany();
+  const { companyId, company, loading: companyLoading } = useCompany();
+
+  // `/api/payments/*` + `/api/company/*` Firestore `companies/{docId}` padhte hain — restore/merge me SQLite row `id` ≠ cloud doc ho to `authoritativeCompanyId` sahi doc khulta hai.
+  const billingFirestoreCompanyId = useMemo(() => {
+    const sel = String(companyId || "").trim();
+    const auth = String(company?.authoritativeCompanyId || "").trim();
+    return auth || sel;
+  }, [companyId, company?.authoritativeCompanyId]);
   // dateFormatBS: BS display key — formatBsFromAD mirrors NepaliDate.format + datex-bs for long AD expiries.
   const { dateSystem, formatDate, formatDateBS, dateFormatBS } = useDate();
   const [plans, setPlans] = useState<Plan[]>(() => readCachedPlansList() ?? defaultPlansListFallback());
@@ -369,10 +385,10 @@ export default function BillingPage() {
     }
   }, [company, companyLoading, router]);
 
-  /** Account plan (all owned companies) so billing UI matches avatar/header after Stripe on another local row. */
+  /** Isi company ka merged `company.planId` — `resolveEffectiveAccountPlanId` doosri owned company ka Pro Plus yahan mix kar deta tha jab Firestore is row par basic ho. */
   const currentPlanId = useMemo(
-    (): PlanId => resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId),
-    [allCompanies, user?.uid, company?.planId]
+    (): PlanId => normalizePlanIdForClient(company?.planId),
+    [company?.planId]
   );
 
   useEffect(() => {
@@ -455,13 +471,19 @@ export default function BillingPage() {
   }, [company]);
 
   const expiryDate = useMemo(() => {
-    // Expiry fallback keeps display stable across web/static migrations.
-    return (
+    // Firestore `planExpiry` + legacy keys; SQLite mirror aksar sirf `planExpiryMs` rakhta hai — bina iske billing par "N/A".
+    const fromTs =
       toSafeDate(company?.planExpiry) ??
       toSafeDate((company as Record<string, unknown> | undefined)?.expiryDate) ??
       toSafeDate((company as Record<string, unknown> | undefined)?.planExpiresAt) ??
-      null
-    );
+      null;
+    if (fromTs) return fromTs;
+    const ms = (company as Record<string, unknown> | undefined)?.planExpiryMs;
+    if (typeof ms === "number" && Number.isFinite(ms)) {
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    return null;
   }, [company]);
 
   useEffect(() => {
@@ -514,7 +536,8 @@ export default function BillingPage() {
         doc.line(x, top, x, top + tableH);
       }
 
-      // Header separator.
+      // Header separator — patli horizontal (neeche feature rows jaisa).
+      doc.setLineWidth(0.4);
       doc.line(left, top + headerH, left + tableW, top + headerH);
 
       // Column headers.
@@ -543,9 +566,10 @@ export default function BillingPage() {
         const wrapped = doc.splitTextToSize(String(p.tagline || "-"), planColW - 12) as string[];
         doc.text(wrapped[0] || "-", x, y);
       });
+      doc.setLineWidth(0.4);
       doc.line(left, top + headerH + rowH, left + tableW, top + headerH + rowH);
 
-      // Feature rows with horizontal grid lines.
+      // Feature rows with horizontal grid lines (0.4 ≈ outer 0.8 ka aadha).
       BILLING_FEATURES.forEach((feature, featureIdx) => {
         const rowTop = top + headerH + rowH + featureIdx * rowH;
         const rowTextY = rowTop + rowH - 6;
@@ -553,9 +577,10 @@ export default function BillingPage() {
         doc.setFontSize(9);
         doc.text(feature.label, left + 6, rowTextY);
         exportPlans.forEach((p, idx) => {
-          const { text } = getFeatureValue(p, feature.key);
+          const fv = getFeatureValue(p, feature.key);
+          const cellText = fv.showDeviceSyncTick ? `${fv.text} \u2713` : fv.text;
           const x = left + featureColW + idx * planColW + 6;
-          const wrapped = doc.splitTextToSize(String(text), planColW - 12) as string[];
+          const wrapped = doc.splitTextToSize(String(cellText), planColW - 12) as string[];
           doc.text(wrapped[0] || "-", x, rowTextY);
         });
         doc.line(left, rowTop + rowH, left + tableW, rowTop + rowH);
@@ -593,7 +618,12 @@ export default function BillingPage() {
       const res = await fetch(getBillingApiUrl("/api/payments/plan-change-checkout"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ companyId, targetPlanId, term, gateway: prorationGateway }),
+        body: JSON.stringify({
+          companyId: billingFirestoreCompanyId,
+          targetPlanId,
+          term,
+          gateway: prorationGateway,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Checkout failed");
@@ -681,7 +711,7 @@ export default function BillingPage() {
       const res = await fetch(getBillingApiUrl("/api/company/downgrade-plan"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ companyId, targetPlanId }),
+        body: JSON.stringify({ companyId: billingFirestoreCompanyId, targetPlanId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Downgrade failed");
@@ -699,7 +729,11 @@ export default function BillingPage() {
 
   const allFeaturesConfig = BILLING_FEATURES;
 
-  const getFeatureValue = (plan: Plan, key: EntitlementKey): { text: string; enabled: boolean } => {
+  /** `showDeviceSyncTick`: max device rows — multi-device on ho to number ke saath green tick (alag row hata di). */
+  const getFeatureValue = (
+    plan: Plan,
+    key: EntitlementKey
+  ): { text: string; enabled: boolean; showDeviceSyncTick?: boolean } => {
     const value = plan.entitlements[key];
 
     // Online + Local column dono me `0` = Unlimited (billing table — admin PlanDetails placeholders ke saath align).
@@ -712,6 +746,30 @@ export default function BillingPage() {
       const enabled = value !== 0;
       const text = value === 0 ? "Unlimited" : String(value);
       return { text, enabled: true };
+    }
+
+    // Admin/plan chart: `0` GB = treat as unlimited cap for display (vouchers jaisa).
+    if (
+      key === "maxAttachmentsGB" ||
+      key === "maxAttachmentsGBLocal" ||
+      key === "maxStorageGB" ||
+      key === "maxStorageGBLocal"
+    ) {
+      const n = typeof value === "number" ? value : Number(value);
+      if (n === 0) return { text: "Unlimited", enabled: true };
+      return { text: String(n), enabled: n > 0 };
+    }
+
+    // Multi-device band = single device (Manage Devices / `useDeviceLimit` jaisa), chahe DB me purana maxDevices zyada ho.
+    if (key === "maxDevices" || key === "maxDevicesLocal") {
+      const raw =
+        key === "maxDevicesLocal"
+          ? (plan.entitlements.maxDevicesLocal ?? plan.entitlements.maxDevices)
+          : plan.entitlements.maxDevices;
+      const stored = Math.max(1, Number(raw) || 1);
+      const multi = plan.entitlements.hasMultiDeviceSync === true;
+      const effective = multi ? stored : 1;
+      return { text: String(effective), enabled: true, showDeviceSyncTick: multi };
     }
 
     if (typeof value === "boolean") {
@@ -738,7 +796,7 @@ export default function BillingPage() {
     return (
       // Billing page: mobile true full-width vs viewport (2px side gap), ignores parent content padding.
       <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">
-        <Card className="w-full max-w-none border shadow-sm">
+        <Card className={cn("w-full max-w-none shadow-sm", BILLING_OUTLINE_CLASS)}>
           <CardHeader>
             <Skeleton className="h-9 w-48" />
             <Skeleton className="h-4 w-64" />
@@ -761,7 +819,7 @@ export default function BillingPage() {
 
   return (
     <div className="relative left-1/2 w-[calc(100vw-4px)] max-w-[calc(100vw-4px)] -translate-x-1/2 box-border py-4 sm:left-auto sm:w-[calc(100%-10px)] sm:max-w-[calc(100vw-10px)] sm:translate-x-0 sm:mx-[5px] sm:py-6">
-      <Card className="w-full max-w-none border shadow-sm">
+      <Card className={cn("w-full max-w-none shadow-sm", BILLING_OUTLINE_CLASS)}>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -777,7 +835,7 @@ export default function BillingPage() {
         </CardHeader>
         <CardContent>
           {company && (
-            <div className="rounded-lg border bg-muted/30 p-4 mb-6 text-sm space-y-3">
+            <div className={cn("rounded-lg bg-muted/30 p-4 mb-6 text-sm space-y-3", BILLING_OUTLINE_CLASS)}>
               <div>
                 <span className="text-muted-foreground">Subscribed plan — current: </span>
                 <strong>{currentSubscribedPlanLabel}</strong>
@@ -790,9 +848,18 @@ export default function BillingPage() {
                   </strong>
                 </div>
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span className="text-muted-foreground">Expiry date: </span>
-                  <span className={cn(dateSystem === "Both" && "whitespace-nowrap")}>
-                    <strong className="font-semibold">{formatBillingExpiry(expiryDate)}</strong>
+                  <span className={cn("text-muted-foreground", expiryMs == null && "line-through decoration-muted-foreground/70")}>
+                    Expiry date:{" "}
+                  </span>
+                  <span className={cn(dateSystem === "Both" && "whitespace-nowrap", expiryMs == null && "line-through decoration-muted-foreground/70")}>
+                    <strong
+                      className={cn(
+                        "font-semibold",
+                        expiryMs == null && "text-muted-foreground font-normal"
+                      )}
+                    >
+                      {formatBillingExpiry(expiryDate)}
+                    </strong>
                     {daysLeftOnPlan != null ? (
                       <span className="ml-2 font-normal text-muted-foreground tabular-nums">
                         {planExpiredByClock ? (
@@ -812,6 +879,7 @@ export default function BillingPage() {
 
           {isMobile ? (
             <div className="space-y-3">
+              <p className="text-xs text-muted-foreground leading-snug px-0.5">{BILLING_FEATURES_SCOPE_NOTE_EN}</p>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {plans.map((p, idx) => (
                   <Button
@@ -827,7 +895,7 @@ export default function BillingPage() {
                 ))}
               </div>
               <div
-                className="border rounded-lg overflow-hidden"
+                className={cn("rounded-lg overflow-hidden", BILLING_OUTLINE_CLASS)}
                 onTouchStart={(e) => setTouchStartX(e.touches[0]?.clientX ?? null)}
                 onTouchEnd={(e) => {
                   // Swipe navigation: one column per screen.
@@ -855,11 +923,19 @@ export default function BillingPage() {
                       <p className="text-lg font-semibold mt-2">{p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id])}</p>
                       <div className="mt-3 space-y-2">
                         {allFeaturesConfig.map((feature) => {
-                          const { text } = getFeatureValue(p, feature.key);
+                          const { text, showDeviceSyncTick } = getFeatureValue(p, feature.key);
                           return (
-                            <div key={`${p.id}-${feature.key}-mobile`} className="flex items-start justify-between gap-3 border-b pb-1 text-sm">
+                            <div
+                              key={`${p.id}-${feature.key}-mobile`}
+                              className="flex items-start justify-between gap-3 border-b-2 border-foreground/25 pb-1 text-sm"
+                            >
                               <span className="text-muted-foreground">{feature.label}</span>
-                              <span className="font-medium text-right">{text}</span>
+                              <span className="font-medium text-right inline-flex items-center justify-end gap-1">
+                                {text}
+                                {showDeviceSyncTick ? (
+                                  <Check className="h-4 w-4 shrink-0 text-green-500" aria-hidden />
+                                ) : null}
+                              </span>
                             </div>
                           );
                         })}
@@ -868,7 +944,7 @@ export default function BillingPage() {
                   );
                 })()}
               </div>
-              <div className="border rounded-lg p-3 space-y-2">
+              <div className={cn("rounded-lg p-3 space-y-2", BILLING_OUTLINE_CLASS)}>
                 {/* Mobile action panel: parity with desktop "Term & action" row. */}
                 <p className="text-sm font-medium">Term &amp; action</p>
                 {(() => {
@@ -978,19 +1054,28 @@ export default function BillingPage() {
             </div>
           ) : (
           /* scrollContainer=false: single horizontal scroll on outer div — avoids clipped first column. table-fixed + break-words keeps text inside each cell. */
-          <div className="border rounded-lg overflow-x-auto">
+          <div className={cn("rounded-lg overflow-x-auto", BILLING_OUTLINE_CLASS)}>
             <Table
               scrollContainer={false}
               className={cn(
                 "w-full min-w-0 table-fixed border-collapse",
-                "[&_th]:border-r [&_td]:border-r [&_th]:border-border [&_td]:border-border",
-                "[&_tr>th:last-child]:border-r-0 [&_tr>td:last-child]:border-r-0"
+                // Matrix grid bhi outer jaisi bold — 2px + foreground/30 taaki vertical/horizontal ek jaise moti lagen.
+                "[&_th]:!border-r-2 [&_td]:!border-r-2 [&_th]:!border-foreground/30 [&_td]:!border-foreground/30",
+                "[&_tr>th:last-child]:border-r-0 [&_tr>td:last-child]:border-r-0",
+                "[&_thead>tr]:!border-b-2 [&_thead>tr]:!border-foreground/30",
+                "[&_tbody>tr]:!border-b-2 [&_tbody>tr]:!border-foreground/30",
+                "[&_tfoot>tr]:!border-b-2 [&_tfoot>tr]:!border-foreground/30 [&_tfoot]:!border-t-2 [&_tfoot]:!border-foreground/30"
               )}
             >
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[22%] min-w-0 max-w-[22%] font-semibold text-base whitespace-normal break-words align-top !whitespace-normal px-2 py-3">
-                    Features
+                  <TableHead className="w-[22%] min-w-0 max-w-[22%] whitespace-normal break-words align-top !whitespace-normal px-2 py-3">
+                    <div className="flex flex-col gap-1.5 text-left">
+                      <span className="font-semibold text-base">Features</span>
+                      <p className="text-[11px] sm:text-xs font-normal text-muted-foreground leading-snug">
+                        {BILLING_FEATURES_SCOPE_NOTE_EN}
+                      </p>
+                    </div>
                   </TableHead>
                   {plans.map((p) => {
                     const isSelected = p.id === selectedPlanId;
@@ -1043,7 +1128,7 @@ export default function BillingPage() {
                       {feature.label}
                     </TableCell>
                     {plans.map((p) => {
-                      const { text, enabled } = getFeatureValue(p, feature.key);
+                      const { text, enabled, showDeviceSyncTick } = getFeatureValue(p, feature.key);
                       const isSelected = p.id === selectedPlanId;
                       return (
                         <TableCell
@@ -1053,12 +1138,26 @@ export default function BillingPage() {
                             isSelected && "bg-muted"
                           )}
                         >
-                          {["hasMultiDeviceSync", "hasRoleBasedAccess", "hasAuditLogs", "hasPrioritySupport"].includes(feature.key) ? (
+                          {["hasRoleBasedAccess", "hasAuditLogs", "hasPrioritySupport"].includes(feature.key) ? (
                             enabled ? (
                               <Check className="h-5 w-5 mx-auto text-green-500 shrink-0" />
                             ) : (
                               <X className="h-5 w-5 mx-auto text-red-500 shrink-0" />
                             )
+                          ) : feature.key === "maxDevices" || feature.key === "maxDevicesLocal" ? (
+                            <span className="inline-flex items-center justify-center gap-1 flex-wrap max-w-full">
+                              <span
+                                className={cn(
+                                  "tabular-nums",
+                                  !enabled && text !== "Unlimited" && "text-muted-foreground"
+                                )}
+                              >
+                                {text}
+                              </span>
+                              {showDeviceSyncTick ? (
+                                <Check className="h-4 w-4 shrink-0 text-green-500" aria-label="Multi-device sync included" />
+                              ) : null}
+                            </span>
                           ) : (
                             <span
                               className={cn(
@@ -1381,7 +1480,7 @@ export default function BillingPage() {
               plan={selectedPlanDetails}
               termKey={colTerms[selectedPlanId]}
               userId={user?.uid ?? ""}
-              companyId={companyId ?? ""}
+              companyId={billingFirestoreCompanyId}
               billingIntent={selectedPlanDetails.isFree ? "donation" : "subscribe"}
             />
           ) : !showMobileCheckoutSection ? (
@@ -1397,7 +1496,7 @@ export default function BillingPage() {
               plan={selectedMobilePlan}
               termKey={colTerms[selectedMobilePlan.id]}
               userId={user?.uid ?? ""}
-              companyId={companyId ?? ""}
+              companyId={billingFirestoreCompanyId}
               billingIntent={selectedMobilePlan.isFree ? "donation" : "subscribe"}
             />
           )}

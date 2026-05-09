@@ -12,17 +12,36 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, PlusCircle, RefreshCw, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useCompany } from "@/hooks/useCompany";
 import { getPlanVoucherHistoryLimit, normalizeVoucherHistoryFullBehavior } from "@/lib/voucherHistoryUtils";
 import { useAuth } from "@/hooks/useAuth";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
+import { cn } from "@/lib/utils";
+import {
+  SETTINGS_LEDGER_CARD as VS_CARD_BORDER,
+  SETTINGS_LEDGER_BORDER_B as VS_BORDER_B,
+  SETTINGS_LEDGER_BORDER_T as VS_BORDER_T,
+  SETTINGS_LEDGER_BORDER_L as VS_BORDER_L,
+  SETTINGS_LEDGER_SEPARATOR as VS_SEPARATOR_LEDGER,
+  SETTINGS_LEDGER_DASHED as VS_DASHED_BOX,
+  SETTINGS_LEDGER_FIELD as VS_FIELD_OUTLINE,
+} from "@/lib/settingsLedgerStyle";
 
 const voucherPrefixSchema = z.object({
   sale: z.array(z.string()),
@@ -171,9 +190,28 @@ const voucherSettingsSchema = z.object({
     (raw) => normalizeVoucherHistoryFullBehavior(raw),
     z.enum(["block_edit", "allow_edit_delete_last"]),
   ),
-});
+  // Recurring automation: admin app-open trigger scope + optional selected users list.
+  recurringVoucherSettingsEnabled: z.boolean(),
+  recurringVoucherRunScope: z.enum(["owner_only", "all_users", "selected_users"]),
+  recurringVoucherAllowedUserIdsCsv: z.string().default(""),
+  /** Voucher par Auto Monthly UI: kaun `configure_company_settings` users use kar saken. */
+  recurringVoucherEditorScope: z.enum(["all_configure_users", "owner_only", "selected_users"]),
+  recurringVoucherEditorAllowedUserIdsCsv: z.string().default(""),
+})
+  .superRefine((data, ctx) => {
+    if (data.recurringVoucherEditorScope !== "selected_users") return;
+    const ids = data.recurringVoucherEditorAllowedUserIdsCsv.split(",").map((x) => x.trim()).filter(Boolean);
+    if (ids.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Select at least one user for voucher Auto Monthly access.",
+        path: ["recurringVoucherEditorAllowedUserIdsCsv"],
+      });
+    }
+  });
 
 type VoucherSettingsValues = z.infer<typeof voucherSettingsSchema>;
+type RecurringScopeUserOption = { id: string; label: string; detail?: string };
 
 export function VoucherSettings() {
   // triggerSync / reloadLocalCompanyRegistry: save ke baad header `CopyLedgerHeaderButton` + SQLite mirror jaldi align
@@ -186,6 +224,36 @@ export function VoucherSettings() {
    const [newPrefixValues, setNewPrefixValues] = useState<Record<keyof VoucherPrefixValues, string>>(
       Object.keys(defaultPrefixes).reduce((acc, key) => ({ ...acc, [key]: "" }), {} as any)
     );
+  const recurringScopeUserOptions = useMemo<RecurringScopeUserOption[]>(() => {
+    // Recurring selected-users dropdown: company owner + shared users ko user-name labels ke saath build karo.
+    const out: RecurringScopeUserOption[] = [];
+    const seen = new Set<string>();
+    const ownerId = String(company?.ownerId || "").trim();
+    const ownerEmail = String(company?.ownerEmail || "").trim();
+    if (ownerId) {
+      seen.add(ownerId);
+      out.push({
+        id: ownerId,
+        label: ownerEmail ? `Owner - ${ownerEmail}` : "Owner",
+        detail: ownerEmail || undefined,
+      });
+    }
+    const shared = Array.isArray(company?.sharedWith) ? company.sharedWith : [];
+    for (const row of shared as Array<Record<string, unknown>>) {
+      const uid = String(row?.uid || "").trim();
+      if (!uid || seen.has(uid)) continue;
+      const displayName = String(row?.displayName || row?.name || "").trim();
+      const email = String(row?.email || "").trim();
+      const role = String(row?.role || "").trim();
+      seen.add(uid);
+      out.push({
+        id: uid,
+        label: displayName || email || uid,
+        detail: [email, role].filter(Boolean).join(" - ") || undefined,
+      });
+    }
+    return out;
+  }, [company?.ownerId, company?.ownerEmail, company?.sharedWith]);
 
   const form = useForm<VoucherSettingsValues>({
     // zod preprocess + RHF Resolver generic mismatch — runtime OK
@@ -219,6 +287,11 @@ export function VoucherSettings() {
         voucherHistoryEnabled: true,
         voucherHistoryLimit: 10,
         voucherHistoryFullBehavior: 'allow_edit_delete_last' as const,
+        recurringVoucherSettingsEnabled: false,
+        recurringVoucherRunScope: "owner_only",
+        recurringVoucherAllowedUserIdsCsv: "",
+        recurringVoucherEditorScope: "all_configure_users",
+        recurringVoucherEditorAllowedUserIdsCsv: "",
     },
   });
 
@@ -278,6 +351,26 @@ export function VoucherSettings() {
         voucherHistoryLimit: Math.max(1, Math.min(planHistoryLimit, Number((company as any).voucherHistoryLimit) || 10)),
         // Company se aayi value ko enum + Select ke saath align karo (invalid string → default)
         voucherHistoryFullBehavior: normalizeVoucherHistoryFullBehavior((company as any).voucherHistoryFullBehavior),
+        recurringVoucherSettingsEnabled: (company as any)?.recurringVoucherSettings?.enabled === true,
+        recurringVoucherRunScope: (() => {
+          const raw = String((company as any)?.recurringVoucherSettings?.runScope || "owner_only");
+          if (raw === "all_users" || raw === "selected_users" || raw === "owner_only") return raw;
+          return "owner_only";
+        })(),
+        recurringVoucherAllowedUserIdsCsv: Array.isArray((company as any)?.recurringVoucherSettings?.allowedUserIds)
+          ? ((company as any).recurringVoucherSettings.allowedUserIds as unknown[]).map((x) => String(x || "").trim()).filter(Boolean).join(", ")
+          : "",
+        recurringVoucherEditorScope: (() => {
+          const raw = String((company as any)?.recurringVoucherSettings?.voucherAutoEditorsScope || "all_configure_users");
+          if (raw === "owner_only" || raw === "selected_users" || raw === "all_configure_users") return raw;
+          return "all_configure_users";
+        })(),
+        recurringVoucherEditorAllowedUserIdsCsv: Array.isArray((company as any)?.recurringVoucherSettings?.voucherAutoEditorsUserIds)
+          ? ((company as any).recurringVoucherSettings.voucherAutoEditorsUserIds as unknown[])
+              .map((x) => String(x || "").trim())
+              .filter(Boolean)
+              .join(", ")
+          : "",
     });
     }
   }, [company, form, planHistoryLimit]);
@@ -315,6 +408,17 @@ export function VoucherSettings() {
         toast({ title: "Plan limit applied", description: `Max history entries capped to ${planHistoryLimit} (your plan's limit).` });
       }
       const companyRef = doc(firestore, "companies", companyId);
+      const recurringAllowedUserIds =
+        data.recurringVoucherRunScope === "selected_users"
+          ? data.recurringVoucherAllowedUserIdsCsv
+              .split(",")
+              .map((x) => x.trim())
+              .filter(Boolean)
+          : [];
+      const recurringEditorAllowedUserIds =
+        data.recurringVoucherEditorScope === "selected_users"
+          ? data.recurringVoucherEditorAllowedUserIdsCsv.split(",").map((x) => x.trim()).filter(Boolean)
+          : [];
       const voucherSettingsPatch = {
         autoVoucherNumbering: data.autoVoucherNumbering,
         allowVoucherNumberEditing: data.allowVoucherNumberEditing,
@@ -329,6 +433,13 @@ export function VoucherSettings() {
         voucherHistoryEnabled: data.voucherHistoryEnabled,
         voucherHistoryLimit: cappedHistoryLimit,
         voucherHistoryFullBehavior: data.voucherHistoryFullBehavior,
+        recurringVoucherSettings: {
+          enabled: data.recurringVoucherSettingsEnabled,
+          runScope: data.recurringVoucherRunScope,
+          allowedUserIds: recurringAllowedUserIds,
+          voucherAutoEditorsScope: data.recurringVoucherEditorScope,
+          voucherAutoEditorsUserIds: recurringEditorAllowedUserIds,
+        },
       };
       await updateDoc(companyRef, voucherSettingsPatch);
       // SQLite mirror me bhi likho — refresh par company yahan se aaye to toggle + header sync rahein
@@ -361,8 +472,9 @@ export function VoucherSettings() {
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className={VS_CARD_BORDER}>
+      {/* Title block ke neeche patli black rule — content se visual split (ledger section lines jaisa). */}
+      <CardHeader className={cn(VS_BORDER_B)}>
         <CardTitle>Voucher Settings</CardTitle>
         <CardDescription>Manage automatic numbering, prefixes, and editing rules for your vouchers.</CardDescription>
       </CardHeader>
@@ -370,7 +482,7 @@ export function VoucherSettings() {
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit as any)} className="space-y-8">
             {/* Save Button at Top — blue so user spots save action */}
-            <div className="flex justify-end pb-4 border-b">
+            <div className={cn("flex justify-end pb-4", VS_BORDER_B)}>
               <Button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Voucher Settings
@@ -379,7 +491,7 @@ export function VoucherSettings() {
 
              {/* Prefixes */}
              <div className="space-y-4">
-                 <h3 className="text-lg font-medium border-b pb-2">Voucher Prefixes</h3>
+                 <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Voucher Prefixes</h3>
                  <CardDescription>
                     Customize the prefixes for your voucher numbers. You can add multiple prefixes for each type.
                 </CardDescription>
@@ -387,13 +499,14 @@ export function VoucherSettings() {
                     {Object.keys(defaultPrefixes).map((keyStr) => {
                         const key = keyStr as keyof VoucherPrefixValues;
                         return (
-                        <div key={key} className="space-y-2">
+                        <div key={key} className={cn("space-y-2 rounded-lg p-3", VS_CARD_BORDER)}>
                                 <FormLabel>{prefixLabels[key]}</FormLabel>
                                 {key === "contra" && (
                                   <FormDescription className="text-xs mt-0.5">Used for both Contra Out (from account) and Contra In (to account). e.g. CNTR → CNTR Out - 001, CNTR In - 001.</FormDescription>
                                 )}
                             <div className="flex gap-2">
                                 <Input
+                                    className={cn(VS_FIELD_OUTLINE, "min-w-0 flex-1")}
                                     value={newPrefixValues[key]}
                                     onChange={(e) => setNewPrefixValues(prev => ({...prev, [key]: e.target.value}))}
                                     placeholder="Add new prefix"
@@ -419,9 +532,9 @@ export function VoucherSettings() {
 
             {/* Transaction Settings */}
             <div className="space-y-4">
-              <h3 className="text-lg font-medium border-b pb-2">Transaction Settings</h3>
+              <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Transaction Settings</h3>
               <div className="space-y-4">
-                <Card className="p-4">
+                <Card className={cn("p-4", VS_CARD_BORDER)}>
                   <FormField
                     control={form.control}
                     name="enableLinkPaymentToTxns"
@@ -440,7 +553,7 @@ export function VoucherSettings() {
                     )}
                   />
                 </Card>
-                <Card className="p-4">
+                <Card className={cn("p-4", VS_CARD_BORDER)}>
                   <FormField
                     control={form.control}
                     name="enableCrossCompanyLedgerCopy"
@@ -465,7 +578,7 @@ export function VoucherSettings() {
                 </Card>
                 {isCompanyOwner && (
                   <>
-                    <Card className="p-4">
+                    <Card className={cn("p-4", VS_CARD_BORDER)}>
                       <FormField
                         control={form.control}
                         name="spendWiseOppositeVoucherEditable"
@@ -488,8 +601,9 @@ export function VoucherSettings() {
                         )}
                       />
                     </Card>
-                    <Card className="p-4">
-                    <div className="space-y-4 pl-1 border-l-2 border-muted pl-4">
+                    <Card className={cn("p-4", VS_CARD_BORDER)}>
+                    {/* Nested role grid — left rail bhi same ledger line weight. */}
+                    <div className={cn("space-y-4 pl-4", VS_BORDER_L)}>
                       <p className="text-sm font-medium">Require Payment In link (role + voucher type)</p>
                       <FormDescription className="!mt-0">
                         When ON, that role must link to Payment In to save. When OFF, they can save without linking. Set per voucher: Payment Out, Contra, Direct Expense.
@@ -516,19 +630,19 @@ export function VoucherSettings() {
                           <div key={role} className="space-y-2">
                             <p className="text-sm font-medium text-muted-foreground">{ROLE_LABELS[role] ?? role}</p>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                              <FormItem className={cn("flex flex-row items-center justify-between rounded-lg px-3 py-2", VS_CARD_BORDER)}>
                                 <FormLabel className="font-normal text-sm cursor-pointer">Payment Out</FormLabel>
                                 <FormControl>
                                   <Switch checked={oppoOn && payment_out} disabled={!oppoOn} onCheckedChange={(v) => update("payment_out", v)} />
                                 </FormControl>
                               </FormItem>
-                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                              <FormItem className={cn("flex flex-row items-center justify-between rounded-lg px-3 py-2", VS_CARD_BORDER)}>
                                 <FormLabel className="font-normal text-sm cursor-pointer">Contra</FormLabel>
                                 <FormControl>
                                   <Switch checked={oppoOn && contra} disabled={!oppoOn} onCheckedChange={(v) => update("contra", v)} />
                                 </FormControl>
                               </FormItem>
-                              <FormItem className="flex flex-row items-center justify-between rounded-lg border px-3 py-2">
+                              <FormItem className={cn("flex flex-row items-center justify-between rounded-lg px-3 py-2", VS_CARD_BORDER)}>
                                 <FormLabel className="font-normal text-sm cursor-pointer">Direct Expense</FormLabel>
                                 <FormControl>
                                   <Switch checked={oppoOn && direct_expense} disabled={!oppoOn} onCheckedChange={(v) => update("direct_expense", v)} />
@@ -548,7 +662,7 @@ export function VoucherSettings() {
             {/* Voucher Edit History — company setting */}
             {isCompanyOwner && (
               <div className="space-y-4">
-                <h3 className="text-lg font-medium border-b pb-2">Voucher Edit History</h3>
+                <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Voucher Edit History</h3>
                 <CardDescription>
                   Track changes to vouchers. When history is full, choose to block edits or allow edit by overwriting oldest history.
                 </CardDescription>
@@ -558,7 +672,7 @@ export function VoucherSettings() {
                     Save Voucher Settings
                   </Button>
                 </div>
-                <Card className="p-4 space-y-4">
+                <Card className={cn("p-4 space-y-4", VS_CARD_BORDER)}>
                   <FormField
                     control={form.control}
                     name="voucherHistoryEnabled"
@@ -589,6 +703,7 @@ export function VoucherSettings() {
                                 max={planHistoryLimit}
                                 {...field}
                                 onChange={(e) => field.onChange(Math.max(1, Math.min(planHistoryLimit, parseInt(e.target.value, 10) || 10)))}
+                                className={cn(VS_FIELD_OUTLINE)}
                               />
                             </FormControl>
                             <FormDescription>1–{planHistoryLimit}. Plan cap from subscription.</FormDescription>
@@ -607,7 +722,7 @@ export function VoucherSettings() {
                               onValueChange={field.onChange}
                             >
                               <FormControl>
-                                <SelectTrigger>
+                                <SelectTrigger className={VS_FIELD_OUTLINE}>
                                   <SelectValue placeholder="Select behavior" />
                                 </SelectTrigger>
                               </FormControl>
@@ -626,9 +741,265 @@ export function VoucherSettings() {
               </div>
             )}
 
+            {isCompanyOwner && (
+              <div className="space-y-4">
+                <h3 className={cn("text-lg font-medium pb-2", VS_BORDER_B)}>Recurring Auto Voucher</h3>
+                <Card className={cn("p-4 space-y-4", VS_CARD_BORDER)}>
+                  <FormField
+                    control={form.control}
+                    name="recurringVoucherSettingsEnabled"
+                    render={({ field }: any) => (
+                      <FormItem className="flex flex-row items-center justify-between">
+                        <div>
+                          <FormLabel>Enable recurring voucher generation</FormLabel>
+                          <FormDescription>
+                            When ON, vouchers marked as &quot;Auto Monthly&quot; generate on month-end app open.
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="recurringVoucherRunScope"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Run trigger user scope</FormLabel>
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <FormControl>
+                            <SelectTrigger className={VS_FIELD_OUTLINE}>
+                              <SelectValue placeholder="Select scope" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="owner_only">Owner/Admin only</SelectItem>
+                            <SelectItem value="all_users">All users</SelectItem>
+                            <SelectItem value="selected_users">Selected user IDs</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          Control who can trigger recurring creation when they open the app.
+                        </FormDescription>
+                      </FormItem>
+                    )}
+                  />
+                  {form.watch("recurringVoucherRunScope") === "selected_users" ? (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:items-start md:gap-4">
+                      <FormField
+                        control={form.control}
+                        name="recurringVoucherAllowedUserIdsCsv"
+                        render={({ field }: any) => (
+                          <FormItem>
+                            <FormLabel>Allowed users</FormLabel>
+                            <FormControl>
+                              <div className="space-y-2">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button type="button" variant="outline" className={cn("w-full justify-start text-left font-normal", VS_FIELD_OUTLINE)}>
+                                      {(() => {
+                                        // Selected ids ko friendly user names me show karo; unknown id fallback raw id.
+                                        const selectedIds = String(field.value || "")
+                                          .split(",")
+                                          .map((x) => x.trim())
+                                          .filter(Boolean);
+                                        if (selectedIds.length === 0) return "Select users";
+                                        const labels = selectedIds.map(
+                                          (id) => recurringScopeUserOptions.find((u) => u.id === id)?.label || id,
+                                        );
+                                        return `${labels.join(", ")}`;
+                                      })()}
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="start" className="w-[26rem] max-w-[90vw]">
+                                    <DropdownMenuLabel>Select users who can trigger recurring</DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    {recurringScopeUserOptions.length === 0 ? (
+                                      <div className="px-2 py-3 text-sm text-muted-foreground">
+                                        No company users found.
+                                      </div>
+                                    ) : (
+                                      recurringScopeUserOptions.map((opt) => {
+                                        const selectedIds = String(field.value || "")
+                                          .split(",")
+                                          .map((x) => x.trim())
+                                          .filter(Boolean);
+                                        const checked = selectedIds.includes(opt.id);
+                                        return (
+                                          <DropdownMenuCheckboxItem
+                                            key={opt.id}
+                                            checked={checked}
+                                            onCheckedChange={(nextChecked) => {
+                                              // Check/uncheck ke baad same csv field update rakho so existing save logic unchanged rahe.
+                                              const set = new Set(selectedIds);
+                                              if (nextChecked) set.add(opt.id);
+                                              else set.delete(opt.id);
+                                              field.onChange(Array.from(set).join(", "));
+                                            }}
+                                            onSelect={(e) => e.preventDefault()}
+                                          >
+                                            <div className="flex flex-col">
+                                              <span>{opt.label}</span>
+                                              {opt.detail ? (
+                                                <span className="text-xs text-muted-foreground">{opt.detail}</span>
+                                              ) : null}
+                                            </div>
+                                          </DropdownMenuCheckboxItem>
+                                        );
+                                      })
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                                <div className="flex flex-wrap gap-1">
+                                  {String(field.value || "")
+                                    .split(",")
+                                    .map((x) => x.trim())
+                                    .filter(Boolean)
+                                    .map((id) => {
+                                      const u = recurringScopeUserOptions.find((row) => row.id === id);
+                                      return (
+                                        <Badge key={id} variant="secondary">
+                                          {u?.label || id}
+                                        </Badge>
+                                      );
+                                    })}
+                                </div>
+                              </div>
+                            </FormControl>
+                            <FormDescription>
+                              Select users by name. Their user IDs are saved internally for generation permission.
+                            </FormDescription>
+                          </FormItem>
+                        )}
+                      />
+                      {/* Allowed users ke saath dahini taraf: month-end app-open behaviour explain. */}
+                      <p className={cn("text-sm leading-snug text-muted-foreground rounded-md bg-muted/40 p-3 md:mt-7", VS_DASHED_BOX)}>
+                        Month-end recurring voucher generation runs on app open based on this company setting.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Month-end recurring voucher generation runs on app open based on this company setting.
+                    </p>
+                  )}
+                  {/* App-open trigger vs voucher-par Auto Monthly editors — do alag permission blocks. */}
+                  <Separator className={VS_SEPARATOR_LEDGER} />
+                  <FormField
+                    control={form.control}
+                    name="recurringVoucherEditorScope"
+                    render={({ field }: any) => (
+                      <FormItem>
+                        <FormLabel>Who can use Auto Monthly on vouchers</FormLabel>
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <FormControl>
+                            <SelectTrigger className={VS_FIELD_OUTLINE}>
+                              <SelectValue placeholder="Select scope" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="all_configure_users">Everyone with Configure Company Settings</SelectItem>
+                            <SelectItem value="owner_only">Company owner only</SelectItem>
+                            <SelectItem value="selected_users">Selected users only</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          Strip, settings dialog, template save on voucher, and Generate now. Role permission
+                          &quot;Configure Company Settings&quot; is still required; this narrows which of those users may use Auto Monthly.
+                        </FormDescription>
+                      </FormItem>
+                    )}
+                  />
+                  {form.watch("recurringVoucherEditorScope") === "selected_users" && (
+                    <FormField
+                      control={form.control}
+                      name="recurringVoucherEditorAllowedUserIdsCsv"
+                      render={({ field }: any) => (
+                        <FormItem>
+                          <FormLabel>Users who may configure Auto Monthly on vouchers</FormLabel>
+                          <FormControl>
+                            <div className="space-y-2">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button type="button" variant="outline" className={cn("w-full justify-start text-left font-normal", VS_FIELD_OUTLINE)}>
+                                    {(() => {
+                                      const selectedIds = String(field.value || "")
+                                        .split(",")
+                                        .map((x) => x.trim())
+                                        .filter(Boolean);
+                                      if (selectedIds.length === 0) return "Select users";
+                                      const labels = selectedIds.map(
+                                        (id) => recurringScopeUserOptions.find((u) => u.id === id)?.label || id,
+                                      );
+                                      return labels.join(", ");
+                                    })()}
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="start" className="w-[26rem] max-w-[90vw]">
+                                  <DropdownMenuLabel>Select users</DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  {recurringScopeUserOptions.length === 0 ? (
+                                    <div className="px-2 py-3 text-sm text-muted-foreground">No company users found.</div>
+                                  ) : (
+                                    recurringScopeUserOptions.map((opt) => {
+                                      const selectedIds = String(field.value || "")
+                                        .split(",")
+                                        .map((x) => x.trim())
+                                        .filter(Boolean);
+                                      const checked = selectedIds.includes(opt.id);
+                                      return (
+                                        <DropdownMenuCheckboxItem
+                                          key={opt.id}
+                                          checked={checked}
+                                          onCheckedChange={(nextChecked) => {
+                                            const set = new Set(selectedIds);
+                                            if (nextChecked) set.add(opt.id);
+                                            else set.delete(opt.id);
+                                            field.onChange(Array.from(set).join(", "));
+                                          }}
+                                          onSelect={(e) => e.preventDefault()}
+                                        >
+                                          <div className="flex flex-col">
+                                            <span>{opt.label}</span>
+                                            {opt.detail ? (
+                                              <span className="text-xs text-muted-foreground">{opt.detail}</span>
+                                            ) : null}
+                                          </div>
+                                        </DropdownMenuCheckboxItem>
+                                      );
+                                    })
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                              <div className="flex flex-wrap gap-1">
+                                {String(field.value || "")
+                                  .split(",")
+                                  .map((x) => x.trim())
+                                  .filter(Boolean)
+                                  .map((id) => {
+                                    const u = recurringScopeUserOptions.find((row) => row.id === id);
+                                    return (
+                                      <Badge key={id} variant="secondary">
+                                        {u?.label || id}
+                                      </Badge>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          </FormControl>
+                          <FormDescription>At least one user required. User IDs stored on the company document.</FormDescription>
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </Card>
+              </div>
+            )}
+
             {/* Auto Numbering */}
              <div className="space-y-4">
-              <div className="flex items-center justify-between border-b pb-2">
+              <div className={cn("flex items-center justify-between pb-2", VS_BORDER_B)}>
                 <h3 className="text-lg font-medium">Voucher Number & Rate Settings</h3>
               </div>
               {/* Middle Button — blue to match other save buttons */}
@@ -644,12 +1015,12 @@ export function VoucherSettings() {
                    const canEditRate = voucherKey === 'sale' || voucherKey === 'purchase';
                    if (voucherKey === 'contra') {
                      return (
-                       <Card key={voucherKey} className="p-4 md:col-span-2">
+                       <Card key={voucherKey} className={cn("p-4 md:col-span-2", VS_CARD_BORDER)}>
                          <CardTitle className="text-base mb-1">Contra Entry (In & Out)</CardTitle>
                          <CardDescription className="mb-4 text-xs">One set of settings for both Contra In and Contra Out. Changing any switch applies to both.</CardDescription>
                          {/* PC: Contra In left, Contra Out right; mobile: stacked */}
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                           <div className="rounded border border-muted/60 bg-muted/20 p-3 space-y-3">
+                           <div className={cn("rounded bg-muted/20 p-3 space-y-3", VS_CARD_BORDER)}>
                              <p className="text-sm font-medium text-muted-foreground">Contra In</p>
                              <FormField control={form.control} name="autoVoucherNumbering.contra" render={({ field }: any) => (
                                <FormItem className="flex flex-row items-center justify-between">
@@ -674,7 +1045,7 @@ export function VoucherSettings() {
                                </FormItem>
                              )} />
                            </div>
-                           <div className="rounded border border-muted/60 bg-muted/20 p-3 space-y-3">
+                           <div className={cn("rounded bg-muted/20 p-3 space-y-3", VS_CARD_BORDER)}>
                              <p className="text-sm font-medium text-muted-foreground">Contra Out</p>
                              <FormField control={form.control} name="autoVoucherNumbering.contra" render={({ field }: any) => (
                                <FormItem className="flex flex-row items-center justify-between">
@@ -704,7 +1075,7 @@ export function VoucherSettings() {
                      );
                    }
                    return (
-                      <Card key={voucherKey} className="p-4">
+                      <Card key={voucherKey} className={cn("p-4", VS_CARD_BORDER)}>
                          <CardTitle className="text-base mb-4">{prefixLabels[voucherKey]}</CardTitle>
                          <div className="space-y-4">
                            <FormField
@@ -783,7 +1154,7 @@ export function VoucherSettings() {
             </div>
 
             {/* Bottom Button — blue to match other save buttons */}
-            <div className="flex justify-end pt-4 border-t">
+            <div className={cn("flex justify-end pt-4", VS_BORDER_T)}>
               <Button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save Voucher Settings

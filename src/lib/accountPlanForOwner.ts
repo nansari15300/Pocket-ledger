@@ -1,6 +1,6 @@
 "use client";
 
-import { PLAN_TIER_ORDER, type PlanId, planTierIndex } from "@/config/plans";
+import { normalizePlanIdForClient, type PlanId, planTierIndex } from "@/config/plans";
 
 /**
  * Account-level plan: highest tier among companies the Firebase user owns.
@@ -19,8 +19,7 @@ export function highestPlanIdAmongOwnedCompanies(
   let best: PlanId = "basic";
   let bestIdx = -1;
   for (const c of owned) {
-    const raw = String(c.planId || "basic").trim();
-    const id = (PLAN_TIER_ORDER as readonly string[]).includes(raw) ? (raw as PlanId) : "basic";
+    const id = normalizePlanIdForClient(c.planId);
     const idx = planTierIndex(id);
     if (idx > bestIdx) {
       bestIdx = idx;
@@ -38,6 +37,5 @@ export function resolveEffectiveAccountPlanId(
 ): PlanId {
   const fromOwned = highestPlanIdAmongOwnedCompanies(allCompanies, firebaseUid);
   if (fromOwned) return fromOwned;
-  const cur = String(activeCompanyPlanId || "basic").trim();
-  return (PLAN_TIER_ORDER as readonly string[]).includes(cur) ? (cur as PlanId) : "basic";
+  return normalizePlanIdForClient(activeCompanyPlanId);
 }

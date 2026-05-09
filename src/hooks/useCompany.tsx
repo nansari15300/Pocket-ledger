@@ -16,7 +16,7 @@ import {
   upsertLocalCompany,
 } from "@/lib/localCompanyStore";
 import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
-import type { PlanId } from "@/config/plans";
+import { higherPlanByTier, normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { CompanyDemoteReason } from "@/lib/companyDemote";
 import { isCurrentUserOwnerOfCompanyRow, reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
@@ -24,8 +24,11 @@ import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalC
 import { readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import {
   syncCompanyPlanFromServer,
+  markDailyAuthoritativePlanSyncDone,
   recomputePlanSyncBannerState,
+  shouldRunDailyAuthoritativePlanSync,
   type PlanSyncBannerState,
+  type SyncCompanyPlanResult,
 } from "@/lib/companyPlanServerSync";
 import {
   getEffectiveNotificationSettings,
@@ -48,6 +51,8 @@ export type DisplaySettings = {
     showBalance?: boolean;
     showTotalDebit?: boolean;
     showTotalCredit?: boolean;
+    /** Poori app me date reference: AD, BS, ya dono (toolbar / forms / recurring labels). */
+    calendarDateSystem?: "AD" | "BS" | "Both";
 };
 
 /** Per-type notification visibility: master on/off + where to show (entity pages, list pages, transaction rows). */
@@ -160,6 +165,15 @@ export type Company = {
     voucherHistoryLimit?: number;
     /** When history full: block_edit = disallow edit; allow_edit_delete_last = allow edit, overwrite oldest. */
     voucherHistoryFullBehavior?: 'block_edit' | 'allow_edit_delete_last';
+    /** Recurring auto vouchers: app-open month-end generator controls. */
+    recurringVoucherSettings?: {
+      enabled?: boolean;
+      runScope?: "owner_only" | "all_users" | "selected_users";
+      allowedUserIds?: string[];
+      /** Voucher dialog: Auto Monthly strip + nested settings + Generate now — `configure_company_settings` ke andar kaun. */
+      voucherAutoEditorsScope?: "all_configure_users" | "owner_only" | "selected_users";
+      voucherAutoEditorsUserIds?: string[];
+    };
     /** Firestore `companies/{id}` — local SQLite id alag ho to sync-plan yahan se */
     authoritativeCompanyId?: string;
     /** Server offline-license window end (`sync-plan` har online + max 20d chunk) */
@@ -248,21 +262,28 @@ function mergeOnlineCompanyWithLocalPlanOverlay(online: Company, localNorm: Comp
     raw?.syncedFromCloud !== true;
   const le = planExpiryMsFromCompanyShape(localNorm);
   const oe = planExpiryMsFromCompanyShape(online);
-  const lp = String(localNorm.planId || "basic").trim();
-  const op = String(online.planId || "basic").trim();
+  const lp = normalizePlanIdForClient(localNorm.planId);
+  const op = normalizePlanIdForClient(online.planId);
   const localPaid = lp !== "basic";
   const onlineBasic = op === "basic";
   let useLocal = false;
   if (isLocalFirst) useLocal = true;
-  else if (localPaid && onlineBasic) useLocal = true;
+  // HATA: `localPaid && onlineBasic` — Firestore downgrade/basic authoritative ho tab bhi purana SQLite pro-plus `higherPlanByTier` se chipak jata tha (checkout vs profile mismatch).
   else if (le != null && oe != null && le > oe) useLocal = true;
   else if (le != null && oe == null) useLocal = true;
 
   if (!useLocal) return online;
 
+  // Firestore `basic` + online-style row: stale SQLite paid tier merge mat karo (`isLocalFirst` galat true ho to bhi).
+  if (op === "basic" && String(raw.storageOption || "").toLowerCase() !== "local") {
+    return online;
+  }
+
+  // SQLite `basic` + Firestore `pro-plus` jab `isLocalFirst` galat true ho (purana mirror flags) — sirf local planId mat chipkao;
+  // dono me se zyada tier lo taaki shared user owner subscription dekh sake.
   const mergedPlan = {
     ...online,
-    planId: lp,
+    planId: higherPlanByTier(online.planId, localNorm.planId),
     planExpiry: localNorm.planExpiry ?? online.planExpiry,
     ...(typeof raw.planExpiryMs === "number" ? { planExpiryMs: raw.planExpiryMs } : {}),
     ...(typeof raw.planUpgradedAtMs === "number" ? { planUpgradedAtMs: raw.planUpgradedAtMs } : {}),
@@ -305,6 +326,8 @@ type CompanyContextType = {
   clearCompanyId: () => void;
   /** Server → local sync UX: 3d stale, 20d “go online”, offline license expiry */
   planAuthoritativeSync: PlanSyncBannerState;
+  /** Manual: POST `/api/company/sync-plan` → SQLite overwrite + banner; avatar “Sync plan” se. */
+  refreshAuthoritativePlan: () => Promise<SyncCompanyPlanResult>;
   /** LocalStorage + current user: badges/sidebar — Firestore company row sirf fallback (unsynced company bhi). */
   effectiveNotificationSettings: NotificationSettings;
 };
@@ -544,14 +567,14 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
 
   const normalizeLocalCompany = useCallback((raw: Company): Company => {
     // Local-first: planId + Firestore live plans (admin entitlements) — static DEFAULT_PLANS se align karo.
-    let planId = (raw.planId && String(raw.planId).trim()) || "basic";
+    let planId = normalizePlanIdForClient(raw.planId);
     let rawMs = (raw as unknown as { planExpiryMs?: unknown }).planExpiryMs;
     const sqliteMs = typeof rawMs === "number" && Number.isFinite(rawMs) ? rawMs : null;
     // localStorage plan cache: server sync / Stripe ke baad mirror ne Basic likh diya ho to bhi limits sahi
     let stripeSessionFromPlanCache: string | undefined;
     const cached = readCompanyPlanLocalCache(String(raw.id || ""));
     if (cached) {
-      const cp = String(cached.planId || "").trim() || "basic";
+      const cp = normalizePlanIdForClient(cached.planId);
       const sqliteBasic = planId === "basic";
       const cachePaid = cp !== "basic";
       const expBetter = sqliteMs == null || cached.planExpiryMs > sqliteMs;
@@ -737,19 +760,26 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     [user, normalizeLocalCompany, isSuperAdminUser, clearCompanyId, router]
   );
 
-  /** Login + selected company: server → local plan + offline license; `normalizeLocalCompany` ke baad hook order safe. */
-  const planSyncBurstRef = useRef(0);
-  useEffect(() => {
-    if (!user || !companyId || authLoading) return;
-
-    let cancelled = false;
-
-    const finish = async (r: Awaited<ReturnType<typeof syncCompanyPlanFromServer>>) => {
-      if (cancelled) return;
+  /**
+   * Firestore authoritative plan → SQLite / plan cache (POST sync-plan).
+   * `recordDailySuccess`: sirf calendar-day idle sync — dubara POST avoid (load kam).
+   */
+  const refreshAuthoritativePlan = useCallback(
+    async (options?: { recordDailySuccess?: boolean }): Promise<SyncCompanyPlanResult> => {
+      if (!user || !companyId?.trim() || authLoading) {
+        return { ok: false, applied: false, reason: "no_context" };
+      }
       const row = await getLocalCompanyById(companyId);
-      // Plan apply: banner + current company row — poori registry reload ki zaroorat nahi (scroll/UI skip).
-      if (row && r.ok && r.applied) {
-        const norm = normalizeLocalCompany(row as unknown as Company);
+      const firebaseCompanyId =
+        String(row?.authoritativeCompanyId || companyId).trim() || companyId;
+      const r = await syncCompanyPlanFromServer({
+        firebaseCompanyId,
+        localCompanyId: companyId,
+        getIdToken: () => user.getIdToken(),
+      });
+      const rowAfter = await getLocalCompanyById(companyId);
+      if (rowAfter && r.ok && r.applied) {
+        const norm = normalizeLocalCompany(rowAfter as unknown as Company);
         setCompany((prev) => (prev?.id === companyId ? norm : prev));
         setAllCompanies((prev) => {
           const idx = prev.findIndex((c) => c.id === companyId);
@@ -760,23 +790,32 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         });
       }
       setPlanAuthoritativeSync(
-        recomputePlanSyncBannerState(companyId, row as { offlineLicenseValidUntilMs?: number } | null)
+        recomputePlanSyncBannerState(companyId, rowAfter as { offlineLicenseValidUntilMs?: number } | null)
       );
+      if (r.ok && options?.recordDailySuccess && user.uid) {
+        markDailyAuthoritativePlanSyncDone(user.uid);
+      }
+      return r;
+    },
+    [user, companyId, authLoading, normalizeLocalCompany]
+  );
+
+  /** Login + selected company: server → local plan + offline license; `normalizeLocalCompany` ke baad hook order safe. */
+  const planSyncBurstRef = useRef(0);
+  useEffect(() => {
+    if (!user || !companyId || authLoading) return;
+
+    let cancelled = false;
+
+    const runDailyIdleSync = () => {
+      if (cancelled) return;
+      if (!user.uid || !shouldRunDailyAuthoritativePlanSync(user.uid)) return;
+      void refreshAuthoritativePlan({ recordDailySuccess: true });
     };
 
-    const runSyncNow = () => {
+    const runOnlineSync = () => {
       if (cancelled) return;
-      void (async () => {
-        const row = await getLocalCompanyById(companyId);
-        const firebaseCompanyId =
-          String(row?.authoritativeCompanyId || companyId).trim() || companyId;
-        const r = await syncCompanyPlanFromServer({
-          firebaseCompanyId,
-          localCompanyId: companyId,
-          getIdToken: () => user.getIdToken(),
-        });
-        await finish(r);
-      })();
+      void refreshAuthoritativePlan();
     };
 
     planSyncBurstRef.current = 0;
@@ -803,23 +842,21 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const win = window;
 
     if (!skipIdlePlanSyncBoot) {
-      // Startup responsiveness: plan sync API compile heavy ho sakta hai, isliye first call idle par queue karo.
+      // Startup: idle par **calendar-day** gate — din me ek baar automatic overwrite (extra POST kam).
       if ("requestIdleCallback" in win && typeof win.requestIdleCallback === "function") {
-        planSyncIdleCallbackId = win.requestIdleCallback(() => runSyncNow(), { timeout: 2500 });
+        planSyncIdleCallbackId = win.requestIdleCallback(() => runDailyIdleSync(), { timeout: 2500 });
       } else {
-        planSyncIdleFallbackTimerId = win.setTimeout(() => runSyncNow(), 1200);
+        planSyncIdleFallbackTimerId = win.setTimeout(() => runDailyIdleSync(), 1200);
       }
     } else {
-      // Continuous online par `online` event nahi aata — ~1 min baad background plan sync (attachment window clear)
-      deferredLazyPlanTimer = win.setTimeout(() => runSyncNow(), 60_000);
+      // Continuous online par `online` event nahi aata — ~1 min baad background plan sync (sirf jab aaj ka daily sync pending ho)
+      deferredLazyPlanTimer = win.setTimeout(() => runDailyIdleSync(), 60_000);
     }
-
-    // Mount + go-online only — tab `visibilitychange` hata: doosre tab se wapas aane par plan sync se poora tree re-render = "page refresh" jaisa.
 
     const onOnline = () => {
       if (skipOnlinePlanSyncForEmbeddedLocal) return;
       planSyncBurstRef.current = 0;
-      runSyncNow();
+      runOnlineSync();
     };
 
     win.addEventListener("online", onOnline);
@@ -842,7 +879,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       }
       win.removeEventListener("online", onOnline);
     };
-  }, [user, companyId, authLoading, normalizeLocalCompany]);
+  }, [user, companyId, authLoading, refreshAuthoritativePlan]);
 
   // Local-only: turant sirf SQLite se list + selected row; defer mirror default 90s, static/APK/`build:static` par ~1.6s (shared jaldi dikhen).
   useEffect(() => {
@@ -972,9 +1009,17 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       c.ownerId === user?.uid ||
       (!!c.ownerEmail && !!user?.email && c.ownerEmail.toLowerCase().trim() === user.email!.toLowerCase().trim());
     // Server snapshots se admin-hidden rows bhi drop karo so super-admin normal app me na dekhe.
-    const owned = ownedSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data(), isOwned: true } as Company)).filter(isCompanyVisibleInMainApp);
-    const shared = sharedSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data(), isOwned: false } as Company)).filter(isCompanyVisibleInMainApp);
-    const ownedByEmail = ownedByEmailSnap?.docs?.map((doc: any) => ({ id: doc.id, ...doc.data(), isOwned: true } as Company)).filter(isCompanyVisibleInMainApp) ?? [];
+    // Firestore row seedha map: planId alias (`proplus`) + entitlements normalizeLocalCompany se — shared list me pehle hi sahi tier.
+    const owned = ownedSnap.docs
+      .map((doc: any) => normalizeLocalCompany({ id: doc.id, ...doc.data() } as Company))
+      .filter(isCompanyVisibleInMainApp);
+    const shared = sharedSnap.docs
+      .map((doc: any) => normalizeLocalCompany({ id: doc.id, ...doc.data() } as Company))
+      .filter(isCompanyVisibleInMainApp);
+    const ownedByEmail =
+      ownedByEmailSnap?.docs
+        ?.map((doc: any) => normalizeLocalCompany({ id: doc.id, ...doc.data() } as Company))
+        .filter(isCompanyVisibleInMainApp) ?? [];
 
     /** Firestore doc abhi bhi query me hai lekin `isDeleted: true` — SQLite mirror purana ho to merge se dubara list me mat lao */
     const deletedOnFirestore = new Set<string>();
@@ -1529,6 +1574,7 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         clearCompanyId,
         allCompanies,
         planAuthoritativeSync,
+        refreshAuthoritativePlan: () => refreshAuthoritativePlan(),
         effectiveNotificationSettings,
       }}
     >

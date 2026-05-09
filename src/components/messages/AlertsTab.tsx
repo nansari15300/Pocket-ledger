@@ -67,6 +67,9 @@ export function AlertsTab({
   onStartChat,
   onOpenVoucher,
   onOpenHistory,
+  kindFilter = "all",
+  headerTitle = "Alerts & Notifications",
+  headerDescription = "Important system alerts and scheduled alarms will appear here.",
 }: {
   onStartChat?: (userId: string) => void;
   /** When provided, "Open Voucher" opens voucher in edit (same page or navigate). */
@@ -79,6 +82,10 @@ export function AlertsTab({
     changedByUid?: string,
     notificationId?: string
   ) => void;
+  /** Auto vouchers ke liye dedicated tab: `auto_created` alerts isolate karo. */
+  kindFilter?: "all" | "auto_only" | "exclude_auto";
+  headerTitle?: string;
+  headerDescription?: string;
 }) {
   const { user, customUser, loading: authLoading } = useAuth();
   /** Alerts har company alag honi chahiye — warna dusri company ke "Transaction edited" yahan dikh jate hain. */
@@ -112,6 +119,8 @@ export function AlertsTab({
     if (kind === "large_amount") return "Large amount added";
     if (kind === "edited") return "Transaction edited";
     if (kind === "deleted") return "Transaction deleted";
+    // Recurring vouchers ke liye dedicated title taaki Alerts/Auto tab dono me clear badge text aaye.
+    if (kind === "auto_created") return "Auto created voucher";
     return "Alert";
   };
   const getByLabel = (n: Notification) => {
@@ -167,6 +176,12 @@ export function AlertsTab({
       const sorted = Array.from(mergedById.values())
         // User request: normal "new transaction added" alerts hide; big amount alerts still visible.
         .filter((n) => !isSuppressibleNewTransactionAlert(n as any))
+        .filter((n) => {
+          const kind = String((n as any)?.kind || "");
+          if (kindFilter === "auto_only") return kind === "auto_created";
+          if (kindFilter === "exclude_auto") return kind !== "auto_created";
+          return true;
+        })
         .sort((a: any, b: any) => {
           const aTs = a?.timestamp?.toDate ? a.timestamp.toDate().getTime() : 0;
           const bTs = b?.timestamp?.toDate ? b.timestamp.toDate().getTime() : 0;
@@ -200,7 +215,7 @@ export function AlertsTab({
     });
 
     return () => unsubscribers.forEach((unsub) => unsub());
-  }, [user, authLoading, recipientIds, isCompanyOwner, companyId]);
+  }, [user, authLoading, recipientIds, isCompanyOwner, companyId, kindFilter]);
 
   const handleMarkAsRead = async (id: string) => {
     try {
@@ -274,9 +289,9 @@ export function AlertsTab({
       <CardHeader className={cn("space-y-3 px-[2px]", isMobile && "pb-2")}>
         <div className={cn("flex flex-col gap-3", isMobile ? "" : "flex-row justify-between items-start")}>
             <div>
-                 <CardTitle className="text-base sm:text-lg">Alerts & Notifications</CardTitle>
+                 <CardTitle className="text-base sm:text-lg">{headerTitle}</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">
-                Important system alerts and scheduled alarms will appear here.
+                {headerDescription}
                 </CardDescription>
             </div>
             <div className={cn("flex items-center gap-2", isMobile && "flex-wrap")}>

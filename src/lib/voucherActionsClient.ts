@@ -400,12 +400,27 @@ function getChanges(oldData: any, newData: any): Record<string, { from: any; to:
     "history", "createdAt", "updatedAt", "id", "isDeleted",
     "deletedAt", "balance", "credit", "debit",
     "lastEditedByUserName", "lastEditedAt", // added as separate history rows with Old/New
+    // Sirf browser SQLite mirror — Firestore pe nahi; history me mat dikhao.
+    LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY,
+    PL_CLIENT_OFFLINE_FIRST_PERSIST_MS,
   ];
   const keys = new Set([...Object.keys(oldData || {}), ...Object.keys(newData || {})]);
   keys.forEach((key) => {
     if (ignoredFields.includes(key)) return;
     let oldVal = oldData?.[key];
     let newVal = newData?.[key];
+    // Journal save payload me `total` hota hai (`CreateJournalForm`), `amount` purane/mirror doc me ho sakta — bina iske "New: N/A" dikhta.
+    if (
+      key === "amount" &&
+      String(newData?.type || "").toLowerCase() === "journal" &&
+      (newVal === undefined || newVal === null) &&
+      newData != null &&
+      newData.total !== undefined &&
+      newData.total !== null
+    ) {
+      const tn = Number(newData.total);
+      if (Number.isFinite(tn)) newVal = tn;
+    }
     if (
       (oldVal instanceof Date || (oldVal?.toDate instanceof Function)) &&
       (newVal instanceof Date || (newVal?.toDate instanceof Function))
@@ -499,7 +514,8 @@ async function saveVoucherOfflineLocalCreate(
   cleanVoucherData: any,
   voucherPath: string,
   /** Forms ne pehle se `local:` file refs + IndexedDB ke liye id banai ho to wahi use karo */
-  preGeneratedVoucherId?: string | null
+  preGeneratedVoucherId?: string | null,
+  options?: SaveVoucherOptions
 ): Promise<{ id: string }> {
   const { storageOption, entitlements: mergedEnt } = await resolveLocalPlanForImmediateVoucherSave(companyId);
   const useLocalLim = companyStorageIsLocal(storageOption);
@@ -512,7 +528,11 @@ async function saveVoucherOfflineLocalCreate(
   const newId = trimmed || generateLocalVoucherIdForCreate();
   const authUser = auth.currentUser;
   const creatorDisplayName =
-    authUser?.displayName || authUser?.email?.split("@")?.[0] || cleanVoucherData.userDisplayName || null;
+    options?.actorDisplayNameOverride ||
+    authUser?.displayName ||
+    authUser?.email?.split("@")?.[0] ||
+    cleanVoucherData.userDisplayName ||
+    null;
   const creatorEmail = authUser?.email || cleanVoucherData.userEmail || null;
   let historyEnabled = false;
   try {
@@ -541,8 +561,9 @@ async function saveVoucherOfflineLocalCreate(
     ...cleanVoucherData,
     companyId,
     userId,
-    isApproved: cleanVoucherData.isApproved === true,
-    userDisplayName: creatorDisplayName,
+    isApproved: options?.forceUnapprovedCreate ? false : cleanVoucherData.isApproved === true,
+    // Auto-generated path: explicit display name preserve karo.
+    userDisplayName: options?.userDisplayNameOverride ?? creatorDisplayName,
     userEmail: creatorEmail,
     lastEditedByUserName: creatorDisplayName || userId,
     lastEditedAt: nowTs,
@@ -650,7 +671,15 @@ async function approveVoucherLocalPersist(
 export type SaveVoucherApproveOption = { approvedByUserId: string; approvedByName?: string | null };
 
 /** Local create: attachment flow ne `generateLocalVoucherIdForCreate` pehle call kiya ho to yahan pass karo */
-export type SaveVoucherOptions = { preGeneratedVoucherId?: string };
+export type SaveVoucherOptions = {
+  preGeneratedVoucherId?: string;
+  /** Recurring auto-create: owner create hone par bhi unapproved persist chahiye. */
+  forceUnapprovedCreate?: boolean;
+  /** Recurring auto-create: transaction user column me fixed label (e.g. "Auto"). */
+  userDisplayNameOverride?: string;
+  /** Recurring auto-create: history/editor actor name ko stable label do. */
+  actorDisplayNameOverride?: string;
+};
 
 export async function saveVoucher(
   companyId: string,
@@ -718,7 +747,8 @@ export async function saveVoucher(
         userId,
         cleanVoucherData,
         voucherPath,
-        options?.preGeneratedVoucherId ?? null
+        options?.preGeneratedVoucherId ?? null,
+        options
       );
     }
     const resolvedExisting = await resolveVoucherSnapshotForLocalWrite(companyId, voucherId!);
@@ -771,6 +801,7 @@ export async function saveVoucher(
     await enforceDailyMonthlyVoucherQuotaForCreate(companyId, dailyLimit, monthlyLimit, storageIsLocal);
     const authUser = auth.currentUser;
     const creatorDisplayName =
+      options?.actorDisplayNameOverride ||
       authUser?.displayName ||
       authUser?.email?.split("@")?.[0] ||
       cleanVoucherData.userDisplayName ||
@@ -787,8 +818,9 @@ export async function saveVoucher(
       ...cleanVoucherData,
       companyId,
       userId,
-      isApproved: isOwnerCreator ? true : (cleanVoucherData.isApproved ?? false),
-      userDisplayName: creatorDisplayName,
+      // Recurring generator owner se create hone par bhi voucher unapproved hi rehna chahiye.
+      isApproved: options?.forceUnapprovedCreate ? false : (isOwnerCreator ? true : (cleanVoucherData.isApproved ?? false)),
+      userDisplayName: options?.userDisplayNameOverride ?? creatorDisplayName,
       userEmail: creatorEmail,
       lastEditedByUserName: creatorDisplayName || userId,
       lastEditedAt: serverTimestamp(),
@@ -833,7 +865,8 @@ export async function saveVoucher(
         userId,
         cleanVoucherData,
         voucherPath,
-        options?.preGeneratedVoucherId ?? null
+        options?.preGeneratedVoucherId ?? null,
+        options
       );
     }
   }

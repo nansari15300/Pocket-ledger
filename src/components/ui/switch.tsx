@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils"
 /** Header se align; user: track height + knob length dono ~25% kam — keyframes `tailwind.config` se sync */
 const ANIM_MS = 400
 const TRACK_H_PX = Math.round(36 * 0.7 * 0.75)
+/** Auto voucher strip / header pills: Switch track ke saath same pixel height align karne ke liye export. */
+export const SWITCH_TRACK_HEIGHT_PX = TRACK_H_PX
 const KNOB_W_PX = Math.round(54 * 0.8 * 0.75)
 const KNOB_PAD_PX = 3
 const KNOB_LEFT_ON = `calc(100% - ${KNOB_W_PX + KNOB_PAD_PX}px)`

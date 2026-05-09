@@ -110,6 +110,8 @@ export function CreateNoteForm({
     onApprove,
     isApproving = false,
     compactFooter = false,
+    recurringVoucherSaveBlocked = false,
+    recurringVoucherAuxiliaryDirty = false,
 }: {
     voucher?: any,
     onVoucherAction?: (status: 'saved' | 'cancelled', isSaveAndNew?: boolean, newId?: string) => void,
@@ -124,6 +126,8 @@ export function CreateNoteForm({
     isApproving?: boolean,
     /** When true, hide History / Save & New / Save & Print / Delete (used in entity "Add a New Note for..." dialogs; keep full buttons in New Transaction → Note for edit) */
     compactFooter?: boolean,
+    recurringVoucherSaveBlocked?: boolean,
+    recurringVoucherAuxiliaryDirty?: boolean,
 }) {
   const { user, customUser } = useAuth();
   const { company, companyId } = useCompany();
@@ -181,7 +185,7 @@ export function CreateNoteForm({
     const init = initialFilesRef.current;
     return currentUrls.length !== init.length || currentUrls.some((u, i) => u !== init[i]);
   })();
-  const isFormDirty = _isFormFieldsDirty || _isFileDirty;
+  const isFormDirty = _isFormFieldsDirty || _isFileDirty || recurringVoucherAuxiliaryDirty;
   const selectedContext = form.watch("context");
   // Page-level Add Note dialogs always use compact footer for consistent button set.
   const isEntityAddNoteDialog = !voucher?.id && Boolean(initialContext) && Boolean(initialEntityId);
@@ -1026,7 +1030,7 @@ export function CreateNoteForm({
                 )}
                 {/* Mobile row: Cancel | Save | Approve — approve daayen (baaki forms jaisa) */}
                 <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("w-full", BTN_CANCEL_CLASS)}>Cancel</Button>
-                <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
+                <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("w-full", BTN_SAVE_CLASS)}>{isLoading ? "..." : "Save"}</Button>
                 {voucher?.id ? (
                   <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("w-full", BTN_APPROVE_CLASS)}>{isApproving ? "..." : isFormDirty ? "Save & Approve" : "Approve"}</Button>
                 ) : canShowCreateApproveButton ? (
@@ -1065,7 +1069,7 @@ export function CreateNoteForm({
                   <Button type="button" onClick={() => onVoucherAction?.('cancelled')} className={cn("shrink-0 rounded-full", BTN_CANCEL_CLASS)}>Cancel</Button>
                   {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndNew: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_SAVE_NEW_CLASS)}>Save & New</Button>}
                   {!useCompactFooter && <Button type="button" onClick={(e) => handleFormSubmit(e, { saveAndPrint: true })} disabled={isLoading || editingDisabled || !isFormValid} className={cn("shrink-0 rounded-full", BTN_PRINT_CLASS)}><Printer className="mr-2 h-4 w-4" /> Save & Print</Button>}
-                  <Button type="submit" disabled={isLoading || editingDisabled || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
+                  <Button type="submit" disabled={isLoading || editingDisabled || recurringVoucherSaveBlocked || !isFormValid || (!!voucher?.id && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_SAVE_CLASS)}>{isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Save</Button>
                   {voucher?.id ? (
                     <Button type="button" onClick={async (e) => { e.preventDefault(); if (isFormDirty) await handleFormSubmit(e, { approveAfterSave: true }); else onApprove?.(); }} disabled={editingDisabled || !showApproveButton || !onApprove || isApproving || (!!voucher?.isApproved && !isFormDirty)} className={cn("shrink-0 rounded-full", BTN_APPROVE_CLASS)}>
                       {isApproving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
