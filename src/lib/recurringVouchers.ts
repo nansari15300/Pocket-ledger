@@ -26,6 +26,8 @@ import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/
 
 export type RecurringNarrationMode = "advance_bs_month";
 export type RecurringRunScope = "owner_only" | "all_users" | "selected_users";
+/** Manual Generate: pehla gap voucher-date se (default) vs aaj se peechhe sabse naya gap (“sirf is mahina” dialog). */
+export type ManualRecurringPickStrategy = "chronological" | "latest";
 /** Company setting: `configure_company_settings` wale me se kaun voucher par Auto Monthly strip / Generate / template save kar sake. */
 export type RecurringVoucherAutoEditorsScope = "all_configure_users" | "owner_only" | "selected_users";
 
@@ -65,6 +67,13 @@ export type RecurringRateAdjustCadence = "every_bs_month" | "every_bs_year";
 
 export type RecurringVoucherTemplate = {
   sourceVoucherId: string;
+  /** Search / UI: chain key + narration `| Id vou.No.{no}{typeTail}` — ek series ke liye stable */
+  recurringChainKey?: string | null;
+  /**
+   * Ji voucher pe user ne Auto manually ON kiya — us voucher ka **number** (Src tag).
+   * Har auto clone narration / `recurringMeta.sourceVoucherNumber` me yahi dikhega (clone body alag ho tab bhi).
+   */
+  manualOnSourceVoucherNumber?: string | null;
   /** Journal: same Dr/Cr account set → ek hi `recurringSeriesKey`; Firestore doc id = yahi key (legacy: doc id = voucher id). */
   recurringSeriesKey?: string | null;
   /** Clone body is voucher id — har save par update (latest rent amount / lines). */
@@ -108,6 +117,123 @@ export type RecurringVoucherTemplate = {
 
 const RECURRING_TEMPLATE_COLLECTION = "recurring_voucher_templates";
 const RECURRING_LOCK_COLLECTION = "recurring_voucher_generation_locks";
+/** Manual Generate lock: crash / tab band hone par bina `finishedAt` — itni der baad dubara try allow (stale). */
+const MANUAL_RECURRING_LOCK_STALE_MS = 15 * 60 * 1000;
+
+/** Narration / search: yahi prefix se `Id` block dhundo ya strip karo */
+export const RECURRING_NARRATION_ID_TOKEN = " | Id ";
+
+/**
+ * Manual Auto ON wale voucher number se Firestore `recurringChainKey` — `vou.No.{…}jrnl` (internal; journal default tail).
+ * Narration: `formatRecurringNarrationSearchSuffix` — `Id vou.No.-{no}{TYPE}` (TYPE voucher type se UPPER, jaise JRNL), bina `· Src`.
+ */
+export function recurringChainKeyFromManualOnVoucherNo(voucherNumber: string | null | undefined): string {
+  const raw = String(voucherNumber ?? "").trim();
+  if (!raw) return "";
+  const compact = raw.replace(/\s+/g, "");
+  const safe = compact.replace(/[^A-Za-z0-9\-_.]/g, "").slice(0, 80);
+  if (!safe) return "";
+  return `vou.No.${safe}jrnl`;
+}
+
+/** Sirf tab jab voucher number se key na bane (draft / edge) — pehle RG… fallback tha */
+function generateRecurringChainKeyFallback(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const a = new Uint8Array(4);
+    crypto.getRandomValues(a);
+    return `RG${Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+  }
+  return `RG${fnv1a32Hex(`${Date.now()}-${Math.random()}`)}`.toUpperCase();
+}
+
+/** Dubara append se pehle line ke end par purana `| Id …` hatao (purana lamba `· Src` wala bhi). */
+export function stripRecurringNarrationSearchSuffix(narration: string): string {
+  return String(narration || "")
+    .replace(/\s*\|\s*Id\s+.+$/i, "")
+    .trim();
+}
+
+/** Narration Id tail: voucher `type` → UPPERCASE (journal = JRNL, sale = SALE, …). */
+function recurringNarrationIdTypeSuffixCaps(voucherType: string | null | undefined): string {
+  const t = String(voucherType || "journal")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "_");
+  const map: Record<string, string> = {
+    journal: "JRNL",
+    sale: "SALE",
+    purchase: "PUR",
+    payment_in: "PIN",
+    payment_out: "POUT",
+    contra: "CONTRA",
+    note: "NOTE",
+    salary: "SAL",
+    production: "PRD",
+  };
+  if (map[t]) return map[t];
+  const slug = t.replace(/[^a-z0-9_]/g, "").toUpperCase();
+  return (slug.slice(0, 6) || "JRNL").toUpperCase();
+}
+
+/** Purane `…jrnl` / chhote type slug narration number se hata kar digit group sahi nikaalne ke liye. */
+function stripLegacyNarrationTypeSlugsFromCompact(safe: string): string {
+  let out = safe;
+  const slugs = ["jrnl", "sale", "pur", "pin", "pout", "cnt", "contra", "note", "sal", "prd"];
+  for (let g = 0; g < 6; g++) {
+    let changed = false;
+    for (const slug of slugs) {
+      const sl = slug.toLowerCase();
+      if (out.length >= sl.length && out.slice(-sl.length).toLowerCase() === sl) {
+        out = out.slice(0, -sl.length);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return out.trim() || safe;
+}
+
+/** `JRNL-094` / `JRNL094` → last digit run `094` (narration `vou.No.-094JRNL`). */
+function extractVoucherNarrationNumericPart(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  const trailing = trimmed.match(/(\d+)$/);
+  if (trailing) return trailing[1];
+  const all = trimmed.match(/\d+/g);
+  if (all?.length) return all[all.length - 1];
+  return "";
+}
+
+/**
+ * Narration tail: ` | Id vou.No.-094JRNL` — `-` + number + voucher-type UPPER tail; Firestore `recurringChainKey` alag rehta hai.
+ * `sourceVoucherNumber` khali ho to `chainKey` se number + type jahan mumkin, warna purana `k` fallback.
+ */
+export function formatRecurringNarrationSearchSuffix(
+  chainKey: string,
+  sourceVoucherNumber: string,
+  voucherType?: string | null,
+): string {
+  const caps = recurringNarrationIdTypeSuffixCaps(voucherType);
+  const s = String(sourceVoucherNumber || "").trim();
+  if (s) {
+    const compact = s.replace(/\s+/g, "");
+    const safe = compact.replace(/[^A-Za-z0-9\-_.]/g, "").slice(0, 80);
+    if (safe) {
+      const forDigits = stripLegacyNarrationTypeSlugsFromCompact(safe);
+      let num = extractVoucherNarrationNumericPart(forDigits);
+      if (!num) num = (forDigits.match(/\d/g) || []).join("").slice(-12) || "0";
+      const idBody = `-${num}${caps}`;
+      return `${RECURRING_NARRATION_ID_TOKEN}vou.No.${idBody}`;
+    }
+  }
+  const k = String(chainKey || "").trim();
+  if (!k) return "";
+  const stripped = stripLegacyNarrationTypeSlugsFromCompact(k.replace(/^vou\.No\./i, ""));
+  const numK = extractVoucherNarrationNumericPart(stripped);
+  if (numK) {
+    return `${RECURRING_NARRATION_ID_TOKEN}vou.No.-${numK}${caps}`;
+  }
+  return `${RECURRING_NARRATION_ID_TOKEN}${k}`;
+}
 
 /** FNV-1a 32-bit — browser-safe series id (no crypto.subtle). */
 function fnv1a32Hex(input: string): string {
@@ -209,6 +335,9 @@ function parsePeriodKey(pk: string): { y: number; m: number } | null {
   return { y, m };
 }
 
+/** Ek missing BS mahina — Generate picker + batch create dono. */
+export type RecurringPeriodSlot = { periodKey: string; bsY: number; bsM: number };
+
 /** BS period key `YYYY-MM` lexicographic compare (same calendar order). */
 function comparePeriodKeysAsc(pkA: string, pkB: string): number {
   const a = parsePeriodKey(pkA);
@@ -245,17 +374,21 @@ async function fetchActiveRecurringPeriodKeysForTemplate(companyId: string, temp
 }
 
 /**
- * “Generate now” = aaj ka mahina hi nahi: pehle (1) template jo last period + voucher recycle/missing,
- * phir (2) aaj tak pehla gap jahan zinda auto voucher nahi. Recycler me doc = gap maana jata hai.
+ * “Generate now” / gap target: (1) last period recycle jab due **source voucher date** ke peechhe na ho;
+ * (2) default `chronological`: source voucher ke BS mahine se aaj tak **pehla** khali slot (purana skip nahi);
+ * (3) `latest`: aaj se peechhe sabse naya khali (purana behaviour);
+ * (4) fallback aaj. — Auto voucher ki date kabhi manual source se purani nahi.
  */
 async function pickManualRecurringGenerateTarget(
   companyId: string,
   templateDocId: string,
   template: RecurringVoucherTemplate,
   now: Date,
+  strategy: ManualRecurringPickStrategy = "chronological",
 ): Promise<{ periodKey: string; bsY: number; bsM: number }> {
   const bsToday = adToBs(now);
   const todayPk = toPeriodKey(bsToday.y, bsToday.m);
+  const sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
 
   const lastPk =
     template.lastGeneratedPeriodKey != null && String(template.lastGeneratedPeriodKey).trim()
@@ -267,56 +400,106 @@ async function pickManualRecurringGenerateTarget(
   if (lastVid) {
     lastVoucherSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, lastVid));
   }
-  const lastVoucherActive =
-    lastVoucherSnap?.exists() === true && (lastVoucherSnap.data() as Record<string, unknown>)?.isDeleted !== true;
-
-  // Template abhi bhi Chaitra id point kare + voucher recycle → pehle Chaitra dubara.
+  // Template abhi bhi Chaitra id point kare + voucher recycle → dubara sirf jab scheduled due source se peechhe na ho.
   if (lastPk && lastVid) {
     const goneOrRecycle =
       lastVoucherSnap?.exists() !== true || (lastVoucherSnap.data() as Record<string, unknown>)?.isDeleted === true;
     if (goneOrRecycle && comparePeriodKeysAsc(lastPk, todayPk) <= 0) {
       const pm = parsePeriodKey(lastPk);
-      if (pm) return { periodKey: lastPk, bsY: pm.y, bsM: pm.m };
-    }
-  }
-
-  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
-
-  let wy: number;
-  let wm: number;
-  const back = addBsMonths(bsToday.y, bsToday.m, -24);
-  wy = back.y;
-  wm = back.m;
-  if (lastPk && lastVoucherActive) {
-    const pm = parsePeriodKey(lastPk);
-    if (pm) {
-      const nxt = addBsMonths(pm.y, pm.m, 1);
-      const nxtPk = toPeriodKey(nxt.y, nxt.m);
-      const walkMinPk = toPeriodKey(wy, wm);
-      if (comparePeriodKeysAsc(nxtPk, walkMinPk) > 0) {
-        wy = nxt.y;
-        wm = nxt.m;
+      if (pm && periodScheduleDueNotBeforeSourceVoucher(template, pm.y, pm.m, sourceMinDay)) {
+        return { periodKey: lastPk, bsY: pm.y, bsM: pm.m };
       }
     }
   }
 
-  for (let i = 0; i < 36; i++) {
-    const { y, m } = addBsMonths(wy, wm, i);
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
+  const suppressed = new Set(
+    Array.isArray(template.suppressedPeriodKeys)
+      ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
+      : [],
+  );
+  const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+
+  const tryPick = (y: number, m: number): { periodKey: string; bsY: number; bsM: number } | null => {
     const pk = toPeriodKey(y, m);
-    if (comparePeriodKeysAsc(pk, todayPk) > 0) break;
-    // Suppressed / recycler: `activePks` me nahi → yahin fill; `createOne` manual par suppress hata dega.
-    if (!activePks.has(pk)) {
-      return { periodKey: pk, bsY: y, bsM: m };
+    if (minPk && comparePeriodKeysAsc(pk, minPk) < 0) return null;
+    if (comparePeriodKeysAsc(pk, todayPk) > 0) return null;
+    if (activePks.has(pk) || suppressed.has(pk)) return null;
+    if (!periodScheduleDueNotBeforeSourceVoucher(template, y, m, sourceMinDay)) return null;
+    return { periodKey: pk, bsY: y, bsM: m };
+  };
+
+  // Chronological: voucher date (clone source) ke BS mahine se aaj tak pehla khali — 4 mahina skip nahi.
+  if (strategy === "chronological" && sourceMinDay) {
+    const srcBs = adToBs(
+      new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+    );
+    for (let j = 0; j < 120; j++) {
+      const cur = addBsMonths(srcBs.y, srcBs.m, j);
+      const pk = toPeriodKey(cur.y, cur.m);
+      if (comparePeriodKeysAsc(pk, todayPk) > 0) break;
+      const hit = tryPick(cur.y, cur.m);
+      if (hit) return hit;
     }
+  }
+
+  // Latest gap (aaj → peechhe) ya chronological me koi slot na mila / strategy === "latest".
+  for (let i = 0; i < 36; i++) {
+    const cur = addBsMonths(bsToday.y, bsToday.m, -i);
+    const hit = tryPick(cur.y, cur.m);
+    if (hit) return hit;
   }
 
   return { periodKey: todayPk, bsY: bsToday.y, bsM: bsToday.m };
 }
 
+/** Auto Monthly save dialog: kitne khali BS mahine (chronological) bache — batch “sab banao” ke liye. */
+export async function listMissingRecurringPeriodSlotsAscending(
+  companyId: string,
+  templateDocId: string,
+  template: RecurringVoucherTemplate,
+  now: Date = new Date(),
+): Promise<RecurringPeriodSlot[]> {
+  const bsToday = adToBs(now);
+  const todayPk = toPeriodKey(bsToday.y, bsToday.m);
+  const sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
+  if (!sourceMinDay) return [];
+
+  const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
+  const suppressed = new Set(
+    Array.isArray(template.suppressedPeriodKeys)
+      ? template.suppressedPeriodKeys.map((k) => String(k).trim()).filter(Boolean)
+      : [],
+  );
+  const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+
+  const tryPick = (y: number, m: number): { periodKey: string; bsY: number; bsM: number } | null => {
+    const pk = toPeriodKey(y, m);
+    if (minPk && comparePeriodKeysAsc(pk, minPk) < 0) return null;
+    if (comparePeriodKeysAsc(pk, todayPk) > 0) return null;
+    if (activePks.has(pk) || suppressed.has(pk)) return null;
+    if (!periodScheduleDueNotBeforeSourceVoucher(template, y, m, sourceMinDay)) return null;
+    return { periodKey: pk, bsY: y, bsM: m };
+  };
+
+  const out: RecurringPeriodSlot[] = [];
+  const srcBs = adToBs(
+    new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+  );
+  for (let j = 0; j < 120; j++) {
+    const cur = addBsMonths(srcBs.y, srcBs.m, j);
+    const pk = toPeriodKey(cur.y, cur.m);
+    if (comparePeriodKeysAsc(pk, todayPk) > 0) break;
+    const hit = tryPick(cur.y, cur.m);
+    if (hit) out.push(hit);
+  }
+  return out;
+}
+
 /**
  * Voucher dialog: pehla gap jisme “Generate now” bhi jata hai — agar us period ka schedule due **aaj se pehle** guzar chuka
  * aur abhi tak zinda auto voucher nahi, to user ko Create / Skip dikhane ke liye (OFF→ON / app miss / runner miss).
- * Target hamesha `pickManualRecurringGenerateTarget` jaisa — Create dabane par `generateRecurringVoucherNow` same period banaye.
+ * Target `pickManualRecurringGenerateTarget(..., "chronological")` — oldest missing month; Create dabane par wahi period (latest strategy alag).
  */
 /** Template `createdAt` → pehla BS mahina — naya ON (purana doc delete) par purane saal ka false “missed” na dikhe. */
 function inferTemplateEarliestBsPeriodFromCreatedAt(template: RecurringVoucherTemplate): { y: number; m: number } | null {
@@ -331,6 +514,28 @@ function inferTemplateEarliestBsPeriodFromCreatedAt(template: RecurringVoucherTe
   return { y: bs.y, m: bs.m };
 }
 
+/**
+ * Missing-slot / pick floor: `createdAt` kabhi **aaj** hota hai jab purane date wale voucher par Auto ON karte ho —
+ * sirf `createdAt` floor se beechna mahine kaat jate the (tick-popup nahi, sirf 1 “latest” generate).
+ * Isliye floor = chronological **pehla** mahina dono me se: template birth ya source voucher BS month.
+ */
+function effectiveMinPeriodKeyForRecurringScan(
+  template: RecurringVoucherTemplate,
+  sourceMinDay: Date | null,
+): string | null {
+  const fromCreated = inferTemplateEarliestBsPeriodFromCreatedAt(template);
+  if (!sourceMinDay) {
+    return fromCreated ? toPeriodKey(fromCreated.y, fromCreated.m) : null;
+  }
+  const bs = adToBs(
+    new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0),
+  );
+  const sourcePk = toPeriodKey(bs.y, bs.m);
+  if (!fromCreated) return sourcePk;
+  const createdPk = toPeriodKey(fromCreated.y, fromCreated.m);
+  return comparePeriodKeysAsc(createdPk, sourcePk) < 0 ? createdPk : sourcePk;
+}
+
 export async function getPastDueRecurringGapIfAny(
   companyId: string,
   templateDocId: string,
@@ -338,12 +543,10 @@ export async function getPastDueRecurringGapIfAny(
   now: Date = new Date(),
 ): Promise<{ periodKey: string; bsY: number; bsM: number } | null> {
   if (!companyId?.trim() || !templateDocId?.trim()) return null;
-  const target = await pickManualRecurringGenerateTarget(companyId, templateDocId, template, now);
-  const earliestBs = inferTemplateEarliestBsPeriodFromCreatedAt(template);
-  if (earliestBs) {
-    const minPk = toPeriodKey(earliestBs.y, earliestBs.m);
-    if (comparePeriodKeysAsc(target.periodKey, minPk) < 0) return null;
-  }
+  const sourceMinDay = await loadSourceMinLocalDayForTemplate(companyId, template);
+  const target = await pickManualRecurringGenerateTarget(companyId, templateDocId, template, now, "chronological");
+  const minPk = effectiveMinPeriodKeyForRecurringScan(template, sourceMinDay);
+  if (minPk && comparePeriodKeysAsc(target.periodKey, minPk) < 0) return null;
   const activePks = await fetchActiveRecurringPeriodKeysForTemplate(companyId, templateDocId);
   if (activePks.has(target.periodKey)) return null;
   const suppressed = new Set(
@@ -376,6 +579,37 @@ function startOfLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
+/** Manual-ON / clone source voucher ki date — auto voucher kabhi is din (local) se pehle schedule na ho. */
+function sourceVoucherMinLocalDayStartFromData(v: Record<string, unknown>): Date | null {
+  const iso = voucherDateFieldToIso(v.date);
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return startOfLocalDay(d);
+}
+
+/** Is BS period ka scheduled due din source voucher ki date se peechhe to nahi (pick / recycle filter). */
+function periodScheduleDueNotBeforeSourceVoucher(
+  template: RecurringVoucherTemplate,
+  bsY: number,
+  bsM: number,
+  sourceMin: Date | null,
+): boolean {
+  if (!sourceMin) return true;
+  const dueStart = scheduleDueLocalStartForPeriod(template, bsY, bsM);
+  if (!dueStart) return true;
+  return dueStart.getTime() >= sourceMin.getTime();
+}
+
+/** Template se clone voucher utha kar minimum AD din (Firestore). */
+async function loadSourceMinLocalDayForTemplate(companyId: string, template: RecurringVoucherTemplate): Promise<Date | null> {
+  const vid = String(template.cloneSourceVoucherId || template.sourceVoucherId || "").trim();
+  if (!companyId.trim() || !vid) return null;
+  const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, vid));
+  if (!snap.exists()) return null;
+  return sourceVoucherMinLocalDayStartFromData(snap.data() as Record<string, unknown>);
+}
+
 /** Us BS mahine me template ka scheduled due (local calendar day start) — delete-before-due vs suppress decide karne ke liye. */
 function scheduleDueLocalStartForPeriod(template: RecurringVoucherTemplate, bsY: number, bsM: number): Date | null {
   try {
@@ -390,7 +624,8 @@ function scheduleDueLocalStartForPeriod(template: RecurringVoucherTemplate, bsY:
   }
 }
 
-function effectiveScheduleBsDay(template: RecurringVoucherTemplate): number {
+/** Schedule BS day — UI + accrual; export taaki dashboard card same rule use kare */
+export function effectiveScheduleBsDay(template: RecurringVoucherTemplate): number {
   if (typeof template.scheduleBsDay === "number" && Number.isFinite(template.scheduleBsDay)) {
     return Math.max(1, Math.min(32, Math.floor(template.scheduleBsDay)));
   }
@@ -807,9 +1042,28 @@ export async function setRecurringTemplateForVoucher(
     typeof payload.scheduleBsDay === "number" && Number.isFinite(payload.scheduleBsDay)
       ? Math.max(1, Math.min(32, Math.floor(payload.scheduleBsDay)))
       : existingData.scheduleBsDay ?? (existingData.scheduleType === "month_end" ? 32 : 32);
+  // Pehla jis voucher par user ne Auto ON kiya — narration Src/Id yahi; naya auto-save isko overwrite na kare jab tak series clear na ho.
+  const existingManualOn = String(existingData.manualOnSourceVoucherNumber || "").trim() || null;
+  const manualOnSourceVoucherNumber =
+    existingManualOn || String(vData.voucherNumber || "").trim() || null;
+  const keyFromManualOnNo = recurringChainKeyFromManualOnVoucherNo(manualOnSourceVoucherNumber || undefined);
+  const existingKey =
+    typeof existingData.recurringChainKey === "string" && String(existingData.recurringChainKey).trim()
+      ? String(existingData.recurringChainKey).trim()
+      : "";
+  // Stable: `vou.No.…jrnl` ek baar save ke baad; purana `RG…` template save par voucher-no style me migrate.
+  let chainKey = existingKey;
+  if (!chainKey) {
+    chainKey = keyFromManualOnNo || generateRecurringChainKeyFallback();
+  } else if (existingKey.toUpperCase().startsWith("RG") && keyFromManualOnNo) {
+    chainKey = keyFromManualOnNo;
+  }
+
   const next: RecurringVoucherTemplate = {
     sourceVoucherId: payload.sourceVoucherId,
     recurringSeriesKey: seriesKey ?? null,
+    recurringChainKey: chainKey,
+    manualOnSourceVoucherNumber,
     cloneSourceVoucherId: payload.sourceVoucherId,
     sourceVoucherType: payload.sourceVoucherType || "journal",
     enabled: true,
@@ -953,13 +1207,27 @@ async function createOneRecurringVoucherFromTemplate(
   const dayNum = effectiveScheduleBsDay(template);
   const dueD = dayNum >= 32 ? dim : Math.min(dayNum, dim);
   const dueAdDate = bsToAd({ y: bsNow.y, m: bsNow.m, d: dueD });
+  // Source (manual ON) voucher ki date se pehle kabhi save na ho — pick ke baad bhi safety clamp.
+  const sourceMinDay = sourceVoucherMinLocalDayStartFromData(sourceVoucher);
+  let voucherAdDate = dueAdDate;
+  if (sourceMinDay && startOfLocalDay(dueAdDate).getTime() < sourceMinDay.getTime()) {
+    const iso = voucherDateFieldToIso(sourceVoucher.date);
+    if (iso) {
+      const sd = new Date(iso);
+      if (!Number.isNaN(sd.getTime())) voucherAdDate = sd;
+      else
+        voucherAdDate = new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0);
+    } else {
+      voucherAdDate = new Date(sourceMinDay.getFullYear(), sourceMinDay.getMonth(), sourceMinDay.getDate(), 12, 0, 0, 0);
+    }
+  }
   const dueMonthName = toPrimaryMonthName(bsNow.m);
 
   let base = stripRecurringUnsafeFields(sourceVoucher);
   const mode = (template.rateAdjustMode || "none") as RecurringRateAdjustMode;
   const rawVal = template.rateAdjustValue;
   const eff = parseRateAdjustEffectiveFrom(template.rateAdjustEffectiveFrom);
-  const dueStart = localDayStartMs(dueAdDate);
+  const dueStart = localDayStartMs(voucherAdDate);
   // Bump sirf jab due date >= effective-from (ya effective-from set hi nahi)
   const effStart = eff ? localDayStartMs(eff) : null;
   const cadenceOk =
@@ -976,11 +1244,39 @@ async function createOneRecurringVoucherFromTemplate(
       ? maybeAdvanceNarrationMonth(base.narration, bsNow.m)
       : String(base.narration || "");
 
+  const tplRefForKey = doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateId);
+  const cloneBodyVoucherNo = String(sourceVoucher.voucherNumber || "").trim() || cloneVid.slice(0, 12);
+  // Src tag: template pe save manual-ON voucher number (user ne jis pe switch ON kiya); purane template ke liye clone number fallback.
+  const srcTagVoucherNo =
+    String(template.manualOnSourceVoucherNumber || "").trim() || cloneBodyVoucherNo;
+  let chainKey = String(template.recurringChainKey || "").trim();
+  const keyFromSrc = recurringChainKeyFromManualOnVoucherNo(srcTagVoucherNo);
+  // Purana `RG…` key: generate (auto / manual) pe `vou.No.…jrnl` me upgrade + template sync.
+  if (chainKey.toUpperCase().startsWith("RG") && keyFromSrc) {
+    chainKey = keyFromSrc;
+    await updateDoc(tplRefForKey, { recurringChainKey: chainKey, updatedAt: serverTimestamp() }).catch(() => {});
+  } else if (!chainKey) {
+    chainKey = keyFromSrc || generateRecurringChainKeyFallback();
+    await updateDoc(tplRefForKey, { recurringChainKey: chainKey, updatedAt: serverTimestamp() }).catch(() => {});
+  }
+  // Legacy template: ek baar generate par number Firestore me likh do taaki Src stable rahe.
+  if (!String(template.manualOnSourceVoucherNumber || "").trim() && cloneBodyVoucherNo) {
+    await updateDoc(tplRefForKey, {
+      manualOnSourceVoucherNumber: cloneBodyVoucherNo,
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
+  }
+  const narrCore = stripRecurringNarrationSearchSuffix(cleanedNarration || `Auto voucher for ${dueMonthName}`);
+  // Type tail narration me (jrnl / sale …); clone body + template dono se type fallback.
+  const narrType = String(sourceVoucher.type || template.sourceVoucherType || "journal").trim();
+  const narrSuffix = formatRecurringNarrationSearchSuffix(chainKey, srcTagVoucherNo, narrType);
+  const narrationFinal = narrCore + (narrSuffix || "");
+
   const payload = {
     ...base,
     voucherNumber: nextVoucherNumber,
-    narration: cleanedNarration || `Auto voucher for ${dueMonthName}`,
-    date: dueAdDate.toISOString(),
+    narration: narrationFinal,
+    date: voucherAdDate.toISOString(),
     isApproved: false,
     recurringMeta: {
       templateId,
@@ -989,6 +1285,8 @@ async function createOneRecurringVoucherFromTemplate(
       generatedAtMs: Date.now(),
       generatedBy: actor.uid,
       generationKind: "recurring_bs_monthly",
+      chainKey,
+      sourceVoucherNumber: srcTagVoucherNo,
     },
   };
 
@@ -1003,6 +1301,10 @@ async function createOneRecurringVoucherFromTemplate(
     lastGeneratedPeriodKey: periodKey,
     lastGeneratedVoucherId: saved.id,
     updatedAt: serverTimestamp(),
+    // Naya auto voucher ab series ka “body” source — UI switch isi par ON; purane voucher par OFF (`ownsRecurringTemplate`).
+    // `manualOnSourceVoucherNumber` / `recurringChainKey` yahan mat chhedo — narration / Src jab tak user OFF+save na kare purane manual-ON wale se.
+    sourceVoucherId: saved.id,
+    cloneSourceVoucherId: saved.id,
   };
   // User ne Generate dabaya + pehle “skip” flag tha → dubara allow (auto scheduler dubara block na kare).
   if (opts?.ignoreSuppressed && suppressed.includes(periodKey)) {
@@ -1030,6 +1332,7 @@ export async function generateRecurringVoucherNow(
   company: Company | null,
   sourceVoucherId: string,
   actor: GenerateActor,
+  options?: { pickStrategy?: ManualRecurringPickStrategy },
 ): Promise<{ ok: boolean; message: string; voucherId?: string }> {
   if (!companyId?.trim() || !sourceVoucherId?.trim() || !actor?.uid) {
     return { ok: false, message: "Missing company or voucher." };
@@ -1039,10 +1342,23 @@ export async function generateRecurringVoucherNow(
   if (!tplSnap.exists()) return { ok: false, message: "Enable Auto Monthly and save the voucher first." };
   const template = tplSnap.data() as RecurringVoucherTemplate;
   if (!template.enabled) return { ok: false, message: "Auto Monthly is off for this voucher." };
+  const tplActiveSource = String(template.cloneSourceVoucherId || template.sourceVoucherId || "").trim();
+  if (tplActiveSource && tplActiveSource !== sourceVoucherId.trim()) {
+    return {
+      ok: false,
+      message: "Auto Monthly is active on another line in this journal series. Open that voucher to generate, or turn Auto on here.",
+    };
+  }
+  const co = company as Record<string, unknown> | null | undefined;
+  const rs = co?.recurringVoucherSettings as Record<string, unknown> | undefined;
+  if (rs?.enabled !== true) {
+    return { ok: false, message: "Company auto recurring is off. Turn it on in Company Settings or the dashboard recurring card." };
+  }
 
   const now = new Date();
-  // Sirf “aaj” nahi: recycle / gap (e.g. Chaitra delete) pehle bharte hain — Baishakh pe jump nahi.
-  const target = await pickManualRecurringGenerateTarget(companyId, templateDocId, template, now);
+  const pickStrategy = options?.pickStrategy ?? "chronological";
+  // Recycle + gap: default chronological (purana mahina pehle); `latest` = purana “sirf is mahina” dialog.
+  const target = await pickManualRecurringGenerateTarget(companyId, templateDocId, template, now, pickStrategy);
   const periodKey = target.periodKey;
   const bsNow = { y: target.bsY, m: target.bsM, d: 1 };
 
@@ -1056,6 +1372,20 @@ export async function generateRecurringVoucherNow(
   }
 
   const lockRef = doc(firestore, `companies/${companyId}/${RECURRING_LOCK_COLLECTION}`, `${templateDocId}_${periodKey}_manual`);
+  // Purana lock (success ke baad bhi doc reh sakta tha / beech me error) → dubara "LOCK_EXISTS" + koi txn nahi dikhna.
+  const preLock = await getDoc(lockRef);
+  if (preLock.exists()) {
+    const ld = preLock.data() as Record<string, unknown>;
+    const hasFinished = ld.finishedAt != null;
+    const createdRaw = ld.createdAt;
+    let createdMs = 0;
+    if (createdRaw instanceof Timestamp) createdMs = createdRaw.toMillis();
+    else if (typeof createdRaw === "number" && Number.isFinite(createdRaw)) createdMs = createdRaw;
+    const staleIncomplete = !hasFinished && createdMs > 0 && Date.now() - createdMs > MANUAL_RECURRING_LOCK_STALE_MS;
+    if (hasFinished || staleIncomplete) {
+      await deleteDoc(lockRef).catch(() => {});
+    }
+  }
   try {
     await runTransaction(firestore, async (tx) => {
       const lockSnap = await tx.get(lockRef);
@@ -1063,7 +1393,11 @@ export async function generateRecurringVoucherNow(
       tx.set(lockRef, { templateId: templateDocId, periodKey, manual: true, createdAt: serverTimestamp(), createdBy: actor.uid });
     });
   } catch {
-    return { ok: false, message: "Generation already in progress or completed." };
+    return {
+      ok: false,
+      message:
+        "Another Generate is running for this month, or a lock is stuck. Wait a minute and try again, or retry after 15 minutes if the last run crashed.",
+    };
   }
 
   try {
@@ -1077,11 +1411,12 @@ export async function generateRecurringVoucherNow(
       actor,
       { ignoreSuppressed: true },
     );
-    await updateDoc(lockRef, { finishedAt: serverTimestamp(), voucherId: result?.id ?? null }).catch(() => {});
     if (!result) {
+      await deleteDoc(lockRef).catch(() => {});
       return { ok: false, message: "Could not generate (source missing or period blocked)." };
     }
     const monthLabel = toPrimaryMonthName(target.bsM);
+    await deleteDoc(lockRef).catch(() => {});
     return {
       ok: true,
       message: `Created ${result.voucherNumber} (${monthLabel} · ${periodKey})`,
@@ -1091,6 +1426,159 @@ export async function generateRecurringVoucherNow(
     await deleteDoc(lockRef).catch(() => {});
     return { ok: false, message: e instanceof Error ? e.message : "Generation failed." };
   }
+}
+
+/** Manual lock doc: purana / crash — Generate now jaisa cleanup taaki batch agla period chal sake. */
+async function clearStaleManualRecurringLockIfNeeded(lockRef: ReturnType<typeof doc>): Promise<void> {
+  const preLock = await getDoc(lockRef);
+  if (!preLock.exists()) return;
+  const ld = preLock.data() as Record<string, unknown>;
+  const hasFinished = ld.finishedAt != null;
+  const createdRaw = ld.createdAt;
+  let createdMs = 0;
+  if (createdRaw instanceof Timestamp) createdMs = createdRaw.toMillis();
+  else if (typeof createdRaw === "number" && Number.isFinite(createdRaw)) createdMs = createdRaw;
+  const staleIncomplete = !hasFinished && createdMs > 0 && Date.now() - createdMs > MANUAL_RECURRING_LOCK_STALE_MS;
+  if (hasFinished || staleIncomplete) {
+    await deleteDoc(lockRef).catch(() => {});
+  }
+}
+
+/**
+ * Chune hue BS periods ke liye auto voucher — chronological order; har success par template clone last voucher pe.
+ * `slots` khali na ho; caller sort / filter de.
+ */
+export async function generateRecurringVouchersForPeriodSlots(
+  companyId: string,
+  company: Company | null,
+  initialSourceVoucherId: string,
+  actor: GenerateActor,
+  slots: RecurringPeriodSlot[],
+): Promise<{ ok: boolean; message: string; created: number; lastVoucherId?: string }> {
+  if (!companyId?.trim() || !initialSourceVoucherId?.trim() || !actor?.uid) {
+    return { ok: false, message: "Missing company or voucher.", created: 0 };
+  }
+  if (!Array.isArray(slots) || slots.length === 0) {
+    return { ok: false, message: "No periods selected.", created: 0 };
+  }
+  const co = company as Record<string, unknown> | null | undefined;
+  const rs = co?.recurringVoucherSettings as Record<string, unknown> | undefined;
+  if (rs?.enabled !== true) {
+    return { ok: false, message: "Company auto recurring is off.", created: 0 };
+  }
+
+  const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, initialSourceVoucherId);
+  const tplSnap = await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId));
+  if (!tplSnap.exists()) return { ok: false, message: "No Auto Monthly template for this voucher.", created: 0 };
+  const template0 = tplSnap.data() as RecurringVoucherTemplate;
+  if (!template0.enabled) return { ok: false, message: "Auto Monthly is off.", created: 0 };
+
+  const ordered = [...slots].sort((a, b) => comparePeriodKeysAsc(a.periodKey, b.periodKey));
+
+  let created = 0;
+  const labels: string[] = [];
+  let lastVoucherId: string | undefined;
+
+  for (const slot of ordered) {
+    const refreshed = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId))).data() as
+      | RecurringVoucherTemplate
+      | undefined;
+    if (!refreshed?.enabled) break;
+
+    if (refreshed.lastGeneratedPeriodKey === slot.periodKey && refreshed.lastGeneratedVoucherId) {
+      const vSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, refreshed.lastGeneratedVoucherId));
+      if (vSnap.exists() && (vSnap.data() as Record<string, unknown>)?.isDeleted !== true) {
+        continue;
+      }
+    }
+
+    const lockRef = doc(firestore, `companies/${companyId}/${RECURRING_LOCK_COLLECTION}`, `${templateDocId}_${slot.periodKey}_manual`);
+    await clearStaleManualRecurringLockIfNeeded(lockRef);
+
+    try {
+      await runTransaction(firestore, async (tx) => {
+        const lockSnap = await tx.get(lockRef);
+        if (lockSnap.exists()) throw new Error("LOCK_EXISTS");
+        tx.set(lockRef, {
+          templateId: templateDocId,
+          periodKey: slot.periodKey,
+          manual: true,
+          batchBackfill: true,
+          createdAt: serverTimestamp(),
+          createdBy: actor.uid,
+        });
+      });
+    } catch {
+      continue;
+    }
+
+    try {
+      const freshTpl = (await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId))).data() as RecurringVoucherTemplate;
+      const result = await createOneRecurringVoucherFromTemplate(
+        companyId,
+        company,
+        templateDocId,
+        freshTpl,
+        slot.periodKey,
+        { y: slot.bsY, m: slot.bsM, d: 1 },
+        actor,
+        { ignoreSuppressed: true },
+      );
+      await deleteDoc(lockRef).catch(() => {});
+      if (result) {
+        created += 1;
+        lastVoucherId = result.id;
+        labels.push(`${result.voucherNumber} (${slot.periodKey})`);
+      }
+    } catch (e) {
+      await deleteDoc(lockRef).catch(() => {});
+      return {
+        ok: created > 0,
+        created,
+        lastVoucherId,
+        message:
+          created > 0
+            ? `Partial: ${created} created, then stopped (${e instanceof Error ? e.message : "error"}).`
+            : (e instanceof Error ? e.message : "Backfill failed."),
+      };
+    }
+  }
+
+  return {
+    ok: created > 0,
+    created,
+    lastVoucherId,
+    message:
+      created > 0
+        ? `Created ${created} voucher(s): ${labels.slice(0, 6).join(", ")}${labels.length > 6 ? "…" : ""}`
+        : "No new vouchers (periods may already exist or locks blocked).",
+  };
+}
+
+/**
+ * Auto Monthly settings ke “sab missing banao” — poori chronological list (Generate picker me sab tick = yahi).
+ */
+export async function generateRecurringBackfillAllMissingForVoucher(
+  companyId: string,
+  company: Company | null,
+  initialSourceVoucherId: string,
+  actor: GenerateActor,
+): Promise<{ ok: boolean; message: string; created: number; lastVoucherId?: string }> {
+  if (!companyId?.trim() || !initialSourceVoucherId?.trim() || !actor?.uid) {
+    return { ok: false, message: "Missing company or voucher.", created: 0 };
+  }
+  const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, initialSourceVoucherId);
+  const tplSnap = await getDoc(doc(firestore, `companies/${companyId}/${RECURRING_TEMPLATE_COLLECTION}`, templateDocId));
+  if (!tplSnap.exists()) return { ok: false, message: "No Auto Monthly template for this voucher.", created: 0 };
+  const template0 = tplSnap.data() as RecurringVoucherTemplate;
+  if (!template0.enabled) return { ok: false, message: "Auto Monthly is off.", created: 0 };
+
+  const now = new Date();
+  const slots = await listMissingRecurringPeriodSlotsAscending(companyId, templateDocId, template0, now);
+  if (slots.length === 0) {
+    return { ok: false, message: "No missing months in this range.", created: 0 };
+  }
+  return generateRecurringVouchersForPeriodSlots(companyId, company, initialSourceVoucherId, actor, slots);
 }
 
 export async function generateDueRecurringVouchersOnAppOpen(

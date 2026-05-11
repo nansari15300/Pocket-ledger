@@ -2,17 +2,10 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { format as formatDateFns } from "date-fns";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
@@ -30,6 +23,8 @@ import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { openBillingStatementPdfPreview } from "@/lib/billingStatementPdf";
 import { toast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
+import { format as formatDateFns } from "date-fns";
 import { useDate } from "@/hooks/useDate";
 import { MobileTransactionsPager } from "@/components/vouchers/MobileTransactionsPager";
 import { cn } from "@/lib/utils";
@@ -60,43 +55,6 @@ type StatementResponse = {
   payments: StatementPaymentRow[];
   error?: string;
 };
-
-/** Billing rows: system calendar (AD / BS / Both) + `HH:mm` — ledger table jaisa split jab Both. */
-function useBillingStatementWhenFormatters() {
-  const { dateSystem, setDateSystem, formatDate, formatDateBS } = useDate();
-
-  const toValidDate = (ms: number | null): Date | null => {
-    if (ms == null || !Number.isFinite(ms) || ms <= 0) return null;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
-
-  const formatWhenSingleLine = useCallback(
-    (ms: number | null): string => {
-      const d = toValidDate(ms);
-      if (!d) return "—";
-      const clock = formatDateFns(d, "HH:mm");
-      if (dateSystem === "AD") return `${formatDate(d)} ${clock}`;
-      if (dateSystem === "BS") return `${formatDateBS(d)} ${clock}`;
-      return `${formatDateBS(d)} ${clock}\n${formatDate(d)} ${clock}`;
-    },
-    [dateSystem, formatDate, formatDateBS]
-  );
-
-  const formatPlanExpirySummary = useCallback(
-    (ms: number | null): string => {
-      const d = toValidDate(ms);
-      if (!d) return "—";
-      const clock = formatDateFns(d, "HH:mm");
-      if (dateSystem === "AD") return `${formatDate(d)} ${clock}`;
-      if (dateSystem === "BS") return `${formatDateBS(d)} ${clock}`;
-      return `${formatDateBS(d)} ${clock}\n${formatDate(d)} ${clock}`;
-    },
-    [dateSystem, formatDate, formatDateBS]
-  );
-
-  return { dateSystem, setDateSystem, formatDate, formatDateBS, formatWhenSingleLine, formatPlanExpirySummary };
-}
 
 /** Global `Table` row = 3px black — statement page par 50% = 1.5px, rang #000 (user request). */
 const STMT_TABLE_ROW_LINE = "border-b-[1.5px] border-[#000000]";
@@ -206,14 +164,8 @@ export default function BillingStatementPage() {
   const isMobile = useIsMobile();
   const { user } = useAuth();
   const { company, loading: companyLoading } = useCompany();
-  const {
-    dateSystem,
-    setDateSystem,
-    formatDate,
-    formatDateBS,
-    formatWhenSingleLine,
-    formatPlanExpirySummary,
-  } = useBillingStatementWhenFormatters();
+  const { dateSystem, formatDate, formatDateBS, formatWhenSingleLine, formatPlanExpirySummary } =
+    useBillingStatementWhenFormatters();
   const [state, setState] = useState<"idle" | "loading" | "ok" | "error">("idle");
   const [data, setData] = useState<StatementResponse | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -224,8 +176,6 @@ export default function BillingStatementPage() {
   const [rowsPerPage, setRowsPerPage] = useState(20);
 
   const isOwner = Boolean(user?.uid && company?.ownerId && user.uid === company.ownerId);
-  /** Header AD/BS/Both — Nepal companies jaisa app header (`DesktopAppHeader`). */
-  const showCalendarModeSelector = !company?.country || company.country === "Nepal";
 
   useEffect(() => {
     setRowsPerPage(isMobile ? 10 : 20);
@@ -330,22 +280,6 @@ export default function BillingStatementPage() {
     if (currentPage !== paymentPagination.safePage) setCurrentPage(paymentPagination.safePage);
   }, [currentPage, paymentPagination.safePage]);
 
-  /** Calendar mode trigger — Print ke baayein (user request). */
-  const calendarModeMenu = showCalendarModeSelector ? (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button type="button" variant="outline" size="sm" className="h-9 shrink-0 gap-1 px-2.5 sm:px-3" aria-label="Calendar AD or BS">
-          <span className="tabular-nums">{dateSystem}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[10rem]">
-        <DropdownMenuItem onSelect={() => setDateSystem("BS")}>Bikram Sambat (BS)</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => setDateSystem("AD")}>Anno Domini (AD)</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => setDateSystem("Both")}>Both AD and BS</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  ) : null;
-
   return (
     // `layout` main = `flex flex-col overflow-hidden` — yahan `flex-1 min-h-0` se poori usable height; scroll sirf CardContent andar.
     <div
@@ -382,7 +316,6 @@ export default function BillingStatementPage() {
               <div className="flex items-start justify-between gap-2 print:hidden">
                 <CardTitle className="min-w-0 flex-1 text-lg leading-tight">Billing statement</CardTitle>
                 <div className="flex shrink-0 items-center gap-1.5">
-                  {calendarModeMenu}
                   {showPrintForOwner ? (
                     <Button
                       type="button"
@@ -413,7 +346,6 @@ export default function BillingStatementPage() {
                 </CardDescription>
               </div>
               <div className="flex shrink-0 items-center gap-2 print:hidden">
-                {calendarModeMenu}
                 {showPrintForOwner ? (
                   <Button
                     type="button"

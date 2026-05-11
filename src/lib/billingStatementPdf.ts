@@ -180,6 +180,47 @@ function buildDocDefinition(args: {
   };
 }
 
+/** pdfmake buffer → blob + filenames — preview aur download dono yahi se (ek hi generate). */
+async function generateBillingStatementPdfBlob(args: {
+  companyName?: string | null;
+  companyId: string;
+  planId: string | null;
+  planExpiryText: string;
+  payments: BillingStatementPdfPaymentRow[];
+}): Promise<{ blob: Blob; fileName: string; title: string }> {
+  const docDefinition = buildDocDefinition(args);
+  const pdfDoc = pdfMake.createPdf(docDefinition);
+  const buffer = await getPdfBufferWithTimeout(pdfDoc, 60_000);
+  const blob = new Blob([buffer as BlobPart], { type: "application/pdf" });
+  const title = `Billing statement: ${args.companyName?.trim() || args.companyId}`;
+  const fileName = `billing-statement-${args.companyId}-${Date.now()}.pdf`;
+  return { blob, fileName, title };
+}
+
+/** Same PDF as preview — browser `<a download>` (footer / statement list se seedha file). */
+export async function downloadBillingStatementPdf(args: {
+  companyName?: string | null;
+  companyId: string;
+  planId: string | null;
+  planExpiryText: string;
+  payments: BillingStatementPdfPaymentRow[];
+}): Promise<void> {
+  const { blob, fileName } = await generateBillingStatementPdfBlob(args);
+  const blobUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = fileName;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Revoke thodi der baad — kuch browsers download start hone tak URL chhodte hain.
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+  }
+}
+
 /** Party Statement jaisa: PDF fullscreen overlay (Print / Share / Close) — desktop + mobile + APK sab par. */
 export async function openBillingStatementPdfPreview(args: {
   companyName?: string | null;
@@ -188,12 +229,7 @@ export async function openBillingStatementPdfPreview(args: {
   planExpiryText: string;
   payments: BillingStatementPdfPaymentRow[];
 }): Promise<void> {
-  const docDefinition = buildDocDefinition(args);
-  const pdfDoc = pdfMake.createPdf(docDefinition);
-  const buffer = await getPdfBufferWithTimeout(pdfDoc, 60_000);
-  const blob = new Blob([buffer as BlobPart], { type: "application/pdf" });
-  const title = `Billing statement: ${args.companyName?.trim() || args.companyId}`;
-  const fileName = `billing-statement-${args.companyId}-${Date.now()}.pdf`;
+  const { blob, fileName, title } = await generateBillingStatementPdfBlob(args);
 
   // Billing statement: invoices/attachments jaisa nahi — user chahta hai mobile par bhi yahi in-app toolbar.
   if (shouldUseInAppPdfPreviewOverlay()) {

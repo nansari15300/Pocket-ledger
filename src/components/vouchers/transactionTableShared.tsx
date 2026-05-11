@@ -101,7 +101,8 @@ export function OpeningBalanceFileCellContent({
 
   return (
     <AttachmentHoverPortal
-      triggerClassName="inline-flex cursor-help"
+      // Click se preview; pointer cursor taaki hover-help jaisa na lage
+      triggerClassName="inline-flex cursor-pointer"
       onPreviewDoubleClick={singlePdfOpen}
       preview={
         // Keep preview width tight so portal does not add side whitespace strips.
@@ -116,7 +117,7 @@ export function OpeningBalanceFileCellContent({
         </div>
       }
     >
-      <span className="inline-flex cursor-help" aria-label="Has attachment">
+      <span className="inline-flex cursor-pointer" aria-label="Has attachment">
         <CheckCircle className="h-4 w-4 text-green-600" />
       </span>
     </AttachmentHoverPortal>
@@ -917,7 +918,7 @@ export const TransactionRow = React.memo(
                 const rowUrls = (transaction.fileUrls as string[])
                   .map((x) => String(x).trim())
                   .filter((s) => s.length > 0);
-                // Shared table rows: hover preview + double-click open for single PDF.
+                // Shared table rows: click preview + double-click open for single PDF.
                 const singlePdfOpen =
                   rowUrls.length === 1 && getAttachmentFormatLabel(rowUrls[0]!) === "PDF"
                     ? (e: React.MouseEvent<HTMLDivElement>) => {
@@ -927,7 +928,7 @@ export const TransactionRow = React.memo(
                     : undefined;
                 return (
                   <AttachmentHoverPortal
-                    triggerClassName="inline-flex cursor-help"
+                    triggerClassName="inline-flex cursor-pointer"
                     onPreviewDoubleClick={singlePdfOpen}
                     preview={
                       <div className="flex w-max max-w-none flex-col gap-3">
@@ -941,7 +942,7 @@ export const TransactionRow = React.memo(
                       </div>
                     }
                   >
-                    <span className="inline-flex cursor-help" aria-label="Has attachment">
+                    <span className="inline-flex cursor-pointer" aria-label="Has attachment">
                       <CheckCircle className="h-4 w-4 text-green-600" />
                     </span>
                   </AttachmentHoverPortal>

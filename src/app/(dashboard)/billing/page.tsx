@@ -30,9 +30,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import KhaltiCheckout from "khalti-checkout-web";
 import { Badge } from "@/components/ui/badge";
-import { Check, Download, Loader2, X } from "lucide-react";
+import { Check, Download, Loader2, Printer, X } from "lucide-react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { auth, firestore } from "@/lib/firebase";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFooter } from "@/components/ui/table";
 import { format as formatDateFns } from "date-fns";
@@ -41,6 +41,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -67,6 +68,7 @@ import {
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
+import { downloadBillingStatementPdf, openBillingStatementPdfPreview } from "@/lib/billingStatementPdf";
 import { mergeAppSettingsPlansDoc } from "@/lib/mergeAppSettingsPlans";
 import {
   defaultPlansListFallback,
@@ -447,6 +449,28 @@ function billingShowUpgradePathParagraph(change: ReturnType<typeof classifyPlanC
   return change === "upgrade";
 }
 
+/** `/api/company/billing-payments-statement` body — PDF row fields only (same contract as statement page). */
+type BillingPaymentsStatementApiRow = {
+  createdAtMs: number | null;
+  amount: number;
+  currency: string;
+  gateway: string;
+  status: string;
+  planId: string;
+  planChangeFrom: string | null;
+  planChangeTo: string | null;
+  planChangeOneTime: boolean;
+  billingIntent: string | null;
+};
+
+type BillingPaymentsStatementApiResponse = {
+  companyId: string;
+  planId: string | null;
+  planExpiryMs: number | null;
+  payments: BillingPaymentsStatementApiRow[];
+  error?: string;
+};
+
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
@@ -460,6 +484,8 @@ export default function BillingPage() {
   }, [companyId, company?.authoritativeCompanyId]);
   // dateFormatBS: BS display key — formatBsFromAD mirrors NepaliDate.format + datex-bs for long AD expiries.
   const { dateSystem, formatDate, formatDateBS, dateFormatBS } = useDate();
+  // Statement PDF “When” / plan expiry strings — shared hook with `/billing/statement` so Print matches.
+  const { formatWhenSingleLine, formatPlanExpirySummary } = useBillingStatementWhenFormatters();
   const [plans, setPlans] = useState<Plan[]>(() => readCachedPlansList() ?? defaultPlansListFallback());
   const [loading, setLoading] = useState(true);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanId>("basic");
@@ -498,6 +524,9 @@ export default function BillingPage() {
     };
   }, []);
   const billingOfflineBlock = !billingNavigatorOnline;
+  /** Paid footer: fetch statement API — preview (Print) ya file save (Download). */
+  const [printStatementBusy, setPrintStatementBusy] = useState(false);
+  const [downloadStatementBusy, setDownloadStatementBusy] = useState(false);
   /** Admin `app_settings/billing` — false par paid→cheaper paid columns (Downgrade / Just change plan) band. */
   const [planDowngradeEnabled, setPlanDowngradeEnabled] = useState(true);
   const formatBillingDate = useCallback(
@@ -1196,6 +1225,119 @@ export default function BillingPage() {
   };
 
   const isPaidCompany = currentPlanId !== "basic";
+
+  /** Statement API + PDF — same gate as `/billing/statement` (owner-only). */
+  const isBillingOwner = useMemo(
+    () => Boolean(user?.uid && company?.ownerId && user.uid === company.ownerId),
+    [user?.uid, company?.ownerId]
+  );
+
+  /** Ek hi API response — Print overlay aur Download file dono isi payload se. */
+  const fetchBillingStatementPdfArgsForFooter = useCallback(async () => {
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) throw new Error("Not signed in.");
+    const url = getBillingApiUrl(
+      `/api/company/billing-payments-statement?companyId=${encodeURIComponent(billingFirestoreCompanyId)}`
+    );
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${idToken}` },
+      cache: "no-store",
+    });
+    const json = (await res.json()) as BillingPaymentsStatementApiResponse;
+    if (!res.ok) {
+      throw new Error(typeof json?.error === "string" ? json.error : `HTTP ${res.status}`);
+    }
+    return {
+      companyName: company?.name ?? null,
+      companyId: json.companyId,
+      planId: json.planId,
+      planExpiryText: formatPlanExpirySummary(json.planExpiryMs),
+      payments: json.payments.map((p) => ({
+        createdAtMs: p.createdAtMs,
+        whenDisplay: formatWhenSingleLine(p.createdAtMs),
+        amount: p.amount,
+        currency: p.currency,
+        gateway: p.gateway,
+        status: p.status,
+        planId: p.planId,
+        planChangeFrom: p.planChangeFrom,
+        planChangeTo: p.planChangeTo,
+        planChangeOneTime: p.planChangeOneTime,
+        billingIntent: p.billingIntent,
+      })),
+    } satisfies Parameters<typeof openBillingStatementPdfPreview>[0];
+  }, [
+    billingFirestoreCompanyId,
+    company?.name,
+    formatPlanExpirySummary,
+    formatWhenSingleLine,
+  ]);
+
+  const billingStatementFooterPdfBusy = printStatementBusy || downloadStatementBusy;
+
+  /** Paid footer Print: `showInAppPdfPreview` (statement page jaisa). */
+  const handlePrintStatementFromBillingFooter = useCallback(async () => {
+    if (!String(billingFirestoreCompanyId).trim() || !user || billingOfflineBlock) return;
+    if (!isBillingOwner) {
+      toast({
+        variant: "destructive",
+        title: "Owner only",
+        description: "Only the company owner can print the billing statement.",
+      });
+      return;
+    }
+    setPrintStatementBusy(true);
+    try {
+      const args = await fetchBillingStatementPdfArgsForFooter();
+      await openBillingStatementPdfPreview(args);
+    } catch (e: unknown) {
+      toast({
+        title: "Could not open print preview",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setPrintStatementBusy(false);
+    }
+  }, [
+    billingFirestoreCompanyId,
+    billingOfflineBlock,
+    fetchBillingStatementPdfArgsForFooter,
+    isBillingOwner,
+    user,
+  ]);
+
+  /** Paid footer Download: same PDF blob — `<a download>` (preview khole bina). */
+  const handleDownloadStatementFromBillingFooter = useCallback(async () => {
+    if (!String(billingFirestoreCompanyId).trim() || !user || billingOfflineBlock) return;
+    if (!isBillingOwner) {
+      toast({
+        variant: "destructive",
+        title: "Owner only",
+        description: "Only the company owner can download the billing statement.",
+      });
+      return;
+    }
+    setDownloadStatementBusy(true);
+    try {
+      const args = await fetchBillingStatementPdfArgsForFooter();
+      await downloadBillingStatementPdf(args);
+    } catch (e: unknown) {
+      toast({
+        title: "Could not download PDF",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    } finally {
+      setDownloadStatementBusy(false);
+    }
+  }, [
+    billingFirestoreCompanyId,
+    billingOfflineBlock,
+    fetchBillingStatementPdfArgsForFooter,
+    isBillingOwner,
+    user,
+  ]);
 
   const hasActiveStripeSubscription = useMemo(
     () => typeof company?.stripeSubscriptionId === "string" && company.stripeSubscriptionId.trim().length > 0,
@@ -2491,7 +2633,7 @@ export default function BillingPage() {
                 You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
                 (prorated), or downgrade.
               </p>
-              {/* Paid plan footer: full T&amp;C (EN/NE/HI) + owner billing statement — opens in new tab. */}
+              {/* Paid plan footer: T&amp;C + Statement tab + PDF Download (left) / Print (in-app overlay). */}
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" asChild>
                   <Link href="/billing/terms" target="_blank" rel="noopener noreferrer">
@@ -2502,6 +2644,45 @@ export default function BillingPage() {
                   <Link href="/billing/statement" target="_blank" rel="noopener noreferrer">
                     Statement
                   </Link>
+                </Button>
+                {/* Download = same pdfmake doc — seedha file; Print = `showInAppPdfPreview` (dono owner + online). */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    billingStatementFooterPdfBusy ||
+                    billingOfflineBlock ||
+                    !isBillingOwner ||
+                    !String(billingFirestoreCompanyId).trim()
+                  }
+                  onClick={() => void handleDownloadStatementFromBillingFooter()}
+                >
+                  {downloadStatementBusy ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Download className="mr-2 h-4 w-4" aria-hidden />
+                  )}
+                  Download
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    billingStatementFooterPdfBusy ||
+                    billingOfflineBlock ||
+                    !isBillingOwner ||
+                    !String(billingFirestoreCompanyId).trim()
+                  }
+                  onClick={() => void handlePrintStatementFromBillingFooter()}
+                >
+                  {printStatementBusy ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Printer className="mr-2 h-4 w-4" aria-hidden />
+                  )}
+                  Print
                 </Button>
               </div>
             </div>

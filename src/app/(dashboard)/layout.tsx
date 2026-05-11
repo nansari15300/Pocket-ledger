@@ -859,7 +859,7 @@ export default function DashboardLayout({
       <MobileViewProvider>
         <SidebarProvider>
           <DashboardProvider>
-            {/* Global file + avatar hover preview — header pill se ON/OFF (AttachmentHoverPortal). */}
+            {/* Global file + avatar click preview — header pill se ON/OFF (AttachmentHoverPortal). */}
             <FileHoverPreviewProvider>
               {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
               <DashboardDocumentTitleSync />

@@ -39,7 +39,6 @@ import {
   FileDigit,
   FileText as FileTextIcon,
   Filter,
-  Wand2,
   ArrowDownCircle,
   ArrowUpCircle,
   StickyNote,
@@ -119,6 +118,7 @@ import {
 } from "@/lib/dashboardPaySalaryStat";
 import { computeReceivablesPayablesFinancialSummary } from "@/lib/receivablesPayablesFinancialSummary";
 import { useServerReceivablesPayablesSummary } from "@/hooks/useServerReceivablesPayablesSummary";
+import { RecurringAutoSummaryCard } from "@/components/dashboard/RecurringAutoSummaryCard";
 
 // Type definitions
 type Voucher = {
@@ -623,6 +623,23 @@ function DashboardPageContent() {
   const [recentRowsPerPage, setRecentRowsPerPage] = React.useState('20');
   const [isVoucherDialogOpen, setIsVoucherDialogOpen] = React.useState(false);
   const [selectedVoucher, setSelectedVoucher] = React.useState<any>(null);
+  /** Auto recurring Dr/Cr popup: row → template source body voucher (Recent table jaisa) */
+  const openRecurringBodyVoucher = React.useCallback(
+    (bodyVoucherId: string) => {
+      const vid = String(bodyVoucherId || "").trim();
+      if (!vid) return;
+      const v = vouchers.find((x) => String((x as { id?: string }).id) === vid);
+      if (v) {
+        setSelectedVoucher(v);
+        setIsVoucherDialogOpen(true);
+      } else {
+        toast.info("Voucher not loaded", {
+          description: "This voucher may be outside the current list. Open it from Daybook or refresh.",
+        });
+      }
+    },
+    [vouchers],
+  );
   const [historyVoucher, setHistoryVoucher] = React.useState<any>(null);
   const [linkAdvancesVoucher, setLinkAdvancesVoucher] = React.useState<any>(null);
   const [linkPaymentVoucher, setLinkPaymentVoucher] = React.useState<any>(null);
@@ -1556,6 +1573,15 @@ function DashboardPageContent() {
         showDetails={reportsEnabled}
         compact={false}
         showVoucherDateCharts={showVoucherDateCharts}
+        recurringSummarySlot={
+          !showVoucherDateCharts && (visibleCard === "all" || visibleCard === "financial-summaries") ? (
+            <RecurringAutoSummaryCard
+              layout="gridCell"
+              placement={visibleCard === "financial-summaries" ? "summary" : "with-all"}
+              onOpenBodyVoucher={openRecurringBodyVoucher}
+            />
+          ) : undefined
+        }
       />
     );
   };
@@ -1821,7 +1847,6 @@ function DashboardPageContent() {
 
   const renderDashboardContent = () => {
     const shouldShow = (cardId: string) => visibleCard === 'all' || visibleCard === cardId;
-
     return (
     <div className="space-y-[5px]">
       {/* Keep consistent 5px spacing between dashboard cards/sections. */}

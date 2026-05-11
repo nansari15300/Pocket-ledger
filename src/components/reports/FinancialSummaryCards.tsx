@@ -425,6 +425,8 @@ type FinancialSummaryCardsProps = {
     compact?: boolean; // Compact layout for report page
     /** Dashboard "Chart" tab: har voucher summary card ke niche din ke hisaab se amount sparkline/bar. */
     showVoucherDateCharts?: boolean;
+    /** Dashboard: Outstanding jaisa `col-span-1` cell — Auto recurring card (optional) */
+    recurringSummarySlot?: React.ReactNode;
 };
 
 // Custom MonthYearFilter wrapper for report page with overflow handling
@@ -450,6 +452,7 @@ export function FinancialSummaryCards({
     showDetails = true,
     compact = false,
     showVoucherDateCharts = false,
+    recurringSummarySlot,
 }: FinancialSummaryCardsProps) {
     const { formatCurrency, formatCurrencyForPrint, dateSystem, formatDate, formatDateBS } = useDate();
     const { can } = usePermissions();
@@ -2325,7 +2328,10 @@ export function FinancialSummaryCards({
         };
     }, [showVoucherDateCharts, processedAccounts, dateSystem, formatDate, formatDateBS]);
 
-    const gridCols = compact ? "" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5";
+    // Lambe currency amounts: har track `min-content` tak wide ho sakta hai — card cut/wrap kam
+    const gridCols = compact
+        ? ""
+        : "grid-cols-1 sm:grid-cols-[repeat(2,minmax(min-content,1fr))] lg:grid-cols-[repeat(3,minmax(min-content,1fr))] xl:grid-cols-[repeat(5,minmax(min-content,1fr))]";
     // Dashboard request: keep exact 5px card-to-card spacing across summary grids.
     const cardSpacing = compact ? "gap-[5px] px-0.5" : "gap-[5px] px-0.5";
     // Dashboard request: use bold card border thickness globally on summary cards.
@@ -2684,7 +2690,9 @@ export function FinancialSummaryCards({
     );
 
     return (
-        <div className={`${compact ? 'financial-summary-grid' : `grid ${gridCols}`} ${cardSpacing} ${compact ? 'w-full' : ''}`}>
+        <div
+            className={`${compact ? "financial-summary-grid" : `grid ${gridCols} max-w-full overflow-x-auto`} ${cardSpacing} ${compact ? "w-full" : ""}`}
+        >
             <Dialog
                 open={!!dashboardChartFullView}
                 onOpenChange={(open) => {
@@ -2771,6 +2779,8 @@ export function FinancialSummaryCards({
                 </DialogContent>
             </Dialog>
             {compact && renderStockSummaryDashboardCard()}
+            {/* Auto recurring — same 5-col grid width as Outstanding (`col-span-1` slot se) */}
+            {!compact && recurringSummarySlot}
 
             {can("view_receivable_payable_summary") && (
                 <Card className={`col-span-1 transition-colors ${dashboardCardRibbonClass} ${cardBorder} ${cardWrapperClass} ${ribbonTone(1)}`}>

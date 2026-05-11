@@ -2906,42 +2906,42 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <FormControl>
-                              <>
-                                <AttachmentHoldPasteSurface
-                                  enabled={
-                                    !editingDisabled &&
-                                    !fileAttachLockedByDialog &&
-                                    allowAttachments &&
-                                    fileAttachmentLimits.maxFileCount > 0
+                            <div className="relative h-16 min-w-0">
+                              <AttachmentHoldPasteSurface
+                                enabled={
+                                  !editingDisabled &&
+                                  !fileAttachLockedByDialog &&
+                                  allowAttachments &&
+                                  fileAttachmentLimits.maxFileCount > 0
+                                }
+                                onShortActivate={() => {
+                                  if (editingDisabled) return;
+                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                    fileInputRef.current?.click();
                                   }
-                                  onShortActivate={() => {
-                                    if (editingDisabled) return;
-                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                      fileInputRef.current?.click();
-                                    }
-                                  }}
-                                  onPastedFiles={(incoming) =>
-                                    void appendCompressedVoucherAttachmentsToState({
-                                      incomingFiles: incoming,
-                                      currentFiles: files,
-                                      maxFiles: fileAttachmentLimits.maxFileCount || 0,
-                                      allowImage: fileAttachmentLimits.allowImage,
-                                      allowPDF: fileAttachmentLimits.allowPDF,
-                                      setFiles,
-                                      toast,
-                                    })
-                                  }
-                                  className={cn(
-                                    "h-16 border-2 border-dashed rounded-md flex flex-col justify-center items-center transition-colors",
-                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                  )}
-                                >
-                                  <Upload className="h-4 w-4" />
-                                  <span className="text-[9px] mt-0.5">Add</span>
-                                </AttachmentHoldPasteSurface>
+                                }}
+                                onPastedFiles={(incoming) =>
+                                  void appendCompressedVoucherAttachmentsToState({
+                                    incomingFiles: incoming,
+                                    currentFiles: files,
+                                    maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                    allowImage: fileAttachmentLimits.allowImage,
+                                    allowPDF: fileAttachmentLimits.allowPDF,
+                                    setFiles,
+                                    toast,
+                                  })
+                                }
+                                className={cn(
+                                  "h-16 border-2 border-dashed rounded-md flex flex-col justify-center items-center transition-colors",
+                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                )}
+                              >
+                                <Upload className="h-4 w-4" />
+                                <span className="text-[9px] mt-0.5">Add</span>
+                              </AttachmentHoldPasteSurface>
+                              <FormControl>
                                 <Input
                                   type="file"
                                   className="hidden"
@@ -2958,8 +2958,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
-                              </>
-                            </FormControl>
+                              </FormControl>
+                            </div>
                           )}
                         </div>
                       </RestrictedFileUploader>
@@ -3173,42 +3173,42 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             />
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                            <FormControl>
-                              <>
-                                <AttachmentHoldPasteSurface
-                                  enabled={
-                                    !editingDisabled &&
-                                    !fileAttachLockedByDialog &&
-                                    allowAttachments &&
-                                    fileAttachmentLimits.maxFileCount > 0
+                            <div className="relative h-24 w-24 shrink-0">
+                              <AttachmentHoldPasteSurface
+                                enabled={
+                                  !editingDisabled &&
+                                  !fileAttachLockedByDialog &&
+                                  allowAttachments &&
+                                  fileAttachmentLimits.maxFileCount > 0
+                                }
+                                onShortActivate={() => {
+                                  if (editingDisabled) return;
+                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                    fileInputRef.current?.click();
                                   }
-                                  onShortActivate={() => {
-                                    if (editingDisabled) return;
-                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                      fileInputRef.current?.click();
-                                    }
-                                  }}
-                                  onPastedFiles={(incoming) =>
-                                    void appendCompressedVoucherAttachmentsToState({
-                                      incomingFiles: incoming,
-                                      currentFiles: files,
-                                      maxFiles: fileAttachmentLimits.maxFileCount || 0,
-                                      allowImage: fileAttachmentLimits.allowImage,
-                                      allowPDF: fileAttachmentLimits.allowPDF,
-                                      setFiles,
-                                      toast,
-                                    })
-                                  }
-                                  className={cn(
-                                    "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                  )}
-                                >
-                                  <Upload className="h-6 w-6" />
-                                  <span className="text-xs mt-1">Add File</span>
-                                </AttachmentHoldPasteSurface>
+                                }}
+                                onPastedFiles={(incoming) =>
+                                  void appendCompressedVoucherAttachmentsToState({
+                                    incomingFiles: incoming,
+                                    currentFiles: files,
+                                    maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                    allowImage: fileAttachmentLimits.allowImage,
+                                    allowPDF: fileAttachmentLimits.allowPDF,
+                                    setFiles,
+                                    toast,
+                                  })
+                                }
+                                className={cn(
+                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                )}
+                              >
+                                <Upload className="h-6 w-6" />
+                                <span className="text-xs mt-1">Add File</span>
+                              </AttachmentHoldPasteSurface>
+                              <FormControl>
                                 <Input
                                   type="file"
                                   className="hidden"
@@ -3225,8 +3225,8 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
-                              </>
-                            </FormControl>
+                              </FormControl>
+                            </div>
                           )}
                         </div>
                       </RestrictedFileUploader>

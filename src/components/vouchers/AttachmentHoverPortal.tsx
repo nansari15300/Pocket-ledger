@@ -81,7 +81,7 @@ type AttachmentHoverPortalProps = {
   /** Preview content — panel ke andar solid background par */
   preview: React.ReactNode;
   disabled?: boolean;
-  /** false: mouse par hover se panel nahi — FilePreview jaisa Preview button + `onRegisterOpen` */
+  /** false: hover/click se trigger par panel nahi — FilePreview jaisa Preview button + `onRegisterOpen` */
   openOnHover?: boolean;
   /** `openOnHover={false}` par Preview button se `handleOpen` yahan register karo */
   onRegisterOpen?: (open: (() => void) | null) => void;
@@ -103,6 +103,8 @@ export function AttachmentHoverPortal({
   const { enabled: globalHoverPreviewEnabled } = useFileHoverPreview();
   const effectiveDisabled = disabled || !globalHoverPreviewEnabled;
   const useTapMode = useTapInteractionMode();
+  // Touch ya desktop (global ON + `openOnHover`): hover band — click/tap se modal + backdrop (`useTapMode` jaisa UX).
+  const clickOrTapOpenMode = useTapMode || (!effectiveDisabled && openOnHover);
   const [open, setOpen] = React.useState(false);
   const [zoom, setZoom] = React.useState(1);
   /** Neeche Window / Width / Height — `window` default */
@@ -294,7 +296,7 @@ export function AttachmentHoverPortal({
       setStickOpen(false);
       return;
     }
-    if (useTapMode) return;
+    if (clickOrTapOpenMode) return;
     updatePosition();
     const onScrollOrResize = () => updatePosition();
     window.addEventListener("scroll", onScrollOrResize, true);
@@ -303,7 +305,7 @@ export function AttachmentHoverPortal({
       window.removeEventListener("scroll", onScrollOrResize, true);
       window.removeEventListener("resize", onScrollOrResize);
     };
-  }, [open, updatePosition, useTapMode]);
+  }, [open, updatePosition, clickOrTapOpenMode]);
 
   /** Default: fit to window — `preview` dep mat rakho (har render naya ref = loop) */
   React.useLayoutEffect(() => {
@@ -479,13 +481,13 @@ export function AttachmentHoverPortal({
   };
 
   const handleTriggerPointerEnter = () => {
-    if (effectiveDisabled || useTapMode || !openOnHover) return;
+    if (effectiveDisabled || clickOrTapOpenMode || !openOnHover) return;
     handleOpen();
   };
 
   /** `openOnHover={false}` par bhi chhodne par delay-close — panel `pointerenter` se cancel (thumb→panel gap safe) */
   const handleTriggerPointerLeave = () => {
-    if (effectiveDisabled || useTapMode || stickOpen) return;
+    if (effectiveDisabled || clickOrTapOpenMode || stickOpen) return;
     scheduleClose();
   };
 
@@ -496,9 +498,9 @@ export function AttachmentHoverPortal({
     cancelClose();
   };
 
-  /** Mobile / touch: ek baar tap = khula rahe; hover enter–leave se band nahi (pehle open + turant close ka bug) */
+  /** Click/tap: toggle khula — desktop par bhi (global preview ON) taaki hover se accidental open na ho */
   const handleTriggerClick = (e: React.MouseEvent) => {
-    if (effectiveDisabled || !useTapMode) return;
+    if (effectiveDisabled || !clickOrTapOpenMode) return;
     e.preventDefault();
     e.stopPropagation();
     setOpen((prev) => {
@@ -517,10 +519,10 @@ export function AttachmentHoverPortal({
     typeof document !== "undefined" &&
     createPortal(
       <>
-        {/* Tap mode: hamesha backdrop; desktop: sirf `stickOpen` — bahar click = close */}
-        {(useTapMode || stickOpen) ? (
+        {/* Centered click/tap: hamesha backdrop; side-anchored desktop: sirf `stickOpen` — bahar click = close */}
+        {(clickOrTapOpenMode || stickOpen) ? (
           <div
-            className={cn("fixed inset-0", useTapMode ? "bg-black/45" : "bg-transparent")}
+            className={cn("fixed inset-0", clickOrTapOpenMode ? "bg-black/45" : "bg-transparent")}
             style={{ zIndex: BACKDROP_Z }}
             data-attachment-preview-backdrop=""
             onPointerDown={(e) => {
@@ -538,7 +540,7 @@ export function AttachmentHoverPortal({
             "isolate [opacity:1]"
           )}
           style={
-            useTapMode
+            clickOrTapOpenMode
               ? {
                   top: "50%",
                   left: "50%",
@@ -549,9 +551,9 @@ export function AttachmentHoverPortal({
               : { top: pos.top, left: pos.left, zIndex: PANEL_Z, borderRadius: "15mm" }
           }
           data-attachment-preview-portal=""
-          onPointerEnter={useTapMode ? undefined : cancelClose}
-          onPointerLeave={useTapMode || stickOpen ? undefined : scheduleClose}
-          onPointerDownCapture={useTapMode ? undefined : handlePanelPointerDownCapture}
+          onPointerEnter={clickOrTapOpenMode ? undefined : cancelClose}
+          onPointerLeave={clickOrTapOpenMode || stickOpen ? undefined : scheduleClose}
+          onPointerDownCapture={clickOrTapOpenMode ? undefined : handlePanelPointerDownCapture}
           /* Bubble par hi stop — capture par mat (warna toolbar button / img tak event pahunchta hi nahi) */
           onPointerDown={(e) => e.stopPropagation()}
           /* Portal DOM body par hai lekin React bubble table row tak jata hai — dblclick se voucher edit na khule */

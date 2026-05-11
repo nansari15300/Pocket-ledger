@@ -4,7 +4,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { useFileHoverPreview } from "@/contexts/FileHoverPreviewContext";
 
-// User: header hover-preview knob motion 400ms (tailwind `file-hover-switch-*` se sync)
+// User: header click-preview knob motion 400ms (tailwind `file-hover-switch-*` class names purane)
 const ANIM_MS = 400;
 
 /** Track height — base ~25px se 25% kam (app `Switch` se same) */
@@ -51,19 +51,19 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
         "inline-flex max-w-[100vw] flex-col items-stretch gap-0.5 shrink-0 text-center",
         className
       )}
-      data-theme-header="global-hover-preview"
+      data-theme-header="global-click-preview"
     >
       {/* Ek line = poori string ki width; neeche switch same width (`w-full`) */}
       {/* User: label pure black (#000) — muted-foreground hata kar contrast */}
       <span className="whitespace-nowrap px-0.5 text-[9px] font-medium leading-tight text-[#000000] sm:text-[10px]">
-        Globale Mouse Hover Preview
+        Global click preview
       </span>
       <button
         type="button"
         role="switch"
         aria-checked={enabled}
         data-state={enabled ? "checked" : "unchecked"}
-        title={enabled ? "Hover preview on" : "Hover preview off"}
+        title={enabled ? "Click preview on" : "Click preview off"}
         onClick={handleClick}
         className={cn(
           // Track colors synced with global switch: ON dim green, OFF gray.
@@ -77,7 +77,7 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
         )}
         style={{ height: TRACK_H_PX }}
       >
-        <span className="sr-only">Toggle global mouse hover preview {enabled ? "on" : "off"}</span>
+        <span className="sr-only">Toggle global click-to-preview {enabled ? "on" : "off"}</span>
         {/* Knob width animation ke dauran max-width mat band karo */}
         <span
           className={cn(

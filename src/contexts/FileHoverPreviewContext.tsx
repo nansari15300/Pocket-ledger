@@ -2,11 +2,11 @@
 
 import * as React from "react";
 
-/** localStorage key — global file/avatar hover preview (AttachmentHoverPortal) ON/OFF */
+/** localStorage key — global file/avatar click preview (AttachmentHoverPortal) ON/OFF; key purana rakha migration ke liye */
 const STORAGE_KEY = "pocket-ledger-file-hover-preview-v1";
 
 type FileHoverPreviewContextValue = {
-  /** true = hover previews enabled app-wide (default) */
+  /** true = attachment/avatar preview ON app-wide — trigger par click (default) */
   enabled: boolean;
   setEnabled: (next: boolean) => void;
   toggle: () => void;
@@ -57,7 +57,7 @@ export function FileHoverPreviewProvider({ children }: { children: React.ReactNo
   return <FileHoverPreviewContext.Provider value={value}>{children}</FileHoverPreviewContext.Provider>;
 }
 
-/** Header toggle + AttachmentHoverPortal — provider ke bina previews ON (purana behaviour). */
+/** Header toggle + AttachmentHoverPortal — provider ke bina previews ON (click path jaisa). */
 export function useFileHoverPreview(): FileHoverPreviewContextValue {
   const ctx = React.useContext(FileHoverPreviewContext);
   if (!ctx) {

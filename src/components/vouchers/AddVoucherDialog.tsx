@@ -40,6 +40,7 @@ import { determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { HistoryDialog } from "./HistoryDialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import BsDatePicker from "@/components/ui/BsDatePicker";
@@ -71,14 +72,18 @@ import {
   canManageVoucherRecurringAutoEditors,
   clearRecurringTemplateForVoucher,
   computeRecurringAccrualPeriodStartMs,
+  effectiveScheduleBsDay,
   generateRecurringVoucherNow,
+  generateRecurringVouchersForPeriodSlots,
   getNextRecurringDueAd,
   getPastDueRecurringGapIfAny,
   getRecurringTemplateDocIdForVoucher,
   getRecurringTemplateForVoucher,
+  listMissingRecurringPeriodSlotsAscending,
   projectNextRecurringMonetaryTotal,
   setRecurringTemplateForVoucher,
   suppressRecurringPeriodForTemplate,
+  type RecurringPeriodSlot,
   type RecurringRateAdjustCadence,
   type RecurringRateAdjustMode,
   type RecurringVoucherTemplate,
@@ -784,6 +789,8 @@ function VoucherDialogContent({
   onCashflowQuadTabNavigate,
   /** Copy-draft: party/bank master create ke baad mismatch list dubara ginti — Copy button hide + red labels fix. */
   onRefreshCopyMismatch,
+  /** Parent `AddVoucherDialog` ko current tab batao — header Auto Monthly sirf journal pe. */
+  onActiveTabChange,
   recurringVoucherSaveBlocked = false,
   recurringVoucherAuxiliaryDirty = false,
 }: { 
@@ -815,9 +822,10 @@ function VoucherDialogContent({
   copyMasterDraftRequest?: CopyMasterDraftRequest | null;
   onCashflowQuadTabNavigate?: () => void;
   onRefreshCopyMismatch?: () => void | Promise<void>;
+  onActiveTabChange?: (tab: VoucherType) => void;
   /** `true` sirf jab copied draft (post-copy seed) — header company dropdown dikhane ke liye. */
   showHeaderCompanySelector?: boolean;
-  /** Auto Monthly OFF→ON: Settings me template save ke bina voucher Save disabled. */
+  /** Legacy prop: parent ab hamesha `false` bhejta — Auto switch sirf main voucher Save se commit hota hai. */
   recurringVoucherSaveBlocked?: boolean;
   /** Toggle vs Firestore template mismatch — form pristine par bhi Save (e.g. ON→OFF). */
   recurringVoucherAuxiliaryDirty?: boolean;
@@ -851,6 +859,11 @@ function VoucherDialogContent({
     defaultTab,
     allowedTabsKey,
   ]);
+
+  // Parent header (Auto Monthly strip) ko current tab — `AddVoucherDialog` me `activeTab` state nahi hai.
+  useEffect(() => {
+    onActiveTabChange?.(activeTab);
+  }, [activeTab, onActiveTabChange]);
 
   // Har tab change par parent ka `effectiveHasLinksFromForm` reset — warna Payment form ne `true` bheja ho to Contra/Salary attach band rehta hai.
   useEffect(() => {
@@ -1166,6 +1179,8 @@ export function AddVoucherDialog(props: any) {
   const [copyButtonMountNode, setCopyButtonMountNode] = useState<HTMLDivElement | null>(null);
   const dialogFrameRef = useRef<HTMLDivElement | null>(null);
   const copyButtonHostRef = useRef<HTMLDivElement | null>(null);
+  /** Multi-gap picker main voucher Save se khula ho to dismiss/complete par parent voucher dialog band (`onOpenChange(false)`). */
+  const recurringPickerCloseParentRef = useRef(false);
   const [liveVoucher, setLiveVoucher] = useState<any>(null);
   const [editingDisabled, setEditingDisabled] = useState(false);
   /** Block edit rule: when voucher history is full and setting is "Block edit", disable Save. */
@@ -1192,6 +1207,17 @@ export function AddVoucherDialog(props: any) {
   const [recurringSettingsOpen, setRecurringSettingsOpen] = useState(false);
   const [savingRecurringSettings, setSavingRecurringSettings] = useState(false);
   const [generatingRecurringNow, setGeneratingRecurringNow] = useState(false);
+  /** Generate / Settings save / main Save: 2+ missing months — tick wale batch; koi tick nahi = sirf latest due ek. */
+  const [recurringGeneratePicker, setRecurringGeneratePicker] = useState<{
+    open: boolean;
+    slots: RecurringPeriodSlot[];
+    selected: Record<string, boolean>;
+    voucherId: string;
+    /** Har row par schedule BS din dikhane ke liye (Firestore template). */
+    templateForSchedule: RecurringVoucherTemplate;
+  } | null>(null);
+  /** Generate now: Firestore list aa rahi hai — button par chhota wait (tooltip nahi). */
+  const [recurringGeneratePickerPrep, setRecurringGeneratePickerPrep] = useState(false);
   /** Firestore template: next-run hint skips periods already auto-created or user-deleted. */
   const [recurringTemplateLastPeriodKey, setRecurringTemplateLastPeriodKey] = useState<string | null>(null);
   const [recurringTemplateSuppressedKeys, setRecurringTemplateSuppressedKeys] = useState<string[]>([]);
@@ -1208,6 +1234,13 @@ export function AddVoucherDialog(props: any) {
   const [missedRecurringGap, setMissedRecurringGap] = useState<{ periodKey: string; bsY: number; bsM: number } | null>(null);
   const [missedRecurringGapScanning, setMissedRecurringGapScanning] = useState(false);
   const [skippingMissedRecurring, setSkippingMissedRecurring] = useState(false);
+  /** `VoucherDialogContent` se sync — yahan `activeTab` nahi hai; recurring strip sirf journal tab pe dikhao. */
+  const [voucherFormActiveTab, setVoucherFormActiveTab] = useState<VoucherType>("sale");
+  /** Auto recurring UI + Firestore: inner form ka current tab journal ho tab hi. */
+  const showVoucherAutoRecurringUi = voucherFormActiveTab === "journal";
+  const recurringEditorsEffective = canUseVoucherAutoMonthlyEditors && showVoucherAutoRecurringUi;
+  /** Strip pills / countdown: permission + journal tab + switch ON teeno */
+  const recurringStripActive = recurringEditorsEffective && autoMonthlyEnabled;
   /**
    * Capacitor plain add/edit: nested `CompanyContext` override hatao — sidebar `companyId` aur form save target align rahein;
    * SQLite list recovery race par galat `clearCompanyId` + `/company` kam (Electron/web jaisa nested rehne do).
@@ -1275,8 +1308,14 @@ export function AddVoucherDialog(props: any) {
       setRecurringLastGeneratedAtMs(null);
       setCommittedAutoMonthlyEnabled(null);
       setRecurringSettingsOpen(false);
+      setVoucherFormActiveTab("sale");
     }
   }, [isOpen]);
+
+  /** Journal se doosra tab: settings modal band — non-journal par Auto Monthly panel dikhe na. */
+  useEffect(() => {
+    if (!showVoucherAutoRecurringUi) setRecurringSettingsOpen(false);
+  }, [showVoucherAutoRecurringUi]);
 
   useEffect(() => {
     if (!isOpen || !companyId) return;
@@ -1307,9 +1346,28 @@ export function AddVoucherDialog(props: any) {
       try {
         const tpl = await getRecurringTemplateForVoucher(companyId, editVoucherId);
         if (cancelled) return;
-        setRecurringTemplateSnapshot(tpl?.enabled === true ? tpl : null);
-        setAutoMonthlyEnabled(tpl?.enabled === true);
-        // Firestore se schedule + rate fields hydrate (recurring_voucher_templates).
+        // Journal series = ek Firestore template; sirf jis voucherId par `sourceVoucherId` match ho wahi line “ON” — doosri line pe switch OFF (purana source).
+        const nominalSource = String(tpl?.cloneSourceVoucherId || tpl?.sourceVoucherId || "").trim();
+        const ownsRecurringTemplate = tpl?.enabled === true && nominalSource === editVoucherId;
+        setRecurringTemplateSnapshot(ownsRecurringTemplate ? tpl : null);
+        setAutoMonthlyEnabled(ownsRecurringTemplate);
+        if (!ownsRecurringTemplate) {
+          setAutoMonthlyScheduleBsDay(32);
+          setAutoMonthlyRateMode("none");
+          setAutoMonthlyRateValue("");
+          setAutoMonthlyRateEffectiveFromAd(undefined);
+          setAutoMonthlyRateCadence("every_bs_month");
+          setAutoMonthlyYearlyBsMonth(1);
+          setAutoMonthlyYearlyBsDay(1);
+          setAutoMonthlyRateEveryN("1");
+          setAutoMonthlyYearlyBaseAnchorAd(undefined);
+          setRecurringTemplateLastPeriodKey(null);
+          setRecurringTemplateSuppressedKeys([]);
+          setRecurringLastGeneratedAtMs(null);
+          setCommittedAutoMonthlyEnabled(false);
+          return;
+        }
+        // Firestore se schedule + rate fields hydrate (recurring_voucher_templates) — tabhi jab yahi voucher active source ho.
         const d =
           typeof tpl?.scheduleBsDay === "number" && Number.isFinite(tpl.scheduleBsDay)
             ? Math.max(1, Math.min(32, Math.floor(tpl.scheduleBsDay)))
@@ -1366,7 +1424,7 @@ export function AddVoucherDialog(props: any) {
         setRecurringTemplateSuppressedKeys(
           Array.isArray(tpl?.suppressedPeriodKeys) ? (tpl!.suppressedPeriodKeys as string[]) : [],
         );
-        setCommittedAutoMonthlyEnabled(tpl?.enabled === true);
+        setCommittedAutoMonthlyEnabled(true);
       } catch {
         if (cancelled) return;
         setRecurringTemplateSnapshot(null);
@@ -2212,6 +2270,14 @@ export function AddVoucherDialog(props: any) {
     }
   }, []);
 
+  /** Multi-gap picker dismiss: kabhi parent voucher dialog bhi band (main Save ne defer kiya ho to). */
+  const closeRecurringGeneratePickerDismiss = useCallback(() => {
+    const closeParent = recurringPickerCloseParentRef.current;
+    recurringPickerCloseParentRef.current = false;
+    setRecurringGeneratePicker(null);
+    if (closeParent) onOpenChange?.(false);
+  }, [onOpenChange]);
+
   // Dialog khule + Auto ON: Firestore template ke hisaab se past-due gap scan — user Create / Skip choose kare.
   useEffect(() => {
     if (
@@ -2221,7 +2287,7 @@ export function AddVoucherDialog(props: any) {
       !autoMonthlyEnabled ||
       autoMonthlyHydrating ||
       !recurringTemplateSnapshot?.enabled ||
-      !canUseVoucherAutoMonthlyEditors
+      !recurringEditorsEffective
     ) {
       setMissedRecurringGap(null);
       setMissedRecurringGapScanning(false);
@@ -2252,7 +2318,7 @@ export function AddVoucherDialog(props: any) {
     autoMonthlyEnabled,
     autoMonthlyHydrating,
     recurringTemplateSnapshot,
-    canUseVoucherAutoMonthlyEditors,
+    recurringEditorsEffective,
   ]);
 
   /** Past-due banner: BS month name + optional AD (template schedule day se due). */
@@ -2278,7 +2344,7 @@ export function AddVoucherDialog(props: any) {
 
   /** AD `Date` for strip “Next auto” + desktop countdown (due local day ke end tak). */
   const autoVoucherNextDueAd = useMemo(() => {
-    if (!autoMonthlyEnabled || !voucher?.id || autoMonthlyHydrating) return null;
+    if (!recurringStripActive || !voucher?.id || autoMonthlyHydrating) return null;
     return getNextRecurringDueAd(
       autoMonthlyScheduleBsDay,
       new Date(),
@@ -2286,7 +2352,7 @@ export function AddVoucherDialog(props: any) {
       recurringTemplateSuppressedKeys,
     );
   }, [
-    autoMonthlyEnabled,
+    recurringStripActive,
     voucher?.id,
     autoMonthlyHydrating,
     autoMonthlyScheduleBsDay,
@@ -2436,6 +2502,8 @@ export function AddVoucherDialog(props: any) {
     pathsToDelete: string[] = [] // यहाँ एरे प्राप्त हुन्छ
   ) => {
     const skipDialogCloseForSaveCopy = skipCloseAfterSaveForCopyRef.current && status === "saved";
+    /** Kai missing months picker khula ho to voucher dialog turant band na ho (user tick / cancel kare). */
+    let suppressMainDialogCloseForRecurringPicker = false;
 
     // Static ledger (mobile + desktop wide): SQLite flush ke baad `/dashboard` push — guard pehle arm (native ~8s window).
     if (status === "saved") {
@@ -2496,18 +2564,19 @@ export function AddVoucherDialog(props: any) {
     if (status === "saved" && companyId && canUseVoucherAutoMonthlyEditors) {
       const savedVoucherId = String(newId || voucher?.id || "").trim();
       if (savedVoucherId) {
-        if (autoMonthlyEnabled) {
-          // Save ke turant baad recurring template sync karo (new voucher id bhi yahin milta hai).
-          let sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
-          try {
-            const savedSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-            if (savedSnap.exists()) {
-              const d = savedSnap.data() as Record<string, unknown>;
-              sourceType = String(d.type || sourceType || "journal");
-            }
-          } catch {
-            /* snapshot fallback: existing inferred type use */
+        // Saved doc se type — sirf journal par recurring Firestore likho; sale/purchase + stale ON = skip (clear nahi).
+        let sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
+        try {
+          const savedSnap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
+          if (savedSnap.exists()) {
+            const d = savedSnap.data() as Record<string, unknown>;
+            sourceType = String(d.type || sourceType || "journal");
           }
+        } catch {
+          /* snapshot fallback: existing inferred type use */
+        }
+        const isJournalSaved = sourceType === "journal";
+        if (autoMonthlyEnabled && isJournalSaved) {
           try {
             await setRecurringTemplateForVoucher(companyId, {
               sourceVoucherId: savedVoucherId,
@@ -2535,10 +2604,51 @@ export function AddVoucherDialog(props: any) {
             });
             void refreshRecurringTemplateMeta(companyId, savedVoucherId);
             setCommittedAutoMonthlyEnabled(true);
+
+            // 2+ missing BS periods: tick-popup — parent dialog yahin roke rakho jab tak user cancel/complete na kare.
+            const rsRec = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
+              | Record<string, unknown>
+              | undefined;
+            if (
+              rsRec?.enabled === true &&
+              !apkOfflineViewOnly &&
+              user?.uid &&
+              !isSaveAndNew &&
+              !skipDialogCloseForSaveCopy
+            ) {
+              try {
+                const tplFresh = await getRecurringTemplateForVoucher(companyId, savedVoucherId);
+                if (tplFresh?.enabled) {
+                  const activeLine = String(tplFresh.cloneSourceVoucherId || tplFresh.sourceVoucherId || "").trim();
+                  if (!activeLine || activeLine === savedVoucherId) {
+                    const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, savedVoucherId);
+                    const slots = await listMissingRecurringPeriodSlotsAscending(
+                      companyId,
+                      templateDocId,
+                      tplFresh,
+                      new Date(),
+                    );
+                    if (slots.length >= 2) {
+                      recurringPickerCloseParentRef.current = true;
+                      setRecurringGeneratePicker({
+                        open: true,
+                        slots,
+                        selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+                        voucherId: savedVoucherId,
+                        templateForSchedule: tplFresh,
+                      });
+                      suppressMainDialogCloseForRecurringPicker = true;
+                    }
+                  }
+                }
+              } catch {
+                /* gap list optional — save already committed */
+              }
+            }
           } catch (recErr) {
             toast.error(recErr instanceof Error ? recErr.message : "Auto Monthly save failed.");
           }
-        } else {
+        } else if (!autoMonthlyEnabled) {
           // User ne OFF kiya ho to existing recurring config clean rakho.
           await clearRecurringTemplateForVoucher(companyId, savedVoucherId);
           setRecurringTemplateLastPeriodKey(null);
@@ -2547,6 +2657,7 @@ export function AddVoucherDialog(props: any) {
           setRecurringLastGeneratedAtMs(null);
           setCommittedAutoMonthlyEnabled(false);
         }
+        // else: ON + non-journal — Firestore mat chhedo (tab switch par local toggle stale ho sakta hai)
       }
     }
   
@@ -2589,7 +2700,7 @@ export function AddVoucherDialog(props: any) {
       skipCloseAfterSaveForCopyRef.current = false;
     }
   
-    if (!keepDialogAsNew && !skipDialogCloseForSaveCopy) {
+    if (!keepDialogAsNew && !skipDialogCloseForSaveCopy && !suppressMainDialogCloseForRecurringPicker) {
       onOpenChange?.(false);
     }
   }, [
@@ -2622,23 +2733,21 @@ export function AddVoucherDialog(props: any) {
     setCompanyId,
     refreshRecurringTemplateMeta,
     canUseVoucherAutoMonthlyEditors,
+    apkOfflineViewOnly,
   ]);
 
-  /** Settings / Save: Firestore template doc ko dialog ke schedule + rate state se sync (voucher pehle save hona chahiye). */
-  const handlePersistRecurringTemplate = useCallback(async (): Promise<boolean> => {
+  /**
+   * Auto Monthly **modal** ka Save: sirf schedule + rate Firestore me (jab recurring pehle se main Save se ON ho).
+   * Header switch / template ON-OFF yahan commit nahi — woh sirf voucher dialog ke Save par (`handleAction` + `setRecurringTemplateForVoucher`).
+   */
+  const persistRecurringScheduleRateOnly = useCallback(async (): Promise<boolean> => {
     const vid = String(voucher?.id || "").trim();
     if (!companyId?.trim() || !vid) {
       toast.error("Save the voucher first, then configure Auto Monthly.");
       return false;
     }
-    // Toggle OFF: poori template delete (journal series = sab months ek saath band).
-    if (!autoMonthlyEnabled) {
-      await clearRecurringTemplateForVoucher(companyId, vid);
-      setRecurringTemplateLastPeriodKey(null);
-      setRecurringTemplateSuppressedKeys([]);
-      setRecurringTemplateSnapshot(null);
-      setRecurringLastGeneratedAtMs(null);
-      setCommittedAutoMonthlyEnabled(false);
+    // Abhi tak server par recurring ON nahi — modal values sirf local state; Firestore mat chhedo.
+    if (committedAutoMonthlyEnabled !== true) {
       return true;
     }
     let sourceType = String(voucher?.type || defaultVoucherData?.type || "journal");
@@ -2650,6 +2759,10 @@ export function AddVoucherDialog(props: any) {
       }
     } catch {
       /* snapshot fail par inferred type */
+    }
+    if (sourceType !== "journal") {
+      toast.error("Auto Monthly applies only to journal vouchers.");
+      return false;
     }
     await setRecurringTemplateForVoucher(companyId, {
       sourceVoucherId: vid,
@@ -2674,14 +2787,13 @@ export function AddVoucherDialog(props: any) {
         autoMonthlyYearlyBaseAnchorAd,
       ),
     });
-    setCommittedAutoMonthlyEnabled(true);
     return true;
   }, [
     companyId,
     voucher?.id,
     voucher?.type,
     defaultVoucherData?.type,
-    autoMonthlyEnabled,
+    committedAutoMonthlyEnabled,
     autoMonthlyScheduleBsDay,
     autoMonthlyRateMode,
     autoMonthlyRateValue,
@@ -2699,25 +2811,77 @@ export function AddVoucherDialog(props: any) {
 
   const handleSaveRecurringSettingsClick = useCallback(async () => {
     if (!canUseVoucherAutoMonthlyEditors) return;
+    if (!showVoucherAutoRecurringUi) return;
     setSavingRecurringSettings(true);
     try {
-      const ok = await handlePersistRecurringTemplate();
+      const ok = await persistRecurringScheduleRateOnly();
       if (ok) {
-        toast.success("Auto Monthly settings saved.");
         const vid = String(voucher?.id || "").trim();
-        if (companyId?.trim() && vid) void refreshRecurringTemplateMeta(companyId, vid);
+        if (committedAutoMonthlyEnabled === true && companyId?.trim() && vid) {
+          toast.success("Auto Monthly settings saved.");
+          void refreshRecurringTemplateMeta(companyId, vid);
+          // Purana voucher + “ab tak” missing months — 2+ ho to backfill choice (Generate default = oldest gap first).
+          if (!apkOfflineViewOnly && user?.uid) {
+            try {
+              const tpl = await getRecurringTemplateForVoucher(companyId, vid);
+              const activeLine = String(tpl?.cloneSourceVoucherId || tpl?.sourceVoucherId || "").trim();
+              // Sirf jis voucher par switch ON hai — warna Generate / backfill “another line” error.
+              if (tpl?.enabled && (!activeLine || activeLine === vid)) {
+                const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, vid);
+                const slots = await listMissingRecurringPeriodSlotsAscending(companyId, templateDocId, tpl, new Date());
+                if (slots.length >= 2) {
+                  recurringPickerCloseParentRef.current = false;
+                  setRecurringGeneratePicker({
+                    open: true,
+                    slots,
+                    selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+                    voucherId: vid,
+                    templateForSchedule: tpl,
+                  });
+                }
+              }
+            } catch {
+              /* optional prompt — ignore */
+            }
+          }
+        } else {
+          toast.success("Schedule saved. Save the voucher to apply Auto Monthly.");
+        }
+        setRecurringSettingsOpen(false);
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed.");
     } finally {
       setSavingRecurringSettings(false);
     }
-  }, [canUseVoucherAutoMonthlyEditors, handlePersistRecurringTemplate, companyId, voucher?.id, refreshRecurringTemplateMeta]);
+  }, [
+    canUseVoucherAutoMonthlyEditors,
+    showVoucherAutoRecurringUi,
+    persistRecurringScheduleRateOnly,
+    committedAutoMonthlyEnabled,
+    companyId,
+    voucher?.id,
+    refreshRecurringTemplateMeta,
+    apkOfflineViewOnly,
+    user?.uid,
+  ]);
 
-  /** Manual run: same guards as scheduler — deleted period dubara auto-create nahi hota (`suppressedPeriodKeys`). */
+  /** Generate now: 1 missing = seedha create; 2+ = tick list popup (hover tooltip nahi). */
   const handleGenerateRecurringNowClick = useCallback(async () => {
     if (!canUseVoucherAutoMonthlyEditors) {
       toast.error("Your account is not allowed to run Auto Monthly on vouchers (company settings).");
+      return;
+    }
+    if (!showVoucherAutoRecurringUi) {
+      toast.error("Open the Journal tab to use Auto Monthly.");
+      return;
+    }
+    if (String(voucher?.type || "").trim() !== "journal") {
+      toast.error("Auto Monthly runs only on journal vouchers.");
+      return;
+    }
+    if (apkOfflineViewOnly) {
+      toast.warning("Offline — view only. Connect to update.");
       return;
     }
     const vid = String(voucher?.id || "").trim();
@@ -2725,8 +2889,44 @@ export function AddVoucherDialog(props: any) {
       toast.error("Save the voucher first.");
       return;
     }
-    setGeneratingRecurringNow(true);
+    const rs = (company as Record<string, unknown> | null | undefined)?.recurringVoucherSettings as
+      | Record<string, unknown>
+      | undefined;
+    if (rs?.enabled !== true) {
+      toast.error("Company auto recurring is off.");
+      return;
+    }
+
+    recurringPickerCloseParentRef.current = false;
+    setRecurringGeneratePickerPrep(true);
     try {
+      const tpl = await getRecurringTemplateForVoucher(companyId, vid);
+      if (!tpl?.enabled) {
+        toast.warning("Enable Auto Monthly and save the voucher first.");
+        return;
+      }
+      const activeLine = String(tpl.cloneSourceVoucherId || tpl.sourceVoucherId || "").trim();
+      if (activeLine && activeLine !== vid) {
+        toast.warning("Auto Monthly is active on another line in this series. Open that voucher to generate.");
+        return;
+      }
+      const templateDocId = await getRecurringTemplateDocIdForVoucher(companyId, vid);
+      const slots = await listMissingRecurringPeriodSlotsAscending(companyId, templateDocId, tpl, new Date());
+      if (slots.length === 0) {
+        toast.info("No missing auto months in range (or all already created).");
+        return;
+      }
+      if (slots.length >= 2) {
+        setRecurringGeneratePicker({
+          open: true,
+          slots,
+          selected: Object.fromEntries(slots.map((s) => [s.periodKey, false])),
+          voucherId: vid,
+          templateForSchedule: tpl,
+        });
+        return;
+      }
+      setGeneratingRecurringNow(true);
       const res = await generateRecurringVoucherNow(companyId, company, vid, {
         uid: user.uid,
         email: user.email ?? null,
@@ -2734,27 +2934,100 @@ export function AddVoucherDialog(props: any) {
       });
       if (res.ok) {
         toast.success(res.message);
-        if (companyId?.trim() && vid) void refreshRecurringTemplateMeta(companyId, vid);
+        void refreshRecurringTemplateMeta(companyId, res.voucherId?.trim() || vid);
       } else toast.warning(res.message);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Generation failed.");
+    } finally {
+      setRecurringGeneratePickerPrep(false);
+      setGeneratingRecurringNow(false);
+    }
+  }, [
+    canUseVoucherAutoMonthlyEditors,
+    showVoucherAutoRecurringUi,
+    apkOfflineViewOnly,
+    companyId,
+    company,
+    voucher?.id,
+    voucher?.type,
+    user,
+    customUser?.displayName,
+    refreshRecurringTemplateMeta,
+  ]);
+
+  /** Tick list: 1+ tick = sirf wahi months; 0 tick = sabse recent missing month ek (pickStrategy latest). */
+  const handleRecurringGeneratePickerConfirm = useCallback(async () => {
+    const p = recurringGeneratePicker;
+    if (!p?.open || !companyId?.trim() || !user?.uid) return;
+    const vid = String(p.voucherId || "").trim();
+    const chosen = p.slots.filter((s) => p.selected[s.periodKey] === true);
+    const closeParentAfter = recurringPickerCloseParentRef.current;
+    recurringPickerCloseParentRef.current = false;
+    setRecurringGeneratePicker(null);
+    setGeneratingRecurringNow(true);
+    try {
+      if (chosen.length === 0) {
+        const res = await generateRecurringVoucherNow(
+          companyId,
+          company,
+          vid,
+          {
+            uid: user.uid,
+            email: user.email ?? null,
+            displayName: customUser?.displayName || user.displayName || null,
+          },
+          { pickStrategy: "latest" },
+        );
+        if (res.ok) {
+          toast.success(res.message);
+          void refreshRecurringTemplateMeta(companyId, res.voucherId?.trim() || vid);
+          if (closeParentAfter) onOpenChange?.(false);
+        } else toast.warning(res.message);
+      } else {
+        const r = await generateRecurringVouchersForPeriodSlots(
+          companyId,
+          company,
+          vid,
+          {
+            uid: user.uid,
+            email: user.email ?? null,
+            displayName: customUser?.displayName || user.displayName || null,
+          },
+          chosen,
+        );
+        if (r.ok) {
+          toast.success(r.message);
+          void refreshRecurringTemplateMeta(companyId, r.lastVoucherId?.trim() || vid);
+          if (closeParentAfter) onOpenChange?.(false);
+        } else toast.warning(r.message);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Generation failed.");
     } finally {
       setGeneratingRecurringNow(false);
     }
   }, [
-    canUseVoucherAutoMonthlyEditors,
+    recurringGeneratePicker,
     companyId,
     company,
-    voucher?.id,
     user,
     customUser?.displayName,
     refreshRecurringTemplateMeta,
+    onOpenChange,
   ]);
 
   /** Past-due row: Skip = period `suppressedPeriodKeys` me — sirf upcoming auto; Create = `generateRecurringVoucherNow` (same target). */
   const handleSkipMissedRecurringClick = useCallback(async () => {
     if (!canUseVoucherAutoMonthlyEditors) {
       toast.error("Your account is not allowed to change Auto Monthly on vouchers (company settings).");
+      return;
+    }
+    if (!showVoucherAutoRecurringUi) {
+      toast.error("Open the Journal tab to use Auto Monthly.");
+      return;
+    }
+    if (String(voucher?.type || "").trim() !== "journal") {
+      toast.error("Auto Monthly applies only to journal vouchers.");
       return;
     }
     if (apkOfflineViewOnly) {
@@ -2777,9 +3050,11 @@ export function AddVoucherDialog(props: any) {
     }
   }, [
     canUseVoucherAutoMonthlyEditors,
+    showVoucherAutoRecurringUi,
     apkOfflineViewOnly,
     companyId,
     voucher?.id,
+    voucher?.type,
     missedRecurringGap?.periodKey,
     refreshRecurringTemplateMeta,
   ]);
@@ -2901,7 +3176,7 @@ export function AddVoucherDialog(props: any) {
               <div
                 className={cn(
                   "flex min-w-0 flex-row flex-wrap items-center gap-x-2 gap-y-0",
-                  canUseVoucherAutoMonthlyEditors ? "pr-1 min-w-0 flex-1" : "pr-8",
+                  recurringEditorsEffective ? "pr-1 min-w-0 flex-1" : "pr-8",
                 )}
               >
                 <DialogTitle className="m-0 font-bold font-headline text-inherit text-base leading-tight">
@@ -2921,7 +3196,7 @@ export function AddVoucherDialog(props: any) {
                   </p>
                 </div>
               )}
-              {canUseVoucherAutoMonthlyEditors ? (
+              {recurringEditorsEffective ? (
                 <div
                   className="shrink-0 self-center pl-0.5"
                   onPointerDownCapture={(e) => e.stopPropagation()}
@@ -2957,7 +3232,7 @@ export function AddVoucherDialog(props: any) {
           </>
         )}
       </DialogHeader>
-      {canUseVoucherAutoMonthlyEditors && (
+      {recurringEditorsEffective && (
         // White strip below ribbon only — not inside drag layer (`z-20` stack above resize hit-zones).
         <div className="relative z-20 flex shrink-0 flex-col gap-1 border-b border-indigo-200/70 bg-white px-2 py-1 text-xs text-indigo-900">
           {missedRecurringGapScanning ? (
@@ -2984,7 +3259,7 @@ export function AddVoucherDialog(props: any) {
                     autoMonthlyHydrating ||
                     !voucher?.id ||
                     !user?.uid ||
-                    !canUseVoucherAutoMonthlyEditors ||
+                    !recurringEditorsEffective ||
                     apkOfflineViewOnly ||
                     editingDisabled ||
                     historyBlocksEdit
@@ -3011,7 +3286,7 @@ export function AddVoucherDialog(props: any) {
                     skippingMissedRecurring ||
                     autoMonthlyHydrating ||
                     !voucher?.id ||
-                    !canUseVoucherAutoMonthlyEditors ||
+                    !recurringEditorsEffective ||
                     apkOfflineViewOnly ||
                     editingDisabled ||
                     historyBlocksEdit
@@ -3134,10 +3409,11 @@ export function AddVoucherDialog(props: any) {
                   Settings
                 </Button>
               ) : null}
+              {/* Id/Src sirf generated voucher ki narration me — header me duplicate mat dikhao (user request). */}
               <Switch
                 checked={autoMonthlyEnabled}
                 onCheckedChange={setAutoMonthlyEnabled}
-                disabled={autoMonthlyHydrating || !canUseVoucherAutoMonthlyEditors}
+                disabled={autoMonthlyHydrating || !recurringEditorsEffective}
               />
             </div>
           </div>
@@ -3178,25 +3454,14 @@ export function AddVoucherDialog(props: any) {
     return dialogCo !== shellId;
   }, [apkLedgerPinsShellCompanyContext, postCopyNewFormSeed, targetCompanyId, ctxCompanyId, companyId]);
 
-  /** Auto Monthly: OFF→ON pe Settings save ke bina main Save band; ON→OFF pe turant Save (form dirty + role). */
-  const recurringVoucherSaveBlocked = useMemo(() => {
-    if (!canUseVoucherAutoMonthlyEditors) return false;
-    if (!String(voucher?.id || "").trim()) return false;
-    if (committedAutoMonthlyEnabled === null || autoMonthlyHydrating) return false;
-    return autoMonthlyEnabled && !committedAutoMonthlyEnabled;
-  }, [
-    canUseVoucherAutoMonthlyEditors,
-    voucher?.id,
-    committedAutoMonthlyEnabled,
-    autoMonthlyHydrating,
-    autoMonthlyEnabled,
-  ]);
+  /** Auto switch Settings modal se commit nahi — sirf main voucher Save; forms ko block karne ki zaroorat nahi. */
+  const recurringVoucherSaveBlocked = false;
   const recurringVoucherAuxiliaryDirty = useMemo(() => {
-    if (!canUseVoucherAutoMonthlyEditors) return false;
+    if (!recurringEditorsEffective) return false;
     if (!String(voucher?.id || "").trim()) return false;
     if (committedAutoMonthlyEnabled === null) return false;
     return autoMonthlyEnabled !== committedAutoMonthlyEnabled;
-  }, [canUseVoucherAutoMonthlyEditors, voucher?.id, committedAutoMonthlyEnabled, autoMonthlyEnabled]);
+  }, [recurringEditorsEffective, voucher?.id, committedAutoMonthlyEnabled, autoMonthlyEnabled]);
 
   const voucherDialogFormTree = (
     <VoucherAttachmentFallbackContext.Provider value={voucherAttachmentFallbackValue}>
@@ -3243,6 +3508,7 @@ export function AddVoucherDialog(props: any) {
           copyMasterDraftRequest={postCopyNewFormSeed ? copyMasterDraftRequest : null}
           onCashflowQuadTabNavigate={postCopyNewFormSeed ? onCashflowQuadTabNavigate : undefined}
           onRefreshCopyMismatch={postCopyNewFormSeed ? refreshCopyMismatchAfterMasterSave : undefined}
+          onActiveTabChange={setVoucherFormActiveTab}
           recurringVoucherSaveBlocked={recurringVoucherSaveBlocked}
           recurringVoucherAuxiliaryDirty={recurringVoucherAuxiliaryDirty}
         />
@@ -3699,22 +3965,21 @@ export function AddVoucherDialog(props: any) {
             <Button
               type="button"
               variant="outline"
-              // Pehle gap / recycle month, phir aaj — sirf “current month” nahi.
-              title="Fills the earliest missing BS month up to today (recycle bin = missing). Run again for the next gap."
               disabled={
                 savingRecurringSettings ||
                 generatingRecurringNow ||
+                recurringGeneratePickerPrep ||
                 autoMonthlyHydrating ||
                 !voucher?.id ||
                 !user?.uid ||
-                !canUseVoucherAutoMonthlyEditors
+                !recurringEditorsEffective
               }
               onClick={() => void handleGenerateRecurringNowClick()}
             >
-              {generatingRecurringNow ? (
+              {generatingRecurringNow || recurringGeneratePickerPrep ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Generating…
+                  {recurringGeneratePickerPrep ? "Checking…" : "Generating…"}
                 </>
               ) : (
                 "Generate now"
@@ -3723,7 +3988,7 @@ export function AddVoucherDialog(props: any) {
             <Button
               type="button"
               disabled={
-                savingRecurringSettings || autoMonthlyHydrating || !voucher?.id || !canUseVoucherAutoMonthlyEditors
+                savingRecurringSettings || autoMonthlyHydrating || !voucher?.id || !recurringEditorsEffective
               }
               onClick={() => void handleSaveRecurringSettingsClick()}
             >
@@ -3735,6 +4000,151 @@ export function AddVoucherDialog(props: any) {
               ) : (
                 "Save"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={recurringGeneratePicker?.open === true}
+        onOpenChange={(open) => {
+          if (!open) closeRecurringGeneratePickerDismiss();
+        }}
+      >
+        <DialogContent
+          className="flex max-h-[85vh] max-w-md flex-col gap-3 border-2 border-indigo-400 p-4 sm:max-w-lg dark:border-indigo-500"
+          aria-describedby="recurring-generate-picker-desc"
+        >
+          <DialogHeader className="shrink-0 space-y-1">
+            <DialogTitle className="text-base font-semibold">Create auto vouchers</DialogTitle>
+            <DialogDescription id="recurring-generate-picker-desc" className="text-left text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{recurringGeneratePicker?.slots.length ?? 0}</span>{" "}
+              scheduled voucher{recurringGeneratePicker?.slots.length === 1 ? "" : "s"} can be created up to this month
+              (one per BS period, on the schedule day below). Tick only the months you want now; use Select all for
+              every row. If you leave all unticked and continue, only the{" "}
+              <span className="font-medium text-foreground">most recent missing</span> month (closest to today) gets one
+              voucher. After a batch, Auto stays on the{" "}
+              <span className="font-medium text-foreground">last</span> voucher created.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={!recurringGeneratePicker?.slots.length}
+              onClick={() =>
+                setRecurringGeneratePicker((prev) =>
+                  prev?.open
+                    ? {
+                        ...prev,
+                        selected: Object.fromEntries(prev.slots.map((s) => [s.periodKey, true])),
+                      }
+                    : prev,
+                )
+              }
+            >
+              Select all
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={!recurringGeneratePicker?.slots.length}
+              onClick={() =>
+                setRecurringGeneratePicker((prev) =>
+                  prev?.open
+                    ? {
+                        ...prev,
+                        selected: Object.fromEntries(prev.slots.map((s) => [s.periodKey, false])),
+                      }
+                    : prev,
+                )
+              }
+            >
+              Clear all
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-indigo-100 bg-muted/30 p-2 dark:border-indigo-900/50">
+            <ul className="flex flex-col gap-2">
+              {recurringGeneratePicker?.slots.map((slot) => {
+                const monthName = NEPALI_MONTHS[Math.max(0, Math.min(11, slot.bsM - 1))] ?? "";
+                const checked = recurringGeneratePicker.selected[slot.periodKey] === true;
+                const tplRow = recurringGeneratePicker.templateForSchedule;
+                const dayNum = effectiveScheduleBsDay(tplRow);
+                const dim = getBSMonthDays(slot.bsY)[slot.bsM - 1] || 30;
+                const dueD = dayNum >= 32 ? dim : Math.min(dayNum, dim);
+                const bsYmd = `${slot.bsY}-${String(slot.bsM).padStart(2, "0")}-${String(dueD).padStart(2, "0")}`;
+                let adExtra = "";
+                try {
+                  const dueAd = bsToAd({ y: slot.bsY, m: slot.bsM, d: dueD });
+                  if (dateSystem === "AD") adExtra = ` → ${formatDate(dueAd)}`;
+                  else if (dateSystem === "BS") adExtra = ` → ${formatDateBS(dueAd)}`;
+                  else adExtra = ` → ${formatDateBS(dueAd)} / ${formatDate(dueAd)}`;
+                } catch {
+                  adExtra = "";
+                }
+                return (
+                  <li
+                    key={slot.periodKey}
+                    className="flex items-start gap-3 rounded-md border border-transparent bg-background/80 px-2 py-2 hover:border-indigo-200 dark:hover:border-indigo-800"
+                  >
+                    <Checkbox
+                      id={`rec-gen-${slot.periodKey}`}
+                      checked={checked}
+                      onCheckedChange={(v) =>
+                        setRecurringGeneratePicker((prev) =>
+                          prev?.open
+                            ? {
+                                ...prev,
+                                selected: {
+                                  ...prev.selected,
+                                  [slot.periodKey]: v === true,
+                                },
+                              }
+                            : prev,
+                        )
+                      }
+                      disabled={generatingRecurringNow}
+                      className="mt-0.5"
+                    />
+                    <label htmlFor={`rec-gen-${slot.periodKey}`} className="cursor-pointer text-sm leading-snug">
+                      <span className="font-medium text-foreground">{slot.periodKey}</span>
+                      <span className="text-muted-foreground">
+                        {" "}
+                        — {monthName} {slot.bsY}
+                      </span>
+                      <div className="text-xs text-muted-foreground">
+                        Voucher date (schedule): <span className="font-mono text-foreground">{bsYmd}</span>
+                        {adExtra}
+                      </div>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+          <DialogFooter className="shrink-0 gap-2 sm:justify-end">
+            <Button type="button" variant="secondary" onClick={() => closeRecurringGeneratePickerDismiss()}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={generatingRecurringNow || !recurringEditorsEffective}
+              onClick={() => void handleRecurringGeneratePickerConfirm()}
+            >
+              {generatingRecurringNow ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating…
+                </>
+              ) : (() => {
+                const n =
+                  recurringGeneratePicker?.slots.filter((s) => recurringGeneratePicker.selected[s.periodKey] === true)
+                    .length ?? 0;
+                return n === 0 ? "Create next due only" : `Create selected (${n})`;
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>
