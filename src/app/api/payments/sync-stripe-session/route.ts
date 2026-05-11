@@ -4,7 +4,7 @@ import { getAdminDb } from "@/lib/firebaseAdmin";
 import {
   buildVerifiedLocalPlanApplyPayload,
   fulfillStripeCheckoutSessionCompleted,
-  getStripeForPayments,
+  getStripeForPaymentsMerged,
 } from "@/lib/payments/stripeCheckoutFulfill";
 
 /**
@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "sessionId required" }, { status: 400 });
     }
 
-    const stripe = getStripeForPayments();
+    const stripe = await getStripeForPaymentsMerged();
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["subscription"],
     });

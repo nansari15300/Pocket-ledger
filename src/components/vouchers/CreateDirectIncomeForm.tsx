@@ -36,6 +36,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
@@ -925,34 +927,52 @@ export function CreatePaymentInForm({
                     />
                   ))}
                   {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                    <div 
-                      className={cn(
-                        "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                        allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                          ? "text-muted-foreground hover:border-primary cursor-pointer"
-                          : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                      )}
-                      onClick={() => {
-                        if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                          fileInputRef.current?.click();
+                    <>
+                      <AttachmentHoldPasteSurface
+                        enabled={allowAttachments && fileAttachmentLimits.maxFileCount > 0}
+                        onShortActivate={() => {
+                          if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                            fileInputRef.current?.click();
+                          }
+                        }}
+                        onPastedFiles={(incoming) =>
+                          void appendCompressedVoucherAttachmentsToState({
+                            incomingFiles: incoming,
+                            currentFiles: files,
+                            maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                            allowImage: fileAttachmentLimits.allowImage,
+                            allowPDF: fileAttachmentLimits.allowPDF,
+                            setFiles,
+                            toast,
+                          })
                         }
-                      }}
-                    >
-                       <PlusCircle className="h-6 w-6" />
-                      <span className="text-xs mt-1">Add File</span>
-                      <Input 
-                        type="file" 
+                        className={cn(
+                          "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                          allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                            ? "text-muted-foreground hover:border-primary cursor-pointer"
+                            : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                        )}
+                      >
+                        <PlusCircle className="h-6 w-6" />
+                        <span className="text-xs mt-1">Add File</span>
+                      </AttachmentHoldPasteSurface>
+                      <Input
+                        type="file"
                         className="hidden"
                         ref={fileInputRef}
                         onChange={handleFileChange}
-                        accept={[
-                          fileAttachmentLimits.allowImage ? "image/*" : "",
-                          fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                        ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                        accept={
+                          [
+                            fileAttachmentLimits.allowImage ? "image/*" : "",
+                            fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(",") || "image/*,application/pdf"
+                        }
                         multiple={fileAttachmentLimits.maxFileCount > 1}
                         disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                       />
-                    </div>
+                    </>
                   )}
                  </div>
               </FormItem>

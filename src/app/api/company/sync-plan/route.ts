@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
+import { applyExpiredPaidPlanAutoDowngradeIfEligible } from "@/lib/server/applyExpiredPaidPlanAutoDowngrade";
 import { type PlanId, normalizePlanIdForClient } from "@/config/plans";
 
 /** `companyId` = Firestore doc id; `localCompanyId` = SQLite row id jab alag ho (offline-first) */
@@ -109,29 +110,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    const planId = normalizePlanIdForClient(data.planId != null ? String(data.planId) : undefined);
+    const db = getAdminDb();
+    /** Paid expiry beet chuki + preference ON → owner sync par Basic (same request me nayi values). */
+    const expiredDowngraded = await applyExpiredPaidPlanAutoDowngradeIfEligible({
+      db,
+      companyRef: ref,
+      snapData: data as Record<string, unknown>,
+      decoded,
+    });
+    const liveData = expiredDowngraded
+      ? ((await withFirestoreTransientRetry(() => ref.get())).data() || {})
+      : data;
+
+    const planId = normalizePlanIdForClient(liveData.planId != null ? String(liveData.planId) : undefined);
     let planExpiryMs: number | null = null;
-    if (typeof data.planExpiryMs === "number" && Number.isFinite(data.planExpiryMs)) {
-      planExpiryMs = data.planExpiryMs;
+    if (typeof liveData.planExpiryMs === "number" && Number.isFinite(liveData.planExpiryMs)) {
+      planExpiryMs = liveData.planExpiryMs;
     } else {
-      const pe = data.planExpiry as { toMillis?: () => number } | undefined;
+      const pe = liveData.planExpiry as { toMillis?: () => number } | undefined;
       if (pe && typeof pe.toMillis === "function") planExpiryMs = pe.toMillis();
     }
 
     const stripeCustomerId =
-      typeof data.stripeCustomerId === "string" && data.stripeCustomerId.trim() ? data.stripeCustomerId.trim() : null;
+      typeof liveData.stripeCustomerId === "string" && liveData.stripeCustomerId.trim()
+        ? liveData.stripeCustomerId.trim()
+        : null;
     const stripeSubscriptionId =
-      typeof data.stripeSubscriptionId === "string" && data.stripeSubscriptionId.trim()
-        ? data.stripeSubscriptionId.trim()
+      typeof liveData.stripeSubscriptionId === "string" && liveData.stripeSubscriptionId.trim()
+        ? liveData.stripeSubscriptionId.trim()
         : null;
     const lastStripeCheckoutSessionId =
-      typeof data.lastStripeCheckoutSessionId === "string" && data.lastStripeCheckoutSessionId.trim()
-        ? data.lastStripeCheckoutSessionId.trim()
+      typeof liveData.lastStripeCheckoutSessionId === "string" && liveData.lastStripeCheckoutSessionId.trim()
+        ? liveData.lastStripeCheckoutSessionId.trim()
         : null;
+    const autoDowngradeToBasicWhenExpired =
+      (liveData as { autoDowngradeToBasicWhenExpired?: unknown }).autoDowngradeToBasicWhenExpired !== false;
 
     // Offline window: har online sync par max 20 din extend; paid par subscription end se zyada nahi
     const now = Date.now();
-    const prevRaw = data.offlineLicenseValidUntilMs;
+    const prevRaw = liveData.offlineLicenseValidUntilMs;
     const prevUntil =
       typeof prevRaw === "number" && Number.isFinite(prevRaw) ? prevRaw : now;
     const base = Math.max(now, prevUntil);
@@ -168,6 +185,8 @@ export async function POST(req: NextRequest) {
       stripeSubscriptionId,
       lastStripeCheckoutSessionId,
       offlineLicenseValidUntilMs,
+      autoDowngradeToBasicWhenExpired,
+      ...(expiredDowngraded ? { autoDowngradedToBasicOnSync: true as const } : {}),
     });
   } catch (e) {
     console.error("[sync-plan]", e);

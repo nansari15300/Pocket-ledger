@@ -60,7 +60,7 @@ type PanSession = {
 };
 
 /** Hydration-safe nahi: useLayoutEffect se pehle paint tak false — coarse pointer / touch par tap-toggle (hover enter/leave mobile par turant band ho jata tha) */
-function useTapInteractionMode(): boolean {
+export function useTapInteractionMode(): boolean {
   const [tap, setTap] = React.useState(false);
   React.useLayoutEffect(() => {
     setTap(
@@ -81,6 +81,10 @@ type AttachmentHoverPortalProps = {
   /** Preview content — panel ke andar solid background par */
   preview: React.ReactNode;
   disabled?: boolean;
+  /** false: mouse par hover se panel nahi — FilePreview jaisa Preview button + `onRegisterOpen` */
+  openOnHover?: boolean;
+  /** `openOnHover={false}` par Preview button se `handleOpen` yahan register karo */
+  onRegisterOpen?: (open: (() => void) | null) => void;
   /** Trigger wrapper class — table icon vs bile FilePreview tile ke liye */
   triggerClassName?: string;
   /** PDF: nested FilePreview ke canvas par dblclick kabhi img tak nahi — scroll area se open in browser */
@@ -91,6 +95,8 @@ export function AttachmentHoverPortal({
   children,
   preview,
   disabled = false,
+  openOnHover = true,
+  onRegisterOpen,
   triggerClassName,
   onPreviewDoubleClick,
 }: AttachmentHoverPortalProps) {
@@ -266,6 +272,12 @@ export function AttachmentHoverPortal({
     updatePosition();
     setOpen(true);
   }, [effectiveDisabled, cancelClose, updatePosition]);
+
+  /** FilePreview: Preview button se bina hover ke panel kholna */
+  React.useEffect(() => {
+    onRegisterOpen?.(effectiveDisabled ? null : handleOpen);
+    return () => onRegisterOpen?.(null);
+  }, [onRegisterOpen, handleOpen, effectiveDisabled]);
 
   /** Global switch OFF: khula preview turant band (header toggle). */
   React.useEffect(() => {
@@ -467,10 +479,11 @@ export function AttachmentHoverPortal({
   };
 
   const handleTriggerPointerEnter = () => {
-    if (effectiveDisabled || useTapMode) return;
+    if (effectiveDisabled || useTapMode || !openOnHover) return;
     handleOpen();
   };
 
+  /** `openOnHover={false}` par bhi chhodne par delay-close — panel `pointerenter` se cancel (thumb→panel gap safe) */
   const handleTriggerPointerLeave = () => {
     if (effectiveDisabled || useTapMode || stickOpen) return;
     scheduleClose();

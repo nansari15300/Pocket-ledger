@@ -1094,6 +1094,39 @@ button.day_selected.is-today.has-transactions {
     background: hsl(var(--muted-foreground) / 0.35);
   }
 
+  /*
+   * Voucher dialog — auto-monthly pills row (horizontal overflow-x):
+   * mouse/desktop: ~2px patla dim thumb; touch-primary (hover:none): bar chhupa, swipe scroll same.
+   */
+  .scrollbar-x-voucher-pills {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.14) transparent;
+  }
+  .scrollbar-x-voucher-pills::-webkit-scrollbar {
+    height: 2px;
+  }
+  .scrollbar-x-voucher-pills::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-x-voucher-pills::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.18);
+    border-radius: 9999px;
+  }
+  .scrollbar-x-voucher-pills::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.28);
+  }
+  @media (hover: none) {
+    .scrollbar-x-voucher-pills {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .scrollbar-x-voucher-pills::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
   /* Link dialogs: table light fill + rows cycle through max 7 light colors */
   .table-row-stripe-7 {
     background: hsl(var(--muted) / 0.5);

@@ -41,6 +41,8 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 
 
 const fileSchema = z.object({
@@ -306,21 +308,23 @@ export function CommissionPayoutDialog({
                     <FilePreview key={index} file={file} onRemove={() => setFiles(prev => prev.filter((_, i) => i !== index))} />
                   ))}
                   {files.length < 3 && (
-                    <div 
+                    <AttachmentHoldPasteSurface
+                      enabled
+                      onShortActivate={() => fileInputRef.current?.click()}
+                      onPastedFiles={(incoming) => void handleFileChange(syntheticFileInputChangeEvent(incoming))}
                       className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                      onClick={() => fileInputRef.current?.click()}
                     >
-                       <PlusCircle className="h-6 w-6" />
+                      <PlusCircle className="h-6 w-6" />
                       <span className="text-xs mt-1">Add File</span>
-                      <Input 
-                        type="file" 
+                      <Input
+                        type="file"
                         className="hidden"
                         ref={fileInputRef}
                         onChange={handleFileChange}
                         accept="image/*,application/pdf"
                         multiple
                       />
-                    </div>
+                    </AttachmentHoldPasteSurface>
                   )}
                 </div>
               </FormItem>

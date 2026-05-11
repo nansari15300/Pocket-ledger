@@ -39,6 +39,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
@@ -2463,21 +2465,40 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     ))}
                     {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                       <>
-                        <label
-                          htmlFor={attachFileInputId}
+                        <AttachmentHoldPasteSurface
+                          enabled={
+                            !editingDisabled &&
+                            !fileAttachLockedByDialog &&
+                            allowAttachments &&
+                            fileAttachmentLimits.maxFileCount > 0
+                          }
+                          onShortActivate={() => {
+                            tracePaymentInAttach("label pointerdown (user tapped Add File area)");
+                            if (editingDisabled) return;
+                            if (fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0) return;
+                            fileInputRef.current?.click();
+                          }}
+                          onPastedFiles={(incoming) =>
+                            void appendCompressedVoucherAttachmentsToState({
+                              incomingFiles: incoming,
+                              currentFiles: files,
+                              maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                              allowImage: fileAttachmentLimits.allowImage,
+                              allowPDF: fileAttachmentLimits.allowPDF,
+                              setFiles,
+                              toast,
+                            })
+                          }
                           className={cn(
                             "relative flex h-24 w-24 flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors",
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0
                               ? "cursor-pointer text-muted-foreground hover:border-primary"
                               : "pointer-events-none cursor-not-allowed border-muted-foreground/25 text-muted-foreground/50 opacity-50"
                           )}
-                          onPointerDown={() =>
-                            tracePaymentInAttach("label pointerdown (user tapped Add File area)")
-                          }
                         >
                           <PlusCircle className="h-6 w-6" />
                           <span className="mt-1 text-xs">Add File</span>
-                        </label>
+                        </AttachmentHoldPasteSurface>
                         <Input
                           id={attachFileInputId}
                           type="file"

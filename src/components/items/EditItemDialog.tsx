@@ -94,6 +94,8 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressFile } from "@/lib/compression";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import {
   MAX_IMAGE_BYTES_BEFORE_COMPRESS,
   MAX_IMAGE_BYTES_AFTER_COMPRESS,
@@ -1241,21 +1243,23 @@ export function EditItemDialog({ item, onItemUpdated, onItemDeleted, children, h
                         ))}
                         {files.length < 5 && (
                           <FormControl>
-                            <div 
+                            <AttachmentHoldPasteSurface
+                              enabled={canAttachDocuments}
+                              onShortActivate={() => fileInputRef.current?.click()}
+                              onPastedFiles={(incoming) => void handleFileChange(syntheticFileInputChangeEvent(incoming))}
                               className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                              onClick={() => fileInputRef.current?.click()}
                             >
                               <Upload className="h-6 w-6" />
                               <span className="text-xs mt-1">Add File</span>
-                              <Input 
-                                type="file" 
+                              <Input
+                                type="file"
                                 className="hidden"
                                 ref={fileInputRef}
                                 onChange={handleFileChange}
                                 accept="image/*,application/pdf"
                                 multiple
                               />
-                            </div>
+                            </AttachmentHoldPasteSurface>
                           </FormControl>
                         )}
                       </div>

@@ -52,6 +52,27 @@ export function countOnlineCompanySlotsForOwner(
   ).length;
 }
 
+/** Local-only rows (`storageOption === "local"`) — owner account ke offline company slots vs `maxCompaniesLocal`. */
+export function countLocalCompanySlotsForOwner(
+  companies: ReadonlyArray<{
+    storageOption?: string;
+    isDeleted?: boolean;
+    isOwned?: boolean;
+    ownerId?: string;
+  }>,
+  ownerUid: string
+): number {
+  const uid = ownerUid.trim();
+  if (!uid) return 0;
+  return companies.filter(
+    (c) =>
+      !isCompanyOnlineSlot(c) &&
+      !c.isDeleted &&
+      c.isOwned === true &&
+      String(c.ownerId || "").trim() === uid
+  ).length;
+}
+
 export function maxOnlineCompaniesForPlan(
   planId: PlanId | string | null | undefined,
   /** `app_settings/plans` merge — pass karo taaki admin `maxCompanies` / `maxOnlineCompanies` sahi reflect ho */

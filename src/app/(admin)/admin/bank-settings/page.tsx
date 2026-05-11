@@ -19,6 +19,10 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { firestore } from '@/lib/firebase';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 const formSchema = z.object({
   stripeSecretKey: z.string().optional(),
@@ -43,6 +47,10 @@ export default function BankSettingsPage() {
   useAdminAccess(['SuperAdmin']);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  /** `app_settings/billing` — owners ko paid→cheaper paid downgrade dikhana / API allow karna. */
+  const [billingPolicyLoading, setBillingPolicyLoading] = useState(true);
+  const [planDowngradeEnabled, setPlanDowngradeEnabled] = useState(true);
+  const [policySaving, setPolicySaving] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -78,6 +86,26 @@ export default function BankSettingsPage() {
     fetchKeys();
   }, [form]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(firestore, 'app_settings', 'billing'));
+        if (cancelled) return;
+        const v = snap.exists() ? (snap.data() as { planDowngradeEnabled?: unknown }).planDowngradeEnabled : undefined;
+        setPlanDowngradeEnabled(typeof v === 'boolean' ? v : true);
+      } catch (error) {
+        console.error('Failed to load billing policy:', error);
+        toast({ variant: 'destructive', title: 'Error', description: 'Could not load billing policy.' });
+      } finally {
+        if (!cancelled) setBillingPolicyLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const onSubmit = async (data: z.infer<typeof formSchema>) => {
     setIsSaving(true);
     try {
@@ -89,6 +117,28 @@ export default function BankSettingsPage() {
       toast({ variant: 'destructive', title: 'Error', description: 'Failed to save keys.' });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  /** Toggle Firestore — billing page `onSnapshot` se turant owners ko UI update. */
+  const persistPlanDowngradeEnabled = async (next: boolean) => {
+    setPolicySaving(true);
+    const prev = planDowngradeEnabled;
+    setPlanDowngradeEnabled(next);
+    try {
+      await setDoc(doc(firestore, 'app_settings', 'billing'), { planDowngradeEnabled: next }, { merge: true });
+      toast({
+        title: 'Saved',
+        description: next
+          ? 'Owners can downgrade to a lower paid tier again.'
+          : 'Paid-to-cheaper-paid downgrades are disabled for owners (Basic/free switch unchanged).',
+      });
+    } catch (error) {
+      console.error('Failed to save billing policy:', error);
+      setPlanDowngradeEnabled(prev);
+      toast({ variant: 'destructive', title: 'Error', description: 'Could not save billing policy.' });
+    } finally {
+      setPolicySaving(false);
     }
   };
 
@@ -204,6 +254,36 @@ export default function BankSettingsPage() {
                 </div>
             </form>
         </Form>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Billing behaviour</CardTitle>
+            <CardDescription>
+              Control whether company owners can use the Downgrade button to move to a cheaper paid tier (remaining
+              value converts to more days at that plan’s rate). “Just change plan” is only for upgrading tiers. Switching
+              to Basic (free) from the current plan column stays available when Basic is free.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <Label htmlFor="plan-downgrade-enabled" className="text-base">
+                Allow downgrade to lower paid plans
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {/* `app_settings/billing.planDowngradeEnabled` — billing page `onSnapshot` + `/api/company/downgrade-plan` dono isi se. */}
+                Off: owners cannot move to a cheaper paid tier (button hidden, API 403); post-upgrade &quot;locked&quot;
+                tiers stay blocked. On: Downgrade works including back to tiers that were locked after an upgrade. Basic
+                (free) from the current plan column is unchanged when Off.
+              </p>
+            </div>
+            <Switch
+              id="plan-downgrade-enabled"
+              checked={planDowngradeEnabled}
+              disabled={billingPolicyLoading || policySaving}
+              onCheckedChange={(c) => void persistPlanDowngradeEnabled(c)}
+            />
+          </CardContent>
+        </Card>
     </div>
   );
 }

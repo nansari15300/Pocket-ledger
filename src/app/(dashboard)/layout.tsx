@@ -726,9 +726,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const { user } = useAuth();
 
-    // Settings / gallery: body scroll bandho — andar list ya grid khud scroll kare
+    // Settings / gallery / billing statement: body scroll band — andar panel scroll (outer chain `min-h-0`).
     useEffect(() => {
-        if (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) {
+        if (
+          pathname?.startsWith("/settings") ||
+          pathname?.startsWith("/gallery") ||
+          pathname?.startsWith("/billing/statement")
+        ) {
             document.documentElement.style.overflow = "hidden";
             document.body.style.overflow = "hidden";
             return () => {
@@ -799,7 +803,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       "relative flex bg-background",
                       /** Mobile + desktop: `100vh`/h-screen Windows taskbar ke niche leak ho sakta hai (Electron); `dvh` visible area ke hisaab se */
                       "h-dvh max-h-dvh min-h-0",
-                      (pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")) && "overflow-hidden"
+                      (pathname?.startsWith("/settings") ||
+                        pathname?.startsWith("/gallery") ||
+                        pathname?.startsWith("/billing/statement")) &&
+                        "overflow-hidden"
                     )}
                   >
                     <AppSidebar />
@@ -818,8 +825,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <ApkCloudOnlineSyncToast />
                       <DashboardMainWithEdgeSwipe
                         className={cn(
-                          "flex-1 min-h-0",
-                          pathname?.startsWith("/settings") || pathname?.startsWith("/gallery")
+                          "flex min-h-0 flex-1 flex-col",
+                          pathname?.startsWith("/settings") ||
+                            pathname?.startsWith("/gallery") ||
+                            pathname?.startsWith("/billing/statement")
                             ? "overflow-hidden"
                             : "overflow-y-auto"
                         )}

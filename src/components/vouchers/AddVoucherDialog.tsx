@@ -2303,16 +2303,17 @@ export function AddVoucherDialog(props: any) {
     return `${formatDateBS(next)} (${formatDate(next)})`;
   }, [autoVoucherNextDueAd, dateSystem, formatDate, formatDateBS]);
 
-  /** PC: due din ke local end tak — countdown `N days HH:MM:SS` (full din + bacha hua din ka time). */
+  /** Due din ke local end tak — countdown `N days HH:MM:SS` (dialog open par mobile + desktop). */
   const [autoVoucherDesktopCountdownTick, setAutoVoucherDesktopCountdownTick] = useState(0);
   useEffect(() => {
-    if (isMobile || !isOpen || !autoVoucherNextDueAd) return;
+    // Dialog open + due date: har device par countdown tick (mobile par bhi PC jaisa pill).
+    if (!isOpen || !autoVoucherNextDueAd) return;
     const id = window.setInterval(() => setAutoVoucherDesktopCountdownTick((x) => x + 1), 1000);
     return () => window.clearInterval(id);
-  }, [isMobile, isOpen, autoVoucherNextDueAd]);
+  }, [isOpen, autoVoucherNextDueAd]);
 
   const autoVoucherDesktopCountdownSuffix = useMemo(() => {
-    if (isMobile || !isOpen || !autoVoucherNextDueAd) return null;
+    if (!isOpen || !autoVoucherNextDueAd) return null;
     void autoVoucherDesktopCountdownTick;
     const n = autoVoucherNextDueAd;
     const end = new Date(n.getFullYear(), n.getMonth(), n.getDate(), 23, 59, 59, 999);
@@ -2330,7 +2331,7 @@ export function AddVoucherDialog(props: any) {
     if (days <= 0) return `· ( in ${clock} )`;
     const dayWord = days === 1 ? "day" : "days";
     return `· ( in ${days} ${dayWord} ${clock} )`;
-  }, [isMobile, isOpen, autoVoucherNextDueAd, autoVoucherDesktopCountdownTick]);
+  }, [isOpen, autoVoucherNextDueAd, autoVoucherDesktopCountdownTick]);
 
   /** Dialog schedule/rate + Firestore snapshot merge — projected “next auto” amount jaisa bump. */
   const recurringTemplateForProjection = useMemo((): RecurringVoucherTemplate | null => {
@@ -2398,9 +2399,9 @@ export function AddVoucherDialog(props: any) {
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [autoVoucherNextDueAd, recurringTemplateForProjection, effectiveVoucher]);
 
-  /** PC: linear accrual — (elapsed / period) × projected next; har sec tick ke saath. */
+  /** Linear accrual — (elapsed / period) × projected next; har sec tick ke saath (mobile + desktop). */
   const autoVoucherDesktopAccruedLabel = useMemo(() => {
-    if (isMobile || !isOpen) return null;
+    if (!isOpen) return null;
     void autoVoucherDesktopCountdownTick;
     if (
       autoVoucherProjectedNextTotal == null ||
@@ -2419,7 +2420,6 @@ export function AddVoucherDialog(props: any) {
     const rounded = Math.round(raw * 100) / 100;
     return formatCurrencyForPrint(rounded, { noSuffix: true, showDrCr: false });
   }, [
-    isMobile,
     isOpen,
     autoVoucherDesktopCountdownTick,
     autoVoucherProjectedNextTotal,
@@ -3030,95 +3030,98 @@ export function AddVoucherDialog(props: any) {
               </div>
             </div>
           ) : null}
-          <div
-            className={cn(
-              "flex items-center gap-x-1.5 gap-y-1",
-              // Mobile: ek hi row — pink pill + next + switch; wrap se do line na bane
-              isMobile ? "min-w-0 flex-nowrap overflow-x-auto" : "flex-wrap",
-            )}
-          >
-            {/* ON: desktop par label + day select ek pill; mobile par sirf day select (label hata — jagah bachao). */}
-            {autoMonthlyEnabled ? (
-              <div
-                style={{ minHeight: SWITCH_TRACK_HEIGHT_PX }}
-                className={cn(
-                  "box-border inline-flex min-h-0 max-w-full flex-nowrap items-center gap-2 rounded-full border border-pink-400/85 bg-pink-100 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-sm",
-                  isMobile ? "shrink-0 px-1.5" : "px-2.5",
-                )}
-              >
-                {!isMobile ? (
-                  <span className="m-0 shrink-0 leading-snug">auto voucher create</span>
-                ) : null}
-                <Select
-                  value={String(autoMonthlyScheduleBsDay)}
-                  onValueChange={(v) => setAutoMonthlyScheduleBsDay(parseInt(v, 10) || 32)}
-                  disabled={autoMonthlyHydrating}
-                >
-                  <SelectTrigger
-                    style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
-                    className="box-border h-auto min-h-0 w-[min(100%,10.5rem)] shrink-0 rounded-md border-0 bg-transparent px-0 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-none hover:bg-pink-200/45 focus:ring-1 focus:ring-pink-400/55 focus:ring-offset-0 data-[placeholder]:text-pink-950 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-pink-800 [&>span]:line-clamp-1"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-[min(50vh,280px)]">
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                      <SelectItem key={d} value={String(d)}>
-                        Day {d}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value="32">{calLab.lastDayOfScheduledMonth}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : !isMobile ? (
-              <p className="m-0 shrink-0 font-semibold leading-snug">auto voucher create</p>
-            ) : null}
-            {autoVoucherNextRunDatePillText ? (
-              <div
-                className={cn(
-                  "flex min-w-0 items-center gap-1.5",
-                  isMobile ? "min-w-0 shrink-0 flex-nowrap" : "flex-wrap",
-                )}
-              >
-                {/* Pink pill; mobile par chhota prefix — ek row me switch ke saath */}
-                <span
-                  style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
+          {/* Mobile: pills baein horizontal scroll; Settings+Switch scroll ke bahar — switch hamesha daen fix. Desktop: pills flex-wrap, controls daen. */}
+          <div className="flex w-full min-w-0 items-center gap-2">
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-x-1.5 gap-y-1",
+                // Mobile: sirf yahan overflow — switch column alag; scrollbar-x-voucher-pills = patla/dim (mouse) ya chhupa (touch)
+                isMobile ? "flex-nowrap overflow-x-auto pb-0.5 scrollbar-x-voucher-pills" : "flex-wrap",
+              )}
+            >
+              {/* ON: desktop/mobile dono par label + day select ek hi pink pill (PC jaisa). */}
+              {autoMonthlyEnabled ? (
+                <div
+                  style={{ minHeight: SWITCH_TRACK_HEIGHT_PX }}
                   className={cn(
-                    "inline-flex min-h-0 min-w-0 max-w-full flex-nowrap items-center gap-1 rounded-full border border-pink-400/85 bg-pink-100 px-2 py-0 text-[11px] font-medium leading-none text-pink-950 shadow-sm box-border",
+                    "box-border inline-flex min-h-0 max-w-full flex-nowrap items-center gap-2 rounded-full border border-pink-400/85 bg-pink-100 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-sm",
+                    isMobile ? "shrink-0 px-1.5" : "px-2.5",
                   )}
                 >
-                  <span className="shrink-0 leading-none">
-                    {isMobile ? "Next:" : "Next auto voucher will be created on"}
-                  </span>
-                  <span
-                    className="shrink-0 text-[11px] font-semibold tabular-nums leading-none text-pink-950"
-                    title="Scheduled due date (BS month day / last day when applicable)."
+                  <span className="m-0 shrink-0 leading-snug">auto voucher create</span>
+                  <Select
+                    value={String(autoMonthlyScheduleBsDay)}
+                    onValueChange={(v) => setAutoMonthlyScheduleBsDay(parseInt(v, 10) || 32)}
+                    disabled={autoMonthlyHydrating}
                   >
-                    {autoVoucherNextRunDatePillText}
-                  </span>
-                  {autoVoucherDesktopCountdownSuffix && !isMobile ? (
-                    <span
-                      className="whitespace-nowrap tabular-nums font-semibold leading-none text-pink-950"
-                      title="Time left until end of the scheduled due day (local)."
+                    <SelectTrigger
+                      style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
+                      className="box-border h-auto min-h-0 w-[min(100%,12.5rem)] shrink-0 rounded-md border-0 bg-transparent px-0 py-0 text-[11px] font-semibold leading-none text-pink-950 shadow-none hover:bg-pink-200/45 focus:ring-1 focus:ring-pink-400/55 focus:ring-offset-0 data-[placeholder]:text-pink-950 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-pink-800 [&>span]:line-clamp-1"
                     >
-                      {autoVoucherDesktopCountdownSuffix}
-                    </span>
-                  ) : null}
-                </span>
-                {/* Gray pill: mobile single-row strip me jagah — sirf desktop */}
-                {autoVoucherDesktopAccruedLabel && !isMobile ? (
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-[min(50vh,280px)]">
+                      {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                        <SelectItem key={d} value={String(d)}>
+                          Day {d}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="32">{calLab.lastDayOfScheduledMonth}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <p className="m-0 shrink-0 font-semibold leading-snug">auto voucher create</p>
+              )}
+              {autoVoucherNextRunDatePillText ? (
+                <div
+                  className={cn(
+                    "flex min-w-0 items-center gap-1.5",
+                    isMobile ? "min-w-0 shrink-0 flex-nowrap" : "flex-wrap",
+                  )}
+                >
                   <span
                     style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
-                    className="inline-flex max-w-full shrink-0 items-center rounded-full border border-gray-300/90 bg-gray-200 px-2 py-0 text-[11px] font-semibold tabular-nums leading-none text-gray-900 shadow-sm box-border"
-                    title="Estimated amount accrued so far toward the next auto voucher (linear by time)."
+                    className={cn(
+                      "inline-flex min-h-0 min-w-0 max-w-full flex-nowrap items-center gap-1 rounded-full border border-pink-400/85 bg-pink-100 px-2 py-0 text-[11px] font-medium leading-none text-pink-950 shadow-sm box-border",
+                    )}
                   >
-                    Till now amount accrued {autoVoucherDesktopAccruedLabel}
+                    <span className="shrink-0 leading-none">Next auto voucher will be created on</span>
+                    <span
+                      className="shrink-0 text-[11px] font-semibold tabular-nums leading-none text-pink-950"
+                      title="Scheduled due date (BS month day / last day when applicable)."
+                    >
+                      {autoVoucherNextRunDatePillText}
+                    </span>
+                    {autoVoucherDesktopCountdownSuffix ? (
+                      <span
+                        className="whitespace-nowrap tabular-nums font-semibold leading-none text-pink-950"
+                        title="Time left until end of the scheduled due day (local)."
+                      >
+                        {autoVoucherDesktopCountdownSuffix}
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </div>
-            ) : null}
-            <div className={cn("ml-auto flex shrink-0 items-center gap-2", isMobile && "pl-1")}>
-              {/* Gear mobile par neeli header patti me; yahan sirf desktop Settings + dono par switch */}
+                  {autoVoucherDesktopAccruedLabel ? (
+                    <span
+                      style={{ height: SWITCH_TRACK_HEIGHT_PX, minHeight: SWITCH_TRACK_HEIGHT_PX }}
+                      className="inline-flex max-w-full shrink-0 items-center rounded-full border border-gray-300/90 bg-gray-200 px-2 py-0 text-[11px] font-semibold tabular-nums leading-none text-gray-900 shadow-sm box-border"
+                      title="Estimated amount accrued so far toward the next auto voucher (linear by time)."
+                    >
+                      Till now amount accrued {autoVoucherDesktopAccruedLabel}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div
+              className={cn(
+                "flex shrink-0 items-center gap-2",
+                // Mobile: safed piche pills scroll overlap na dikhe; halka shadow daen se edge clear
+                isMobile && "bg-white pl-1.5 shadow-[-10px_0_12px_-8px_rgba(255,255,255,1)]",
+              )}
+            >
+              {/* Mobile: Settings text chhupa — neeli header me gear pehle se; desktop: yahan label. */}
               {!isMobile ? (
                 <Button
                   type="button"

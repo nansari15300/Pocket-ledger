@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from "react";
 import { toast } from "@/hooks/use-toast";
 import {
   DEFAULT_PLANS,
@@ -9,11 +9,24 @@ import {
   formatPrice,
   EntitlementKey,
   normalizePlanIdForClient,
+  planTierIndex,
 } from "@/config/plans";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import KhaltiCheckout from "khalti-checkout-web";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useDate } from "@/hooks/useDate";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -39,11 +53,17 @@ import {
 import { formatBsFromAD } from "@/lib/bs-date";
 import {
   BILLING_TERM_OPTIONS,
+  PLAN_CHANGE_ONLY_SELECT_OPTION,
   classifyPlanChange,
   grossPriceNpr,
   quoteDowngradeNewExpiry,
   quotePaidPlanPurchase,
+  creditDaysEquivalentAtTargetYearly,
+  renewColumnFrozenUsageAndCreditDaysLeft,
+  usageNprAccruedSinceCurrentTierStart,
+  upgradeTargetCreditDaysCarried,
   daysLeftRounded,
+  termDurationMs,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
@@ -53,6 +73,19 @@ import {
   readCachedPlansList,
   writeCachedPlansList,
 } from "@/lib/plansCatalogCache";
+import {
+  PRORATION_PILL_CREDIT_CLASS,
+  PRORATION_PILL_USAGE_CLASS,
+  PRORATION_PILL_USAGE_FROZEN_CLASS,
+  creditPillAdjustedDayWord,
+  formatCreditPillDaysLeftDisplay,
+  formatUsageLineSuffix,
+} from "@/lib/billingProrationPillDisplay";
+import {
+  findFrozenSnapshotForPlan,
+  parseBillingFrozenPlanLedger,
+  parseBillingDowngradeBlockedPlanIds,
+} from "@/lib/billingFrozenPlanSnapshots";
 
 /** Per-column price line using the same gross math as server `/api/payments/initiate` + proration quotes. */
 function formatTermPriceFromKey(plan: Plan, termKey: SubscriptionTermKey): string {
@@ -125,24 +158,89 @@ function withKhaltiProrationReturnParams(returnUrl: string, token: string, amoun
   return `${returnUrl}${sep}token=${encodeURIComponent(token)}&amount=${encodeURIComponent(String(amount))}`;
 }
 
+// Purana export naam — agar dev bundle / HMR ne `PRORATION_PILL_SPENDED_CLASS` rakha ho to ReferenceError na aaye.
+const PRORATION_PILL_SPENDED_CLASS = PRORATION_PILL_USAGE_CLASS;
+
+const MS_DAY_PRORATION = 86400000;
+
+/** Dropdown term se kitne din add honge — total expiry (730) nahi, sirf is term ka block (e.g. 365). */
+function termAddedDaysRounded(term: SubscriptionTermKey): number {
+  return Math.round(termDurationMs(term) / MS_DAY_PRORATION);
+}
+
+/** Paid user + Basic column band: expiry ke baad auto Basic notice — current-plan “Switch to Basic” link bhi hata diya. */
+function PaidPlanBasicColumnLockedNotice() {
+  return (
+    <div className="text-xs text-center text-muted-foreground leading-snug px-1">
+      {/* `text-xs` (~12px) — pehle 10px tha; notice thoda bada padhne ke liye. */}
+      <p>
+        When your <strong className="text-foreground">paid plan expires</strong>, this company{" "}
+        <strong className="text-foreground">automatically becomes Basic (free)</strong>, when the free plan is available.
+      </p>
+    </div>
+  );
+}
+
+/** `/api/payments/gateway-status` — null = abhi load; tab tak radios enable (flash avoid). */
+type BillingGatewayAvailability = { stripe: boolean; khalti: boolean; esewa: boolean };
+
+function firstAvailableBillingGateway(
+  ga: BillingGatewayAvailability | null,
+  preferred: "stripe" | "khalti" | "esewa"
+): "stripe" | "khalti" | "esewa" {
+  if (!ga) return preferred;
+  if (ga[preferred]) return preferred;
+  for (const g of ["stripe", "khalti", "esewa"] as const) {
+    if (ga[g]) return g;
+  }
+  return "stripe";
+}
+
 type CheckoutFormProps = {
   plan: Plan;
   termKey: SubscriptionTermKey;
   userId: string;
   companyId: string;
   billingIntent: "donation" | "subscribe";
+  /** false = subscribe/donate API disabled — user ko “back online” copy. */
+  networkOnline?: boolean;
+  /** Server keys miss par gateway radio band — initiate route jaisa. */
+  gatewayAvailability?: BillingGatewayAvailability | null;
 };
 
-function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: CheckoutFormProps) {
+function CheckoutForm({
+  plan,
+  termKey,
+  userId,
+  companyId,
+  billingIntent,
+  networkOnline = true,
+  gatewayAvailability = null,
+}: CheckoutFormProps) {
   const [gateway, setGateway] = useState<"stripe" | "khalti" | "esewa">("stripe");
+
+  useEffect(() => {
+    setGateway((prev) => firstAvailableBillingGateway(gatewayAvailability, prev));
+  }, [gatewayAvailability]);
   const [isLoading, setIsLoading] = useState(false);
   const [donationAmount, setDonationAmount] = useState(100);
 
   const isFreePlan = plan.isFree;
   const amountNpr = checkoutAmountNpr(plan, termKey, donationAmount);
   const amountInPaisa = Math.round(amountNpr * 100);
+  const stripeOk = gatewayAvailability == null || gatewayAvailability.stripe;
+  const khaltiOk = gatewayAvailability == null || gatewayAvailability.khalti;
+  const esewaOk = gatewayAvailability == null || gatewayAvailability.esewa;
 
   async function handleCheckout() {
+    if (!networkOnline) {
+      toast({
+        variant: "destructive",
+        title: "Offline",
+        description: "Back online to subscribe or donate.",
+      });
+      return;
+    }
     if (amountNpr <= 0) {
       toast({
         variant: "destructive",
@@ -277,27 +375,55 @@ function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: Check
       <RadioGroup value={gateway} onValueChange={(val) => setGateway(val as "stripe" | "khalti" | "esewa")} className="flex flex-wrap items-center gap-4 mb-6">
         <Label
           htmlFor="stripe"
-          className={cn("flex items-center gap-2 border rounded-lg p-3 cursor-pointer", gateway === "stripe" && "border-primary")}
+          className={cn(
+            "flex items-center gap-2 border rounded-lg p-3",
+            stripeOk ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+            gateway === "stripe" && stripeOk && "border-primary"
+          )}
         >
-          <RadioGroupItem value="stripe" id="stripe" />
+          <RadioGroupItem value="stripe" id="stripe" disabled={!stripeOk} />
           Stripe (Cards)
         </Label>
         <Label
           htmlFor="khalti"
-          className={cn("flex items-center gap-2 border rounded-lg p-3 cursor-pointer", gateway === "khalti" && "border-primary")}
+          className={cn(
+            "flex items-center gap-2 border rounded-lg p-3",
+            khaltiOk ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+            gateway === "khalti" && khaltiOk && "border-primary"
+          )}
         >
-          <RadioGroupItem value="khalti" id="khalti" />
+          <RadioGroupItem value="khalti" id="khalti" disabled={!khaltiOk} />
           Khalti
         </Label>
         <Label
           htmlFor="esewa"
-          className={cn("flex items-center gap-2 border rounded-lg p-3 cursor-pointer", gateway === "esewa" && "border-primary")}
+          className={cn(
+            "flex items-center gap-2 border rounded-lg p-3",
+            esewaOk ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+            gateway === "esewa" && esewaOk && "border-primary"
+          )}
         >
-          <RadioGroupItem value="esewa" id="esewa" />
+          <RadioGroupItem value="esewa" id="esewa" disabled={!esewaOk} />
           eSewa
         </Label>
       </RadioGroup>
-      <Button onClick={handleCheckout} disabled={isLoading} className="w-full max-w-sm">
+      {!networkOnline ? (
+        <p className="mb-3 text-sm text-muted-foreground">Back online to subscribe or complete checkout.</p>
+      ) : null}
+      <Button
+        onClick={handleCheckout}
+        disabled={
+          isLoading ||
+          !networkOnline ||
+          (gatewayAvailability != null &&
+            !(gateway === "stripe"
+              ? gatewayAvailability.stripe
+              : gateway === "khalti"
+                ? gatewayAvailability.khalti
+                : gatewayAvailability.esewa))
+        }
+        className="w-full max-w-sm"
+      >
         {isLoading ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -313,10 +439,18 @@ function CheckoutForm({ plan, termKey, userId, companyId, billingIntent }: Check
   );
 }
 
+/**
+ * “Upgrade path” sirf **current se upar** wale columns — `renew` / `downgrade` columns is helper tak aate hi nahi
+ * (proration block `change !== "downgrade"` + upgrade paragraph `change === "upgrade"`).
+ */
+function billingShowUpgradePathParagraph(change: ReturnType<typeof classifyPlanChange>): boolean {
+  return change === "upgrade";
+}
+
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { companyId, company, loading: companyLoading } = useCompany();
+  const { companyId, company, loading: companyLoading, refreshAuthoritativePlan } = useCompany();
 
   // `/api/payments/*` + `/api/company/*` Firestore `companies/{docId}` padhte hain — restore/merge me SQLite row `id` ≠ cloud doc ho to `authoritativeCompanyId` sahi doc khulta hai.
   const billingFirestoreCompanyId = useMemo(() => {
@@ -337,13 +471,35 @@ export default function BillingPage() {
   });
   const [prorationLoading, setProrationLoading] = useState<string | null>(null);
   const [downgradeLoading, setDowngradeLoading] = useState<string | null>(null);
+  /** `/api/company/billing-auto-renew` — checkbox save. */
+  const [autoRenewSaving, setAutoRenewSaving] = useState(false);
   const isMobile = useIsMobile();
   /** Mobile plan carousel: one visible plan column at a time. */
   const [mobilePlanIndex, setMobilePlanIndex] = useState(0);
   const [touchStartX, setTouchStartX] = useState<number | null>(null);
   /** Gateway for paid-plan renew (proration): matches Basic checkout — admin/history get separate rows per gateway. */
   const [prorationGateway, setProrationGateway] = useState<"stripe" | "khalti" | "esewa">("stripe");
-
+  /** Bank Settings + env merge — kaunse gateway initiate / plan-change chala sakte hain. */
+  const [gatewayAvailability, setGatewayAvailability] = useState<BillingGatewayAvailability | null>(null);
+  /** "Just change plan" pehle AlertDialog — seedha Stripe/page na khule (user request). */
+  const [planChangeOnlyTargetId, setPlanChangeOnlyTargetId] = useState<PlanId | null>(null);
+  /** Browser network — billing APIs + sync-plan sirf online; offline par buttons band + copy. */
+  const [billingNavigatorOnline, setBillingNavigatorOnline] = useState(
+    () => typeof window !== "undefined" && navigator.onLine
+  );
+  useEffect(() => {
+    const sync = () => setBillingNavigatorOnline(typeof navigator !== "undefined" && navigator.onLine);
+    if (typeof window === "undefined") return;
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
+  const billingOfflineBlock = !billingNavigatorOnline;
+  /** Admin `app_settings/billing` — false par paid→cheaper paid columns (Downgrade / Just change plan) band. */
+  const [planDowngradeEnabled, setPlanDowngradeEnabled] = useState(true);
   const formatBillingDate = useCallback(
     (dDate: Date | null | undefined) => {
       if (!dDate || isNaN(dDate.getTime())) return "N/A";
@@ -391,11 +547,53 @@ export default function BillingPage() {
     [company?.planId]
   );
 
+  const billingFrozenLedger = useMemo(
+    () => parseBillingFrozenPlanLedger(company?.billingFrozenUsageLedger),
+    [company?.billingFrozenUsageLedger]
+  );
+  const billingDowngradeBlockedIds = useMemo(
+    () => parseBillingDowngradeBlockedPlanIds(company?.billingBlockedDowngradePlanIds),
+    [company?.billingBlockedDowngradePlanIds]
+  );
+  /** Neeche wala paid tier ledger me freeze ho (upgrade / Just change plan) — current tier Usage 0 se din hisaab se badhe. */
+  const frozenLowerPaidTierInLedger = useMemo(() => {
+    if (currentPlanId === "basic") return false;
+    const cur = planTierIndex(currentPlanId);
+    return billingFrozenLedger.some((s) => planTierIndex(normalizePlanIdForClient(s.planId)) < cur);
+  }, [billingFrozenLedger, currentPlanId]);
+  /** Firestore `planUpgradedAt` / mirror ms — ramp usage ke liye tier switch timestamp. */
+  const planUpgradedAtMsForUsageRamp = useMemo(() => {
+    const d = toSafeDate(company?.planUpgradedAt);
+    if (d && !Number.isNaN(d.getTime())) return d.getTime();
+    const ms = (company as { planUpgradedAtMs?: number } | undefined)?.planUpgradedAtMs;
+    if (typeof ms === "number" && Number.isFinite(ms)) return ms;
+    return null;
+  }, [company]);
+  const isPaidTierDowngradeBlocked = useCallback(
+    (pid: PlanId) => billingDowngradeBlockedIds.includes(normalizePlanIdForClient(pid)),
+    [billingDowngradeBlockedIds]
+  );
+
   useEffect(() => {
     if (["basic", "advance", "pro", "pro-plus"].includes(currentPlanId)) {
       setSelectedPlanId(currentPlanId);
     }
   }, [currentPlanId]);
+
+  // Pehle dropdown me `plan_change_only` tha — ab sirf button; purana state invalid Select value na chhode.
+  useEffect(() => {
+    setColTerms((prev) => {
+      let touched = false;
+      const next = { ...prev };
+      (Object.keys(next) as PlanId[]).forEach((id) => {
+        if (next[id] === "plan_change_only") {
+          next[id] = "year_1";
+          touched = true;
+        }
+      });
+      return touched ? next : prev;
+    });
+  }, []);
 
   /** Admin DB se list prices (Firebase Admin) — client persistence cache se zyada trustworthy. */
   const fetchServerPlanCatalog = useCallback(async () => {
@@ -449,6 +647,65 @@ export default function BillingPage() {
     return () => unsub();
   }, [fetchServerPlanCatalog]);
 
+  // Realtime billing policy — bank-settings toggle ke baad table bina refresh ke align ho.
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(firestore, "app_settings", "billing"),
+      (snap) => {
+        if (!snap.exists()) {
+          setPlanDowngradeEnabled(true);
+          return;
+        }
+        const v = (snap.data() as { planDowngradeEnabled?: unknown }).planDowngradeEnabled;
+        setPlanDowngradeEnabled(typeof v === "boolean" ? v : true);
+      },
+      () => setPlanDowngradeEnabled(true)
+    );
+    return () => unsub();
+  }, []);
+
+  // Gateway radios: server pe keys na hon to disabled — user pehle hi dekh le.
+  const fetchGatewayAvailability = useCallback(async () => {
+    try {
+      const res = await fetch(getBillingApiUrl("/api/payments/gateway-status"), { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as Record<string, unknown>;
+      const stripe = data.stripe === true;
+      const khalti = data.khalti === true;
+      const esewa = data.esewa === true;
+      setGatewayAvailability({ stripe, khalti, esewa });
+    } catch {
+      /* offline: null = purana behaviour */
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchGatewayAvailability();
+  }, [fetchGatewayAvailability]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") void fetchGatewayAvailability();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [fetchGatewayAvailability]);
+
+  useEffect(() => {
+    setProrationGateway((prev) => firstAvailableBillingGateway(gatewayAvailability, prev));
+  }, [gatewayAvailability]);
+
+  const prorationStripeAvail = gatewayAvailability == null || gatewayAvailability.stripe;
+  const prorationKhaltiAvail = gatewayAvailability == null || gatewayAvailability.khalti;
+  const prorationEsewaAvail = gatewayAvailability == null || gatewayAvailability.esewa;
+  const prorationPayEnabled =
+    gatewayAvailability == null ||
+    (prorationGateway === "stripe"
+      ? gatewayAvailability.stripe
+      : prorationGateway === "khalti"
+        ? gatewayAvailability.khalti
+        : gatewayAvailability.esewa);
+
   const selectedPlanDetails = plans.find((p) => p.id === selectedPlanId);
 
   /** Resolved display name for the company’s active SKU (merged Firestore plan names). */
@@ -485,6 +742,28 @@ export default function BillingPage() {
     }
     return null;
   }, [company]);
+
+  /** Stripe sub active + Firestore expiry miss — server se `current_period_end` backfill (ek baar / mount). */
+  const repairExpiryAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (repairExpiryAttemptedRef.current || companyLoading || !user || !billingFirestoreCompanyId) return;
+    const subId = typeof company?.stripeSubscriptionId === "string" ? company.stripeSubscriptionId.trim() : "";
+    if (!subId || expiryDate != null) return;
+    repairExpiryAttemptedRef.current = true;
+    void (async () => {
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch(getBillingApiUrl("/api/company/repair-stripe-plan-expiry"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ companyId: billingFirestoreCompanyId }),
+        });
+        if (!res.ok) repairExpiryAttemptedRef.current = false;
+      } catch {
+        repairExpiryAttemptedRef.current = false;
+      }
+    })();
+  }, [user, companyLoading, billingFirestoreCompanyId, company?.stripeSubscriptionId, expiryDate]);
 
   useEffect(() => {
     if (mobilePlanIndex >= plans.length) {
@@ -599,6 +878,43 @@ export default function BillingPage() {
 
   const expiryMs = expiryDate != null && !Number.isNaN(expiryDate.getTime()) ? expiryDate.getTime() : null;
 
+  /** Popup copy + “about N days” — `plan_change_only` server quote ke saath (upgrade par naya end date). */
+  const planChangeOnlyDialogPreview = useMemo(() => {
+    if (!planChangeOnlyTargetId) return null;
+    const curRow = plans.find((x) => x.id === currentPlanId);
+    const tgtRow = plans.find((x) => x.id === planChangeOnlyTargetId);
+    if (!curRow || !tgtRow || curRow.isFree) return null;
+    const nowMs = Date.now();
+    const q = quotePaidPlanPurchase({
+      nowMs,
+      currentExpiryMs: expiryMs,
+      currentYearly: curRow.price.yearly,
+      targetMonthly: tgtRow.price.monthly,
+      targetYearly: tgtRow.price.yearly,
+      term: "plan_change_only",
+    });
+    const isUpgradeConversion =
+      tgtRow.price.yearly > curRow.price.yearly && curRow.price.yearly > 0 && tgtRow.price.yearly > 0;
+    const newDaysLeft = daysLeftRounded(nowMs, q.newExpiryMs);
+    const remainingMsDialog =
+      expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+    const leavingLedger = renewColumnFrozenUsageAndCreditDaysLeft({
+      nowMs,
+      currentExpiryMs: expiryMs,
+      planYearly: curRow.price.yearly,
+      remainingMs: remainingMsDialog,
+    });
+    return {
+      fromLabel: curRow.name,
+      toLabel: tgtRow.name,
+      netNpr: q.netNpr,
+      isUpgradeConversion,
+      newDaysLeft,
+      leavingUsageNpr: leavingLedger.frozenUsageNpr,
+      leavingPlanYearly: curRow.price.yearly,
+    };
+  }, [planChangeOnlyTargetId, plans, currentPlanId, expiryMs]);
+
   /** Calendar days until plan expiry — shown beside expiry; null when no expiry timestamp. */
   const daysLeftOnPlan = useMemo(
     () => (expiryMs != null ? daysLeftRounded(Date.now(), expiryMs) : null),
@@ -608,9 +924,40 @@ export default function BillingPage() {
   const planExpiredByClock = expiryMs != null && expiryMs <= Date.now();
 
   /** Prorated renew: Stripe redirect, Khalti widget, or eSewa form — server stores pending intent for NP gateways. */
-  async function handleProratedPay(targetPlanId: PlanId) {
+  /** `termOverride`: "Just change plan" alag button se — dropdown click se plan change/commit nahi. */
+  async function handleProratedPay(targetPlanId: PlanId, termOverride?: SubscriptionTermKey) {
     if (!user || !companyId) return;
-    const term = colTerms[targetPlanId];
+    if (billingOfflineBlock) {
+      toast({
+        variant: "destructive",
+        title: "Offline",
+        description: "Back online to renew, upgrade, or change plan.",
+      });
+      return;
+    }
+    const term = termOverride ?? colTerms[targetPlanId];
+    // `plan_change_only` + paid downgrade: API 400 — neeche tier sirf Downgrade button (ya admin ne band kiya ho).
+    if (term === "plan_change_only") {
+      const ck = classifyPlanChange(currentPlanId, targetPlanId);
+      if (ck === "downgrade") {
+        if (!planDowngradeEnabled) {
+          toast({
+            variant: "destructive",
+            title: "Downgrades disabled",
+            description:
+              "Lower paid plan downgrades are turned off. Contact support if you need to change your paid tier.",
+          });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Use Downgrade",
+            description:
+              "To move down a paid tier, use the Downgrade button in that plan’s column. “Just change plan” is only for moving up without payment.",
+          });
+        }
+        return;
+      }
+    }
     const loadKey = `pay:${targetPlanId}`;
     setProrationLoading(loadKey);
     try {
@@ -628,10 +975,22 @@ export default function BillingPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Checkout failed");
       if (data.applied && data.ok) {
-        toast({
-          title: "Plan updated",
-          description: "No payment was charged — unused time covered this change.",
-        });
+        let description: string;
+        if (term === "plan_change_only") {
+          const h = data.planChangeHistory as { oldExpiryMs?: number | null; newExpiryMs?: number } | undefined;
+          const oldE = h?.oldExpiryMs;
+          const newE = h?.newExpiryMs;
+          // Upgrade “Just change plan”: naya expiry purane se pehle — value → nayi plan par din.
+          if (typeof oldE === "number" && typeof newE === "number" && newE < oldE - 60_000) {
+            description = "Remaining value became time on the new plan (end date updated). No charge.";
+          } else {
+            description = "Tier changed — subscription end date unchanged. No charge.";
+          }
+        } else {
+          description = "No payment was charged — unused time covered this change.";
+        }
+        await refreshAuthoritativePlan();
+        toast({ title: "Plan updated", description });
         return;
       }
       if (prorationGateway === "stripe" && typeof data.url === "string") {
@@ -704,6 +1063,24 @@ export default function BillingPage() {
   /** Lower tier: remap remaining value into days on the cheaper yearly rate (Firestore only). */
   async function handleDowngrade(targetPlanId: PlanId) {
     if (!user || !companyId) return;
+    if (billingOfflineBlock) {
+      toast({
+        variant: "destructive",
+        title: "Offline",
+        description: "Back online to change or downgrade your plan.",
+      });
+      return;
+    }
+    const tgtRow = plans.find((x) => x.id === targetPlanId);
+    const changeKind = classifyPlanChange(currentPlanId, targetPlanId);
+    if (changeKind === "downgrade" && tgtRow && !tgtRow.isFree && !planDowngradeEnabled) {
+      toast({
+        variant: "destructive",
+        title: "Downgrades disabled",
+        description: "Lower paid plan downgrades are turned off by the administrator.",
+      });
+      return;
+    }
     const loadKey = `down:${targetPlanId}`;
     setDowngradeLoading(loadKey);
     try {
@@ -715,6 +1092,7 @@ export default function BillingPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Downgrade failed");
+      await refreshAuthoritativePlan();
       toast({ title: "Plan updated", description: "Your subscription tier was updated." });
     } catch (e: unknown) {
       toast({
@@ -724,6 +1102,39 @@ export default function BillingPage() {
       });
     } finally {
       setDowngradeLoading(null);
+    }
+  }
+
+  async function handleBillingAutoRenewChange(enabled: boolean) {
+    if (!user || !billingFirestoreCompanyId) return;
+    if (billingOfflineBlock) {
+      toast({ variant: "destructive", title: "Offline", description: "Back online to change auto renew." });
+      return;
+    }
+    setAutoRenewSaving(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(getBillingApiUrl("/api/company/billing-auto-renew"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ companyId: billingFirestoreCompanyId, enabled }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "Could not save");
+      toast({
+        title: enabled ? "Auto renew on" : "Auto renew off",
+        description: enabled
+          ? "Stripe will charge your saved card for the next billing cycles. If a charge fails, you may get 3 extra days and an alert here."
+          : "Stripe will not auto-renew after this period ends. Use Continue — pay on this page before your access expires.",
+      });
+    } catch (e: unknown) {
+      toast({
+        variant: "destructive",
+        title: "Could not update",
+        description: e instanceof Error ? e.message : "Error",
+      });
+    } finally {
+      setAutoRenewSaving(false);
     }
   }
 
@@ -785,6 +1196,72 @@ export default function BillingPage() {
   };
 
   const isPaidCompany = currentPlanId !== "basic";
+
+  const hasActiveStripeSubscription = useMemo(
+    () => typeof company?.stripeSubscriptionId === "string" && company.stripeSubscriptionId.trim().length > 0,
+    [company?.stripeSubscriptionId]
+  );
+
+  /** Firestore `false` = user ne off kiya; missing/`true` = Stripe-style default auto-renew on. */
+  const autoRenewCheckboxChecked = useMemo(
+    () => hasActiveStripeSubscription && company?.billingAutoRenew !== false,
+    [hasActiveStripeSubscription, company?.billingAutoRenew]
+  );
+
+  /** Webhook `invoice.payment_failed` + `billingAutoRenew` — 3 din tak owner ko yahan dikhao. */
+  const billingRenewFailureMessage = useMemo(() => {
+    const raw = company as Record<string, unknown> | undefined;
+    if (!raw) return null;
+    const until = raw.billingAutoRenewFailureNoticeUntilMs;
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= Date.now()) return null;
+    const en = raw.billingAutoRenewFailureNoticeEn;
+    if (typeof en === "string" && en.trim()) return en.trim();
+    return "Renewal failed: insufficient balance on your saved card. You have 3 extra days to renew manually — after that, this company will move to the Basic (free) plan.";
+  }, [company]);
+
+  /** Neeche wale paid columns: Firestore snapshot pills — live trailing-year math mat chalao. */
+  const renderFrozenDowngradeSnapshot = useCallback(
+    (columnPlanId: PlanId) => {
+      const snap = findFrozenSnapshotForPlan(billingFrozenLedger, columnPlanId);
+      if (!snap) return null;
+      if (planTierIndex(currentPlanId) <= planTierIndex(columnPlanId)) return null;
+      const colPlan = plans.find((x) => x.id === columnPlanId);
+      if (!colPlan || colPlan.isFree) return null;
+      const y = colPlan.price.yearly;
+      // Advance column: Pro par bhi freeze ho = ladder Adv→Pro→Pro+ → copy me "… to Pro"; seedha Adv→Pro+ → "… to Pro Plus".
+      let shiftedToPlanId: PlanId = currentPlanId;
+      if (columnPlanId === "advance") {
+        if (currentPlanId === "pro-plus") {
+          const proFrozen = findFrozenSnapshotForPlan(billingFrozenLedger, "pro");
+          shiftedToPlanId = proFrozen ? "pro" : "pro-plus";
+        } else if (currentPlanId === "pro") {
+          shiftedToPlanId = "pro";
+        }
+      }
+      const shiftedToPlan = plans.find((x) => x.id === shiftedToPlanId);
+      const shiftedToLabel =
+        shiftedToPlan?.name ??
+        shiftedToPlanId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      return (
+        <div className="flex flex-col items-center gap-1.5 mb-2 w-full max-w-[280px] mx-auto">
+          <p className="text-[10px] text-muted-foreground text-center leading-snug px-1">
+            {/* Past tense: upgrade ho chuka — “was” ke sath “shifted” consistent. */}
+            When you shifted from <strong className="text-foreground">{colPlan.name}</strong> to{" "}
+            <strong className="text-foreground">{shiftedToLabel}</strong>, your usage was:
+          </p>
+          {/* Credit pill chhodo — sirf usage snapshot (user request). */}
+          <div className={PRORATION_PILL_USAGE_FROZEN_CLASS}>
+            <span>
+              Usage: रु {snap.frozenUsageNpr.toFixed(2)}
+              {formatUsageLineSuffix(snap.frozenUsageNpr, y, y)}
+            </span>
+          </div>
+        </div>
+      );
+    },
+    [billingFrozenLedger, currentPlanId, plans]
+  );
+
   /** Paid accounts: plan changes only via table (no donation / free checkout block below). */
   const showStandardCheckout =
     !isPaidCompany && (!selectedPlanDetails.isFree || selectedPlanId === "basic");
@@ -834,6 +1311,22 @@ export default function BillingPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {billingOfflineBlock ? (
+            <div
+              className={cn(
+                "rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-foreground mb-4",
+                BILLING_OUTLINE_CLASS
+              )}
+            >
+              You&apos;re offline. Back online to subscribe, renew, upgrade, or use &quot;Just change plan&quot;.
+            </div>
+          ) : null}
+          {isPaidCompany && billingRenewFailureMessage ? (
+            <Alert variant="destructive" className={cn("mb-4", BILLING_OUTLINE_CLASS)}>
+              <AlertTitle>Card renewal failed</AlertTitle>
+              <AlertDescription className="text-sm">{billingRenewFailureMessage}</AlertDescription>
+            </Alert>
+          ) : null}
           {company && (
             <div className={cn("rounded-lg bg-muted/30 p-4 mb-6 text-sm space-y-3", BILLING_OUTLINE_CLASS)}>
               <div>
@@ -961,7 +1454,10 @@ export default function BillingPage() {
                       <div className="space-y-2">
                         <Select
                           value={colTerms[p.id]}
-                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
+                          onValueChange={(v) => {
+                            setSelectedPlanId(p.id);
+                            setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                          }}
                         >
                           <SelectTrigger className="w-full">
                             <SelectValue placeholder="Term" />
@@ -974,7 +1470,156 @@ export default function BillingPage() {
                             ))}
                           </SelectContent>
                         </Select>
-                        <Button type="button" className="w-full" disabled={loadPay || !companyId} onClick={() => handleProratedPay(p.id)}>
+                        {/* Mobile: ek hi column dikhta hai — credit / net yahin (desktop jaisa breakdown). */}
+                        {(() => {
+                          const curRow = plans.find((x) => x.id === currentPlanId);
+                          if (!curRow || curRow.isFree) return null;
+                          const nowMs = Date.now();
+                          const q = quotePaidPlanPurchase({
+                            nowMs,
+                            currentExpiryMs: expiryMs,
+                            currentYearly: curRow.price.yearly,
+                            targetMonthly: p.price.monthly,
+                            targetYearly: p.price.yearly,
+                            term: colTerms[p.id],
+                          });
+                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
+                          const remainingMsRenew =
+                            expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+                          const renewLedger = renewColumnFrozenUsageAndCreditDaysLeft({
+                            nowMs,
+                            currentExpiryMs: expiryMs,
+                            planYearly: curRow.price.yearly,
+                            remainingMs: remainingMsRenew,
+                          });
+                          // Pink Credit din = isi `q.creditNpr` par yearly map — `renewLedger.creditDaysLeft` calendar−usage hai, kabhi 0 dikha kar रु mismatch.
+                          const creditDaysPinkFromQuote = creditDaysEquivalentAtTargetYearly(q.creditNpr, curRow.price.yearly);
+                          // Chhoda hua neeche tier freeze ho to Pro par Usage 0 se din ke sath (desktop table jaisa).
+                          const usageNprRenewMobileCur = frozenLowerPaidTierInLedger
+                            ? usageNprAccruedSinceCurrentTierStart({
+                                nowMs,
+                                planUpgradedAtMs: planUpgradedAtMsForUsageRamp,
+                                planYearly: curRow.price.yearly,
+                              })
+                            : renewLedger.frozenUsageNpr;
+                          return (
+                            <>
+                              <p className="text-xs text-muted-foreground leading-snug">
+                                This term adds about{" "}
+                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
+                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
+                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
+                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                have left.
+                              </p>
+                              <div className="flex flex-col items-center gap-1.5">
+                                <div className={PRORATION_PILL_CREDIT_CLASS}>
+                                  <span>
+                                    Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                    <strong className="font-semibold text-pink-950 dark:text-pink-50">
+                                      {formatCreditPillDaysLeftDisplay(creditDaysPinkFromQuote)}
+                                    </strong>{" "}
+                                    {creditPillAdjustedDayWord(creditDaysPinkFromQuote)} left
+                                  </span>
+                                </div>
+                                <div className={PRORATION_PILL_USAGE_CLASS}>
+                                  <span>
+                                    Usage: रु {usageNprRenewMobileCur.toFixed(2)}
+                                    {formatUsageLineSuffix(
+                                      usageNprRenewMobileCur,
+                                      curRow.price.yearly,
+                                      q.grossNpr
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            </>
+                          );
+                        })()}
+                        {/* Sirf current paid column: Stripe subscription + webhook grace. */}
+                        <div className="flex items-start gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
+                          <Checkbox
+                            id="billing-auto-renew-mobile"
+                            checked={autoRenewCheckboxChecked}
+                            disabled={
+                              !hasActiveStripeSubscription ||
+                              autoRenewSaving ||
+                              billingOfflineBlock ||
+                              !billingFirestoreCompanyId
+                            }
+                            onCheckedChange={(v) => void handleBillingAutoRenewChange(v === true)}
+                          />
+                          <div className="grid gap-0.5 leading-snug min-w-0">
+                            <Label
+                              htmlFor="billing-auto-renew-mobile"
+                              className="text-xs font-medium cursor-pointer leading-tight"
+                            >
+                              Auto renew
+                            </Label>
+                            <p className="text-[10px] text-muted-foreground">
+                              {hasActiveStripeSubscription
+                                ? "On: Stripe renews automatically with your saved card. Off: no auto-renew after this period — renew manually with Continue — pay."
+                                : "Subscribe with Stripe recurring billing first; one-time renewals here do not use this toggle."}
+                            </p>
+                          </div>
+                        </div>
+                        <RadioGroup
+                          value={prorationGateway}
+                          onValueChange={(v) => setProrationGateway(v as "stripe" | "khalti" | "esewa")}
+                          className="flex flex-col gap-2 text-xs"
+                        >
+                          <Label
+                            className={cn(
+                              "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                              prorationStripeAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                              prorationGateway === "stripe" && prorationStripeAvail && "border-primary"
+                            )}
+                          >
+                            <RadioGroupItem
+                              value="stripe"
+                              id="proration-stripe-mobile"
+                              className="shrink-0"
+                              disabled={!prorationStripeAvail}
+                            />
+                            Stripe (cards)
+                          </Label>
+                          <Label
+                            className={cn(
+                              "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                              prorationKhaltiAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                              prorationGateway === "khalti" && prorationKhaltiAvail && "border-primary"
+                            )}
+                          >
+                            <RadioGroupItem
+                              value="khalti"
+                              id="proration-khalti-mobile"
+                              className="shrink-0"
+                              disabled={!prorationKhaltiAvail}
+                            />
+                            Khalti
+                          </Label>
+                          <Label
+                            className={cn(
+                              "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                              prorationEsewaAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                              prorationGateway === "esewa" && prorationEsewaAvail && "border-primary"
+                            )}
+                          >
+                            <RadioGroupItem
+                              value="esewa"
+                              id="proration-esewa-mobile"
+                              className="shrink-0"
+                              disabled={!prorationEsewaAvail}
+                            />
+                            eSewa
+                          </Label>
+                        </RadioGroup>
+                        <Button
+                          type="button"
+                          className="w-full"
+                          disabled={loadPay || !companyId || billingOfflineBlock || !prorationPayEnabled}
+                          onClick={() => handleProratedPay(p.id)}
+                        >
                           {loadPay ? <Loader2 className="h-4 w-4 animate-spin" /> : `Continue — pay with ${prorationGateway}`}
                         </Button>
                       </div>
@@ -982,10 +1627,41 @@ export default function BillingPage() {
                   }
 
                   if (change === "downgrade") {
+                    const basicColumnLockedMobile = isPaidCompany && p.id === "basic";
+                    const tierLockedMobile =
+                      isPaidCompany && isPaidTierDowngradeBlocked(p.id) && !planDowngradeEnabled;
+                    // Desktop footer jaisa: admin ne paid→paid downgrade band kiya ho to mobile par bhi actions hide/disable.
+                    // `change === "downgrade"` + paid target ⇒ current plan already paid — `basic` comparison TS-narrow redundant.
+                    const adminBlocksPaidLowerMobile = !p.isFree && isPaidCompany && !planDowngradeEnabled;
                     return (
-                      <Button type="button" variant="secondary" className="w-full" disabled={loadDown || !companyId} onClick={() => handleDowngrade(p.id)}>
-                        {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : p.isFree ? "Select this plan" : `Downgrade to ${p.name}`}
-                      </Button>
+                      <div className="flex flex-col gap-2">
+                        {renderFrozenDowngradeSnapshot(p.id)}
+                        {/* Admin ne paid→paid downgrade band: sirf chhota locked copy — Basic wala alag link current column me. */}
+                        {adminBlocksPaidLowerMobile ? (
+                          <p className="text-xs text-muted-foreground text-center leading-snug px-0.5">
+                            This tier is locked after your upgrade — you can&apos;t switch back here.
+                          </p>
+                        ) : null}
+                        {basicColumnLockedMobile ? <PaidPlanBasicColumnLockedNotice /> : null}
+                        {!(adminBlocksPaidLowerMobile && !p.isFree) ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full"
+                            disabled={
+                              loadDown ||
+                              !companyId ||
+                              basicColumnLockedMobile ||
+                              tierLockedMobile ||
+                              billingOfflineBlock
+                            }
+                            onClick={() => handleDowngrade(p.id)}
+                          >
+                            {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : p.isFree ? "Select this plan" : `Downgrade to ${p.name}`}
+                          </Button>
+                        ) : null}
+                        {/* Neeche paid tier: sirf Downgrade — value → cheap plan par zyada din; "Just change plan" sirf upgrade columns par. */}
+                      </div>
                     );
                   }
 
@@ -994,7 +1670,10 @@ export default function BillingPage() {
                       <div className="space-y-2">
                         <Select
                           value={colTerms[p.id]}
-                          onValueChange={(v) => setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))}
+                          onValueChange={(v) => {
+                            setSelectedPlanId(p.id);
+                            setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                          }}
                         >
                           <SelectTrigger className="w-full">
                             <SelectValue placeholder="Term" />
@@ -1007,9 +1686,136 @@ export default function BillingPage() {
                             ))}
                           </SelectContent>
                         </Select>
-                        <Button type="button" className="w-full" disabled={loadPay || !companyId} onClick={() => handleProratedPay(p.id)}>
-                          {loadPay ? <Loader2 className="h-4 w-4 animate-spin" /> : change === "upgrade" ? "Upgrade (prorated)" : "Renew (prorated)"}
+                        {(() => {
+                          const curRow = plans.find((x) => x.id === currentPlanId);
+                          if (!curRow || curRow.isFree) return null;
+                          const nowMs = Date.now();
+                          const q = quotePaidPlanPurchase({
+                            nowMs,
+                            currentExpiryMs: expiryMs,
+                            currentYearly: curRow.price.yearly,
+                            targetMonthly: p.price.monthly,
+                            targetYearly: p.price.yearly,
+                            term: colTerms[p.id],
+                          });
+                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
+                          const daysLeftCurrentPlan = daysLeftRounded(nowMs, expiryMs);
+                          const remainingMsMob = expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+                          const renewLedgerMob = renewColumnFrozenUsageAndCreditDaysLeft({
+                            nowMs,
+                            currentExpiryMs: expiryMs,
+                            planYearly: curRow.price.yearly,
+                            remainingMs: remainingMsMob,
+                          });
+                          const creditDaysCarriedMob =
+                            change === "upgrade" && p.price.yearly > 0
+                              ? upgradeTargetCreditDaysCarried(q.creditNpr, p.price.yearly)
+                              : 0;
+                          // Renew branch: Credit रु ke saath din `q.creditNpr` se (desktop table jaisa).
+                          const creditDaysPinkRenewMob = creditDaysEquivalentAtTargetYearly(q.creditNpr, curRow.price.yearly);
+                          return (
+                            <>
+                              <p className="text-xs text-muted-foreground leading-snug">
+                                This term adds about{" "}
+                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
+                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
+                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
+                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                have left.
+                              </p>
+                              {billingShowUpgradePathParagraph(change) ? (
+                                <p className="text-[11px] text-muted-foreground leading-snug">
+                                  Upgrade: {curRow.name} usage stays on {curRow.name}; on {p.name} usage starts at zero.
+                                  Remaining value credits toward {p.name} (≈{" "}
+                                  <strong className="tabular-nums text-foreground">
+                                    {creditDaysCarriedMob.toFixed(2)}
+                                  </strong>{" "}
+                                  days at {p.name} list rate before your new term). Then your purchased term extends the
+                                  end date.
+                                </p>
+                              ) : null}
+                              {change === "upgrade" ? (
+                                <div className="flex flex-col items-center gap-1.5">
+                                  <div className={PRORATION_PILL_CREDIT_CLASS}>
+                                    <span>
+                                      Credit ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                      <strong className="font-semibold text-pink-950 dark:text-pink-50">
+                                        {creditDaysCarriedMob.toFixed(2)}
+                                      </strong>{" "}
+                                      {creditPillAdjustedDayWord(creditDaysCarriedMob)} left
+                                    </span>
+                                  </div>
+                                  <div className={PRORATION_PILL_USAGE_CLASS}>
+                                    <span>
+                                      Usage: रु {(0).toFixed(2)}
+                                      {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
+                                    </span>
+                                  </div>
+                                  {/* Upgrade: "Pay now" net Stripe line mat dikhao — primary flow zero-wala "Just change plan" (bacha credit → din). */}
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-1.5">
+                                  <div className={PRORATION_PILL_CREDIT_CLASS}>
+                                    <span>
+                                      Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                      <strong className="font-semibold text-pink-950 dark:text-pink-50">
+                                        {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewMob)}
+                                      </strong>{" "}
+                                      {creditPillAdjustedDayWord(creditDaysPinkRenewMob)} left
+                                    </span>
+                                  </div>
+                                  <div className={PRORATION_PILL_USAGE_CLASS}>
+                                    <span>
+                                      Usage: रु {renewLedgerMob.frozenUsageNpr.toFixed(2)}
+                                      {formatUsageLineSuffix(
+                                        renewLedgerMob.frozenUsageNpr,
+                                        curRow.price.yearly,
+                                        q.grossNpr
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                        <Button
+                          type="button"
+                          className="w-full"
+                          disabled={loadPay || !companyId || billingOfflineBlock}
+                          onClick={() => {
+                            setSelectedPlanId(p.id);
+                            void handleProratedPay(p.id);
+                          }}
+                        >
+                          {loadPay ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : change === "upgrade" ? (
+                            "Upgrade (prorated)"
+                          ) : (
+                            "Renew (prorated)"
+                          )}
                         </Button>
+                        {change === "upgrade" ? (
+                          <>
+                            <p className="text-[10px] text-muted-foreground text-center leading-snug px-0.5">
+                              {PLAN_CHANGE_ONLY_SELECT_OPTION.label}: popup — credit → days on higher plan (end date
+                              updates); no payment.
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              disabled={loadPay || !companyId || billingOfflineBlock}
+                              onClick={() => {
+                                setSelectedPlanId(p.id);
+                                setPlanChangeOnlyTargetId(p.id);
+                              }}
+                            >
+                              {PLAN_CHANGE_ONLY_SELECT_OPTION.label}
+                            </Button>
+                          </>
+                        ) : null}
                       </div>
                     );
                   }
@@ -1040,10 +1846,20 @@ export default function BillingPage() {
                   }
 
                   if (p.isFree && p.id !== currentPlanId) {
+                    const basicFreeLockedMob = isPaidCompany && p.id === "basic";
                     return (
-                      <Button type="button" variant="secondary" className="w-full" disabled={loadDown || !companyId} onClick={() => handleDowngrade(p.id)}>
-                        {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : "Select this plan"}
-                      </Button>
+                      <div className="flex flex-col gap-2">
+                        {basicFreeLockedMob ? <PaidPlanBasicColumnLockedNotice /> : null}
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full"
+                          disabled={loadDown || !companyId || basicFreeLockedMob}
+                          onClick={() => handleDowngrade(p.id)}
+                        >
+                          {loadDown ? <Loader2 className="h-4 w-4 animate-spin" /> : "Select this plan"}
+                        </Button>
+                      </div>
                     );
                   }
 
@@ -1081,18 +1897,34 @@ export default function BillingPage() {
                     const isSelected = p.id === selectedPlanId;
                     const offerDate = p.limitedTimeOfferDate ? (p.limitedTimeOfferDate as { toDate: () => Date }).toDate() : null;
                     const isOfferValid = offerDate && offerDate > new Date();
+                    // Bank Settings downgrade ON ho to "Locked" badge mat dikhao — button/API tier lock override.
+                    const tierLockedHeader =
+                      isPaidCompany && isPaidTierDowngradeBlocked(p.id) && !planDowngradeEnabled;
 
                     return (
                       <TableHead
                         key={p.id}
                         className={cn(
                           "w-[19.5%] min-w-0 max-w-[19.5%] text-center align-top !whitespace-normal whitespace-normal break-words px-2 py-3",
-                          isSelected && "bg-muted"
+                          isSelected && "bg-muted",
+                          // Column tap = isi plan ke liye live credit / net lines (dropdown ke alawa).
+                          "cursor-pointer select-none"
                         )}
+                        onClick={() => setSelectedPlanId(p.id)}
                       >
                         <div className="p-2 min-w-0">
                           <div className="flex flex-wrap items-center justify-center gap-2 min-w-0">
                             <h3 className="text-xl font-bold break-words min-w-0 leading-tight">{p.name}</h3>
+                            {p.id === currentPlanId ? (
+                              <Badge className="shrink-0 text-[10px] sm:text-xs" variant="default">
+                                Current
+                              </Badge>
+                            ) : null}
+                            {tierLockedHeader ? (
+                              <Badge className="shrink-0 text-[10px] sm:text-xs" variant="outline">
+                                Locked
+                              </Badge>
+                            ) : null}
                             {p.highlight && <Badge className="shrink-0">Most Popular</Badge>}
                           </div>
                           <p className="text-sm text-muted-foreground break-words mt-1">{p.tagline}</p>
@@ -1186,38 +2018,132 @@ export default function BillingPage() {
                     const loadPay = prorationLoading === `pay:${p.id}`;
                     const loadDown = downgradeLoading === `down:${p.id}`;
 
+                    // Credit / Usage pills sirf highlighted column; upar wali line har paid column par = is term ke din + stack copy.
                     const prorationHint =
                       isPaidCompany && change !== "downgrade" && !p.isFree && curPlanRow && !curPlanRow.isFree ? (
                         (() => {
+                          const nowMs = Date.now();
                           const q = quotePaidPlanPurchase({
-                            nowMs: Date.now(),
+                            nowMs,
                             currentExpiryMs: expiryMs,
                             currentYearly: curPlanRow.price.yearly,
                             targetMonthly: p.price.monthly,
                             targetYearly: p.price.yearly,
                             term: colTerms[p.id],
                           });
-                          const daysApprox = daysLeftRounded(Date.now(), q.newExpiryMs);
+                          const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
+                          // Current plan column: hamesha apni Credit/Usage dikhao — warna Pro select karte hi Advance ki pills gayab (user confusion).
+                          const showLiveProrationAmounts = p.id === selectedPlanId || p.id === currentPlanId;
+                          const daysLeftCurrentPlan = daysLeftRounded(nowMs, expiryMs);
+                          const remainingMsForPills =
+                            expiryMs != null && Number.isFinite(expiryMs) ? Math.max(0, expiryMs - nowMs) : 0;
+                          const renewLedgerDesk = renewColumnFrozenUsageAndCreditDaysLeft({
+                            nowMs,
+                            currentExpiryMs: expiryMs,
+                            planYearly: curPlanRow.price.yearly,
+                            remainingMs: remainingMsForPills,
+                          });
+                          const creditCarriedDesk =
+                            change === "upgrade" && p.price.yearly > 0
+                              ? upgradeTargetCreditDaysCarried(q.creditNpr, p.price.yearly)
+                              : 0;
+                          // Renew / same-tier column: pink din = checkout `q.creditNpr` — warna trailing-year usage se 0.00 + positive रु.
+                          const creditDaysPinkRenewDesk = creditDaysEquivalentAtTargetYearly(
+                            q.creditNpr,
+                            curPlanRow.price.yearly
+                          );
+                          const usageNprRenewDesk = frozenLowerPaidTierInLedger
+                            ? usageNprAccruedSinceCurrentTierStart({
+                                nowMs,
+                                planUpgradedAtMs: planUpgradedAtMsForUsageRamp,
+                                planYearly: curPlanRow.price.yearly,
+                              })
+                            : renewLedgerDesk.frozenUsageNpr;
                           return (
                             <>
                               <p className="text-xs text-muted-foreground leading-snug">
-                                With the term selected above, you would have about{" "}
-                                <strong className="tabular-nums text-foreground">{daysApprox}</strong> days of{" "}
-                                <span className="font-medium">{p.name}</span> access from today (after payment is
-                                applied).
+                                This term adds about{" "}
+                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
+                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
+                                <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
+                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                have left.
                               </p>
-                              <p className="text-xs text-muted-foreground tabular-nums">
-                                Credit ≈ रु {q.creditNpr.toFixed(2)} · Net due रु {q.netNpr.toFixed(2)}
-                              </p>
+                              {billingShowUpgradePathParagraph(change) ? (
+                                <p className="text-[11px] text-muted-foreground leading-snug">
+                                  Upgrade path: your remaining{" "}
+                                  <strong className="tabular-nums text-foreground">{daysLeftCurrentPlan}</strong> day
+                                  {daysLeftCurrentPlan === 1 ? "" : "s"} on {curPlanRow.name} — usage on{" "}
+                                  {curPlanRow.name} is frozen; on {p.name} usage starts at zero. Carried value ≈{" "}
+                                  <strong className="tabular-nums text-foreground">
+                                    {creditCarriedDesk.toFixed(2)}
+                                  </strong>{" "}
+                                  days on {p.name} before your new term extends the end date.
+                                </p>
+                              ) : null}
+                              {showLiveProrationAmounts ? (
+                                change === "upgrade" ? (
+                                  <div className="flex flex-col items-center gap-1.5 max-w-[280px] mx-auto">
+                                    <div className={PRORATION_PILL_CREDIT_CLASS}>
+                                      <span>
+                                        Credit ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                        <strong className="font-semibold text-pink-950 dark:text-pink-50">
+                                          {creditCarriedDesk.toFixed(2)}
+                                        </strong>{" "}
+                                        {creditPillAdjustedDayWord(creditCarriedDesk)} left
+                                      </span>
+                                    </div>
+                                    <div className={PRORATION_PILL_USAGE_CLASS}>
+                                      <span>
+                                        Usage: रु {(0).toFixed(2)}
+                                        {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
+                                      </span>
+                                    </div>
+                                    {/* Upgrade: Stripe net breakdown hide — user ko sirf credit/days + "Just change plan" dikhana hai. */}
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center gap-1.5">
+                                    <div className={PRORATION_PILL_CREDIT_CLASS}>
+                                      <span>
+                                        Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                        <strong className="font-semibold text-pink-950 dark:text-pink-50">
+                                          {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewDesk)}
+                                        </strong>{" "}
+                                        {creditPillAdjustedDayWord(creditDaysPinkRenewDesk)} left
+                                      </span>
+                                    </div>
+                                    <div className={PRORATION_PILL_USAGE_CLASS}>
+                                      <span>
+                                        Usage: रु {usageNprRenewDesk.toFixed(2)}
+                                        {formatUsageLineSuffix(
+                                          usageNprRenewDesk,
+                                          curPlanRow.price.yearly,
+                                          q.grossNpr
+                                        )}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )
+                              ) : null}
                             </>
                           );
                         })()
                       ) : null;
 
+                    const adminBlocksPaidLowerColumn =
+                      change === "downgrade" && !p.isFree && isPaidCompany && !planDowngradeEnabled;
+
                     const downgradeHint =
                       change === "downgrade" && currentPlanId !== "basic" && isPaidCompany ? (
                         (() => {
                           if (p.isFree) return null;
+                          if (!planDowngradeEnabled) {
+                            return (
+                              <p className="text-xs text-muted-foreground leading-snug">
+                                This tier is locked after your upgrade — you can&apos;t switch back here.
+                              </p>
+                            );
+                          }
                           const tgt = p;
                           const curY = curPlanRow?.price.yearly ?? 0;
                           const q = quoteDowngradeNewExpiry({
@@ -1229,8 +2155,10 @@ export default function BillingPage() {
                           return (
                             <p className="text-xs text-muted-foreground leading-snug">
                               If you downgrade, your remaining paid time converts to about{" "}
-                              <strong className="tabular-nums text-foreground">{q.extraDays}</strong> days on{" "}
-                              <span className="font-medium">{tgt.name}</span> at that plan&apos;s yearly rate.
+                              <strong className="tabular-nums text-foreground">
+                                {q.extraDays.toFixed(2)}
+                              </strong>{" "}
+                              days on <span className="font-medium">{tgt.name}</span> at that plan&apos;s yearly rate.
                             </p>
                           );
                         })()
@@ -1244,9 +2172,10 @@ export default function BillingPage() {
                           <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                             <Select
                               value={colTerms[p.id]}
-                              onValueChange={(v) =>
-                                setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))
-                              }
+                              onValueChange={(v) => {
+                                setSelectedPlanId(p.id);
+                                setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                              }}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Term" />
@@ -1260,6 +2189,32 @@ export default function BillingPage() {
                               </SelectContent>
                             </Select>
                             {prorationHint}
+                            <div className="flex items-start gap-2 rounded-md border border-border/70 px-2 py-2 text-left">
+                              <Checkbox
+                                id="billing-auto-renew-desk"
+                                checked={autoRenewCheckboxChecked}
+                                disabled={
+                                  !hasActiveStripeSubscription ||
+                                  autoRenewSaving ||
+                                  billingOfflineBlock ||
+                                  !billingFirestoreCompanyId
+                                }
+                                onCheckedChange={(v) => void handleBillingAutoRenewChange(v === true)}
+                              />
+                              <div className="grid gap-0.5 leading-snug min-w-0">
+                                <Label
+                                  htmlFor="billing-auto-renew-desk"
+                                  className="text-xs font-medium cursor-pointer leading-tight"
+                                >
+                                  Auto renew
+                                </Label>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {hasActiveStripeSubscription
+                                    ? "On: Stripe renews automatically with your saved card. Off: no auto-renew after this period — renew manually with Continue — pay."
+                                    : "Subscribe with Stripe recurring billing first; one-time renewals here do not use this toggle."}
+                                </p>
+                              </div>
+                            </div>
                             {/* Renew: same gateways as new subscription — each payment row in admin shows gateway separately. */}
                             <RadioGroup
                               value={prorationGateway}
@@ -1268,29 +2223,47 @@ export default function BillingPage() {
                             >
                               <Label
                                 className={cn(
-                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 cursor-pointer font-normal",
-                                  prorationGateway === "stripe" && "border-primary"
+                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                                  prorationStripeAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                                  prorationGateway === "stripe" && prorationStripeAvail && "border-primary"
                                 )}
                               >
-                                <RadioGroupItem value="stripe" id="proration-stripe" className="shrink-0" />
+                                <RadioGroupItem
+                                  value="stripe"
+                                  id="proration-stripe"
+                                  className="shrink-0"
+                                  disabled={!prorationStripeAvail}
+                                />
                                 Stripe (cards)
                               </Label>
                               <Label
                                 className={cn(
-                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 cursor-pointer font-normal",
-                                  prorationGateway === "khalti" && "border-primary"
+                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                                  prorationKhaltiAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                                  prorationGateway === "khalti" && prorationKhaltiAvail && "border-primary"
                                 )}
                               >
-                                <RadioGroupItem value="khalti" id="proration-khalti" className="shrink-0" />
+                                <RadioGroupItem
+                                  value="khalti"
+                                  id="proration-khalti"
+                                  className="shrink-0"
+                                  disabled={!prorationKhaltiAvail}
+                                />
                                 Khalti
                               </Label>
                               <Label
                                 className={cn(
-                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 cursor-pointer font-normal",
-                                  prorationGateway === "esewa" && "border-primary"
+                                  "flex items-center gap-2 border rounded-md px-2 py-1.5 font-normal",
+                                  prorationEsewaAvail ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                                  prorationGateway === "esewa" && prorationEsewaAvail && "border-primary"
                                 )}
                               >
-                                <RadioGroupItem value="esewa" id="proration-esewa" className="shrink-0" />
+                                <RadioGroupItem
+                                  value="esewa"
+                                  id="proration-esewa"
+                                  className="shrink-0"
+                                  disabled={!prorationEsewaAvail}
+                                />
                                 eSewa
                               </Label>
                             </RadioGroup>
@@ -1298,7 +2271,7 @@ export default function BillingPage() {
                               type="button"
                               size="sm"
                               className="w-full"
-                              disabled={loadPay || !companyId}
+                              disabled={loadPay || !companyId || billingOfflineBlock || !prorationPayEnabled}
                               onClick={() => handleProratedPay(p.id)}
                             >
                               {loadPay ? (
@@ -1307,11 +2280,6 @@ export default function BillingPage() {
                                 `Continue — pay with ${prorationGateway}`
                               )}
                             </Button>
-                            <p className="text-[10px] text-muted-foreground leading-tight">
-                              Prorated renew uses the gateway you choose; Khalti may require a secret key on the server
-                              for verification. If you also have a Stripe subscription, it may renew there until you
-                              cancel in Stripe.
-                            </p>
                           </div>
                         ) : (
                           <Button type="button" variant="outline" disabled className="w-full max-w-[220px]">
@@ -1319,37 +2287,54 @@ export default function BillingPage() {
                           </Button>
                         );
                     } else if (change === "downgrade") {
+                      // Basic column + paid subscription: table se "Select this plan" band — upar current-plan link use karo.
+                      const basicColumnLocked = isPaidCompany && p.id === "basic";
+                      const tierLockedDesk =
+                        isPaidCompany && isPaidTierDowngradeBlocked(p.id) && !planDowngradeEnabled;
                       footerInner = (
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
+                          {renderFrozenDowngradeSnapshot(p.id)}
                           {downgradeHint}
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="w-full"
-                            disabled={loadDown || !companyId}
-                            onClick={() => handleDowngrade(p.id)}
-                          >
-                            {loadDown ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : p.isFree ? (
-                              "Select this plan"
-                            ) : (
-                              `Downgrade to ${p.name}`
-                            )}
-                          </Button>
+                          {basicColumnLocked ? <PaidPlanBasicColumnLockedNotice /> : null}
+                          {/* Admin OFF: paid→paid Downgrade button mat dikhao — Basic (free) column alag (`adminBlocks` false jab p.isFree). */}
+                          {!(adminBlocksPaidLowerColumn && !p.isFree) ? (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="w-full"
+                              disabled={
+                                loadDown ||
+                                !companyId ||
+                                basicColumnLocked ||
+                                tierLockedDesk ||
+                                billingOfflineBlock
+                              }
+                              onClick={() => handleDowngrade(p.id)}
+                            >
+                              {loadDown ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : p.isFree ? (
+                                "Select this plan"
+                              ) : (
+                                `Downgrade to ${p.name}`
+                              )}
+                            </Button>
+                          ) : null}
                         </div>
                       );
                     } else if (p.isFree && p.id !== currentPlanId) {
+                      const basicFreeColumnLocked = isPaidCompany && p.id === "basic";
                       footerInner = (
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                           <p className="text-xs text-muted-foreground text-center leading-snug px-1">
                             No payment — your company switches to this plan immediately.
                           </p>
+                          {basicFreeColumnLocked ? <PaidPlanBasicColumnLockedNotice /> : null}
                           <Button
                             type="button"
                             variant="secondary"
                             className="w-full"
-                            disabled={loadDown || !companyId}
+                            disabled={loadDown || !companyId || basicFreeColumnLocked || billingOfflineBlock}
                             onClick={() => handleDowngrade(p.id)}
                           >
                             {loadDown ? (
@@ -1365,9 +2350,10 @@ export default function BillingPage() {
                         <div className="flex flex-col items-stretch gap-2 max-w-[240px] mx-auto">
                           <Select
                             value={colTerms[p.id]}
-                            onValueChange={(v) =>
-                              setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }))
-                            }
+                            onValueChange={(v) => {
+                              setSelectedPlanId(p.id);
+                              setColTerms((prev) => ({ ...prev, [p.id]: v as SubscriptionTermKey }));
+                            }}
                           >
                             <SelectTrigger className="w-full">
                               <SelectValue placeholder="Term" />
@@ -1384,10 +2370,10 @@ export default function BillingPage() {
                           <Button
                             type="button"
                             className="w-full"
-                            disabled={loadPay || !companyId}
+                            disabled={loadPay || !companyId || billingOfflineBlock}
                             onClick={() => {
                               setSelectedPlanId(p.id);
-                              handleProratedPay(p.id);
+                              void handleProratedPay(p.id);
                             }}
                           >
                             {loadPay ? (
@@ -1398,6 +2384,27 @@ export default function BillingPage() {
                               "Renew (Stripe, prorated)"
                             )}
                           </Button>
+                          {change === "upgrade" ? (
+                            <>
+                            <p className="text-[10px] text-muted-foreground text-center leading-snug px-0.5">
+                              {PLAN_CHANGE_ONLY_SELECT_OPTION.label}: popup — remaining value becomes days on the higher
+                              plan; no payment.
+                            </p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full"
+                                disabled={loadPay || !companyId || billingOfflineBlock}
+                                onClick={() => {
+                                  setSelectedPlanId(p.id);
+                                  setPlanChangeOnlyTargetId(p.id);
+                                }}
+                              >
+                                {PLAN_CHANGE_ONLY_SELECT_OPTION.label}
+                              </Button>
+                            </>
+                          ) : null}
                         </div>
                       );
                     } else if (!p.isFree && currentPlanId === "basic") {
@@ -1422,20 +2429,13 @@ export default function BillingPage() {
                           </Select>
                           {(() => {
                             const basicRow = plans.find((x) => x.id === "basic");
-                            const q = quotePaidPlanPurchase({
-                              nowMs: Date.now(),
-                              currentExpiryMs: expiryMs,
-                              currentYearly: basicRow?.price.yearly ?? 0,
-                              targetMonthly: p.price.monthly,
-                              targetYearly: p.price.yearly,
-                              term: colTerms[p.id],
-                            });
-                            const daysApprox = daysLeftRounded(Date.now(), q.newExpiryMs);
+                            const termDaysAdd = termAddedDaysRounded(colTerms[p.id]);
                             return (
                               <p className="text-xs text-muted-foreground text-center leading-snug">
                                 On this term, new subscribers get about{" "}
-                                <strong className="tabular-nums text-foreground">{daysApprox}</strong> days of{" "}
-                                <span className="font-medium">{p.name}</span> access from payment date.
+                                <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
+                                {termDaysAdd === 1 ? "day" : "days"} of{" "}
+                                <span className="font-medium">{p.name}</span> access from the payment date.
                               </p>
                             );
                           })()}
@@ -1482,12 +2482,29 @@ export default function BillingPage() {
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
               billingIntent={selectedPlanDetails.isFree ? "donation" : "subscribe"}
+              networkOnline={billingNavigatorOnline}
+              gatewayAvailability={gatewayAvailability}
             />
-          ) : !showMobileCheckoutSection ? (
-            <p className="mt-8 border-t pt-6 text-sm text-muted-foreground">
-              You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
-              (prorated), or downgrade.
-            </p>
+          ) : !showMobileCheckoutSection && isPaidCompany ? (
+            <div className="mt-8 border-t pt-6 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                You are on a paid plan — use the term dropdowns and Stripe actions in the table above to renew, upgrade
+                (prorated), or downgrade.
+              </p>
+              {/* Paid plan footer: full T&amp;C (EN/NE/HI) + owner billing statement — opens in new tab. */}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/billing/terms" target="_blank" rel="noopener noreferrer">
+                    Terms &amp; Conditions
+                  </Link>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/billing/statement" target="_blank" rel="noopener noreferrer">
+                    Statement
+                  </Link>
+                </Button>
+              </div>
+            </div>
           ) : null}
 
           {showMobileCheckoutSection && (
@@ -1498,8 +2515,90 @@ export default function BillingPage() {
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
               billingIntent={selectedMobilePlan.isFree ? "donation" : "subscribe"}
+              networkOnline={billingNavigatorOnline}
+              gatewayAvailability={gatewayAvailability}
             />
           )}
+
+          <AlertDialog
+            open={planChangeOnlyTargetId != null}
+            onOpenChange={(open) => {
+              if (!open) setPlanChangeOnlyTargetId(null);
+            }}
+          >
+            <AlertDialogContent className="max-w-md">
+              <AlertDialogHeader>
+                <AlertDialogTitle>{PLAN_CHANGE_ONLY_SELECT_OPTION.label}</AlertDialogTitle>
+                <AlertDialogDescription asChild>
+                  <div className="space-y-2 text-left text-sm text-muted-foreground">
+                    {planChangeOnlyDialogPreview ? (
+                      planChangeOnlyDialogPreview.isUpgradeConversion ? (
+                        <div className="space-y-3">
+                          <p>
+                            Switch tier:{" "}
+                            <strong className="text-foreground">{planChangeOnlyDialogPreview.fromLabel}</strong> →{" "}
+                            <strong className="text-foreground">{planChangeOnlyDialogPreview.toLabel}</strong>. Your{" "}
+                            <strong className="text-foreground">remaining subscription value</strong> (same NPR logic as
+                            the prorated upgrade line above) becomes about{" "}
+                            <strong className="text-foreground tabular-nums">
+                              {planChangeOnlyDialogPreview.newDaysLeft}{" "}
+                              {planChangeOnlyDialogPreview.newDaysLeft === 1 ? "day" : "days"}
+                            </strong>{" "}
+                            of {planChangeOnlyDialogPreview.toLabel} from today —{" "}
+                            <strong className="text-foreground">end date moves earlier</strong>. No new paid term is
+                            added. <strong className="text-foreground">No payment</strong>.
+                          </p>
+                          {typeof planChangeOnlyDialogPreview.leavingUsageNpr === "number" &&
+                          planChangeOnlyDialogPreview.leavingPlanYearly > 0 ? (
+                            <div className="flex flex-col items-center gap-1.5">
+                              <p className="text-[11px] text-muted-foreground text-center m-0">
+                                {planChangeOnlyDialogPreview.fromLabel} — ab tak ka usage (confirm ke baad isi par{" "}
+                                <strong className="text-foreground">freeze</strong>):
+                              </p>
+                              <div className={PRORATION_PILL_USAGE_FROZEN_CLASS}>
+                                <span>
+                                  Usage: रु {planChangeOnlyDialogPreview.leavingUsageNpr.toFixed(2)}
+                                  {formatUsageLineSuffix(
+                                    planChangeOnlyDialogPreview.leavingUsageNpr,
+                                    planChangeOnlyDialogPreview.leavingPlanYearly,
+                                    planChangeOnlyDialogPreview.leavingPlanYearly
+                                  )}
+                                </span>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p>
+                          Switch tier only:{" "}
+                          <strong className="text-foreground">{planChangeOnlyDialogPreview.fromLabel}</strong> →{" "}
+                          <strong className="text-foreground">{planChangeOnlyDialogPreview.toLabel}</strong>.{" "}
+                          <strong className="text-foreground">End date stays the same</strong> (no extra purchased days).{" "}
+                          <strong className="text-foreground">No payment</strong>.
+                        </p>
+                      )
+                    ) : (
+                      <p>Confirm this plan switch on the server.</p>
+                    )}
+                  </div>
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  type="button"
+                  disabled={billingOfflineBlock}
+                  onClick={() => {
+                    const tid = planChangeOnlyTargetId;
+                    setPlanChangeOnlyTargetId(null);
+                    if (tid) void handleProratedPay(tid, "plan_change_only");
+                  }}
+                >
+                  Confirm
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </CardContent>
       </Card>
     </div>

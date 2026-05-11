@@ -751,26 +751,65 @@ export default function MessagesPage() {
               onValueChange={handleTabChange}
               className="flex flex-1 flex-col min-h-0 w-full"
             >
-                <div className="flex flex-col gap-2 w-full">
-                    <TabsList className="mb-0 w-full sm:w-auto">
-                        <TabsTrigger value="alerts" className="flex items-center gap-2">
-                            <Bell className="h-4 w-4"/>Alerts 
+                <div className="flex flex-col gap-2 w-full overflow-x-auto overflow-y-visible">
+                    {/* Badge: purana top-0 -50% clip, top-1 zyada niche — ab top-0 + -translate-y-[30%] beech ka rasta */}
+                    <TabsList
+                      className={cn(
+                        "mb-0 flex h-10 w-full min-h-10 max-h-10 overflow-visible p-1 sm:inline-flex sm:w-auto",
+                      )}
+                    >
+                        <TabsTrigger
+                          value="alerts"
+                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
+                        >
+                            <Bell className="h-4 w-4 shrink-0" />
+                            <span className="truncate">Alerts</span>
                             {unreadAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
-                              <Badge className="ml-2">{unreadAlerts}</Badge>
+                              <Badge
+                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
+                                variant="default"
+                              >
+                                {unreadAlerts > 99 ? "99+" : unreadAlerts}
+                              </Badge>
                             )}
                         </TabsTrigger>
-                        <TabsTrigger value="auto" className="flex items-center gap-2">
-                            <Bot className="h-4 w-4"/>Auto Voucher
+                        <TabsTrigger
+                          value="auto"
+                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
+                        >
+                            <Bot className="h-4 w-4 shrink-0" />
+                            <span className="truncate sm:whitespace-normal">Auto Voucher</span>
                             {unreadAutoAlerts > 0 && (effectiveNotificationSettings?.transactionAlerts?.onTabs !== false) && (
-                              <Badge className="ml-2">{unreadAutoAlerts}</Badge>
+                              <Badge
+                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
+                                variant="default"
+                              >
+                                {unreadAutoAlerts > 99 ? "99+" : unreadAutoAlerts}
+                              </Badge>
                             )}
                         </TabsTrigger>
-                        <TabsTrigger value="chat" className="flex items-center gap-2">
-                            <MessageSquare className="h-4 w-4"/>Chat 
-                            {unreadMessages > 0 && <Badge className="ml-2">{unreadMessages}</Badge>}
+                        <TabsTrigger
+                          value="chat"
+                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
+                        >
+                            {/* Mobile par sirf Chat tab: icon chhupa — jagah + cleaner row */}
+                            {!isMobile ? <MessageSquare className="h-4 w-4 shrink-0" /> : null}
+                            <span className="truncate">Chat</span>
+                            {unreadMessages > 0 && (
+                              <Badge
+                                className="pointer-events-none absolute right-1 top-0 z-10 flex h-4 min-w-[1rem] max-w-[2.75rem] -translate-y-[30%] items-center justify-center border-2 border-background px-1 py-0 text-[10px] font-bold leading-none shadow-sm"
+                                variant="default"
+                              >
+                                {unreadMessages > 99 ? "99+" : unreadMessages}
+                              </Badge>
+                            )}
                         </TabsTrigger>
-                        <TabsTrigger value="alarms" className="flex items-center gap-2">
-                            <AlarmPlus className="h-4 w-4"/>Alarms
+                        <TabsTrigger
+                          value="alarms"
+                          className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-visible px-2 py-1.5 sm:flex-initial sm:gap-2 sm:px-3"
+                        >
+                            <AlarmPlus className="h-4 w-4 shrink-0" />
+                            <span className="truncate">Alarms</span>
                         </TabsTrigger>
                     </TabsList>
                     <CardDescription className="text-green-500 whitespace-nowrap text-right sm:text-left">Online from: <span className="font-semibold text-foreground">{company?.name || 'Personal Account'}</span></CardDescription>

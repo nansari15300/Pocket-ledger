@@ -4,14 +4,9 @@ import { getAdminDb } from "@/lib/firebaseAdmin";
 import * as admin from "firebase-admin";
 import {
   fulfillStripeCheckoutSessionCompleted,
-  getStripeForPayments,
+  getStripeForPaymentsMerged,
+  getSubscriptionWithPeriodEndRetry,
 } from "@/lib/payments/stripeCheckoutFulfill";
-
-/** invoice.paid renewal — same period-end read as fulfillment helper (not exported from fulfill module). */
-function subscriptionPeriodEndMs(sub: unknown): number | null {
-  const end = (sub as { current_period_end?: number })?.current_period_end;
-  return typeof end === "number" ? end * 1000 : null;
-}
 
 export async function POST(req: NextRequest) {
   const body = await req.text();
@@ -25,7 +20,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const stripe = getStripeForPayments();
+  const stripe = await getStripeForPaymentsMerged();
   let event: Stripe.Event;
   try {
     event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
@@ -46,28 +41,99 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ received: true });
     }
 
-    // Subscription renewal: extend planExpiry (metadata from subscription_data.metadata on Checkout).
+    // Subscription paid (pehli invoice + renewals): planExpiry — pehle subscription_create skip tha isliye 1st cycle par date nahi aati thi.
     if (event.type === "invoice.paid") {
       const invoice = event.data.object as Stripe.Invoice;
-      if (invoice.billing_reason === "subscription_create") {
-        return NextResponse.json({ received: true });
-      }
       const subRef = (invoice as { subscription?: string | { id?: string } | null }).subscription;
       const subId = typeof subRef === "string" ? subRef : subRef?.id;
       if (!subId) return NextResponse.json({ received: true });
 
-      const sub = await stripe.subscriptions.retrieve(subId);
-      const meta = (sub as { metadata?: Record<string, string> }).metadata || {};
+      const period = await getSubscriptionWithPeriodEndRetry(stripe, subId);
+      if (!period) return NextResponse.json({ received: true });
+      const { subscription: sub, endMs } = period;
+      const meta = sub.metadata || {};
       const companyId = meta.companyId?.trim();
       if (!companyId) return NextResponse.json({ received: true });
 
-      const endMs = subscriptionPeriodEndMs(sub);
-      if (endMs == null) return NextResponse.json({ received: true });
       const planExpiry = admin.firestore.Timestamp.fromMillis(endMs);
+      const isFirstSubscriptionInvoice = invoice.billing_reason === "subscription_create";
       await db.collection("companies").doc(companyId).update({
         planExpiry,
+        planExpiryMs: endMs,
         stripeSubscriptionId: subId,
-        lastSubscriptionRenewalAt: admin.firestore.FieldValue.serverTimestamp(),
+        // Successful charge — purana “renewal failed” banner hata do.
+        billingAutoRenewFailureNoticeEn: admin.firestore.FieldValue.delete(),
+        billingAutoRenewFailureNoticeUntilMs: admin.firestore.FieldValue.delete(),
+        billingAutoRenewLastFailedInvoiceId: admin.firestore.FieldValue.delete(),
+        // Renewal timestamp sirf actual renewals par — pehli invoice par nahi (misleading "renewal").
+        ...(isFirstSubscriptionInvoice
+          ? {}
+          : { lastSubscriptionRenewalAt: admin.firestore.FieldValue.serverTimestamp() }),
+      });
+
+      return NextResponse.json({ received: true });
+    }
+
+    // Card decline + owner ne auto-renew off nahi kiya (`billingAutoRenew !== false`) → 3 din grace + billing alert.
+    if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object as Stripe.Invoice;
+      // Stripe `Invoice.subscription` — SDK typing version drift par safe access.
+      const subRef = (invoice as unknown as { subscription?: string | Stripe.Subscription | null }).subscription;
+      const subId =
+        typeof subRef === "string"
+          ? subRef
+          : subRef && typeof subRef === "object" && "id" in subRef
+            ? (subRef as { id: string }).id
+            : null;
+      if (!subId) return NextResponse.json({ received: true });
+
+      const sub = await stripe.subscriptions.retrieve(subId);
+      const companyId = sub.metadata?.companyId?.trim();
+      if (!companyId) return NextResponse.json({ received: true });
+
+      const coRef = db.collection("companies").doc(companyId);
+      const coSnap = await coRef.get();
+      if (!coSnap.exists) return NextResponse.json({ received: true });
+      const cdata = coSnap.data() as Record<string, unknown>;
+
+      // Explicit `false` = owner ne auto-renew band kiya — grace mat lagao; undefined/true = default / on.
+      if (cdata.billingAutoRenew === false) {
+        return NextResponse.json({ received: true });
+      }
+
+      // Pehli subscribe invoice fail alag flow — sirf recurring renewal / update fail par grace.
+      const br = invoice.billing_reason;
+      if (br !== "subscription_cycle" && br !== "subscription_update") {
+        return NextResponse.json({ received: true });
+      }
+
+      const invId = typeof invoice.id === "string" ? invoice.id : "";
+      if (invId && cdata.billingAutoRenewLastFailedInvoiceId === invId) {
+        return NextResponse.json({ received: true });
+      }
+
+      const nowMs = Date.now();
+      const MS_3D = 3 * 86400000;
+      let curExp = 0;
+      if (typeof cdata.planExpiryMs === "number" && Number.isFinite(cdata.planExpiryMs)) {
+        curExp = cdata.planExpiryMs;
+      } else {
+        const pe = cdata.planExpiry as { toMillis?: () => number } | undefined;
+        if (pe && typeof pe.toMillis === "function") curExp = pe.toMillis();
+      }
+      const base = Math.max(curExp, nowMs);
+      const newExpMs = base + MS_3D;
+
+      const noticeEn =
+        "Renewal failed: insufficient balance on your saved card. You have 3 extra days to renew manually — after that, this company will move to the Basic (free) plan.";
+
+      await coRef.update({
+        planExpiryMs: newExpMs,
+        planExpiry: admin.firestore.Timestamp.fromMillis(newExpMs),
+        ...(invId ? { billingAutoRenewLastFailedInvoiceId: invId } : {}),
+        billingAutoRenewLastFailureAt: admin.firestore.FieldValue.serverTimestamp(),
+        billingAutoRenewFailureNoticeEn: noticeEn,
+        billingAutoRenewFailureNoticeUntilMs: nowMs + MS_3D,
       });
 
       return NextResponse.json({ received: true });

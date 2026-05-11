@@ -83,6 +83,8 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
@@ -2521,34 +2523,51 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         />
                       ))}
                       {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                        <div 
+                        <AttachmentHoldPasteSurface
+                          enabled={isFormEditing && allowAttachments && fileAttachmentLimits.maxFileCount > 0}
+                          onShortActivate={() => {
+                            if (!isFormEditing) return;
+                            if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                              fileInputRef.current?.click();
+                            }
+                          }}
+                          onPastedFiles={(incoming) =>
+                            void appendCompressedVoucherAttachmentsToState({
+                              incomingFiles: incoming,
+                              currentFiles: files,
+                              maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                              allowImage: fileAttachmentLimits.allowImage,
+                              allowPDF: fileAttachmentLimits.allowPDF,
+                              setFiles,
+                              toast,
+                            })
+                          }
                           className={cn(
                             "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0
                               ? "text-muted-foreground hover:border-primary cursor-pointer"
                               : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
                           )}
-                          onClick={() => {
-                            if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                              fileInputRef.current?.click();
-                            }
-                          }}
                         >
-                           <PlusCircle className="h-6 w-6" />
+                          <PlusCircle className="h-6 w-6" />
                           <span className="text-xs mt-1">Add File</span>
-                          <input 
-                            type="file" 
+                          <input
+                            type="file"
                             className="hidden"
                             ref={fileInputRef}
                             onChange={handleFileChange}
-                            accept={[
-                              fileAttachmentLimits.allowImage ? "image/*" : "",
-                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                            accept={
+                              [
+                                fileAttachmentLimits.allowImage ? "image/*" : "",
+                                fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                              ]
+                                .filter(Boolean)
+                                .join(",") || "image/*,application/pdf"
+                            }
                             multiple={fileAttachmentLimits.maxFileCount > 1}
                             disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                           />
-                        </div>
+                        </AttachmentHoldPasteSurface>
                       )}
                     </div>
                   </RestrictedFileUploader>

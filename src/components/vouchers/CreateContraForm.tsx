@@ -38,6 +38,8 @@ import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
 import { FilePreview } from "../vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { useVouchers } from "@/hooks/useVouchers";
 import {
@@ -1784,8 +1786,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         ))}
                         {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                           <>
-                            <label
-                              htmlFor={attachFileInputId}
+                            <AttachmentHoldPasteSurface
+                              enabled={
+                                !editingDisabled &&
+                                !fileAttachLockedByDialog &&
+                                allowAttachments &&
+                                fileAttachmentLimits.maxFileCount > 0
+                              }
+                              onShortActivate={() => {
+                                if (editingDisabled) return;
+                                if (fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0) return;
+                                fileInputRef.current?.click();
+                              }}
+                              onPastedFiles={(incoming) =>
+                                void appendCompressedVoucherAttachmentsToState({
+                                  incomingFiles: incoming,
+                                  currentFiles: files,
+                                  maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                  allowImage: fileAttachmentLimits.allowImage,
+                                  allowPDF: fileAttachmentLimits.allowPDF,
+                                  setFiles,
+                                  toast,
+                                })
+                              }
                               className={cn(
                                 "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                                 allowAttachments && fileAttachmentLimits.maxFileCount > 0
@@ -1795,7 +1818,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             >
                               <PlusCircle className="h-6 w-6" />
                               <span className="text-xs mt-1">Add File</span>
-                            </label>
+                            </AttachmentHoldPasteSurface>
                             <Input
                               id={attachFileInputId}
                               type="file"

@@ -17,6 +17,7 @@ import {
 } from "@/lib/localCompanyStore";
 import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
 import { higherPlanByTier, normalizePlanIdForClient, type PlanId } from "@/config/plans";
+import type { BillingFrozenPlanSnapshot } from "@/lib/billingFrozenPlanSnapshots";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { CompanyDemoteReason } from "@/lib/companyDemote";
 import { isCurrentUserOwnerOfCompanyRow, reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
@@ -127,8 +128,25 @@ export type Company = {
     isOwned?: boolean;
     planId?: string;
     planExpiry?: Timestamp;
+    /** Firestore / SQLite mirror — billing + offline sync ke liye numeric expiry (Timestamp ke saath). */
+    planExpiryMs?: number;
+    /** Active Stripe subscription id — expiry miss par server `current_period_end` se repair. */
+    stripeSubscriptionId?: string;
+    /** Owner billing checkbox — `invoice.payment_failed` par 3 din grace + notice (Stripe subscription). */
+    billingAutoRenew?: boolean;
+    billingAutoRenewFailureNoticeEn?: string;
+    billingAutoRenewFailureNoticeUntilMs?: number;
+    /**
+     * Paid expiry ke baad renew na ho to Basic — default ON; owner billing se `false` kar sakta hai.
+     * Server `sync-plan` par `applyExpiredPaidPlanAutoDowngrade` is flag ko dekhta hai.
+     */
+    autoDowngradeToBasicWhenExpired?: boolean;
     /** Set when a paid plan is applied (Stripe fulfill); good proxy for “joined” paid subscription date. */
     planUpgradedAt?: Timestamp;
+    /** Paid upgrade ke waqt chhode hue tier ka usage/credit snapshot — UI frozen pills + server truth. */
+    billingFrozenUsageLedger?: BillingFrozenPlanSnapshot[];
+    /** In tiers par downgrade / “Just change plan” block (e.g. Advance lock after Advance→Pro). */
+    billingBlockedDowngradePlanIds?: string[];
     settings?: Record<string, boolean>;
     allowAttachments?: boolean;
     isDeleted?: boolean; 

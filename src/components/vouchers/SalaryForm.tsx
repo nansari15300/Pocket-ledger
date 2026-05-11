@@ -91,6 +91,8 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
@@ -2615,8 +2617,29 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <>
-                              <label
-                                htmlFor={attachFileInputId}
+                              <AttachmentHoldPasteSurface
+                                enabled={
+                                  !editingDisabled &&
+                                  !fileAttachLockedByDialog &&
+                                  allowAttachments &&
+                                  fileAttachmentLimits.maxFileCount > 0
+                                }
+                                onShortActivate={() => {
+                                  if (editingDisabled) return;
+                                  if (fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0) return;
+                                  fileInputRef.current?.click();
+                                }}
+                                onPastedFiles={(incoming) =>
+                                  void appendCompressedVoucherAttachmentsToState({
+                                    incomingFiles: incoming,
+                                    currentFiles: files,
+                                    maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                    allowImage: fileAttachmentLimits.allowImage,
+                                    allowPDF: fileAttachmentLimits.allowPDF,
+                                    setFiles,
+                                    toast,
+                                  })
+                                }
                                 className={cn(
                                   "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                                   allowAttachments && fileAttachmentLimits.maxFileCount > 0
@@ -2626,17 +2649,21 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                               >
                                 <PlusCircle className="h-6 w-6" />
                                 <span className="text-xs mt-1">Add File</span>
-                              </label>
+                              </AttachmentHoldPasteSurface>
                               <input
                                 id={attachFileInputId}
                                 type="file"
                                 className="sr-only"
                                 ref={fileInputRef}
                                 onChange={handleFileChange}
-                                accept={[
-                                  fileAttachmentLimits.allowImage ? "image/*" : "",
-                                  fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                accept={
+                                  [
+                                    fileAttachmentLimits.allowImage ? "image/*" : "",
+                                    fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(",") || "image/*,application/pdf"
+                                }
                                 multiple={fileAttachmentLimits.maxFileCount > 1}
                                 disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                               />

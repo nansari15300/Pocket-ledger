@@ -3,11 +3,11 @@
 import * as React from "react";
 import { useCallback, useEffect, useState, useRef } from "react";
 import Image from "next/image";
-import { FileText, Loader2, Trash2 } from "lucide-react";
+import { Copy, Eye, FileText, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { AttachmentHoverPortal } from "@/components/vouchers/AttachmentHoverPortal";
+import { AttachmentHoverPortal, useTapInteractionMode } from "@/components/vouchers/AttachmentHoverPortal";
 import { storage } from "@/lib/firebase";
 import { ref, getBlob } from "firebase/storage";
 import {
@@ -35,6 +35,12 @@ import {
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { useAttachmentHoldPointer } from "@/hooks/useAttachmentHoldPointer";
+import {
+  buildHoldPayloadFromPreviewSource,
+  writeAttachmentHoldClipboard,
+} from "@/lib/attachmentHoldClipboard";
+import { toast as sonnerToast } from "sonner";
 
 /** JPG seedha browser decode; PDF = download + pdf.js + canvas — 3–6s pehli baar normal. Dubara same URL tez ho: LRU cache. */
 const PDF_THUMB_LRU_MAX = 40;
@@ -226,6 +232,8 @@ interface FilePreviewProps {
   attachmentGallery?: { urls: string[]; startIndex: number };
   /** Voucher edit: `files` se string URLs — server pe HTTPS milne par index match */
   attachmentClientFileUrls?: string[];
+  /** ~2s hold = clipboard me attachment ref (paste = nayi copy upload). Gallery / nested hover par false. */
+  holdAttachmentClipboard?: boolean;
 }
 
 const getCleanName = (name: string) => {
@@ -256,6 +264,7 @@ export function FilePreview({
   showFormatBadge = true,
   attachmentGallery,
   attachmentClientFileUrls,
+  holdAttachmentClipboard = true,
 }: FilePreviewProps) {
   const voucherAttachmentFb = useVoucherAttachmentFallback();
   // URL-only props (e.g. gallery vouchers) par Firebase SDK se blob — fetch/CORS fail hone par bhi thumb mile
@@ -919,6 +928,31 @@ export function FilePreview({
   }, [file, fileSize, resolvedStoragePath, layoutW, layoutH, generatePdfThumbnail, setPdfThumbnailSafe, revokeThumbnailUrl]);
 
   /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
+  const canHoldCopyAttachment =
+    holdAttachmentClipboard &&
+    !disabled &&
+    ((typeof file === "string" && String(file).trim().length > 0) || file instanceof File);
+
+  /** Long-press + desktop hover par Copy button — ek hi payload/toast path */
+  const runHoldCopyNow = useCallback(async () => {
+    const payload = buildHoldPayloadFromPreviewSource({
+      file: file as File | string,
+      storagePath: resolvedStoragePath,
+    });
+    if (!payload) return;
+    const ok = await writeAttachmentHoldClipboard(payload);
+    sonnerToast.success(ok ? "Attachment copied" : "Attachment ready to paste", {
+      description: ok
+        ? "Hold an empty Add File / Add photo area ~2s — saves as a new upload."
+        : "Clipboard blocked — copied in this tab only; hold empty slot to paste.",
+    });
+  }, [file, resolvedStoragePath]);
+
+  const copyAttachmentHold = useAttachmentHoldPointer({
+    disabled: !canHoldCopyAttachment,
+    onHoldComplete: runHoldCopyNow,
+  });
+
   const openAttachmentFromFileInfo = useCallback(() => {
     if (!viewFileInfo.url) return;
     const kind = viewFileInfo.type === "pdf" ? "pdf" : viewFileInfo.type === "image" ? "image" : "other";
@@ -957,6 +991,11 @@ export function FilePreview({
     Boolean(viewFileInfo.url) &&
     !viewIsLoading &&
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
+
+  /** Mouse: hover se portal mat kholo — ~2s hold copy se clash; touch: tap-toggle jaise pehle */
+  const tapInteractionMode = useTapInteractionMode();
+  /** Preview button se `AttachmentHoverPortal` kholne ke liye register callback */
+  const attachmentPortalOpenRef = useRef<(() => void) | null>(null);
   
   const ThumbnailContent = () => {
     if (viewIsLoading || (viewFileInfo.type === "pdf" && isPdfLoading && !pdfThumbnail)) {
@@ -1102,6 +1141,7 @@ export function FilePreview({
         disabled={disabled}
         fileSize={fileSize}
         isAvatar={isAvatar}
+        holdAttachmentClipboard={false}
       />
     );
 
@@ -1109,6 +1149,12 @@ export function FilePreview({
     <div
       className={cn("relative group h-full w-full", className)}
       style={{ width: `${layoutW}px`, height: `${layoutH}px` }}
+      onPointerDown={copyAttachmentHold.onPointerDown}
+      onPointerMove={copyAttachmentHold.onPointerMove}
+      onPointerUp={copyAttachmentHold.onPointerUp}
+      onPointerCancel={copyAttachmentHold.onPointerCancel}
+      onPointerLeave={copyAttachmentHold.onPointerLeave}
+      onClickCapture={copyAttachmentHold.onClickCapture}
     >
       {onRemove && (
         <button
@@ -1127,6 +1173,11 @@ export function FilePreview({
       {showHoverFullPreview ? (
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
+          /* Fine pointer: sirf Preview button / mobile tap — hover par turant bada panel nahi */
+          openOnHover={tapInteractionMode}
+          onRegisterOpen={(fn) => {
+            attachmentPortalOpenRef.current = fn;
+          }}
           /* PDF: img ke alawa canvas/blank par dblclick — Sale/Note/journal sab forms */
           onPreviewDoubleClick={
             viewFileInfo.type === "pdf" && viewFileInfo.url
@@ -1145,7 +1196,44 @@ export function FilePreview({
             </>
           }
         >
-          {borderedPreview}
+          <div className="relative h-full w-full min-h-0 min-w-0">
+            {borderedPreview}
+            {/* Sirf fine pointer: coarse par `hidden` — hydration flash bhi nahi (JS tap flag se pehle) */}
+            <div className="pointer-events-none absolute inset-0 z-[60] hidden items-start justify-center gap-1 bg-transparent pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  attachmentPortalOpenRef.current?.();
+                }}
+              >
+                <Eye className="h-3 w-3 shrink-0" aria-hidden />
+                Preview
+              </Button>
+              {canHoldCopyAttachment ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    void runHoldCopyNow();
+                  }}
+                >
+                  <Copy className="h-3 w-3 shrink-0" aria-hidden />
+                  Copy
+                </Button>
+              ) : null}
+            </div>
+          </div>
         </AttachmentHoverPortal>
       ) : (
         borderedPreview

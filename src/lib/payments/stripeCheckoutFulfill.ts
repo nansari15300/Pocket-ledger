@@ -5,14 +5,29 @@ import "server-only";
 import Stripe from "stripe";
 import * as admin from "firebase-admin";
 import type { PlanId } from "@/config/plans";
+import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
+import { getAdminDb } from "@/lib/firebaseAdmin";
 import { applyPlanChangeOneTimeToFirestore } from "@/lib/payments/planChangeApply";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
+import {
+  BILLING_TERM_OPTIONS,
+  termDurationMs,
+  type SubscriptionTermKey,
+} from "@/lib/subscriptionPlanMath";
 
 /** Paid SKUs only; basic stays free and is not granted via checkout. */
 export const PAID_PLAN_IDS = new Set<PlanId>(["advance", "pro", "pro-plus"]);
 
-/** Same key resolution as webhook so sync route matches live account. */
+const VALID_SUBSCRIPTION_TERM_KEYS = new Set(
+  BILLING_TERM_OPTIONS.map((o) => o.value)
+);
+
+/**
+ * Sirf env — scripts / quick checks. API routes ko `getStripeForPaymentsMerged` use karna chahiye:
+ * `/api/payments/initiate` Bank Settings (Firestore) se key leta hai; agar webhook/sync sirf env use kare to
+ * galat account pe `sessions.retrieve` / `subscriptions.retrieve` → planId update ho jata hai lekin planExpiry null.
+ */
 export function getStripeForPayments(): Stripe {
   const secretKey =
     process.env.STRIPE_SECRET_KEY?.trim() ||
@@ -31,9 +46,83 @@ export function getStripeForPayments(): Stripe {
   });
 }
 
+/** `/api/payments/initiate` jaisa: `app_settings/payment_gateways` + env merge — checkout jis account pe bana usi se fulfill. */
+export async function getStripeForPaymentsMerged(): Promise<Stripe> {
+  let stored: GatewayKeys = {};
+  try {
+    const db = getAdminDb();
+    const snap = await db.doc("app_settings/payment_gateways").get();
+    if (snap.exists) stored = (snap.data() as GatewayKeys) || {};
+  } catch {
+    /* Firebase Admin na ho / read fail — sirf env */
+  }
+  const keys = mergeGatewayKeysWithEnv(stored);
+  const secretKey = keys.stripeSecretKey?.trim();
+  if (!secretKey) {
+    throw new Error(
+      process.env.NODE_ENV === "development"
+        ? "Stripe server key missing: Admin → Bank Settings me secret save karo, ya STRIPE_SECRET_KEY / STRIPE_TEST_SECRET_KEY .env.local me."
+        : "Stripe is not configured (Bank Settings or STRIPE_SECRET_KEY)"
+    );
+  }
+  return new Stripe(secretKey, {
+    apiVersion: "2025-12-15.clover" as any,
+  });
+}
+
+/** Subscription `current_period_end` na mile to checkout metadata `subscriptionTermKey` se approximate end (pehli subscribe par N/A se bachao). */
+function planExpiryMsFallbackFromCheckoutMetadata(
+  metadata: Record<string, string | null | undefined>
+): number | null {
+  const raw = typeof metadata.subscriptionTermKey === "string" ? metadata.subscriptionTermKey.trim() : "";
+  if (!raw || !VALID_SUBSCRIPTION_TERM_KEYS.has(raw as SubscriptionTermKey)) return null;
+  return Date.now() + termDurationMs(raw as SubscriptionTermKey);
+}
+
 function subscriptionPeriodEndMs(sub: unknown): number | null {
   const end = (sub as { current_period_end?: number })?.current_period_end;
   return typeof end === "number" ? end * 1000 : null;
+}
+
+/** Successful retrieve jisme `current_period_end` mila — webhook metadata + expiry ek hi loop se. */
+export type StripeSubscriptionPeriodResult = {
+  subscription: Stripe.Subscription;
+  endMs: number;
+};
+
+/**
+ * Pehli subscription par Stripe kabhi `current_period_end` ek tick baad populate karta hai —
+ * checkout.session.completed jaldi aaye to null; retry + invoice.paid subscription_create se patch.
+ */
+export async function getSubscriptionWithPeriodEndRetry(
+  stripe: Stripe,
+  subscriptionId: string,
+  opts?: { maxAttempts?: number; baseDelayMs?: number }
+): Promise<StripeSubscriptionPeriodResult | null> {
+  const maxAttempts = opts?.maxAttempts ?? 4;
+  const baseDelayMs = opts?.baseDelayMs ?? 400;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      const endMs = subscriptionPeriodEndMs(subscription);
+      if (endMs != null) return { subscription, endMs };
+    } catch (e) {
+      console.warn("[stripe] subscription retrieve for period end", { attempt, subscriptionId, e });
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)));
+    }
+  }
+  return null;
+}
+
+export async function getSubscriptionCurrentPeriodEndMs(
+  stripe: Stripe,
+  subscriptionId: string,
+  opts?: { maxAttempts?: number; baseDelayMs?: number }
+): Promise<number | null> {
+  const r = await getSubscriptionWithPeriodEndRetry(stripe, subscriptionId, opts);
+  return r?.endMs ?? null;
 }
 
 /**
@@ -226,12 +315,16 @@ export async function fulfillStripeCheckoutSessionCompleted(
   // Persist period end on the payment doc so admin/history shows per-checkout expiry (company.planExpiry is latest only).
   let planExpiryMs: number | null = null;
   if (session.mode === "subscription" && stripeSubscriptionId) {
-    try {
-      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-      const endMs = subscriptionPeriodEndMs(sub);
-      if (endMs != null) planExpiryMs = endMs;
-    } catch (e) {
-      console.warn("[stripe fulfill] subscription retrieve for planExpiryMs", e);
+    planExpiryMs = await getSubscriptionCurrentPeriodEndMs(stripe, stripeSubscriptionId);
+    if (planExpiryMs == null) {
+      console.warn("[stripe fulfill] planExpiryMs still null after retries", { sessionId: session.id, stripeSubscriptionId });
+      planExpiryMs = planExpiryMsFallbackFromCheckoutMetadata(metadata);
+      if (planExpiryMs != null) {
+        console.warn("[stripe fulfill] planExpiryMs from checkout metadata term (fallback)", {
+          sessionId: session.id,
+          subscriptionTermKey: metadata.subscriptionTermKey,
+        });
+      }
     }
   }
 
@@ -267,17 +360,8 @@ export async function fulfillStripeCheckoutSessionCompleted(
     return { ok: true as const };
   }
 
-  let planExpiry: admin.firestore.Timestamp | null =
+  const planExpiry: admin.firestore.Timestamp | null =
     planExpiryMs != null ? admin.firestore.Timestamp.fromMillis(planExpiryMs) : null;
-  if (!planExpiry && session.mode === "subscription" && stripeSubscriptionId) {
-    try {
-      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-      const endMs = subscriptionPeriodEndMs(sub);
-      if (endMs != null) planExpiry = admin.firestore.Timestamp.fromMillis(endMs);
-    } catch (e) {
-      console.warn("[stripe fulfill] subscription retrieve for company planExpiry", e);
-    }
-  }
 
   const companyRef = db.collection("companies").doc(effectiveCompanyId);
   if (!companySnap.exists) {
@@ -290,7 +374,11 @@ export async function fulfillStripeCheckoutSessionCompleted(
     lastStripeCheckoutSessionId: session.id,
     planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
-  if (planExpiry) patch.planExpiry = planExpiry;
+  if (planExpiry) {
+    patch.planExpiry = planExpiry;
+    // Client sync / billing `planExpiryMs` path — Timestamp ke saath numeric bhi taaki SQLite mirror align rahe.
+    if (planExpiryMs != null) patch.planExpiryMs = planExpiryMs;
+  }
   if (stripeCustomerId) patch.stripeCustomerId = stripeCustomerId;
   if (stripeSubscriptionId) patch.stripeSubscriptionId = stripeSubscriptionId;
 
@@ -359,21 +447,9 @@ export async function buildVerifiedLocalPlanApplyPayload(
     typeof session.subscription === "string" ? session.subscription : session.subscription?.id ?? null;
   let planExpiryMs: number | null = null;
   if (session.mode === "subscription" && stripeSubscriptionId) {
-    try {
-      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-      const endMs = subscriptionPeriodEndMs(sub);
-      if (endMs != null) planExpiryMs = endMs;
-    } catch {
-      /* ignore */
-    }
-  }
-  if (planExpiryMs == null && stripeSubscriptionId) {
-    try {
-      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-      const endMs = subscriptionPeriodEndMs(sub);
-      if (endMs != null) planExpiryMs = endMs;
-    } catch {
-      /* ignore */
+    planExpiryMs = await getSubscriptionCurrentPeriodEndMs(stripe, stripeSubscriptionId);
+    if (planExpiryMs == null) {
+      planExpiryMs = planExpiryMsFallbackFromCheckoutMetadata(metadata);
     }
   }
   if (planExpiryMs == null) return null;

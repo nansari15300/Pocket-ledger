@@ -34,7 +34,7 @@ import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { filterSharedOnlyCompaniesForSuperAdminInMainApp } from "@/lib/companySuperAdminFilter";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { firestore, auth, signOutWithFirestoreTeardown } from "@/lib/firebase";
-import { format, differenceInDays } from "date-fns";
+import { format } from "date-fns";
 import { CompanyActions } from "@/components/company/CompanySelector";
 import { useRouter, usePathname, useParams } from "next/navigation";
 import { useLocationSearchParams } from "@/hooks/useLocationSearchParams";
@@ -82,9 +82,15 @@ import { isLocalOnlyMode } from "@/lib/localMode";
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import { highestPlanIdAmongOwnedCompanies, resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
-import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/lib/companyOnlineSlots";
+import {
+  countLocalCompanySlotsForOwner,
+  countOnlineCompanySlotsForOwner,
+  maxOnlineCompaniesForPlan,
+} from "@/lib/companyOnlineSlots";
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
+import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
+import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
@@ -545,6 +551,36 @@ function ProfileDropdownPlanCard({
   );
 }
 
+/**
+ * White fill + colored border; text hamesha black / normal weight (layout me `font-normal`).
+ */
+const PROFILE_STAT_TONE_CLASSES = {
+  expiry: "border-cyan-300 bg-white dark:border-cyan-400 dark:bg-white",
+  companyStorage: "border-violet-300 bg-white dark:border-violet-400 dark:bg-white",
+  dailyVoucher: "border-amber-300 bg-white dark:border-amber-400 dark:bg-white",
+  monthlyVoucher: "border-orange-300 bg-white dark:border-orange-400 dark:bg-white",
+  onlineSlots: "border-teal-300 bg-white dark:border-teal-400 dark:bg-white",
+  offlineSlots: "border-indigo-300 bg-white dark:border-indigo-400 dark:bg-white",
+  usersDevices: "border-rose-300 bg-white dark:border-rose-400 dark:bg-white",
+  attachments: "border-lime-300 bg-white dark:border-lime-400 dark:bg-white",
+  storage: "border-fuchsia-300 bg-white dark:border-fuchsia-400 dark:bg-white",
+} as const;
+
+type ProfileStatTone = keyof typeof PROFILE_STAT_TONE_CLASSES;
+
+/** Shared layout — normal weight, black text (`tone` sirf border color). */
+const PROFILE_PLAN_STAT_PILL_LAYOUT =
+  "flex w-full max-w-full min-w-0 flex-wrap items-center gap-x-1 rounded-full border-2 px-2.5 py-0.5 text-left text-xs font-normal tabular-nums leading-tight text-black shadow-sm dark:text-black";
+
+function ProfilePlanStatPill({ tone, children }: { tone: ProfileStatTone; children: React.ReactNode }) {
+  return (
+    <div className={cn(PROFILE_PLAN_STAT_PILL_LAYOUT, PROFILE_STAT_TONE_CLASSES[tone])}>
+      {/* Lambi label/value dropdown width ke andar wrap */}
+      <span className="min-w-0 flex-1 break-words">{children}</span>
+    </div>
+  );
+}
+
 function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
@@ -749,6 +785,24 @@ function UserProfileButton() {
     numericEntitlement(selectedCompanyPlanLive.entitlements, "maxUsers", thisCompanyStorageLocal) || 1
   );
 
+  /** Profile card: plan voucher caps — `numericEntitlement` + company local flag (Billing matrix jaisa). */
+  const dailyVoucherPlanCap = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "dailyVoucherLimit",
+    storageIsLocal
+  );
+  const monthlyVoucherPlanCap = numericEntitlement(
+    selectedCompanyPlanLive.entitlements,
+    "monthlyVoucherLimit",
+    storageIsLocal
+  );
+  /** Offline SQLite-first companies count vs `maxCompaniesLocal` (online slot ke parallel). */
+  const localCompanySlotMax = numericEntitlement(selectedCompanyPlanLive.entitlements, "maxCompanies", true);
+  const localCompanySlotUsed =
+    user?.uid != null && user.uid !== ""
+      ? countLocalCompanySlotsForOwner(allCompanies, user.uid)
+      : 0;
+
   const ownedPlanExpiryCompany = React.useMemo(() => {
     const withExpiry = ownedForUsage.filter((c) => c.planExpiry);
     if (withExpiry.length === 0) return null;
@@ -756,6 +810,12 @@ function UserProfileButton() {
       withExpiry.find((c) => String(c.planId || "basic").trim() === ownedOnlyPlanId) ?? withExpiry[0]
     );
   }, [ownedForUsage, ownedOnlyPlanId]);
+
+  /** Owner profile: billing jaisa proration quote — `planExpiry` / `planExpiryMs` se ms (shared user branch me pills nahi). */
+  const profileProrationExpiryMs = React.useMemo(
+    () => (company ? getCompanyPlanExpiryMsFromDoc(company) : null),
+    [company]
+  );
 
   if (!user) return null;
 
@@ -786,6 +846,8 @@ function UserProfileButton() {
         <DropdownMenuContent
           className={cn(
             "p-0 min-w-0 w-[min(96vw,440px)] sm:w-[min(92vw,520px)] rounded-xl shadow-lg border bg-popover text-popover-foreground",
+            /* Lamba profile card: mobile par viewport ke andar scroll — overflow clip na ho */
+            "max-h-[85dvh] overflow-y-auto overflow-x-hidden overscroll-y-contain touch-pan-y",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
           )}
           align="end"
@@ -853,56 +915,96 @@ function UserProfileButton() {
                       {selectedCompanyCanUpgradeToPaidTier ? "Upgrade" : "Billing"}
                     </Button>
                   </div>
-                  {company?.planExpiry && (() => {
-                    const raw = company.planExpiry;
-                    const expiryDate = typeof raw?.toDate === "function" ? raw.toDate() : (raw?.seconds ? new Date(raw.seconds * 1000) : null);
-                    if (!expiryDate) return null;
-                    const now = new Date();
-                    const daysLeft = differenceInDays(expiryDate, now);
-                    return (
-                      <div className="text-xs text-muted-foreground mt-1.5 space-y-0.5">
-                        <div>Expires on: <span className="font-medium text-foreground">{format(expiryDate, "MMM d, yyyy")}</span></div>
-                        <div>
-                          {daysLeft < 0 ? (
-                            <span className="font-medium text-destructive">Expired</span>
-                          ) : daysLeft === 0 ? (
-                            <span className="font-medium text-amber-600">Expires today</span>
+                  {/* Sab stats vertical pills — expiry sabse niche; Credit/Usage upar */}
+                  {/* Pills ke beech fixed 5px vertical gap */}
+                  <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
+                    {/* Sirf company owner: Billing page jaisa Credit / Usage pills — shared company card me nahi. */}
+                    {!selectedCompanyPlanLive.isFree ? (
+                      <RenewProrationPills plan={selectedCompanyPlanLive} currentExpiryMs={profileProrationExpiryMs} />
+                    ) : null}
+                    <ProfilePlanStatPill tone="companyStorage">
+                      {/* Label: account-wide storage mode + baaki MB — "All storage" user-facing copy. */}
+                      All storage:{" "}
+                      {storageIsLocal ? "Device local (offline-first)" : "Online (cloud-linked)"}
+                      {/* Plan par storage cap ho to yahin total baaki MB — neeche Storage pill jaisa `storFreeMB`. */}
+                      {maxStorGB > 0 ? (
+                        <>
+                          <span aria-hidden className="mx-0.5 opacity-90">
+                            ·
+                          </span>
+                          {userStorageUsedBytes != null ? (
+                            <>{storFreeMB.toFixed(0)} MB left</>
                           ) : (
-                            <span className="font-medium text-foreground">{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
+                            <>… MB left</>
                           )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                  {onlineSlotMax > 0 && user?.uid ? (
-                    <div className="text-xs text-muted-foreground mt-1.5">
-                      Online company slots:{" "}
-                      <span className="font-medium text-foreground">{onlineSlotUsed}</span> /{" "}
-                      <span className="font-medium text-foreground">{onlineSlotMax}</span>
-                    </div>
-                  ) : null}
-                  <div className="text-xs text-muted-foreground mt-1.5">
-                    Max users (this company):{" "}
-                    <span className="font-medium text-foreground">
-                      {Math.max(1, numericEntitlement(limitsPlan?.entitlements, "maxUsers", storageIsLocal) || 1)}
-                    </span>
+                        </>
+                      ) : null}
+                    </ProfilePlanStatPill>
+                    <ProfilePlanStatPill tone="dailyVoucher">
+                      Daily vouchers (plan cap):{" "}
+                      {dailyVoucherPlanCap <= 0 ? "Unlimited" : dailyVoucherPlanCap} /day
+                    </ProfilePlanStatPill>
+                    <ProfilePlanStatPill tone="monthlyVoucher">
+                      Monthly vouchers (plan cap):{" "}
+                      {monthlyVoucherPlanCap <= 0 ? "Unlimited" : monthlyVoucherPlanCap} /month
+                    </ProfilePlanStatPill>
+                    {onlineSlotMax > 0 && user?.uid ? (
+                      <ProfilePlanStatPill tone="onlineSlots">
+                        Online company slots (cloud-linked): {onlineSlotUsed} / {onlineSlotMax}
+                      </ProfilePlanStatPill>
+                    ) : null}
+                    {user?.uid ? (
+                      <ProfilePlanStatPill tone="offlineSlots">
+                        Offline / local company slots: {localCompanySlotUsed} /{" "}
+                        {localCompanySlotMax <= 0 ? "Unlimited" : localCompanySlotMax}
+                      </ProfilePlanStatPill>
+                    ) : null}
+                    <ProfilePlanStatPill tone="usersDevices">
+                      Max users / devices (this company): {thisCompanyMaxUsers} users ·{" "}
+                      {selectedCompanyMaxDevices} devices
+                    </ProfilePlanStatPill>
+                    {maxAttGB > 0 ? (
+                      <ProfilePlanStatPill tone="attachments">
+                        Attachments: {attUsedMB.toFixed(0)} MB used / {attFreeMB.toFixed(0)} MB free
+                      </ProfilePlanStatPill>
+                    ) : null}
+                    {maxStorGB > 0 ? (
+                      <ProfilePlanStatPill tone="storage">
+                        Storage:{" "}
+                        {userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"} MB used /{" "}
+                        {userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"} MB free
+                      </ProfilePlanStatPill>
+                    ) : null}
+                    {company?.planExpiry && (() => {
+                      const raw = company.planExpiry;
+                      const expiryDate =
+                        typeof raw?.toDate === "function"
+                          ? raw.toDate()
+                          : raw?.seconds
+                            ? new Date(raw.seconds * 1000)
+                            : null;
+                      if (!expiryDate) return null;
+                      const expiryMs =
+                        profileProrationExpiryMs ??
+                        (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
+                      const nowMsExp = Date.now();
+                      // Pill par sirf expiry date — din count Credit/Usage pills mein; yahan past date = Expired.
+                      const expiredPlan = expiryMs != null && expiryMs <= nowMsExp;
+                      return (
+                        <ProfilePlanStatPill tone="expiry">
+                          Expires on: {format(expiryDate, "MMM d, yyyy")}
+                          {expiredPlan ? (
+                            <>
+                              <span aria-hidden className="mx-0.5 opacity-90">
+                                ·
+                              </span>
+                              <span>Expired</span>
+                            </>
+                          ) : null}
+                        </ProfilePlanStatPill>
+                      );
+                    })()}
                   </div>
-                  {(maxAttGB > 0 || maxStorGB > 0) && (
-                    <div className="text-xs text-muted-foreground mt-1.5 space-y-1">
-                      {maxAttGB > 0 && (
-                        <div>
-                          Attachments: <span className="font-medium text-foreground">{attUsedMB.toFixed(0)}</span> MB used /{" "}
-                          <span className="font-medium text-foreground">{attFreeMB.toFixed(0)}</span> MB free
-                        </div>
-                      )}
-                      {maxStorGB > 0 && (
-                        <div>
-                          Storage: <span className="font-medium text-foreground">{userStorageUsedBytes != null ? userStorUsedMB.toFixed(0) : "…"}</span> MB used /{" "}
-                          <span className="font-medium text-foreground">{userStorageUsedBytes != null ? storFreeMB.toFixed(0) : "…"}</span> MB free
-                        </div>
-                      )}
-                    </div>
-                  )}
                   <DropdownMenuSeparator className="my-2" />
                   <DropdownMenuItem
                     onClick={handleLogout}
@@ -973,20 +1075,21 @@ function UserProfileButton() {
                       const raw = ownedPlanExpiryCompany.planExpiry;
                       const expiryDate = typeof raw?.toDate === "function" ? raw.toDate() : (raw?.seconds ? new Date(raw.seconds * 1000) : null);
                       if (!expiryDate) return null;
-                      const now = new Date();
-                      const daysLeft = differenceInDays(expiryDate, now);
+                      const expiryMsOwned =
+                        getCompanyPlanExpiryMsFromDoc(ownedPlanExpiryCompany) ??
+                        (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
+                      const nowMsOwn = Date.now();
+                      const expiredOwned = expiryMsOwned != null && expiryMsOwned <= nowMsOwn;
                       return (
-                        <div className="text-xs text-muted-foreground mt-1.5 space-y-0.5">
-                          <div>Your plan renews / expires: <span className="font-medium text-foreground">{format(expiryDate, "MMM d, yyyy")}</span></div>
-                          <div>
-                            {daysLeft < 0 ? (
-                              <span className="font-medium text-destructive">Expired</span>
-                            ) : daysLeft === 0 ? (
-                              <span className="font-medium text-amber-600">Expires today</span>
-                            ) : (
-                              <span className="font-medium text-foreground">{daysLeft} day{daysLeft !== 1 ? "s" : ""} left</span>
-                            )}
-                          </div>
+                        <div className="text-xs text-muted-foreground mt-1.5">
+                          Your plan renews / expires:{" "}
+                          <span className="font-medium text-foreground">{format(expiryDate, "MMM d, yyyy")}</span>
+                          {expiredOwned ? (
+                            <>
+                              {" "}
+                              · <span className="font-medium text-destructive">Expired</span>
+                            </>
+                          ) : null}
                         </div>
                       );
                     })()}

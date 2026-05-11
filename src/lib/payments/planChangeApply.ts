@@ -3,7 +3,12 @@
  * Stripe webhook + sync + Khalti/eSewa completion routes all funnel through this for consistent payment rows / admin history.
  */
 import * as admin from "firebase-admin";
-import type { PlanId } from "@/config/plans";
+import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
+import {
+  buildMergedFrozenStateAfterPaidUpgrade,
+  resolveCompanyPlanTierStartedAtMs,
+} from "@/lib/billingFrozenPlanSnapshots";
+import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
 
 /** Snapshot stored on payment docs + merged into admin plan-change History dialog. */
@@ -78,6 +83,7 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
   if (!companySnap.exists) {
     return { ok: false, reason: "company_not_found" };
   }
+  const cdata = companySnap.data() as Record<string, unknown>;
 
   const paymentRef = companyRef.collection("payments").doc(paymentId);
   const paySnap = await paymentRef.get();
@@ -113,6 +119,7 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
     planId: targetPlanId,
     planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
     planExpiry,
+    planExpiryMs: newPlanExpiryMs,
   };
   if (stripeSessionId) {
     companyPatch.lastStripeCheckoutSessionId = stripeSessionId;
@@ -120,6 +127,29 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
   if (stripeCustomerId) {
     companyPatch.stripeCustomerId = stripeCustomerId;
   }
+
+  const hist = planChangeHistory;
+  const oldPid = normalizePlanIdForClient(
+    hist.oldPlanId != null ? String(hist.oldPlanId) : previousPlanId != null ? String(previousPlanId) : undefined
+  );
+  if (hist.changeKind === "upgrade" && oldPid !== "basic" && PAID_PLAN_IDS.has(oldPid)) {
+    const prices = await getEffectivePlanPrices(oldPid);
+    const frozenPatch = buildMergedFrozenStateAfterPaidUpgrade({
+      existingLedgerRaw: cdata.billingFrozenUsageLedger,
+      existingBlockedRaw: cdata.billingBlockedDowngradePlanIds,
+      nowMs: Date.now(),
+      oldPlanId: oldPid,
+      oldExpiryMs: hist.oldExpiryMs,
+      oldYearly: prices.yearly,
+      // Webhook se pehle company doc — `planUpgradedAt` abhi **purane** tier ka start hai.
+      oldPlanStartedAtMs: resolveCompanyPlanTierStartedAtMs(cdata),
+      targetPlanId,
+    });
+    if (frozenPatch) {
+      Object.assign(companyPatch, frozenPatch);
+    }
+  }
+
   await companyRef.update(companyPatch);
 
   await companyRef.collection("subscription_history").add({

@@ -3,7 +3,9 @@ import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { type PlanId, normalizePlanIdForClient } from "@/config/plans";
+import { parseBillingDowngradeBlockedPlanIds } from "@/lib/billingFrozenPlanSnapshots";
 import { getEffectivePlanPrices, getEffectivePlanIsFree } from "@/lib/server/getEffectivePlanPrices";
+import { getBillingPolicySettings } from "@/lib/server/getBillingPolicySettings";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import { classifyPlanChange, quoteDowngradeNewExpiry, daysLeftRounded } from "@/lib/subscriptionPlanMath";
 
@@ -11,6 +13,17 @@ type Body = {
   companyId?: string;
   targetPlanId?: PlanId;
 };
+
+/** Kai companies par `planExpiry` Timestamp miss ho `planExpiryMs` se sync — downgrade quote dono se le. */
+function resolvePlanExpiryMillis(cdata: {
+  planExpiry?: admin.firestore.Timestamp;
+  planExpiryMs?: number;
+}): number | null {
+  const fromTs = cdata.planExpiry?.toMillis?.() ?? null;
+  if (fromTs != null && Number.isFinite(fromTs)) return fromTs;
+  if (typeof cdata.planExpiryMs === "number" && Number.isFinite(cdata.planExpiryMs)) return cdata.planExpiryMs;
+  return null;
+}
 
 /**
  * Owner-only: move to a lower (or free) SKU; remaining value → equivalent days on target yearly rate — no payment.
@@ -49,7 +62,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Company not found" }, { status: 404 });
     }
 
-    const cdata = companySnap.data() as { ownerId?: string; ownerEmail?: string; planId?: string; planExpiry?: admin.firestore.Timestamp };
+    const cdata = companySnap.data() as {
+      ownerId?: string;
+      ownerEmail?: string;
+      planId?: string;
+      planExpiry?: admin.firestore.Timestamp;
+      planExpiryMs?: number;
+      billingBlockedDowngradePlanIds?: unknown;
+    };
     if (!isCompanyOwner(decoded, cdata)) {
       return NextResponse.json({ error: "Only the company owner can change plans" }, { status: 403 });
     }
@@ -59,11 +79,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Already on this plan" }, { status: 400 });
     }
 
+    const billingPolicy = await getBillingPolicySettings(db);
+    const blocked = parseBillingDowngradeBlockedPlanIds(cdata.billingBlockedDowngradePlanIds);
+    // Post-upgrade tier lock sirf tab jab global "allow downgrade" OFF ho; ON ho to owner wapas neeche paid tier ja sakta hai.
+    if (blocked.includes(normalizePlanIdForClient(targetPlanId)) && !billingPolicy.planDowngradeEnabled) {
+      return NextResponse.json(
+        {
+          error:
+            "This plan tier is locked after your upgrade. Stay on your current plan or contact support if you need a change.",
+        },
+        { status: 403 }
+      );
+    }
+
     const targetIsFree = await getEffectivePlanIsFree(targetPlanId);
     /** Any admin-marked free tier: one-click switch (upgrade/downgrade) without payment. */
     if (targetIsFree) {
       const nowMs = Date.now();
-      const currentExpiryMs = cdata.planExpiry?.toMillis?.() ?? null;
+      const currentExpiryMs = resolvePlanExpiryMillis(cdata);
       const previousDaysLeft = daysLeftRounded(nowMs, currentExpiryMs);
       const planChangeHistory = {
         oldPlanId: currentPlanId,
@@ -84,7 +117,11 @@ export async function POST(req: NextRequest) {
       batch.update(companyRef, {
         planId: targetPlanId,
         planExpiry: admin.firestore.FieldValue.delete(),
+        // Numeric mirror hatao — warna client pehle `planExpiryMs` padh kar purani paid expiry dikhata.
+        planExpiryMs: admin.firestore.FieldValue.delete(),
         planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        billingFrozenUsageLedger: [],
+        billingBlockedDowngradePlanIds: [],
       });
       batch.set(paymentRef, {
         paymentId: paymentDocId,
@@ -118,9 +155,19 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    // Paid → cheaper paid: admin toggle off ho to reject; `basic` ID hamesha chhodo (free path ya legacy paid-basic edge).
+    if (!billingPolicy.planDowngradeEnabled && targetPlanId !== "basic") {
+      return NextResponse.json(
+        {
+          error:
+            "Downgrades to a lower paid plan are disabled. You can still switch to Basic (free) when it is available from your current plan.",
+        },
+        { status: 403 }
+      );
+    }
 
     const nowMs = Date.now();
-    const currentExpiryMs = cdata.planExpiry?.toMillis?.() ?? null;
+    const currentExpiryMs = resolvePlanExpiryMillis(cdata);
     const curPrices = await getEffectivePlanPrices(currentPlanId);
 
     const previousDaysLeft = daysLeftRounded(nowMs, currentExpiryMs);
@@ -165,12 +212,17 @@ export async function POST(req: NextRequest) {
       batch.update(companyRef, {
         planId: "basic",
         planExpiry: admin.firestore.FieldValue.delete(),
+        planExpiryMs: admin.firestore.FieldValue.delete(),
         planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        billingFrozenUsageLedger: [],
+        billingBlockedDowngradePlanIds: [],
       });
     } else if (newExpiryMs != null) {
       batch.update(companyRef, {
         planId: targetPlanId,
         planExpiry: admin.firestore.Timestamp.fromMillis(newExpiryMs),
+        // `useCompany` / billing pehle `planExpiryMs` dekhte hain — sirf Timestamp se purani high-tier din chipak jati thi.
+        planExpiryMs: newExpiryMs,
         planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }

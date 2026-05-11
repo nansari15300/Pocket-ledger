@@ -21,6 +21,8 @@ import { Loader2, Trash2, CalendarIcon, PlusCircle, CheckCircle, History, Printe
 import { VOUCHER_BUTTONS_CLASS, BTN_HISTORY_CLASS, BTN_PRINT_CLASS, BTN_CANCEL_CLASS, BTN_SAVE_NEW_CLASS, BTN_SAVE_CLASS, BTN_APPROVE_CLASS, VOUCHER_NARRATION_TEXTAREA_CLASS } from "@/components/vouchers/voucherButtonStyles";
 import { FilePreview } from "./FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { VoucherPdfAsImageToggle } from "@/components/vouchers/VoucherPdfAsImageToggle";
@@ -957,34 +959,53 @@ export function CreateNoteForm({
                         />
                       ))}
                       {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
-                        <div 
-                          className={cn(
-                            "w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                            allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                              ? "cursor-pointer hover:border-primary"
-                              : "cursor-not-allowed opacity-50"
-                          )}
-                          onClick={() => {
-                            if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                              fileInputRef.current?.click();
+                        <>
+                          <AttachmentHoldPasteSurface
+                            enabled={!editingDisabled && allowAttachments && fileAttachmentLimits.maxFileCount > 0}
+                            onShortActivate={() => {
+                              if (editingDisabled) return;
+                              if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                fileInputRef.current?.click();
+                              }
+                            }}
+                            onPastedFiles={(incoming) =>
+                              void appendCompressedVoucherAttachmentsToState({
+                                incomingFiles: incoming,
+                                currentFiles: files,
+                                maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                allowImage: fileAttachmentLimits.allowImage,
+                                allowPDF: fileAttachmentLimits.allowPDF,
+                                setFiles,
+                                toast,
+                              })
                             }
-                          }}
-                        >
-                          <PlusCircle className="h-6 w-6 text-muted-foreground" />
-                          <span className="text-[10px] mt-1">Add File</span>
-                          <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            className="hidden" 
-                            onChange={handleFileChange} 
-                            accept={[
-                              fileAttachmentLimits.allowImage ? "image/*" : "",
-                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                            className={cn(
+                              "w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                              allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                ? "cursor-pointer hover:border-primary"
+                                : "cursor-not-allowed opacity-50"
+                            )}
+                          >
+                            <PlusCircle className="h-6 w-6 text-muted-foreground" />
+                            <span className="text-[10px] mt-1">Add File</span>
+                          </AttachmentHoldPasteSurface>
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            className="hidden"
+                            onChange={handleFileChange}
+                            accept={
+                              [
+                                fileAttachmentLimits.allowImage ? "image/*" : "",
+                                fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                              ]
+                                .filter(Boolean)
+                                .join(",") || "image/*,application/pdf"
+                            }
                             multiple={fileAttachmentLimits.maxFileCount > 1}
                             disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                           />
-                        </div>
+                        </>
                       )}
                     </div>
                   </RestrictedFileUploader>

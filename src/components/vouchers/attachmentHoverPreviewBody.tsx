@@ -347,6 +347,7 @@ export function LocalFileRefTooltipPreview({
             objectFit="contain"
             enableHoverFullPreview={false}
             showFormatBadge={false}
+            holdAttachmentClipboard={false}
           />
         </div>
       ) : (
@@ -448,6 +449,7 @@ export function SingleAttachmentHoverPreviewBody({
             enableHoverFullPreview={false}
             showFormatBadge={false}
             attachmentGallery={attachmentGallery}
+            holdAttachmentClipboard={false}
           />
         </div>
       )}

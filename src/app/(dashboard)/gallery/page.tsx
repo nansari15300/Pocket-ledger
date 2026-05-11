@@ -722,6 +722,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                               storagePath={attachMeta.storagePath}
                               fileSize={attachMeta.fileSize}
                               enableHoverFullPreview={false}
+                              holdAttachmentClipboard={false}
                             />
                             {!item.isAvatar && (
                               <DropdownMenu>
@@ -830,6 +831,7 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                                   objectFit="contain"
                                   enableHoverFullPreview={false}
                                   showFormatBadge={false}
+                                  holdAttachmentClipboard={false}
                                 />
                               );
                             })()}
@@ -1751,6 +1753,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                       fileSize={file.size}
                       storagePath={file.path}
                       enableHoverFullPreview={false}
+                      holdAttachmentClipboard={false}
                     />
                     <div className="absolute top-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button variant="destructive" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setFileToDelete(file); }}>
@@ -1851,6 +1854,7 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                               enableHoverFullPreview={false}
                               showFormatBadge={false}
                               fileSize={file.size}
+                              holdAttachmentClipboard={false}
                             />
                           );
                         })()}

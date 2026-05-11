@@ -96,6 +96,8 @@ import BsDatePicker from "@/components/ui/BsDatePicker";
 import { Combobox } from "../ui/combobox";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { CreatePartyDialog } from "@/components/party/CreatePartyDialog";
 import { CreateItemDialog } from "@/components/items/CreateItemDialog";
@@ -2140,16 +2142,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                               render={({ field }: any) => (
                                 <FormItem>
                                   <FormLabel className="text-xs">Rate</FormLabel>
-                                  <FormControl>
+                                  <div className="flex w-full min-w-0 items-center gap-1">
+                                    {/* FormControl (Slot) child = Input; TooltipProvider Fragment pe `id` merge na ho */}
                                     <TooltipProvider delayDuration={0}>
                                       <Tooltip>
                                         <TooltipTrigger asChild>
-                                          <div className="w-full flex gap-1 items-center min-w-0">
+                                          <FormControl>
                                             <Input
                                               type="number"
                                               {...field}
                                               disabled={purchaseRateDisabled(index, itemFieldsDisabled)}
-                                              className={cn("h-9 text-xs text-right flex-1 min-w-0", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                              className={cn("h-9 min-w-0 flex-1 text-xs text-right", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                               title={
                                                 !canEditRates
                                                   ? "No role permission to edit rates"
@@ -2160,24 +2163,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                                       : undefined
                                               }
                                             />
-                                            {isRateEditingAllowed && !itemFieldsDisabled && (
-                                              <FormField
-                                                control={form.control}
-                                                name={`lineItems.${index}.allowManualRate`}
-                                                render={({ field: manualRateField }: any) => (
-                                                  <FormItem className="space-y-0 m-0 shrink-0">
-                                                    <FormControl>
-                                                      <Checkbox
-                                                        checked={manualRateField.value !== false}
-                                                        onCheckedChange={(c) => manualRateField.onChange(c === true)}
-                                                        aria-label="Allow editing item rate on this line"
-                                                      />
-                                                    </FormControl>
-                                                  </FormItem>
-                                                )}
-                                              />
-                                            )}
-                                          </div>
+                                          </FormControl>
                                         </TooltipTrigger>
                                         {!isRateEditingAllowed && !canEditRates ? (
                                           <TooltipContent>
@@ -2194,7 +2180,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                         ) : null}
                                       </Tooltip>
                                     </TooltipProvider>
-                                  </FormControl>
+                                    {isRateEditingAllowed && !itemFieldsDisabled && (
+                                      <FormField
+                                        control={form.control}
+                                        name={`lineItems.${index}.allowManualRate`}
+                                        render={({ field: manualRateField }: any) => (
+                                          <FormItem className="m-0 shrink-0 space-y-0">
+                                            <FormControl>
+                                              <Checkbox
+                                                checked={manualRateField.value !== false}
+                                                onCheckedChange={(c) => manualRateField.onChange(c === true)}
+                                                aria-label="Allow editing item rate on this line"
+                                              />
+                                            </FormControl>
+                                          </FormItem>
+                                        )}
+                                      />
+                                    )}
+                                  </div>
                                 </FormItem>
                               )}
                             />
@@ -2553,16 +2556,17 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                             control={form.control}
                             name={`lineItems.${index}.rate`}
                             render={({ field }: any) => (
-                              <FormControl>
+                              <div className="flex w-full min-w-0 items-center justify-end gap-1">
+                                {/* Purchase table rate — Tooltip bahar, FormControl andar Input par */}
                                 <TooltipProvider delayDuration={0}>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <div className="w-full flex gap-1 items-center min-w-0 justify-end">
+                                      <FormControl>
                                         <Input
                                           type="number"
                                           {...field}
                                           disabled={purchaseRateDisabled(index, itemFieldsDisabled)}
-                                          className={cn(FLAT_INPUT, "flex-1 min-w-0 text-right tabular-nums", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
+                                          className={cn(FLAT_INPUT, "min-w-0 flex-1 text-right tabular-nums", purchaseRateDisabled(index, itemFieldsDisabled) && 'bg-muted cursor-not-allowed')}
                                           title={
                                             !canEditRates
                                               ? "No role permission to edit rates"
@@ -2573,24 +2577,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                                   : undefined
                                           }
                                         />
-                                        {isRateEditingAllowed && !itemFieldsDisabled && (
-                                          <FormField
-                                            control={form.control}
-                                            name={`lineItems.${index}.allowManualRate`}
-                                            render={({ field: manualRateField }: any) => (
-                                              <FormItem className="space-y-0 m-0 shrink-0">
-                                                <FormControl>
-                                                  <Checkbox
-                                                    checked={manualRateField.value !== false}
-                                                    onCheckedChange={(c) => manualRateField.onChange(c === true)}
-                                                    aria-label="Allow editing item rate on this line"
-                                                  />
-                                                </FormControl>
-                                              </FormItem>
-                                            )}
-                                          />
-                                        )}
-                                      </div>
+                                      </FormControl>
                                     </TooltipTrigger>
                                     {!isRateEditingAllowed && !canEditRates ? (
                                       <TooltipContent>
@@ -2607,7 +2594,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                                     ) : null}
                                   </Tooltip>
                                 </TooltipProvider>
-                              </FormControl>
+                                {isRateEditingAllowed && !itemFieldsDisabled && (
+                                  <FormField
+                                    control={form.control}
+                                    name={`lineItems.${index}.allowManualRate`}
+                                    render={({ field: manualRateField }: any) => (
+                                      <FormItem className="m-0 shrink-0 space-y-0">
+                                        <FormControl>
+                                          <Checkbox
+                                            checked={manualRateField.value !== false}
+                                            onCheckedChange={(c) => manualRateField.onChange(c === true)}
+                                            aria-label="Allow editing item rate on this line"
+                                          />
+                                        </FormControl>
+                                      </FormItem>
+                                    )}
+                                  />
+                                )}
+                              </div>
                             )}
                           />
                         </div>
@@ -2903,34 +2907,58 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
-                              <div 
-                                className={cn(
-                                  "h-16 border-2 border-dashed rounded-md flex flex-col justify-center items-center transition-colors",
-                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                )}
-                                onClick={() => {
-                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                    fileInputRef.current?.click();
+                              <>
+                                <AttachmentHoldPasteSurface
+                                  enabled={
+                                    !editingDisabled &&
+                                    !fileAttachLockedByDialog &&
+                                    allowAttachments &&
+                                    fileAttachmentLimits.maxFileCount > 0
                                   }
-                                }}
-                              >
-                                <Upload className="h-4 w-4" />
-                                <span className="text-[9px] mt-0.5">Add</span>
-                                <Input 
-                                  type="file" 
+                                  onShortActivate={() => {
+                                    if (editingDisabled) return;
+                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                      fileInputRef.current?.click();
+                                    }
+                                  }}
+                                  onPastedFiles={(incoming) =>
+                                    void appendCompressedVoucherAttachmentsToState({
+                                      incomingFiles: incoming,
+                                      currentFiles: files,
+                                      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                      allowImage: fileAttachmentLimits.allowImage,
+                                      allowPDF: fileAttachmentLimits.allowPDF,
+                                      setFiles,
+                                      toast,
+                                    })
+                                  }
+                                  className={cn(
+                                    "h-16 border-2 border-dashed rounded-md flex flex-col justify-center items-center transition-colors",
+                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                  )}
+                                >
+                                  <Upload className="h-4 w-4" />
+                                  <span className="text-[9px] mt-0.5">Add</span>
+                                </AttachmentHoldPasteSurface>
+                                <Input
+                                  type="file"
                                   className="hidden"
                                   ref={fileInputRef}
                                   onChange={handleFileChange}
-                                  accept={[
-                                    fileAttachmentLimits.allowImage ? "image/*" : "",
-                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                  accept={
+                                    [
+                                      fileAttachmentLimits.allowImage ? "image/*" : "",
+                                      fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(",") || "image/*,application/pdf"
+                                  }
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
-                              </div>
+                              </>
                             </FormControl>
                           )}
                         </div>
@@ -3146,34 +3174,58 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           ))}
                           {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                             <FormControl>
-                              <div 
-                                className={cn(
-                                  "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
-                                  allowAttachments && fileAttachmentLimits.maxFileCount > 0
-                                    ? "text-muted-foreground hover:border-primary cursor-pointer"
-                                    : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
-                                )}
-                                onClick={() => {
-                                  if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
-                                    fileInputRef.current?.click();
+                              <>
+                                <AttachmentHoldPasteSurface
+                                  enabled={
+                                    !editingDisabled &&
+                                    !fileAttachLockedByDialog &&
+                                    allowAttachments &&
+                                    fileAttachmentLimits.maxFileCount > 0
                                   }
-                                }}
-                              >
-                                <Upload className="h-6 w-6" />
-                                <span className="text-xs mt-1">Add File</span>
-                                <Input 
-                                  type="file" 
+                                  onShortActivate={() => {
+                                    if (editingDisabled) return;
+                                    if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                      fileInputRef.current?.click();
+                                    }
+                                  }}
+                                  onPastedFiles={(incoming) =>
+                                    void appendCompressedVoucherAttachmentsToState({
+                                      incomingFiles: incoming,
+                                      currentFiles: files,
+                                      maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                      allowImage: fileAttachmentLimits.allowImage,
+                                      allowPDF: fileAttachmentLimits.allowPDF,
+                                      setFiles,
+                                      toast,
+                                    })
+                                  }
+                                  className={cn(
+                                    "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
+                                    allowAttachments && fileAttachmentLimits.maxFileCount > 0
+                                      ? "text-muted-foreground hover:border-primary cursor-pointer"
+                                      : "text-muted-foreground/50 border-muted-foreground/25 cursor-not-allowed opacity-50"
+                                  )}
+                                >
+                                  <Upload className="h-6 w-6" />
+                                  <span className="text-xs mt-1">Add File</span>
+                                </AttachmentHoldPasteSurface>
+                                <Input
+                                  type="file"
                                   className="hidden"
                                   ref={fileInputRef}
                                   onChange={handleFileChange}
-                                  accept={[
-                                    fileAttachmentLimits.allowImage ? "image/*" : "",
-                                    fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                                  ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                                  accept={
+                                    [
+                                      fileAttachmentLimits.allowImage ? "image/*" : "",
+                                      fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(",") || "image/*,application/pdf"
+                                  }
                                   multiple={fileAttachmentLimits.maxFileCount > 1}
                                   disabled={fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                                 />
-                              </div>
+                              </>
                             </FormControl>
                           )}
                         </div>

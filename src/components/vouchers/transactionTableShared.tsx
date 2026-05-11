@@ -35,6 +35,32 @@ import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
 
+/**
+ * Ledger row Dr/Cr/Balance: kabhi Firestore/legacy `debit`/`credit` object ho — table me `[object Object]` na aaye.
+ * Animated `formatCurrency` ReactNode ko `String()` se mat ghumao.
+ */
+function toLedgerAmount(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(String(v).replace(/,/g, "").trim());
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (v != null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (typeof o.toNumber === "function") {
+      try {
+        const n = Number((o.toNumber as () => unknown)());
+        if (Number.isFinite(n)) return n;
+      } catch {
+        /* ignore */
+      }
+    }
+    if ("amount" in o) return toLedgerAmount(o.amount);
+  }
+  const n = Number(v as number);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export type Context =
   | "party"
   | "group"
@@ -743,9 +769,9 @@ export const TransactionRow = React.memo(
     const d = safeToDate(transaction.date);
     // Desktop table me bhi mobile card wali same entry-time priority dikhani hai: createdAt -> edited/updated -> voucher date.
     const entryClock = formatVoucherEntryTimeLocal(transaction as Record<string, unknown>);
-    let debit = transaction.debit;
-    let credit = transaction.credit;
-    let balance = transaction.balance;
+    let debit = toLedgerAmount(transaction.debit);
+    let credit = toLedgerAmount(transaction.credit);
+    let balance = toLedgerAmount(transaction.balance);
     if (typeof spendWiseRunningBalance === "number") balance = spendWiseRunningBalance;
     const spendWiseLinkedAmount = (transaction as any)._spendWiseLinkedAmount;
     if (isSpendWiseChild && typeof spendWiseLinkedAmount === "number" && spendWiseLinkedAmount > 0) {
@@ -812,11 +838,16 @@ export const TransactionRow = React.memo(
     };
 
     const formatAmountCell = (val: number) => {
-      if (val === 0) return "-";
+      const n = toLedgerAmount(val);
+      if (n === 0) return "-";
       if (context === "item" && stockView === "qty")
-        return `${formatQuantity(val)} ${displayUnit || ""}`;
-      return getDisplayValue(val);
+        return `${formatQuantity(n)} ${displayUnit || ""}`;
+      return getDisplayValue(n);
     };
+
+    /** Daybook search highlight: string pe `hl`, `AnimatedNumber` jaisa ReactNode seedha (String() se [object Object] na bane) */
+    const renderHlDrCr = (formatted: React.ReactNode) =>
+      typeof formatted === "string" || typeof formatted === "number" ? hl(String(formatted)) : formatted;
 
     // Show whatever user info is available for visible transaction rows.
     const resolvedUserName = userNames && transaction.userId ? userNames[transaction.userId] : null;
@@ -923,12 +954,12 @@ export const TransactionRow = React.memo(
         )}
         {showCol("dr") && (
           <TableCell className={cn("text-right text-green-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {hl(String(formatAmountCell(debit)))}
+            {renderHlDrCr(formatAmountCell(debit))}
           </TableCell>
         )}
         {showCol("cr") && (
           <TableCell className={cn("text-right text-red-600", ensureMinGaps && "min-w-[100px] px-[5px]")}>
-            {hl(String(formatAmountCell(credit)))}
+            {renderHlDrCr(formatAmountCell(credit))}
           </TableCell>
         )}
         {showCol("status") && !hideStatusColumn &&
@@ -997,9 +1028,7 @@ export const TransactionRow = React.memo(
               transaction.type === "journal" &&
               (transaction as any).subType !== "add_salary" &&
               (transaction as any).outstanding != null;
-            const journalOutstandingSigned = isJournalWithOutstanding
-              ? ((Number(transaction.debit) || 0) > 0 ? out : -out)
-              : 0;
+            const journalOutstandingSigned = isJournalWithOutstanding ? (debit > 0 ? out : -out) : 0;
             // When useOutstandingForBalance: Dr amount → Dr balance, Cr amount → Cr balance (match amount column).
             const displayValue =
               useOutstandingForBalance && isJournalWithOutstanding

@@ -7,6 +7,9 @@
 import Link from "next/link";
 import { Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
+import { toast as sonnerToast } from "sonner";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Textarea } from "@/components/ui/textarea";
@@ -56,9 +59,19 @@ export function EntityProfilePhotoBlock({
           {file ? <FilePreview file={file} onRemove={onRemoveAvatar} size={DOC_SIZE} /> : null}
           {!file ? (
             <FormControl>
-              <div
+              {/* 2s hold = clipboard attachment paste (sirf image); tap = picker */}
+              <AttachmentHoldPasteSurface
+                enabled={canAddAvatar}
+                onShortActivate={onPickClick}
+                onPastedFiles={(incoming) => {
+                  const img = incoming[0];
+                  if (!img?.type.startsWith("image/")) {
+                    sonnerToast.error("Profile photo: images only");
+                    return;
+                  }
+                  void onAvatarChange(syntheticFileInputChangeEvent([img]));
+                }}
                 className="relative flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
-                onClick={onPickClick}
               >
                 <Upload className="h-6 w-6" />
                 <span className="mt-1 px-1 text-center text-xs">Add photo</span>
@@ -70,7 +83,7 @@ export function EntityProfilePhotoBlock({
                   onChange={onAvatarChange}
                   accept="image/*"
                 />
-              </div>
+              </AttachmentHoldPasteSurface>
             </FormControl>
           ) : null}
         </div>
@@ -132,9 +145,14 @@ export function EntityDocumentsBlock({
           ))}
           {docSlots.length < 5 ? (
             <FormControl>
-              <div
+              <AttachmentHoldPasteSurface
+                enabled={canAttachDocuments}
+                onShortActivate={onAddClick}
+                onPastedFiles={(incoming) => {
+                  if (docSlots.length >= 5) return;
+                  void onDocsChange(syntheticFileInputChangeEvent(incoming));
+                }}
                 className="relative flex h-24 w-24 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-muted-foreground transition-colors hover:border-primary"
-                onClick={onAddClick}
               >
                 <Upload className="h-6 w-6" />
                 <span className="mt-1 px-1 text-center text-xs">PDF / image</span>
@@ -147,7 +165,7 @@ export function EntityDocumentsBlock({
                   accept="image/*,application/pdf"
                   multiple
                 />
-              </div>
+              </AttachmentHoldPasteSurface>
             </FormControl>
           ) : null}
         </div>

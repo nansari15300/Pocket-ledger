@@ -74,6 +74,8 @@ import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { toast as sonnerToast } from "sonner";
 import { ScrollArea } from "../ui/scroll-area";
 import { Card, CardHeader, CardTitle, CardContent } from "../ui/card";
@@ -1007,9 +1009,18 @@ export function CreateBankAccountDialog({
                         )}
                         {!avatarToUpload && (
                           <FormControl>
-                            <div
+                            <AttachmentHoldPasteSurface
+                              enabled={canAddAvatar}
+                              onShortActivate={() => avatarInputRef.current?.click()}
+                              onPastedFiles={(incoming) => {
+                                const img = incoming[0];
+                                if (!img?.type.startsWith("image/")) {
+                                  sonnerToast.error("Profile photo: images only");
+                                  return;
+                                }
+                                void handleAvatarChange(syntheticFileInputChangeEvent([img]));
+                              }}
                               className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                              onClick={() => avatarInputRef.current?.click()}
                             >
                               <Upload className="h-6 w-6" />
                               <span className="text-xs mt-1 text-center px-1">Add photo</span>
@@ -1020,7 +1031,7 @@ export function CreateBankAccountDialog({
                                 onChange={handleAvatarChange}
                                 accept="image/*"
                               />
-                            </div>
+                            </AttachmentHoldPasteSurface>
                           </FormControl>
                         )}
                       </div>
@@ -1047,9 +1058,11 @@ export function CreateBankAccountDialog({
                         ))}
                         {documentFiles.length < 5 && (
                           <FormControl>
-                            <div
+                            <AttachmentHoldPasteSurface
+                              enabled={canAttachDocuments}
+                              onShortActivate={() => docsInputRef.current?.click()}
+                              onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
                               className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                              onClick={() => docsInputRef.current?.click()}
                             >
                               <Upload className="h-6 w-6" />
                               <span className="text-xs mt-1 text-center px-1">PDF / image</span>
@@ -1061,7 +1074,7 @@ export function CreateBankAccountDialog({
                                 accept="image/*,application/pdf"
                                 multiple
                               />
-                            </div>
+                            </AttachmentHoldPasteSurface>
                           </FormControl>
                         )}
                       </div>

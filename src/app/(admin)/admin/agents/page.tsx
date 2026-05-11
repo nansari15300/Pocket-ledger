@@ -175,7 +175,7 @@ export default function AgentsPage() {
                 <CardHeader>
                     <div className="flex items-start justify-between">
                          <div className="flex items-center gap-4">
-                            <FilePreview file={app.profilePic || ""} onRemove={()=>{}} isAvatar>
+                            <FilePreview file={app.profilePic || ""} onRemove={()=>{}} isAvatar holdAttachmentClipboard={false}>
                                 <Avatar className="h-16 w-16 cursor-pointer"><AvatarImage src={app.profilePic} /><AvatarFallback>{app.name[0]}</AvatarFallback></Avatar>
                             </FilePreview>
                             <div>
@@ -213,7 +213,7 @@ export default function AgentsPage() {
                             )}
                             <div className="flex flex-wrap gap-2">
                                 {(app.documents || []).map((docUrl, index) => (
-                                    <FilePreview key={index} file={docUrl} onRemove={() => {}} />
+                                    <FilePreview key={index} file={docUrl} onRemove={() => {}} holdAttachmentClipboard={false} />
                                 ))}
                             </div>
                         </div>

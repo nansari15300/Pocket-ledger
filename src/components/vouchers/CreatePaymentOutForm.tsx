@@ -42,6 +42,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { Staff } from "@/components/staff/types";
 import { CreateStaffDialog } from "@/components/staff/CreateStaffDialog";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { CreateTaxDialog } from "@/components/tax/CreateTaxDialog";
@@ -2505,8 +2507,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                     ))}
                     {allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                       <>
-                        <label
-                          htmlFor={attachFileInputId}
+                        <AttachmentHoldPasteSurface
+                          enabled={
+                            !editingDisabled &&
+                            !fileAttachLockedByDialog &&
+                            allowAttachments &&
+                            fileAttachmentLimits.maxFileCount > 0
+                          }
+                          onShortActivate={() => {
+                            if (editingDisabled) return;
+                            if (fileAttachLockedByDialog || !allowAttachments || fileAttachmentLimits.maxFileCount === 0) return;
+                            fileInputRef.current?.click();
+                          }}
+                          onPastedFiles={(incoming) =>
+                            void appendCompressedVoucherAttachmentsToState({
+                              incomingFiles: incoming,
+                              currentFiles: files,
+                              maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                              allowImage: fileAttachmentLimits.allowImage,
+                              allowPDF: fileAttachmentLimits.allowPDF,
+                              setFiles,
+                              toast,
+                            })
+                          }
                           className={cn(
                             "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0
@@ -2516,7 +2539,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         >
                           <PlusCircle className="h-6 w-6" />
                           <span className="text-xs mt-1">Add File</span>
-                        </label>
+                        </AttachmentHoldPasteSurface>
                         <Input
                           id={attachFileInputId}
                           type="file"

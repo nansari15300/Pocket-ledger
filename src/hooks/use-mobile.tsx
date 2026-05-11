@@ -132,8 +132,9 @@ export function MobileViewProvider({ children }: { children: React.ReactNode }) 
         return;
       }
 
-      // Real mobile in portrait (non-phone tablet-ish rare): mobile chrome
-      if (realMobile && portrait) {
+      // Chhote phone: portrait me mobile — **iPad / Android tablet yahan mat pakdo** warna portrait me hamesha
+      // mobile rehta hai aur header ka PC toggle (`forcedViewMode === 'pc'`) asar nahi karta.
+      if (realMobile && portrait && !isTabletDevice()) {
         setIsMobile(true);
         return;
       }

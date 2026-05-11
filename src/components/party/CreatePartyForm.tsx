@@ -47,10 +47,12 @@ import {
   MAX_IMAGE_MB_AFTER_COMPRESS,
 } from "@/lib/fileUploadLimits";
 import { FilePreview } from "../vouchers/FilePreview";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
+import { toast as sonnerToast } from "sonner";
 import { RestrictedFileUploader } from "../ui/RestrictedFileUploader";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 import { Combobox } from "../ui/combobox";
-import { toast as sonnerToast } from "sonner";
 import { saveVoucher, balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
 import usePermissions from "@/hooks/usePermissions";
@@ -904,9 +906,18 @@ export function CreatePartyForm({
                 )}
                 {!avatarToUpload && (
                   <FormControl>
-                    <div
+                    <AttachmentHoldPasteSurface
+                      enabled={canAddAvatar}
+                      onShortActivate={() => avatarInputRef.current?.click()}
+                      onPastedFiles={(incoming) => {
+                        const img = incoming[0];
+                        if (!img?.type.startsWith("image/")) {
+                          sonnerToast.error("Profile photo: images only");
+                          return;
+                        }
+                        void handleAvatarChange(syntheticFileInputChangeEvent([img]));
+                      }}
                       className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                      onClick={() => avatarInputRef.current?.click()}
                     >
                       <Upload className="h-6 w-6" />
                       <span className="text-xs mt-1 text-center px-1">Add photo</span>
@@ -917,7 +928,7 @@ export function CreatePartyForm({
                         onChange={handleAvatarChange}
                         accept="image/*"
                       />
-                    </div>
+                    </AttachmentHoldPasteSurface>
                   </FormControl>
                 )}
               </div>
@@ -955,9 +966,11 @@ export function CreatePartyForm({
                 ))}
                 {documentFiles.length < 5 && (
                   <FormControl>
-                    <div
+                    <AttachmentHoldPasteSurface
+                      enabled={canAttachDocuments}
+                      onShortActivate={() => docsInputRef.current?.click()}
+                      onPastedFiles={(incoming) => void handleDocumentsChange(syntheticFileInputChangeEvent(incoming))}
                       className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                      onClick={() => docsInputRef.current?.click()}
                     >
                       <Upload className="h-6 w-6" />
                       <span className="text-xs mt-1 text-center px-1">PDF / image</span>
@@ -969,7 +982,7 @@ export function CreatePartyForm({
                         accept="image/*,application/pdf"
                         multiple
                       />
-                    </div>
+                    </AttachmentHoldPasteSurface>
                   </FormControl>
                 )}
               </div>

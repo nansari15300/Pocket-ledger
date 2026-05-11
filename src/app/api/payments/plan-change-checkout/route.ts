@@ -6,6 +6,10 @@ import crypto from "crypto";
 import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { DEFAULT_PLANS, type PlanId, normalizePlanIdForClient } from "@/config/plans";
+import {
+  buildMergedFrozenStateAfterPaidUpgrade,
+  resolveCompanyPlanTierStartedAtMs,
+} from "@/lib/billingFrozenPlanSnapshots";
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import {
@@ -16,6 +20,7 @@ import {
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
+import { syncCompanyPlanExpiryFromStripe } from "@/lib/payments/syncCompanyPlanExpiryFromStripe";
 import {
   PENDING_PLAN_CHANGES_COLLECTION,
   PENDING_PLAN_CHANGE_TTL_MS,
@@ -66,7 +71,11 @@ function stripeConfigHelpMessage(adminResult: AdminKeysResult): string {
   return `Stripe not configured. ${envHint}`;
 }
 
-const VALID_TERMS = new Set(BILLING_TERM_OPTIONS.map((o) => o.value));
+// `plan_change_only`: paid→paid upgrade / renew-style zero net; paid **downgrade** sirf `/api/company/downgrade-plan`.
+const VALID_TERMS = new Set<SubscriptionTermKey>([
+  ...BILLING_TERM_OPTIONS.map((o) => o.value),
+  "plan_change_only",
+]);
 
 type ProrationGateway = "stripe" | "khalti" | "esewa";
 
@@ -127,7 +136,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Company not found" }, { status: 404 });
     }
 
-    const cdata = companySnap.data() as { ownerId?: string; ownerEmail?: string; planId?: string; planExpiry?: admin.firestore.Timestamp };
+    const cdata = companySnap.data() as {
+      ownerId?: string;
+      ownerEmail?: string;
+      planId?: string;
+      planExpiry?: admin.firestore.Timestamp;
+      planExpiryMs?: number;
+      /** Chhoota hua tier par kitna din/NPR — frozen pill ramp (pre-upgrade snapshot). */
+      planUpgradedAt?: admin.firestore.Timestamp;
+      planUpgradedAtMs?: number;
+      stripeSubscriptionId?: string;
+      billingFrozenUsageLedger?: unknown;
+      billingBlockedDowngradePlanIds?: unknown;
+    };
     if (!isCompanyOwner(decoded, cdata)) {
       return NextResponse.json({ error: "Only the company owner can change plans" }, { status: 403 });
     }
@@ -144,17 +165,61 @@ export async function POST(req: NextRequest) {
       );
     }
     const changeKind = classifyPlanChange(currentPlanId, targetPlanId);
-    if (changeKind === "downgrade") {
+    // Paid→paid **downgrade**: UI sirf "Downgrade" button — value → cheap tier par zyada din; `plan_change_only` neeche band.
+    if (changeKind === "downgrade" && term === "plan_change_only") {
       return NextResponse.json(
-        { error: "Use the downgrade action (no payment) for lower tiers." },
+        {
+          error:
+            "To move down a paid tier, use the Downgrade button in that plan’s column. It converts your remaining subscription value into days at the lower plan’s yearly rate. “Just change plan” is only for moving up a tier without payment.",
+        },
+        { status: 400 }
+      );
+    }
+    if (changeKind === "downgrade" && term !== "plan_change_only") {
+      return NextResponse.json(
+        {
+          error:
+            "Lower paid tiers use the Downgrade button. This checkout is for renewals and upgrades only.",
+        },
         { status: 400 }
       );
     }
 
     const nowMs = Date.now();
-    const currentExpiryMs = cdata.planExpiry?.toMillis?.() ?? null;
+    // Pehla subscription Firestore par planExpiry likh na chhoot jaye to proration "abhi se" maan leta hai — Stripe period se backfill.
+    let currentExpiryMs = cdata.planExpiry?.toMillis?.() ?? null;
+    if (currentExpiryMs == null && typeof cdata.planExpiryMs === "number" && Number.isFinite(cdata.planExpiryMs)) {
+      currentExpiryMs = cdata.planExpiryMs;
+    }
+    const stripeSubId = typeof cdata.stripeSubscriptionId === "string" ? cdata.stripeSubscriptionId.trim() : "";
+    if (currentExpiryMs == null && stripeSubId) {
+      const adminResult = await getGatewayKeysFromAdmin();
+      const keys = mergeGatewayKeysWithEnv(adminResult.stored);
+      const sk = keys.stripeSecretKey?.trim();
+      if (sk) {
+        const stripeForRepair = new Stripe(sk, { apiVersion: "2025-12-15.clover" as any });
+        const repairedMs = await syncCompanyPlanExpiryFromStripe({
+          companyRef,
+          stripeSubscriptionId: stripeSubId,
+          stripe: stripeForRepair,
+        });
+        if (repairedMs != null) {
+          currentExpiryMs = repairedMs;
+          console.info("[plan-change-checkout] planExpiry backfilled from Stripe before quote", { companyId });
+        }
+      }
+    }
     const curPrices = await getEffectivePlanPrices(currentPlanId);
     const tgtPrices = await getEffectivePlanPrices(targetPlanId);
+
+    if (term === "plan_change_only") {
+      if (currentExpiryMs == null || currentExpiryMs <= nowMs) {
+        return NextResponse.json(
+          { error: "Just change plan needs an active paid subscription with a future expiry date." },
+          { status: 400 }
+        );
+      }
+    }
 
     const quote = quotePaidPlanPurchase({
       nowMs,
@@ -187,10 +252,25 @@ export async function POST(req: NextRequest) {
       const paymentDocId = `plan_change_${uuidv4()}`;
       const paymentRef = companyRef.collection("payments").doc(paymentDocId);
       const batch = db.batch();
+      const frozenPatch =
+        changeKind === "upgrade" && PAID_PLAN_IDS.has(currentPlanId)
+          ? buildMergedFrozenStateAfterPaidUpgrade({
+              existingLedgerRaw: cdata.billingFrozenUsageLedger,
+              existingBlockedRaw: cdata.billingBlockedDowngradePlanIds,
+              nowMs,
+              oldPlanId: currentPlanId,
+              oldExpiryMs: currentExpiryMs,
+              oldYearly: curPrices.yearly,
+              oldPlanStartedAtMs: resolveCompanyPlanTierStartedAtMs(cdata),
+              targetPlanId,
+            })
+          : null;
       batch.update(companyRef, {
         planId: targetPlanId,
         planExpiry: admin.firestore.Timestamp.fromMillis(quote.newExpiryMs),
+        planExpiryMs: quote.newExpiryMs,
         planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(frozenPatch ?? {}),
       });
       batch.set(paymentRef, {
         paymentId: paymentDocId,
@@ -215,7 +295,8 @@ export async function POST(req: NextRequest) {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       await batch.commit();
-      return NextResponse.json({ ok: true, applied: true, quote });
+      // Client toast: upgrade par end date pehle ho sakti hai — `planChangeHistory` se compare.
+      return NextResponse.json({ ok: true, applied: true, quote, planChangeHistory });
     }
 
     // Khalti/eSewa proration: persist server-side intent so return callbacks cannot forge company/plan/amount.

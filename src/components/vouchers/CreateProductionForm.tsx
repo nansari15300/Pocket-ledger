@@ -48,6 +48,8 @@ import {
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { Upload } from "lucide-react";
 import { compressVoucherAttachment } from "@/lib/compression";
+import { appendCompressedVoucherAttachmentsToState } from "@/lib/appendCompressedVoucherAttachments";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
 import { attachmentMaxBytes, attachmentStillTooLargeToastFields } from "@/lib/attachmentCompressionUi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -902,34 +904,33 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name={`rawMaterials.${index}.rate`}
                         render={({ field }: any) => (
-                          <FormControl>
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div className="w-full">
-                                    <Input
-                                      type="number"
-                                      placeholder="Rate"
-                                      value={field.value ?? ''}
-                                      onChange={(e) => {
-                                        const val = parseFloat(e.target.value) || 0;
-                                        field.onChange(val);
-                                        handleRawMaterialChange(index, 'rate', e.target.value);
-                                      }}
-                                      disabled={!isRateEditingAllowed}
-                                      className={cn(!isRateEditingAllowed && 'bg-muted cursor-not-allowed')}
-                                      title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                {!isRateEditingAllowed && !canEditRates && (
-                                  <TooltipContent>
-                                    <p>No permission to edit item rates</p>
-                                  </TooltipContent>
-                                )}
-                              </Tooltip>
-                            </TooltipProvider>
-                          </FormControl>
+                          <TooltipProvider>
+                            <Tooltip>
+                              {/* FormControl (Slot) ko TooltipProvider par mat lapeto — Provider child Fragment, `id` invalid */}
+                              <TooltipTrigger asChild>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    placeholder="Rate"
+                                    value={field.value ?? ''}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value) || 0;
+                                      field.onChange(val);
+                                      handleRawMaterialChange(index, 'rate', e.target.value);
+                                    }}
+                                    disabled={!isRateEditingAllowed}
+                                    className={cn("w-full", !isRateEditingAllowed && 'bg-muted cursor-not-allowed')}
+                                    title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
+                                  />
+                                </FormControl>
+                              </TooltipTrigger>
+                              {!isRateEditingAllowed && !canEditRates && (
+                                <TooltipContent>
+                                  <p>No permission to edit item rates</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       />
                     </div>
@@ -954,29 +955,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name={`rawMaterials.${index}.hsCode`}
                         render={({ field }: any) => (
-                          <FormControl>
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div className="w-full">
-                                    <Input
-                                      placeholder="HS Code"
-                                      value={field.value ?? ''}
-                                      onChange={field.onChange}
-                                      disabled={!isHSCodeEditingAllowed}
-                                      className={cn(!isHSCodeEditingAllowed && 'bg-muted cursor-not-allowed')}
-                                      title={!isHSCodeEditingAllowed && !canEditHSCode ? "No permission to edit HS Code" : undefined}
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                {!isHSCodeEditingAllowed && !canEditHSCode && (
-                                  <TooltipContent>
-                                    <p>No permission to edit HS Code</p>
-                                  </TooltipContent>
-                                )}
-                              </Tooltip>
-                            </TooltipProvider>
-                          </FormControl>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <FormControl>
+                                  <Input
+                                    placeholder="HS Code"
+                                    value={field.value ?? ''}
+                                    onChange={field.onChange}
+                                    disabled={!isHSCodeEditingAllowed}
+                                    className={cn("w-full", !isHSCodeEditingAllowed && 'bg-muted cursor-not-allowed')}
+                                    title={!isHSCodeEditingAllowed && !canEditHSCode ? "No permission to edit HS Code" : undefined}
+                                  />
+                                </FormControl>
+                              </TooltipTrigger>
+                              {!isHSCodeEditingAllowed && !canEditHSCode && (
+                                <TooltipContent>
+                                  <p>No permission to edit HS Code</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       />
                     </div>
@@ -1094,34 +1093,32 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name={`finishedGoods.${index}.rate`}
                         render={({ field }: any) => (
-                          <FormControl>
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div className="w-full">
-                                    <Input
-                                      type="number"
-                                      placeholder="Rate"
-                                      value={field.value ?? ''}
-                                      onChange={(e) => {
-                                        const val = parseFloat(e.target.value) || 0;
-                                        field.onChange(val);
-                                        handleFinishedGoodChange(index, 'rate', e.target.value);
-                                      }}
-                                      disabled={!isRateEditingAllowed}
-                                      className={cn(!isRateEditingAllowed && 'bg-muted cursor-not-allowed')}
-                                      title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                {!isRateEditingAllowed && !canEditRates && (
-                                  <TooltipContent>
-                                    <p>No permission to edit item rates</p>
-                                  </TooltipContent>
-                                )}
-                              </Tooltip>
-                            </TooltipProvider>
-                          </FormControl>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    placeholder="Rate"
+                                    value={field.value ?? ''}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value) || 0;
+                                      field.onChange(val);
+                                      handleFinishedGoodChange(index, 'rate', e.target.value);
+                                    }}
+                                    disabled={!isRateEditingAllowed}
+                                    className={cn("w-full", !isRateEditingAllowed && 'bg-muted cursor-not-allowed')}
+                                    title={!isRateEditingAllowed && !canEditRates ? "No permission to edit rates" : undefined}
+                                  />
+                                </FormControl>
+                              </TooltipTrigger>
+                              {!isRateEditingAllowed && !canEditRates && (
+                                <TooltipContent>
+                                  <p>No permission to edit item rates</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       />
                     </div>
@@ -1146,29 +1143,27 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         control={form.control}
                         name={`finishedGoods.${index}.hsCode`}
                         render={({ field }: any) => (
-                          <FormControl>
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <div className="w-full">
-                                    <Input
-                                      placeholder="HS Code"
-                                      value={field.value ?? ''}
-                                      onChange={field.onChange}
-                                      disabled={!isHSCodeEditingAllowed}
-                                      className={cn(!isHSCodeEditingAllowed && 'bg-muted cursor-not-allowed')}
-                                      title={!isHSCodeEditingAllowed && !canEditHSCode ? "No permission to edit HS Code" : undefined}
-                                    />
-                                  </div>
-                                </TooltipTrigger>
-                                {!isHSCodeEditingAllowed && !canEditHSCode && (
-                                  <TooltipContent>
-                                    <p>No permission to edit HS Code</p>
-                                  </TooltipContent>
-                                )}
-                              </Tooltip>
-                            </TooltipProvider>
-                          </FormControl>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <FormControl>
+                                  <Input
+                                    placeholder="HS Code"
+                                    value={field.value ?? ''}
+                                    onChange={field.onChange}
+                                    disabled={!isHSCodeEditingAllowed}
+                                    className={cn("w-full", !isHSCodeEditingAllowed && 'bg-muted cursor-not-allowed')}
+                                    title={!isHSCodeEditingAllowed && !canEditHSCode ? "No permission to edit HS Code" : undefined}
+                                  />
+                                </FormControl>
+                              </TooltipTrigger>
+                              {!isHSCodeEditingAllowed && !canEditHSCode && (
+                                <TooltipContent>
+                                  <p>No permission to edit HS Code</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                       />
                     </div>
@@ -1218,8 +1213,25 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       ))}
                       {allowAttachments && fileAttachmentLimits.maxFileCount > 0 && files.length < fileAttachmentLimits.maxFileCount && (
                         <>
-                          <label
-                            htmlFor={attachFileInputId}
+                          <AttachmentHoldPasteSurface
+                            enabled={!editingDisabled && allowAttachments && fileAttachmentLimits.maxFileCount > 0}
+                            onShortActivate={() => {
+                              if (editingDisabled) return;
+                              if (allowAttachments && fileAttachmentLimits.maxFileCount > 0) {
+                                fileInputRef.current?.click();
+                              }
+                            }}
+                            onPastedFiles={(incoming) =>
+                              void appendCompressedVoucherAttachmentsToState({
+                                incomingFiles: incoming,
+                                currentFiles: files,
+                                maxFiles: fileAttachmentLimits.maxFileCount || 0,
+                                allowImage: fileAttachmentLimits.allowImage,
+                                allowPDF: fileAttachmentLimits.allowPDF,
+                                setFiles,
+                                toast,
+                              })
+                            }
                             className={cn(
                               "relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center transition-colors",
                               allowAttachments && fileAttachmentLimits.maxFileCount > 0
@@ -1229,17 +1241,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           >
                             <Upload className="h-6 w-6" />
                             <span className="text-xs mt-1">Add File</span>
-                          </label>
+                          </AttachmentHoldPasteSurface>
                           <Input
                             id={attachFileInputId}
                             type="file"
                             className="sr-only"
                             ref={fileInputRef}
                             onChange={handleFileChange}
-                            accept={[
-                              fileAttachmentLimits.allowImage ? "image/*" : "",
-                              fileAttachmentLimits.allowPDF ? "application/pdf" : ""
-                            ].filter(Boolean).join(",") || "image/*,application/pdf"}
+                            accept={
+                              [
+                                fileAttachmentLimits.allowImage ? "image/*" : "",
+                                fileAttachmentLimits.allowPDF ? "application/pdf" : "",
+                              ]
+                                .filter(Boolean)
+                                .join(",") || "image/*,application/pdf"
+                            }
                             multiple={fileAttachmentLimits.maxFileCount > 1}
                             disabled={!allowAttachments || fileAttachmentLimits.maxFileCount === 0}
                           />

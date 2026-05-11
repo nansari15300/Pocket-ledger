@@ -40,6 +40,8 @@ import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
 import Link from "next/link";
 import { FilePreview } from "../vouchers/FilePreview";
+import { AttachmentHoldPasteSurface } from "@/components/vouchers/AttachmentHoldPasteSurface";
+import { syntheticFileInputChangeEvent } from "@/lib/syntheticFileInputChangeEvent";
 import { compressFile } from "@/lib/compression";
 import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@/lib/fileUploadLimits";
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
@@ -725,9 +727,18 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                       {file ? <FilePreview file={file} onRemove={removeAvatar} /> : null}
                       {!file ? (
                         <FormControl>
-                          <div
+                          <AttachmentHoldPasteSurface
+                            enabled={canAddAvatar}
+                            onShortActivate={() => avatarInputRef.current?.click()}
+                            onPastedFiles={(incoming) => {
+                              const img = incoming[0];
+                              if (!img?.type.startsWith("image/")) {
+                                sonnerToast.error("Profile photo: images only");
+                                return;
+                              }
+                              void handleAvatarChange(syntheticFileInputChangeEvent([img]));
+                            }}
                             className="relative w-24 h-24 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            onClick={() => avatarInputRef.current?.click()}
                           >
                             <Upload className="h-6 w-6" />
                             <span className="text-xs mt-1 text-center px-1">Add photo</span>
@@ -738,7 +749,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                               onChange={handleAvatarChange}
                               accept="image/*"
                             />
-                          </div>
+                          </AttachmentHoldPasteSurface>
                         </FormControl>
                       ) : null}
                     </div>
@@ -771,9 +782,11 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                       ))}
                       {docSlots.length < 5 ? (
                         <FormControl>
-                          <div
+                          <AttachmentHoldPasteSurface
+                            enabled={canAttachDocuments}
+                            onShortActivate={() => docsInputRef.current?.click()}
+                            onPastedFiles={(incoming) => void handleDocsChange(syntheticFileInputChangeEvent(incoming))}
                             className="relative h-24 w-24 shrink-0 border-2 border-dashed rounded-lg flex flex-col justify-center items-center text-muted-foreground hover:border-primary transition-colors cursor-pointer"
-                            onClick={() => docsInputRef.current?.click()}
                           >
                             <Upload className="h-6 w-6" />
                             <span className="text-xs mt-1 text-center px-1">PDF / image</span>
@@ -785,7 +798,7 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
                               accept="image/*,application/pdf"
                               multiple
                             />
-                          </div>
+                          </AttachmentHoldPasteSurface>
                         </FormControl>
                       ) : null}
                     </div>
