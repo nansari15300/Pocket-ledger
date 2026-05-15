@@ -84,16 +84,34 @@ export function parseAttachmentHoldClipboardText(raw: string): AttachmentHoldPay
   }
 }
 
-export async function writeAttachmentHoldClipboard(payload: AttachmentHoldPayloadV1): Promise<boolean> {
-  const text = encodePayload(payload);
+export type WriteAttachmentHoldClipboardOpts = {
+  /**
+   * Clipboard line user ko dikhe (HTTPS link); session me hamesha PL marker — `readText` URL ho to bhi paste session se chal sakta hai.
+   */
+  clipboardDisplayUrl?: string | null;
+};
+
+export async function writeAttachmentHoldClipboard(
+  payload: AttachmentHoldPayloadV1,
+  opts?: WriteAttachmentHoldClipboardOpts
+): Promise<boolean> {
+  const encoded = encodePayload(payload);
   try {
-    sessionStorage.setItem(SESSION_BACKUP_KEY, text);
+    sessionStorage.setItem(SESSION_BACKUP_KEY, encoded);
   } catch {
     /* private mode */
   }
+  const raw = String(opts?.clipboardDisplayUrl || "").trim();
+  const usePlain =
+    raw.length > 0 &&
+    !raw.startsWith(ATTACHMENT_HOLD_CLIPBOARD_PREFIX) &&
+    !raw.startsWith("blob:") &&
+    !raw.startsWith("data:") &&
+    (raw.startsWith("http://") || raw.startsWith("https://"));
+  const toWrite = usePlain ? raw : encoded;
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(toWrite);
       return true;
     }
   } catch {

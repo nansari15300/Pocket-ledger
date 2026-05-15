@@ -1,18 +1,19 @@
 "use client";
 
 /**
- * Pehli login / naye device par splash:
+ * Pehli login / embedded company pick:
  * - Web: registry hydrate + min ~2s (purana behaviour).
- * - APK / static EXE: splash ko selected-company data warm complete par dismiss karo; attachment startup prefetch OFF.
- *   `OfflineWarmSyncManager` is dauran `gateActive` se band — double warm nahi.
+ * - APK/static: SQLite UI turant — blocking splash nahi; `runOfflineFullWarmSync` + attachment prefetch background (`FirstLoginWarmGate` duplicate warm rokta hai).
+ *   `OfflineWarmSyncManager` `gateActive` ke dauran debounced warm band.
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/hooks/useCompany";
 import type { Company } from "@/hooks/useCompany";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import {
   hasCompanyHydrationSplashBeenSeen,
@@ -21,10 +22,16 @@ import {
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { useFirstLoginWarmGate } from "@/contexts/FirstLoginWarmGateContext";
+import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import {
   runOfflineFullWarmSync,
   isCloudBackedCompanyShape,
+  runEmbeddedAttachmentPrefetchPhase,
 } from "@/lib/offlineFullWarmSync";
+import {
+  clearEmbeddedPendingCompanyDataWarm,
+  hasEmbeddedPendingCompanyDataWarm,
+} from "@/lib/embeddedPendingCompanyWarm";
 
 const MIN_DISPLAY_MS = 2000;
 /** Web-only: stuck trap */
@@ -47,9 +54,11 @@ type CompanyProgress = { data: number; attach: number };
 
 export function FirstDeviceCompanyHydrationOverlay() {
   const pathname = usePathname() || "";
+  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const { companyId, company, allCompanies, loading: registryLoading } = useCompany();
   const { setGateActive } = useFirstLoginWarmGate();
+  const { setHeaderAttachmentPercent } = useEmbeddedAttachmentPrefetch();
 
   const uid = user?.uid ?? "";
   const isLoginRoute = pathname === "/" || pathname === "";
@@ -57,13 +66,32 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const embeddedFullWarm =
     isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
 
-  const eligible =
-    !!uid && !hasCompanyHydrationSplashBeenSeen(uid) && !authLoading && !isLoginRoute && !isCompanySelectionRoute;
+  const firstSplashPending =
+    !!uid &&
+    !hasCompanyHydrationSplashBeenSeen(uid) &&
+    !authLoading &&
+    !isLoginRoute &&
+    !isCompanySelectionRoute;
+
+  const pendingEmbeddedCompanyWarm =
+    embeddedFullWarm &&
+    !!uid &&
+    !authLoading &&
+    !isLoginRoute &&
+    hasEmbeddedPendingCompanyDataWarm(uid, companyId) &&
+    !!companyId &&
+    company != null &&
+    company.id === companyId &&
+    isCloudBackedCompanyShape(company);
+
+  const eligible = firstSplashPending || pendingEmbeddedCompanyWarm;
 
   const overlayClockStartRef = useRef<number | null>(null);
   const dismissedRef = useRef(false);
   const warmStartedRef = useRef(false);
   const warmAbortRef = useRef<AbortController | null>(null);
+  const attachmentBgAbortRef = useRef<AbortController | null>(null);
+  const prevCompanyIdForResetRef = useRef<string>("");
 
   const [displayPct, setDisplayPct] = useState(0);
   const [visible, setVisible] = useState(false);
@@ -73,7 +101,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const [cloudRows, setCloudRows] = useState<Company[]>([]);
   const [progressById, setProgressById] = useState<Record<string, CompanyProgress>>({});
   const [warmPhase, setWarmPhase] = useState<"idle" | "running" | "done">("idle");
-  const [waitingOnline, setWaitingOnline] = useState(false);
 
   const companyResolvedForSelection = useMemo(() => {
     if (!companyId?.trim()) return true;
@@ -91,44 +118,39 @@ export function FirstDeviceCompanyHydrationOverlay() {
   const currentDataPct = currentWarmCompany
     ? progressById[currentWarmCompany.id]?.data ?? 0
     : 0;
-  const currentAttachPct = currentWarmCompany
-    ? progressById[currentWarmCompany.id]?.attach ?? 0
-    : 0;
-  // Selected company data progress: dashboard gate isi se kholna hai, all-companies average se nahi.
   const selectedCompanyDataPct = companyId
     ? progressById[companyId]?.data ?? 0
     : currentDataPct;
 
-  const { overallData, overallAttach } = useMemo(() => {
-    const ids = cloudRows.map((c) => c.id).filter(Boolean);
-    if (!ids.length) return { overallData: 0, overallAttach: 0 };
-    let sd = 0;
-    let sa = 0;
-    for (const id of ids) {
-      const p = progressById[id] ?? { data: 0, attach: 0 };
-      sd += p.data;
-      sa += p.attach;
-    }
-    return {
-      overallData: Math.round(sd / ids.length),
-      overallAttach: Math.round(sa / ids.length),
-    };
-  }, [cloudRows, progressById]);
-
-  // Embedded splash: selected company data mirror 100% hote hi UI unblock karo; attachment download background me jaari rahe.
+  /** Company switch: purana warm + background attachment cancel — nayi selection se overlap na ho. */
   useEffect(() => {
-    if (!visible || !eligible || !embeddedFullWarm) return;
-    if (warmPhase !== "running") return;
-    if (selectedCompanyDataPct < 100) return;
-    if (dismissedRef.current) return;
-    dismissedRef.current = true;
-    setDisplayPct(100);
-    if (uid) markCompanyHydrationSplashSeen(uid);
-    window.setTimeout(() => setVisible(false), 180);
-  }, [visible, eligible, embeddedFullWarm, warmPhase, selectedCompanyDataPct, uid]);
+    if (!embeddedFullWarm) return;
+    const next = (companyId || "").trim();
+    const prev = prevCompanyIdForResetRef.current;
+    if (next === prev) return;
+    if (prev === "" && next) {
+      prevCompanyIdForResetRef.current = next;
+      return;
+    }
+    if (prev && next && prev !== next) {
+      warmStartedRef.current = false;
+      warmAbortRef.current?.abort();
+      attachmentBgAbortRef.current?.abort();
+      setHeaderAttachmentPercent(null);
+      setWarmPhase("idle");
+      setCloudRows([]);
+      setProgressById({});
+      dismissedRef.current = false;
+    }
+    prevCompanyIdForResetRef.current = next;
+  }, [companyId, embeddedFullWarm, setHeaderAttachmentPercent]);
 
   useEffect(() => {
     if (eligible) {
+      // APK/static: splash `startEmbeddedWarm` khud turant band karta hai — yahan `visible`/dismissed reset se race na ho.
+      if (embeddedFullWarm) {
+        return;
+      }
       if (overlayClockStartRef.current == null) overlayClockStartRef.current = Date.now();
       setDisplayPct(0);
       dismissedRef.current = false;
@@ -168,7 +190,21 @@ export function FirstDeviceCompanyHydrationOverlay() {
     companyResolvedForSelection,
   ]);
 
-  /** APK/static: registry ke baad cloud company list + serial full warm */
+  const skipToDashboard = useCallback(() => {
+    warmAbortRef.current?.abort();
+    attachmentBgAbortRef.current?.abort();
+    warmStartedRef.current = false;
+    setHeaderAttachmentPercent(null);
+    if (companyId) clearEmbeddedPendingCompanyDataWarm(uid, companyId);
+    dismissedRef.current = true;
+    setDisplayPct(100);
+    setVisible(false);
+    setGateActive(false);
+    if (!hasCompanyHydrationSplashBeenSeen(uid)) markCompanyHydrationSplashSeen(uid);
+    router.replace("/dashboard");
+  }, [companyId, router, setGateActive, setHeaderAttachmentPercent, uid]);
+
+  /** APK/static: registry ke baad cloud company — pehle data mirror, phir splash dismiss + attachment background. */
   const startEmbeddedWarm = useCallback(async () => {
     if (!embeddedFullWarm || warmStartedRef.current || !uid) return;
     warmStartedRef.current = true;
@@ -180,113 +216,117 @@ export function FirstDeviceCompanyHydrationOverlay() {
         : company && company.id === companyId && isCloudBackedCompanyShape(company as Company)
           ? (company as Company)
           : null;
-    // Startup warm scope: selected company only; other companies are loaded when user opens them.
     const rows = selectedCloudRow ? [selectedCloudRow] : [];
     setCloudRows(rows);
-
-    const init: Record<string, CompanyProgress> = {};
-    for (const r of rows) {
-      init[r.id] = { data: 0, attach: 0 };
-    }
-    setProgressById(init);
 
     if (rows.length === 0) {
       setWarmPhase("done");
       setGateActive(false);
-      markCompanyHydrationSplashSeen(uid);
+      if (!hasCompanyHydrationSplashBeenSeen(uid)) markCompanyHydrationSplashSeen(uid);
+      if (companyId) clearEmbeddedPendingCompanyDataWarm(uid, companyId);
       setDisplayPct(100);
       window.setTimeout(() => setVisible(false), 280);
       return;
     }
 
-    setGateActive(true);
+    // UI turant SQLite mirror se — blocking `waitOnline` + full warm splash hata; Firestore pull + attachment cache background me.
+    for (const r of rows) {
+      clearEmbeddedPendingCompanyDataWarm(uid, r.id);
+    }
+    dismissedRef.current = true;
+    setDisplayPct(100);
     setWarmPhase("running");
     setWarmCompanyIndex(0);
+    if (!hasCompanyHydrationSplashBeenSeen(uid)) markCompanyHydrationSplashSeen(uid);
+    setGateActive(false);
+    setVisible(false);
+    const doneProgress: Record<string, CompanyProgress> = {};
+    for (const r of rows) {
+      doneProgress[r.id] = { data: 100, attach: 0 };
+    }
+    setProgressById(doneProgress);
 
-    const waitOnline = async () => {
-      if (typeof navigator === "undefined") return;
-      while (!navigator.onLine) {
-        setWaitingOnline(true);
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      setWaitingOnline(false);
-    };
+    const pathNorm = (pathname || "").replace(/\/+$/, "") || "/";
+    if (!pathNorm.toLowerCase().startsWith("/dashboard")) {
+      router.replace("/dashboard");
+    }
 
-    try {
-      await waitOnline();
+    void (async () => {
+      setGateActive(true);
+      try {
+        for (let i = 0; i < rows.length; i++) {
+          setWarmCompanyIndex(i);
+          const row = rows[i];
+          warmAbortRef.current?.abort();
+          const ac = new AbortController();
+          warmAbortRef.current = ac;
 
-      for (let i = 0; i < rows.length; i++) {
-        setWarmCompanyIndex(i);
-        const row = rows[i];
-        warmAbortRef.current?.abort();
-        const ac = new AbortController();
-        warmAbortRef.current = ac;
-
-        await waitOnline();
-
-        try {
-          const warmResult = await runOfflineFullWarmSync({
-            company: row,
-            localCompanyId: String(row.id).trim(),
-            signal: ac.signal,
-            // Startup policy: attachment blobs do not prefetch globally; hover prewarm handles visible rows only.
-            includeAttachmentPrefetch: false,
-            onProgress: (e) => {
-              if (e.kind === "data_subcollection" && e.localCompanyId === row.id) {
-                const data = e.total ? Math.min(100, Math.round((e.completed / e.total) * 100)) : 0;
-                setProgressById((prev) => ({
-                  ...prev,
-                  [row.id]: { ...(prev[row.id] ?? { data: 0, attach: 0 }), data },
-                }));
-              } else if (e.kind === "attachment_item" && e.localCompanyId === row.id) {
-                // 0 URLs = kuch download nahi — row 100% maano (warna 0% atke rehta)
-                const attach =
-                  e.total <= 0 ? 100 : Math.min(100, Math.round((e.done / e.total) * 100));
-                setProgressById((prev) => ({
-                  ...prev,
-                  [row.id]: { ...(prev[row.id] ?? { data: 0, attach: 0 }), attach },
-                }));
-              }
-            },
-          });
-          if (warmResult && warmResult.attachmentUrlsSeen === 0) {
-            setProgressById((prev) => ({
-              ...prev,
-              [row.id]: { ...(prev[row.id] ?? { data: 0, attach: 0 }), attach: 100 },
-            }));
+          try {
+            await runOfflineFullWarmSync({
+              company: row,
+              localCompanyId: String(row.id).trim(),
+              signal: ac.signal,
+              includeAttachmentPrefetch: false,
+              onProgress: (e) => {
+                if (e.kind === "data_subcollection" && e.localCompanyId === row.id) {
+                  const data = e.total ? Math.min(100, Math.round((e.completed / e.total) * 100)) : 0;
+                  setProgressById((prev) => ({
+                    ...prev,
+                    [row.id]: { ...(prev[row.id] ?? { data: 0, attach: 0 }), data },
+                  }));
+                }
+              },
+            });
+          } catch {
+            /* per-company network */
           }
-        } catch {
-          /* per-company network — agla */
+
+          setProgressById((prev) => ({
+            ...prev,
+            [row.id]: { data: 100, attach: 0 },
+          }));
+
+          attachmentBgAbortRef.current?.abort();
+          const bgAc = new AbortController();
+          attachmentBgAbortRef.current = bgAc;
+          try {
+            setHeaderAttachmentPercent(1);
+            await runEmbeddedAttachmentPrefetchPhase({
+              company: row,
+              localCompanyId: String(row.id).trim(),
+              signal: bgAc.signal,
+              onProgressPercent: (pct) => setHeaderAttachmentPercent(pct),
+            });
+          } catch {
+            /* offline mid-run */
+          } finally {
+            setHeaderAttachmentPercent(null);
+          }
         }
-
-        setProgressById((prev) => ({
-          ...prev,
-          [row.id]: { data: 100, attach: 100 },
-        }));
-
-        await new Promise((r) => setTimeout(r, 400));
+      } finally {
+        warmAbortRef.current = null;
+        setGateActive(false);
+        setWarmPhase("done");
       }
-    } finally {
-      warmAbortRef.current = null;
-      setGateActive(false);
-    }
-
-    setWarmPhase("done");
-    // Warm complete fallback: agar early-dismiss nahi hua to ab splash close + seen mark karo.
-    if (!dismissedRef.current) {
-      dismissedRef.current = true;
-      markCompanyHydrationSplashSeen(uid);
-      setDisplayPct(100);
-      window.setTimeout(() => setVisible(false), 320);
-    }
-  }, [embeddedFullWarm, uid, allCompanies, setGateActive]);
+    })();
+  }, [
+    embeddedFullWarm,
+    uid,
+    allCompanies,
+    company,
+    companyId,
+    pathname,
+    router,
+    setGateActive,
+    setHeaderAttachmentPercent,
+  ]);
 
   useEffect(() => {
-    if (!visible || !eligible || !embeddedFullWarm) return;
+    if (!eligible || !embeddedFullWarm) return;
     if (!hydrationDone || warmPhase !== "idle") return;
     if (warmStartedRef.current) return;
     void startEmbeddedWarm();
-  }, [visible, eligible, embeddedFullWarm, hydrationDone, warmPhase, startEmbeddedWarm]);
+  }, [eligible, embeddedFullWarm, hydrationDone, warmPhase, startEmbeddedWarm]);
 
   /** Web: min 2s + hydration — phir mark */
   useEffect(() => {
@@ -311,16 +351,17 @@ export function FirstDeviceCompanyHydrationOverlay() {
   useEffect(() => {
     return () => {
       warmAbortRef.current?.abort();
+      attachmentBgAbortRef.current?.abort();
       setGateActive(false);
+      setHeaderAttachmentPercent(null);
     };
-  }, [setGateActive]);
+  }, [setGateActive, setHeaderAttachmentPercent]);
 
-  /** Embedded: top progress bar = overall weighted (data + attach) / 2 for simple single % */
+  /** Embedded running: overlay % = data mirror only (attachments header me). */
   useEffect(() => {
     if (!visible || !eligible || !embeddedFullWarm || warmPhase === "idle") return;
-    const blended = Math.round((overallData + overallAttach) / 2);
-    setDisplayPct((p) => (blended > p ? blended : p));
-  }, [visible, eligible, embeddedFullWarm, warmPhase, overallData, overallAttach]);
+    setDisplayPct((p) => (selectedCompanyDataPct > p ? selectedCompanyDataPct : p));
+  }, [visible, eligible, embeddedFullWarm, warmPhase, selectedCompanyDataPct]);
 
   if (!visible || !eligible) return null;
 
@@ -366,12 +407,6 @@ export function FirstDeviceCompanyHydrationOverlay() {
 
         {embeddedFullWarm && warmPhase === "running" && (
           <div className="w-full space-y-4 text-left">
-            {waitingOnline && (
-              <p className="text-sm text-amber-600 dark:text-amber-400 text-center">
-                Waiting for internet…
-              </p>
-            )}
-            {/* Row 1 — is company ka SQLite / Firestore mirror (subcollections) */}
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground">
                 Data (masters + vouchers)
@@ -380,26 +415,15 @@ export function FirstDeviceCompanyHydrationOverlay() {
               <Progress value={currentDataPct} className="h-2" />
               <p className="text-xs tabular-nums text-muted-foreground text-right">{currentDataPct}%</p>
             </div>
-            {/* Row 2 — attachment URLs IndexedDB prefetch */}
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-muted-foreground">
-                Attachments (download & cache)
-                {currentWarmCompany?.name ? ` — ${currentWarmCompany.name}` : ""}
-              </p>
-              <Progress value={currentAttachPct} className="h-2" />
-              <p className="text-xs tabular-nums text-muted-foreground text-right">{currentAttachPct}%</p>
-            </div>
-            {/* Row 3 — saari companies ka average */}
-            <div className="space-y-1.5 rounded-lg border border-border/60 bg-muted/30 p-3">
-              <p className="text-xs font-semibold text-foreground">All companies (average)</p>
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Data {overallData}%</span>
-                <span>Attachments {overallAttach}%</span>
-              </div>
-              <Progress value={Math.round((overallData + overallAttach) / 2)} className="h-2" />
-            </div>
-            <p className="text-[11px] text-center text-muted-foreground">
-              Company {Math.min(warmCompanyIndex + 1, cloudRows.length || 1)} of {cloudRows.length || "—"}
+            <p className="text-[11px] text-center text-muted-foreground leading-snug">
+              After this step, attachments cache in the background — a thin progress line appears under the app header
+              while downloads run (online only).
+            </p>
+            <Button type="button" variant="outline" className="w-full" onClick={() => void skipToDashboard()}>
+              Go to dashboard
+            </Button>
+            <p className="text-[10px] text-center text-muted-foreground">
+              Skip stops this download — you can use the app; open vouchers online later to finish caching files.
             </p>
           </div>
         )}

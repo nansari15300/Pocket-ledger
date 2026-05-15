@@ -23,7 +23,6 @@ import {
   apkCloudCompanyOfflineViewOnly,
   apkEntityWriteUsesLocalSqliteMirror,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { getCompanyDocFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -60,13 +59,8 @@ export function EditGroupDialog({ group, allGroups, onGroupUpdated, onGroupDelet
   const { user } = useAuth();
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
-  const { directServerWrites } = useServerDirectWrites();
-  /** Server writes OFF: offline par bhi group update/delete SQLite + outbox. */
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
-  const apkOfflineViewOnly = useMemo(
-    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline, directServerWrites]
-  );
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  const apkOfflineViewOnly = useMemo(() => apkCloudCompanyOfflineViewOnly(company, navigatorOnline), [company, navigatorOnline]);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),

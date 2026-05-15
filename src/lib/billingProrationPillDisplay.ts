@@ -1,12 +1,12 @@
 /**
- * Billing table + profile dropdown: Credit / Usage pills — ek hi styling taaki renew quote match rahe.
+ * Billing table + profile dropdown: Balance / Usage pills — ek hi styling taaki renew quote match rahe.
  */
 
-/** Credit pill — halka pink, `border-2`, width content jitni. */
+/** Balance pill (pink) — `border-2`, width content jitni. */
 export const PRORATION_PILL_CREDIT_CLASS =
   "inline-flex w-fit max-w-full flex-wrap items-center justify-center gap-x-1 rounded-full border-2 border-pink-400 bg-pink-100/90 px-2.5 py-0.5 text-center text-xs tabular-nums leading-tight text-pink-950 dark:border-pink-400 dark:bg-pink-950/50 dark:text-pink-50";
 
-/** Snapshot credit (chhoda hua tier) — dashed pink, live quote se alag. */
+/** Snapshot balance (chhoda hua tier) — dashed pink, live quote se alag. */
 export const PRORATION_PILL_CREDIT_FROZEN_CLASS =
   "inline-flex w-fit max-w-full flex-wrap items-center justify-center gap-x-1 rounded-full border-2 border-dashed border-pink-500 bg-pink-100/90 px-2.5 py-0.5 text-center text-xs tabular-nums leading-tight text-pink-950 dark:border-pink-400 dark:bg-pink-950/50 dark:text-pink-50";
 
@@ -18,20 +18,20 @@ export const PRORATION_PILL_USAGE_CLASS =
 export const PRORATION_PILL_USAGE_FROZEN_CLASS =
   "inline-flex w-fit max-w-full flex-wrap items-center justify-center gap-x-1 rounded-full border-2 border-dashed border-emerald-600 bg-emerald-100/90 px-2.5 py-0.5 text-center text-xs tabular-nums leading-tight text-emerald-950 dark:border-emerald-400 dark:bg-emerald-950/50 dark:text-emerald-50";
 
-/** Profile Credit — white fill, black normal-weight text (billing table alag). */
+/** Profile Balance row — white fill, black normal-weight text (billing table alag). */
 export const PROFILE_PRORATION_PILL_CREDIT_CLASS =
   "inline-flex w-full max-w-full flex-wrap items-center justify-start gap-x-1 rounded-full border-2 border-pink-300 bg-white px-2.5 py-0.5 text-left text-xs font-normal tabular-nums leading-tight text-black shadow-sm dark:border-pink-400 dark:bg-white dark:text-black";
 
-/** Profile Usage — same typography as Credit. */
+/** Profile Usage — same typography as Balance row. */
 export const PROFILE_PRORATION_PILL_USAGE_CLASS =
   "inline-flex w-full max-w-full flex-wrap items-center justify-start gap-x-1 rounded-full border-2 border-emerald-300 bg-white px-2.5 py-0.5 text-left text-xs font-normal tabular-nums leading-tight text-black shadow-sm dark:border-emerald-400 dark:bg-white dark:text-black";
 
-/** Credit pill: adjusted din — UI par hamesha 2 decimal (Usage pill ke `≈ X days` ke saath tally). */
+/** Balance pill: adjusted din — UI par hamesha 2 decimal (Usage pill ke `≈ X days` ke saath tally). */
 export function formatCreditPillDaysLeftDisplay(days: number): string {
   return Math.max(0, days).toFixed(2);
 }
 
-/** Credit pill ~1.00 adjusted ho to "day", warna "days". */
+/** Balance pill ~1.00 adjusted ho to "day", warna "days". */
 export function creditPillAdjustedDayWord(adjustedDays: number): "day" | "days" {
   return Math.abs(adjustedDays - 1) < 0.005 ? "day" : "days";
 }

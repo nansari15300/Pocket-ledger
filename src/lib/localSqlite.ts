@@ -12,7 +12,11 @@ const IDB_KEY = "sqlite-db";
 
 export type SqlJsDatabase = import("sql.js").Database;
 
-function getRuntimeDbScope(): string {
+/**
+ * Pending-IDB (`offlineDb`) + browser-sqlite-IDB dono isi suffix se naam banate hain — drift se write/read alag DB na ho.
+ * `127.0.0.1` → `localhost` normalize: warna same dev machine par do IndexedDB namespaces (cache MISS / FILE fallback).
+ */
+export function getBrowserIndexedDbHostScope(): string {
   if (typeof window === "undefined") return "default";
   // Embedded/native: WebView localhost port app restart par badal sakta hai; fixed scope se SQLite persistence stable rakho.
   if (isCapacitorNativeApp()) return "capacitor_native_embedded";
@@ -20,17 +24,21 @@ function getRuntimeDbScope(): string {
   const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase();
   if (ua.includes("electron") && window.location.hostname === "localhost") return "electron_embedded";
   // Host-based DB scope: localhost vs production domain ko अलग rakhkar data conflict avoid kare.
-  const host = `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`;
+  const rawHost = window.location.hostname || "unknown";
+  const hostForScope = rawHost === "127.0.0.1" ? "localhost" : rawHost;
+  const host = `${hostForScope}${window.location.port ? `-${window.location.port}` : ""}`;
   return host.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
 }
 
 function getScopedIdbName(): string {
-  return `${BASE_IDB_NAME}__${getRuntimeDbScope()}`;
+  return `${BASE_IDB_NAME}__${getBrowserIndexedDbHostScope()}`;
 }
 
 function getHostPortScopeForLegacyFallback(): string {
   if (typeof window === "undefined") return "default";
-  const host = `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`;
+  const rawHost = window.location.hostname || "unknown";
+  const hostForScope = rawHost === "127.0.0.1" ? "localhost" : rawHost;
+  const host = `${hostForScope}${window.location.port ? `-${window.location.port}` : ""}`;
   return host.replace(/[^a-zA-Z0-9_.-]/g, "_").toLowerCase();
 }
 
@@ -200,6 +208,45 @@ function initSchema(db: SqlJsDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_sync_outbox_company_created
     ON sync_outbox(company_id, created_at)
   `);
+  migrateBrowserSqliteSchema(db);
+}
+
+/** Purane DB files: naye columns ALTER se — outbox anti-spoof + attachment sha256 integrity. */
+function migrateBrowserSqliteSchema(db: SqlJsDatabase): void {
+  const vRow = db.exec("PRAGMA user_version");
+  let v = 0;
+  if (vRow.length > 0 && vRow[0].values.length > 0) {
+    const cell = vRow[0].values[0]![0];
+    v = typeof cell === "number" ? cell : Number(cell) || 0;
+  }
+  const setUserVersion = (n: number) => db.run(`PRAGMA user_version = ${n}`);
+  if (v < 1) {
+    try {
+      db.run("ALTER TABLE sync_outbox ADD COLUMN client_write_id TEXT");
+    } catch {
+      /* column already exists */
+    }
+    try {
+      db.run("ALTER TABLE sync_outbox ADD COLUMN nonce TEXT");
+    } catch {
+      /* ignore */
+    }
+    try {
+      db.run("ALTER TABLE sync_outbox ADD COLUMN payload_hash TEXT");
+    } catch {
+      /* ignore */
+    }
+    setUserVersion(1);
+    v = 1;
+  }
+  if (v < 2) {
+    try {
+      db.run("ALTER TABLE attachment_file_refs ADD COLUMN sha256_hex TEXT");
+    } catch {
+      /* ignore */
+    }
+    setUserVersion(2);
+  }
 }
 
 /** Server-style prepare().get/run/all wrapper; har write ke baad IndexedDB me save. */

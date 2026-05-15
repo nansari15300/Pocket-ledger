@@ -9,6 +9,8 @@ import {
   isLocalFileRef,
 } from "@/lib/localPendingFiles";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { getRemoteAttachmentBlobPreferOfflineCache } from "@/lib/offlineAttachmentUrlCache";
+import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
 
 type Props = {
   src?: string | null;
@@ -20,7 +22,8 @@ type Props = {
 };
 
 /**
- * `local:uuid` ya remote URL — party/bank/staff/item thumbnail; local PDF = fallback initials.
+ * Master/detail avatar: `local:` + Firebase HTTPS + raw Storage path — pehle IndexedDB warm cache, phir online fetch;
+ * image nahi (PDF) ya miss par fallback.
  */
 export function ResolvedEntityAvatar({
   src,
@@ -31,6 +34,9 @@ export function ResolvedEntityAvatar({
 }: Props) {
   const [localBlobUrl, setLocalBlobUrl] = React.useState<string | null>(null);
   const blobUrlRef = React.useRef<string | null>(null);
+  /** Remote HTTPS / `voucher-files/…` — sirf yahan banaya `blob:` revoke (local Capacitor displayUrl nahi). */
+  const [remoteImgSrc, setRemoteImgSrc] = React.useState<string | undefined>(undefined);
+  const remoteBlobRevokeRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -81,8 +87,67 @@ export function ResolvedEntityAvatar({
     };
   }, [src]);
 
-  const imageSrc =
-    !src?.trim() ? undefined : isLocalFileRef(src) ? localBlobUrl ?? undefined : src;
+  React.useEffect(() => {
+    let cancelled = false;
+    const revokeRemote = () => {
+      if (remoteBlobRevokeRef.current) {
+        try {
+          URL.revokeObjectURL(remoteBlobRevokeRef.current);
+        } catch {
+          /* ignore */
+        }
+        remoteBlobRevokeRef.current = null;
+      }
+    };
+
+    if (!src?.trim() || isLocalFileRef(src)) {
+      revokeRemote();
+      setRemoteImgSrc(undefined);
+      return;
+    }
+
+    revokeRemote();
+    setRemoteImgSrc(undefined);
+    const trimmed = src.trim();
+
+    void (async () => {
+      try {
+        const blob = await getRemoteAttachmentBlobPreferOfflineCache(trimmed);
+        if (cancelled) return;
+        if (blob && blob.size > 0) {
+          const kind = await sniffBlobKindForPreview(blob);
+          if (cancelled) return;
+          if (kind === "image") {
+            const ou = URL.createObjectURL(blob);
+            remoteBlobRevokeRef.current = ou;
+            setRemoteImgSrc(ou);
+            return;
+          }
+        }
+        if (
+          !cancelled &&
+          /^https?:\/\//i.test(trimmed) &&
+          typeof navigator !== "undefined" &&
+          navigator.onLine
+        ) {
+          setRemoteImgSrc(trimmed);
+        }
+      } catch {
+        if (!cancelled) setRemoteImgSrc(undefined);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      revokeRemote();
+    };
+  }, [src]);
+
+  const imageSrc = !src?.trim()
+    ? undefined
+    : isLocalFileRef(src)
+      ? localBlobUrl ?? undefined
+      : remoteImgSrc;
 
   return (
     <Avatar className={className}>

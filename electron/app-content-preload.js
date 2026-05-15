@@ -11,3 +11,8 @@ contextBridge.exposeInMainWorld("plElectronTabBridge", {
     } catch (_) {}
   },
 });
+
+/** Multi-device / Firestore label: renderer `os.hostname` nahi padh sakta — main IPC se string. */
+contextBridge.exposeInMainWorld("plElectronDevice", {
+  getDisplayLabel: () => ipcRenderer.invoke("pl-device-display-info"),
+});

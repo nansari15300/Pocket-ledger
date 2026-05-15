@@ -20,6 +20,26 @@ declare global {
 
 declare const self: ServiceWorkerGlobalScope;
 
+/**
+ * `defaultCache` (Serwist/Next) antima `!sameOrigin` + `NetworkFirst` + cache plugins rakhta —
+ * Firebase Storage / Firestore jasta cross-origin requests yahi intercept hokar noisy `no-response` / CORS
+ * console flood karta. In hosts ko **pehle** plain `NetworkOnly` se handle karo (cache mat chipka).
+ */
+function isFirebaseOrGoogleCloudSdkHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return (
+    h === "firebasestorage.googleapis.com" ||
+    h === "storage.googleapis.com" ||
+    h.endsWith(".firebasestorage.app") ||
+    h === "firestore.googleapis.com" ||
+    h === "identitytoolkit.googleapis.com" ||
+    h === "securetoken.googleapis.com" ||
+    h === "firebaseinstallations.googleapis.com" ||
+    h === "oauth2.googleapis.com" ||
+    h === "play.googleapis.com"
+  );
+}
+
 const serwist = new Serwist({
   precacheEntries: self.__SW_MANIFEST,
   // `skipWaiting: true` naya SW activate hote hi purane tab control le leta — APK/Capacitor me online aane par navigate/shell mismatch se “restart” feel aata tha.
@@ -30,8 +50,23 @@ const serwist = new Serwist({
   navigationPreload: false,
   runtimeCaching: [
     {
+      matcher: ({ url }) => isFirebaseOrGoogleCloudSdkHost(url.hostname),
+      handler: new NetworkOnly(),
+    },
+    {
       matcher: ({ url, sameOrigin }) =>
         Boolean(sameOrigin && url.pathname.endsWith("/pdf.worker.min.mjs")),
+      handler: new NetworkOnly(),
+    },
+    {
+      // Next.js App Router Flight / `_rsc` — `defaultCache` intercept se `GET …/__next.….txt?_rsc=…` 404; hamesha network
+      matcher: ({ url, request, sameOrigin }) =>
+        Boolean(
+          sameOrigin &&
+            (url.searchParams.has("_rsc") ||
+              url.pathname.includes("__next.") ||
+              String(request.headers.get("RSC") || "").trim() === "1")
+        ),
       handler: new NetworkOnly(),
     },
     {

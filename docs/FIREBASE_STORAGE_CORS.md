@@ -8,7 +8,8 @@
 
 Project को root मा **`cors.json`** पहिले नै छ। यसमा:
 
-- `http://localhost:3000` — local dev
+- `http://localhost:3000` / `http://127.0.0.1:3000` — Next dev / Electron default static port (`PL_ELECTRON_STATIC_PORT`, default `3000`)
+- `http://localhost:55818` जस्ता अरू localhost port — पुरानो Electron `listen(0)` random port; **हरेक नयाँ port = नयाँ origin** — `http://localhost:54823` जस्ता port CORS मा नभए सम्म browser फेरि block गर्छ
 - Firebase Hosting URLs — यदि तपाईंले deploy गर्नुभयो भने
 
 **Production domain** थप्न: `cors.json` खोल्नुहोस् र आफ्नो domain `origin` मा राख्नुहोस्:
@@ -67,6 +68,12 @@ Full bucket: **`gs://studio-5452513410-a3f5b.firebasestorage.app`**
 
 ```bash
 gsutil cors set d:\pocket-ledger\cors.json gs://studio-5452513410-a3f5b.firebasestorage.app
+```
+
+**Project script (PATH me `gsutil` ho tab):** repo root बाट:
+
+```bash
+npm run storage:cors
 ```
 
 (कुनै पनि directory बाट चल्छ।)

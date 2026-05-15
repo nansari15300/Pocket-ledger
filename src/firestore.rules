@@ -80,6 +80,15 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['animationSettings']);
     }
 
+    /** Admin panel: SuperAdmin dusre user par sirf `role` patch (embedded server-writes toggles hata diye). */
+    function canSuperAdminPatchManagedUserFields(userId) {
+      return isSuperAdmin() && resource != null
+        && request.resource.data.get('id', '') == resource.data.get('id', '')
+        && request.resource.data.get('uid', '') == resource.data.get('uid', '')
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['role']);
+    }
+
     /**
      * Validates the creation of a document in a user's subcollection (e.g., transaction, category).
      * Ensures the creator is the owner and the document's internal 'userId' field matches the user's UID.
@@ -171,7 +180,8 @@ service cloud.firestore {
       allow get: if isSignedIn();
       allow list: if isSignedIn();
       allow create: if isValidUserCreate(userId);
-      allow update: if canUpdateUser(userId) || canUpdateUserByEmail(userId) || canUpdateUserDocByOwnership(userId) || canUpdateOwnAnimationSettings(userId);
+      allow update: if canUpdateUser(userId) || canUpdateUserByEmail(userId) || canUpdateUserDocByOwnership(userId) || canUpdateOwnAnimationSettings(userId)
+        || canSuperAdminPatchManagedUserFields(userId);
       allow delete: if isExistingOwner(userId);
 
       /**
@@ -264,6 +274,17 @@ service cloud.firestore {
        * collectionGroup("vouchers") hits this path. Check isSuperAdminEmail() first (no get()) so read always allows for that email.
        */
       match /vouchers/{voucherId} {
+        allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
+        allow write: if isCompanyUser(companyId) || isSuperAdmin();
+      }
+
+      /**
+       * Outbox flush idempotency: `localVoucherOutbox` `runTransaction` me `companies/{cid}/_pl_ledger_idem/{key}` pe
+       * `tx.get` + `tx.set(merge)` — is collection par pehle koi `match` nahi tha → implicit deny → REST BatchGet 403.
+       * Access boundary vouchers jaisi: sirf company member / SuperAdmin (shared email `isCompanyUser` me cover).
+       * @path /companies/{companyId}/_pl_ledger_idem/{idemKey}
+       */
+      match /_pl_ledger_idem/{idemKey} {
         allow read: if isSuperAdminEmail() || isAdmin() || isCompanyUser(companyId);
         allow write: if isCompanyUser(companyId) || isSuperAdmin();
       }

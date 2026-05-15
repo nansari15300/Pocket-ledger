@@ -1,7 +1,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { serverTimestamp } from "firebase/firestore";
+import { writeEntity } from "@/lib/writeGateway";
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,7 +24,12 @@ export async function POST(req: NextRequest) {
     // if (verificationData.state === "Completed") {
     
     if (metadata?.companyId) {
-        await addDoc(collection(firestore, `companies/${metadata.companyId}/payments`), {
+        await writeEntity({
+            companyId: String(metadata.companyId),
+            collectionName: "payments",
+            docId: "",
+            operation: "create",
+            data: {
             paymentId: token,
             userId: metadata?.userId,
             planId: metadata?.planId,
@@ -33,6 +38,8 @@ export async function POST(req: NextRequest) {
             gateway: 'khalti',
             status: 'completed', // Assuming success if webhook is called
             createdAt: serverTimestamp(),
+            },
+            options: { useFirestoreAutoId: true },
         });
     }
 

@@ -1,23 +1,26 @@
 "use client";
 
 /**
- * Static build: jaise hi network wapas aaye (ya periodic) pending voucher outbox Firestore pe flush.
+ * Local-first / embedded: flush pending `sync_outbox` rows to Firestore when the network is up, on focus, or on an interval (~8s).
+ * Must also run on Capacitor with Firebase UI mode — previously the manager returned early when `isLocalOnlyMode` was false.
  */
 
 import { useEffect } from "react";
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 
 export function VoucherOutboxFlushManager() {
   useEffect(() => {
-    if (!isLocalOnlyMode()) return;
-    // Local-first sync engine: default ON for online-category companies, can disable via env flag.
+    // Capacitor + Firebase data source: `isLocalOnlyMode` may be false but outbox flush is still required, or masters stay stuck in the queue.
+    if (!isLocalOnlyMode() && !apkEmbeddedSqliteFirstWritesPreferred()) return;
+    // Local-first sync engine: default ON for online-category companies; disable with env flag.
     if (process.env.NEXT_PUBLIC_ENABLE_AUTO_BACKUP_SYNC === "0") return;
-    /** Watch stream ko browser "online" ke turant baad settle hone do — flush se race kam (Firestore ca9). */
+    /** Let the browser "online" event settle before flushing — reduces races with Firestore watch streams (ca9). */
     const FLUSH_AFTER_ONLINE_MS = 900;
     const ONLINE_DEBOUNCE_MS = 1200;
 
-    // Browser `setTimeout` id = number; Node typings use `Timeout` — yahan sirf window
+    // Browser `setTimeout` ids are numbers here; Node typings use `Timeout` — this effect is window-only.
     let onlineTimer: number | null = null;
     const pendingFlushTimers: number[] = [];
     const scheduleFlush = (delayMs: number) => {
@@ -32,6 +35,9 @@ export function VoucherOutboxFlushManager() {
       void flushVoucherOutbox();
     };
     const onOnline = () => {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[ONLINE_EVENT]", "VoucherOutboxFlushManager:debounced-online→flush");
+      }
       if (onlineTimer != null) clearTimeout(onlineTimer);
       onlineTimer = window.setTimeout(() => {
         onlineTimer = null;
@@ -47,7 +53,8 @@ export function VoucherOutboxFlushManager() {
     window.addEventListener("focus", onVisibleOrFocus);
     document.addEventListener("visibilitychange", onVisibleOrFocus);
     if (typeof navigator !== "undefined" && navigator.onLine) scheduleFlush(FLUSH_AFTER_ONLINE_MS);
-    const iv = setInterval(tick, 15_000);
+    /** Periodic retry jab awaited flush fail / queue baaki ho — 15s→8s taake web/exe cross-device kam late */
+    const iv = setInterval(tick, 8_000);
     return () => {
       if (onlineTimer != null) clearTimeout(onlineTimer);
       pendingFlushTimers.forEach((t) => clearTimeout(t));

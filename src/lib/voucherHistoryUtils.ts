@@ -6,6 +6,7 @@ import { doc, getDoc, getDocFromServer } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { getPlan, type PlanId } from "@/config/plans";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 
 export type VoucherHistoryFullBehavior = 'block_edit' | 'allow_edit_delete_last';
 
@@ -23,6 +24,10 @@ export function normalizeVoucherHistoryFullBehavior(raw: unknown): VoucherHistor
 export async function getEffectiveHistorySettings(companyId: string): Promise<{ enabled: boolean; limit: number; fullBehavior: VoucherHistoryFullBehavior }> {
   if (isLocalOnlyMode()) {
     // Local-only mode me Firestore reads avoid karo; safe defaults se edit/save flow chalne do.
+    return { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" };
+  }
+  // Static/APK + device offline: `getDocFromServer` / company read mat — `saveVoucherOfflineLocalCreate` "Saving…" yahin atakta tha.
+  if (apkEmbeddedSqliteFirstWritesPreferred() || (typeof navigator !== "undefined" && !navigator.onLine)) {
     return { enabled: true, limit: 10, fullBehavior: "allow_edit_delete_last" };
   }
   // Prefer server read so live settings (from Voucher Settings) apply immediately; fallback to cache if offline
@@ -56,6 +61,9 @@ export async function getEffectiveHistorySettings(companyId: string): Promise<{ 
 export async function getPlanVoucherHistoryLimit(companyId: string): Promise<number> {
   if (isLocalOnlyMode()) {
     // Local-only mode me plan lookup Firestore se na karo; fallback cap use karo.
+    return 10;
+  }
+  if (apkEmbeddedSqliteFirstWritesPreferred() || (typeof navigator !== "undefined" && !navigator.onLine)) {
     return 10;
   }
   const companySnap = await getDoc(doc(firestore, "companies", companyId));

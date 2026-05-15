@@ -7,7 +7,6 @@ import { Card } from "@/components/ui/card";
 import { Item } from "@/components/items/types";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Package } from "lucide-react";
 import type { StockView } from "./ItemDetails";
 import React, { useMemo, useState } from "react";
@@ -21,6 +20,7 @@ import {
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 
 interface ItemListProps {
   items: Item[];
@@ -152,12 +152,12 @@ export function ItemList({
                           fileUrl={attachmentPreviewUrl}
                           triggerClassName="inline-flex shrink-0 rounded-md"
                         >
-                          <Avatar className="h-8 w-8 text-sm">
-                            <AvatarImage src={attachmentPreviewUrl ?? undefined} />
-                            <AvatarFallback>
-                              <Package />
-                            </AvatarFallback>
-                          </Avatar>
+                          <ResolvedEntityAvatar
+                            className="h-8 w-8 text-sm"
+                            src={attachmentPreviewUrl ?? undefined}
+                            alt={item.name}
+                            fallbackSlot={<Package />}
+                          />
                         </EntityFileAttachmentHover>
                         {(pendingApprovalByItemId[item.id] ?? 0) > 0 && (
                           <span

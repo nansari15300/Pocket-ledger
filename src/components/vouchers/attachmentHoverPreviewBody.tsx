@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FilePreview } from "@/components/vouchers/FilePreview";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
-import { tryGetStoragePathFromFirebaseDownloadUrl } from "@/lib/firebaseStorageDownloadUrl";
+import { tryGetStoragePathFromFirebaseDownloadUrl, looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import {
   isLocalFileRef,
   getBlobFromLocalFileRef,
@@ -69,10 +69,15 @@ export async function prewarmHoverPreviewHttpsUrls(
   urls: readonly string[],
   options?: { signal?: AbortSignal; maxUrls?: number }
 ): Promise<void> {
-  // Only visible-row HTTPS attachments are warmed so hover preview opens instantly without app-start preload.
-  const maxUrls = Math.max(1, Math.min(120, options?.maxUrls ?? 40));
-  const uniqueHttps = [...new Set(urls.map((u) => String(u || "").trim()).filter((u) => /^https?:\/\//i.test(u)))].slice(0, maxUrls);
-  for (const url of uniqueHttps) {
+  // Idle path: visible rows ke liye LRU + `getRemoteAttachmentBlobPreferOfflineCache` — hover turant; app-start par global preload nahi.
+  // Poori company bytes background: `CompanyAttachmentOfflineBackfillManager` / `runEmbeddedAttachmentPrefetchPhase` + ab wahan `prioritizeUrls` bhi.
+  // HTTPS signed URLs + raw Storage object-path — offline avatar / hover dono IndexedDB se hit.
+  const maxUrls = Math.max(1, Math.min(400, options?.maxUrls ?? 200));
+  const unique = [...new Set(urls.map((u) => String(u || "").trim()).filter((u) => {
+    // Transaction table visible rows: HTTPS + raw Storage path dono warm — gallery / avatar hover offline hit.
+    return /^https?:\/\//i.test(u) || looksLikeFirebaseStorageObjectPath(u);
+  }))].slice(0, maxUrls);
+  for (const url of unique) {
     if (options?.signal?.aborted) break;
     if (peekHoverCachedBlobUrl(url)) continue;
     try {
@@ -99,7 +104,12 @@ function HoverPreviewHttpsAwareImage(props: {
 }) {
   const u = String(props.url || "");
   const [displaySrc, setDisplaySrc] = React.useState<string>(() => {
-    if (!/^https?:\/\//i.test(u)) return u;
+    if (!/^https?:\/\//i.test(u)) {
+      if (u.startsWith("blob:") || u.startsWith("data:")) return u;
+      const fromLru = peekHoverCachedBlobUrl(u);
+      if (fromLru) return fromLru;
+      return "";
+    }
     const fromLru = peekHoverCachedBlobUrl(u);
     if (fromLru) return fromLru;
     if (typeof navigator !== "undefined" && navigator.onLine && isElectronDesktopApp()) return u;
@@ -112,9 +122,38 @@ function HoverPreviewHttpsAwareImage(props: {
     let blobUrlToRevoke: string | null = null;
 
     if (!/^https?:\/\//i.test(u)) {
-      setDisplaySrc(u);
+      // `blob:` / `data:` — direct render; Storage object-path / baaki — cache/SDK se blob (raw path `<img src>` invalid).
+      if (u.startsWith("blob:") || u.startsWith("data:")) {
+        setDisplaySrc(u);
+        return () => {
+          cancelled = true;
+        };
+      }
+      setDisplaySrc("");
+      void (async () => {
+        const b = await getRemoteAttachmentBlobPreferOfflineCache(u);
+        if (cancelled) return;
+        if (b && b.size > 0) {
+          const ou = URL.createObjectURL(b);
+          if (cancelled) {
+            URL.revokeObjectURL(ou);
+            return;
+          }
+          rememberHoverBlobUrl(u, ou);
+          blobUrlToRevoke = ou;
+          setDisplaySrc(ou);
+          return;
+        }
+      })();
       return () => {
         cancelled = true;
+        if (blobUrlToRevoke && hoverHttpsBlobUrlByKey.get(u.trim()) !== blobUrlToRevoke) {
+          try {
+            URL.revokeObjectURL(blobUrlToRevoke);
+          } catch {
+            /* ignore */
+          }
+        }
       };
     }
 

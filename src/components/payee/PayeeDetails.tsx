@@ -5,7 +5,9 @@ import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Party } from "@/components/party/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -342,12 +344,17 @@ export function PayeeDetails({
                   <ArrowLeft className="h-5 w-5" />
                 </Button>
               )}
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarImage src={party.fileUrl} alt={party.name} />
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  {getEntityIcon(party.type)}
-                </AvatarFallback>
-              </Avatar>
+              <EntityFileAttachmentHover
+                fileUrl={trimEntityFileUrlForPreview(party.fileUrl)}
+                triggerClassName="inline-flex shrink-0 rounded-full"
+              >
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={trimEntityFileUrlForPreview(party.fileUrl) ?? undefined}
+                  alt={party.name}
+                  fallbackSlot={<span className="text-muted-foreground">{getEntityIcon(party.type)}</span>}
+                />
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{party.name}</h2>
                 {party.type === 'Party' && party.id !== 'all' && (

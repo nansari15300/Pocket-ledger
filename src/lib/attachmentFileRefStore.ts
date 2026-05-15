@@ -12,6 +12,8 @@ export type AttachmentFileRefRow = {
   size: number;
   metaJson: string | null;
   updatedAt: number;
+  /** Native DataDirectory file integrity — open/read par verify. */
+  sha256Hex?: string | null;
 };
 
 /** SQLite row upsert: binary bytes alag DataDirectory me, yahan stable path+meta only. */
@@ -19,14 +21,15 @@ export async function upsertAttachmentFileRef(row: AttachmentFileRefRow): Promis
   const db = await getBrowserDb();
   if (!db) return;
   db.prepare(
-    `INSERT INTO attachment_file_refs(scope, id, file_path, content_type, size, meta_json, updatedAt)
-     VALUES(?,?,?,?,?,?,?)
+    `INSERT INTO attachment_file_refs(scope, id, file_path, content_type, size, meta_json, updatedAt, sha256_hex)
+     VALUES(?,?,?,?,?,?,?,?)
      ON CONFLICT(scope, id) DO UPDATE SET
        file_path = excluded.file_path,
        content_type = excluded.content_type,
        size = excluded.size,
        meta_json = excluded.meta_json,
-       updatedAt = excluded.updatedAt`
+       updatedAt = excluded.updatedAt,
+       sha256_hex = COALESCE(excluded.sha256_hex, attachment_file_refs.sha256_hex)`
   ).run(
     row.scope,
     row.id,
@@ -34,7 +37,8 @@ export async function upsertAttachmentFileRef(row: AttachmentFileRefRow): Promis
     row.contentType ?? null,
     Math.max(0, Number(row.size || 0)),
     row.metaJson ?? null,
-    row.updatedAt || Date.now()
+    row.updatedAt || Date.now(),
+    row.sha256Hex ?? null
   );
 }
 
@@ -47,7 +51,7 @@ export async function getAttachmentFileRef(
   if (!db) return null;
   const row = db
     .prepare(
-      `SELECT scope, id, file_path, content_type, size, meta_json, updatedAt
+      `SELECT scope, id, file_path, content_type, size, meta_json, updatedAt, sha256_hex
        FROM attachment_file_refs
        WHERE scope = ? AND id = ?`
     )
@@ -60,6 +64,7 @@ export async function getAttachmentFileRef(
         size: number | null;
         meta_json: string | null;
         updatedAt: number | null;
+        sha256_hex: string | null;
       }
     | undefined;
   if (!row) return null;
@@ -71,6 +76,7 @@ export async function getAttachmentFileRef(
     size: Number(row.size || 0),
     metaJson: row.meta_json ?? null,
     updatedAt: Number(row.updatedAt || 0),
+    sha256Hex: row.sha256_hex ? String(row.sha256_hex) : null,
   };
 }
 
@@ -80,7 +86,7 @@ export async function listAttachmentFileRefs(scope: AttachmentRefScope): Promise
   if (!db) return [];
   const rows = db
     .prepare(
-      `SELECT scope, id, file_path, content_type, size, meta_json, updatedAt
+      `SELECT scope, id, file_path, content_type, size, meta_json, updatedAt, sha256_hex
        FROM attachment_file_refs
        WHERE scope = ?
        ORDER BY updatedAt ASC`
@@ -93,6 +99,7 @@ export async function listAttachmentFileRefs(scope: AttachmentRefScope): Promise
     size: number | null;
     meta_json: string | null;
     updatedAt: number | null;
+    sha256_hex: string | null;
   }>;
   return rows.map((r) => ({
     scope: r.scope,
@@ -102,6 +109,7 @@ export async function listAttachmentFileRefs(scope: AttachmentRefScope): Promise
     size: Number(r.size || 0),
     metaJson: r.meta_json ?? null,
     updatedAt: Number(r.updatedAt || 0),
+    sha256Hex: r.sha256_hex ? String(r.sha256_hex) : null,
   }));
 }
 

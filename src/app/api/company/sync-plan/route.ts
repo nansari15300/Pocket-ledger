@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import admin from "firebase-admin";
+import { corsHeadersForPocketLedgerBillingApi } from "@/lib/server/billingApiCors";
 import { getAdminDb, isFirebaseAdminConfigured } from "@/lib/firebaseAdmin";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import { applyExpiredPaidPlanAutoDowngradeIfEligible } from "@/lib/server/applyExpiredPaidPlanAutoDowngrade";
-import { type PlanId, normalizePlanIdForClient } from "@/config/plans";
+import { reconcileOwnerCompaniesPlanWithDriftHeal } from "@/lib/server/accountCanonicalPlan";
+import { normalizePlanIdForClient } from "@/config/plans";
 
 /** `companyId` = Firestore doc id; `localCompanyId` = SQLite row id jab alag ho (offline-first) */
 type Body = { companyId?: string; localCompanyId?: string };
@@ -61,20 +63,26 @@ function canReadCompanyPlan(decoded: admin.auth.DecodedIdToken, data: Record<str
   return emails.some((x: unknown) => String(x || "").toLowerCase().trim() === e);
 }
 
+/** CORS preflight — static EXE/APK `localhost` → production `sync-plan`. */
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: corsHeadersForPocketLedgerBillingApi(req) });
+}
+
 /**
  * POST: Bearer token + companyId — Firestore companies/{id} se authoritative plan (Admin SDK).
  * Client SQLite / localStorage cache isi se align hota hai (offline + SaaS sync).
  */
 export async function POST(req: NextRequest) {
+  const cors = corsHeadersForPocketLedgerBillingApi(req);
   try {
     if (!isFirebaseAdminConfigured()) {
-      return NextResponse.json({ error: "Firebase Admin not configured" }, { status: 503 });
+      return NextResponse.json({ error: "Firebase Admin not configured" }, { status: 503, headers: cors });
     }
 
     const authHeader = req.headers.get("authorization");
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
     if (!token) {
-      return NextResponse.json({ error: "Missing Authorization Bearer token" }, { status: 401 });
+      return NextResponse.json({ error: "Missing Authorization Bearer token" }, { status: 401, headers: cors });
     }
 
     getAdminDb();
@@ -82,13 +90,13 @@ export async function POST(req: NextRequest) {
     try {
       decoded = await admin.auth().verifyIdToken(token);
     } catch {
-      return NextResponse.json({ error: "Invalid auth token" }, { status: 401 });
+      return NextResponse.json({ error: "Invalid auth token" }, { status: 401, headers: cors });
     }
 
     const body = (await req.json()) as Body;
     const companyId = typeof body.companyId === "string" ? body.companyId.trim() : "";
     if (!companyId) {
-      return NextResponse.json({ error: "companyId required" }, { status: 400 });
+      return NextResponse.json({ error: "companyId required" }, { status: 400, headers: cors });
     }
     const localCompanyId =
       typeof body.localCompanyId === "string" && body.localCompanyId.trim()
@@ -98,16 +106,16 @@ export async function POST(req: NextRequest) {
     const ref = getAdminDb().collection("companies").doc(companyId);
     const snap = await withFirestoreTransientRetry(() => ref.get());
     if (!snap.exists) {
-      return NextResponse.json({ error: "company_not_found" }, { status: 404 });
+      return NextResponse.json({ error: "company_not_found" }, { status: 404, headers: cors });
     }
 
     const data = snap.data() || {};
     if (data.isDeleted === true) {
-      return NextResponse.json({ error: "company_deleted" }, { status: 404 });
+      return NextResponse.json({ error: "company_deleted" }, { status: 404, headers: cors });
     }
 
     if (!canReadCompanyPlan(decoded, data)) {
-      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+      return NextResponse.json({ error: "forbidden" }, { status: 403, headers: cors });
     }
 
     const db = getAdminDb();
@@ -175,21 +183,54 @@ export async function POST(req: NextRequest) {
       )
     );
 
-    return NextResponse.json({
-      companyId,
-      authoritativeCompanyId: companyId,
-      localCompanyId,
-      planId,
-      planExpiryMs,
-      stripeCustomerId,
-      stripeSubscriptionId,
-      lastStripeCheckoutSessionId,
-      offlineLicenseValidUntilMs,
-      autoDowngradeToBasicWhenExpired,
-      ...(expiredDowngraded ? { autoDowngradedToBasicOnSync: true as const } : {}),
-    });
+    // Owner apni company sync kare: Firestore drift heal — max tier + dates sab `companies` + `users` canonical par align.
+    const ownerUid = String(liveData.ownerId ?? "").trim();
+    let responseData = liveData as Record<string, unknown>;
+    if (ownerUid && decoded.uid === ownerUid && isCompanyOwner(decoded, liveData as { ownerId?: string; ownerEmail?: string })) {
+      await reconcileOwnerCompaniesPlanWithDriftHeal(db, ownerUid);
+      const refetch = await withFirestoreTransientRetry(() => ref.get());
+      responseData = (refetch.data() as Record<string, unknown>) || responseData;
+    }
+
+    const planIdOut = normalizePlanIdForClient(responseData.planId != null ? String(responseData.planId) : undefined);
+    let planExpiryMsOut: number | null = null;
+    if (typeof responseData.planExpiryMs === "number" && Number.isFinite(responseData.planExpiryMs)) {
+      planExpiryMsOut = responseData.planExpiryMs;
+    } else {
+      const pe = responseData.planExpiry as { toMillis?: () => number } | undefined;
+      if (pe && typeof pe.toMillis === "function") planExpiryMsOut = pe.toMillis();
+    }
+    const stripeCustomerIdOut =
+      typeof responseData.stripeCustomerId === "string" && responseData.stripeCustomerId.trim()
+        ? responseData.stripeCustomerId.trim()
+        : null;
+    const stripeSubscriptionIdOut =
+      typeof responseData.stripeSubscriptionId === "string" && responseData.stripeSubscriptionId.trim()
+        ? responseData.stripeSubscriptionId.trim()
+        : null;
+    const lastStripeCheckoutSessionIdOut =
+      typeof responseData.lastStripeCheckoutSessionId === "string" && responseData.lastStripeCheckoutSessionId.trim()
+        ? responseData.lastStripeCheckoutSessionId.trim()
+        : null;
+
+    return NextResponse.json(
+      {
+        companyId,
+        authoritativeCompanyId: companyId,
+        localCompanyId,
+        planId: planIdOut,
+        planExpiryMs: planExpiryMsOut,
+        stripeCustomerId: stripeCustomerIdOut,
+        stripeSubscriptionId: stripeSubscriptionIdOut,
+        lastStripeCheckoutSessionId: lastStripeCheckoutSessionIdOut,
+        offlineLicenseValidUntilMs,
+        autoDowngradeToBasicWhenExpired,
+        ...(expiredDowngraded ? { autoDowngradedToBasicOnSync: true as const } : {}),
+      },
+      { status: 200, headers: cors }
+    );
   } catch (e) {
     console.error("[sync-plan]", e);
-    return NextResponse.json({ error: "server_error" }, { status: 500 });
+    return NextResponse.json({ error: "server_error" }, { status: 500, headers: cors });
   }
 }

@@ -7,6 +7,11 @@
 import { isLocalFileRef, getBlobFromLocalFileRef } from "@/lib/localPendingFiles";
 import { tryGetBlobFromFirebaseStorageDownloadUrl } from "@/lib/storageGetBlobFromDownloadUrl";
 import {
+  getOfflineCachedAttachmentBlob,
+  getRemoteAttachmentBlobPreferOfflineCache,
+} from "@/lib/offlineAttachmentUrlCache";
+import { sniffBlobKindForPreview } from "@/lib/attachmentFormatLabel";
+import {
   attachPreviewCloseInteraction,
   pushInAppAttachmentPreviewLayer,
   scheduleInAppAttachmentPreviewRootRemoval,
@@ -14,6 +19,7 @@ import {
 } from "@/lib/inAppAttachmentPreviewOpen";
 import type { AttachmentKindHint } from "@/lib/openAttachmentInApp";
 import { mountGalleryImageZoom, type GalleryImageZoomApi } from "@/lib/inAppGalleryImageZoom";
+import { dismissOpenInAppPdfPreviewIfPresent, showInAppPdfPreview } from "@/lib/inAppPdfPreview";
 
 function pathLooksImage(pathLower: string): boolean {
   return /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(pathLower);
@@ -69,6 +75,28 @@ async function resolveSlide(url: string, kindHint?: AttachmentKindHint): Promise
   const isDataImage = u.startsWith("data:image/");
   const isDataPdf =
     u.startsWith("data:application/pdf") || u.toLowerCase().startsWith("data:application%2fpdf");
+
+  // Full-screen viewer: HTTPS ko seedha `src` mat — pehle IndexedDB / warm fetch taaki gallery tiles offline bhi hit karein
+  if (/^https?:\/\//i.test(u)) {
+    let hb = await getOfflineCachedAttachmentBlob(u);
+    if ((!hb || hb.size === 0) && typeof navigator !== "undefined" && navigator.onLine) {
+      hb = (await getRemoteAttachmentBlobPreferOfflineCache(u)) ?? null;
+    }
+    if (hb && hb.size > 0) {
+      const objectUrl = URL.createObjectURL(hb);
+      const revoke = () => {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          /* ignore */
+        }
+      };
+      const kind = await sniffBlobKindForPreview(hb);
+      if (kind === "image") return { kind: "image", src: objectUrl, revoke };
+      if (kind === "pdf") return { kind: "pdf", src: objectUrl, revoke };
+      revoke();
+    }
+  }
 
   if (kindHint === "image" || isDataImage || pathLooksImage(pathOnly)) {
     return { kind: "image", src: u, revoke: noop };
@@ -365,6 +393,8 @@ export function openAttachmentGalleryInApp(
 
   const renderSlide = async () => {
     const seq = ++loadSeq;
+    // Pehle khula PDF overlay band — warna iframe-era jaisa blob / handler race (Electron / static)
+    dismissOpenInAppPdfPreviewIfPresent();
     disposeSlideBlob();
     imageZoomApi?.dispose();
     imageZoomApi = null;
@@ -448,11 +478,19 @@ export function openAttachmentGalleryInApp(
           "box-sizing:border-box;width:100%;height:100%;max-height:100%;overflow:auto;padding:8px 56px;display:flex;align-items:center;justify-content:center;-webkit-overflow-scrolling:touch";
 
         if (resolved.kind === "pdf") {
-          const iframe = document.createElement("iframe");
-          iframe.src = resolved.src;
-          iframe.title = "PDF";
-          iframe.style.cssText = "width:min(96vw,900px);height:min(78vh,820px);border:0;background:#fff;flex-shrink:0";
-          wrap.appendChild(iframe);
+          // Electron / static: `<iframe src=blob|https>` PDF often blank — same PDF.js overlay as `openAttachmentInApp`
+          showInAppPdfPreview(resolved.src, resolved.revoke, {
+            title: `${baseTitle} (${idx + 1}/${list.length})`,
+            fileName: `attachment-${idx + 1}.pdf`,
+            onAfterPreviewLayerRemoved: () => setAttachmentPreviewHardwareBackHandler(safeClose),
+          });
+          wrap.appendChild(
+            Object.assign(document.createElement("p"), {
+              textContent: "PDF opened above — close it to return here. Use ‹ › for other files.",
+              style:
+                "color:#a3a3a3;text-align:center;padding:16px;font-size:13px;margin:0;line-height:1.35;max-width:min(92vw,320px)",
+            }),
+          );
         } else {
           const p = document.createElement("p");
           p.style.cssText = "color:#ddd;text-align:center;padding:16px";

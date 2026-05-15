@@ -5,6 +5,8 @@
 import * as admin from "firebase-admin";
 import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
+import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
+import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 
 const PAID: PlanId[] = ["advance", "pro", "pro-plus"];
 
@@ -39,16 +41,21 @@ export async function applyExpiredPaidPlanAutoDowngradeIfEligible(args: {
   const autoDowngrade = args.snapData.autoDowngradeToBasicWhenExpired;
   if (autoDowngrade === false) return false;
 
-  const batch = args.db.batch();
-  batch.update(args.companyRef, {
+  const autoDownMs = Date.now();
+  const autoDownTs = admin.firestore.Timestamp.fromMillis(autoDownMs);
+  const companyPatch: Record<string, unknown> = {
     planId: "basic",
     planExpiry: admin.firestore.FieldValue.delete(),
     planExpiryMs: admin.firestore.FieldValue.delete(),
     stripeSubscriptionId: admin.firestore.FieldValue.delete(),
-    planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+    planUpgradedAt: autoDownTs,
+    planUpgradedAtMs: autoDownMs,
     lastAutoDowngradeToBasicAt: admin.firestore.FieldValue.serverTimestamp(),
     lastAutoDowngradeToBasicReason: "paid_plan_expired_no_renewal",
-  });
+  };
+
+  const batch = args.db.batch();
+  batch.update(args.companyRef, companyPatch);
   const histRef = args.companyRef.collection("subscription_history").doc();
   batch.set(histRef, {
     oldPlanId: planId,
@@ -59,5 +66,19 @@ export async function applyExpiredPaidPlanAutoDowngradeIfEligible(args: {
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
   await batch.commit();
+
+  const ownerId = String(args.snapData.ownerId ?? args.decoded.uid ?? "").trim();
+  if (ownerId) {
+    await applyOwnerPlanMirrorBatched(args.db, ownerId, (docId) =>
+      docId === args.companyRef.id ? {} : companyPatch
+    );
+    await persistAccountCanonicalPlanDoc(args.db, ownerId, {
+      planId: "basic",
+      planExpiryMs: null,
+      planUpgradedAtMs: autoDownMs,
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+    });
+  }
   return true;
 }

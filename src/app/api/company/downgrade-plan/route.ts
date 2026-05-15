@@ -8,6 +8,8 @@ import { getEffectivePlanPrices, getEffectivePlanIsFree } from "@/lib/server/get
 import { getBillingPolicySettings } from "@/lib/server/getBillingPolicySettings";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import { classifyPlanChange, quoteDowngradeNewExpiry, daysLeftRounded } from "@/lib/subscriptionPlanMath";
+import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
+import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 
 type Body = {
   companyId?: string;
@@ -69,10 +71,15 @@ export async function POST(req: NextRequest) {
       planExpiry?: admin.firestore.Timestamp;
       planExpiryMs?: number;
       billingBlockedDowngradePlanIds?: unknown;
+      stripeCustomerId?: string;
+      stripeSubscriptionId?: string;
     };
     if (!isCompanyOwner(decoded, cdata)) {
       return NextResponse.json({ error: "Only the company owner can change plans" }, { status: 403 });
     }
+
+    /** Saari owned `companies` par plan/expiry mirror — `decoded.uid` fallback agar `ownerId` legacy miss ho. */
+    const mirrorOwnerId = String(cdata.ownerId ?? decoded.uid ?? "").trim();
 
     const currentPlanId = normalizePlanIdForClient(cdata.planId != null ? String(cdata.planId) : undefined);
     if (currentPlanId === targetPlanId) {
@@ -98,6 +105,8 @@ export async function POST(req: NextRequest) {
       const nowMs = Date.now();
       const currentExpiryMs = resolvePlanExpiryMillis(cdata);
       const previousDaysLeft = daysLeftRounded(nowMs, currentExpiryMs);
+      const tierSwitchMs = nowMs;
+      const tierSwitchTs = admin.firestore.Timestamp.fromMillis(tierSwitchMs);
       const planChangeHistory = {
         oldPlanId: currentPlanId,
         newPlanId: targetPlanId,
@@ -119,7 +128,8 @@ export async function POST(req: NextRequest) {
         planExpiry: admin.firestore.FieldValue.delete(),
         // Numeric mirror hatao — warna client pehle `planExpiryMs` padh kar purani paid expiry dikhata.
         planExpiryMs: admin.firestore.FieldValue.delete(),
-        planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        planUpgradedAt: tierSwitchTs,
+        planUpgradedAtMs: tierSwitchMs,
         billingFrozenUsageLedger: [],
         billingBlockedDowngradePlanIds: [],
       });
@@ -145,6 +155,23 @@ export async function POST(req: NextRequest) {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       await batch.commit();
+      const siblingMirror: Record<string, unknown> = {
+        planId: targetPlanId,
+        planExpiry: admin.firestore.FieldValue.delete(),
+        planExpiryMs: admin.firestore.FieldValue.delete(),
+        planUpgradedAt: tierSwitchTs,
+        planUpgradedAtMs: tierSwitchMs,
+        billingFrozenUsageLedger: [],
+        billingBlockedDowngradePlanIds: [],
+      };
+      await applyOwnerPlanMirrorBatched(db, mirrorOwnerId, (docId) => (docId === companyId ? {} : siblingMirror));
+      await persistAccountCanonicalPlanDoc(db, mirrorOwnerId, {
+        planId: normalizePlanIdForClient(targetPlanId),
+        planExpiryMs: null,
+        planUpgradedAtMs: tierSwitchMs,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+      });
       return NextResponse.json({ ok: true, planChangeHistory });
     }
 
@@ -207,13 +234,16 @@ export async function POST(req: NextRequest) {
     const paymentDocId = `downgrade_${uuidv4()}`;
     const paymentRef = companyRef.collection("payments").doc(paymentDocId);
     const batch = db.batch();
+    const paidSwitchMs = Date.now();
+    const paidSwitchTs = admin.firestore.Timestamp.fromMillis(paidSwitchMs);
 
     if (targetPlanId === "basic") {
       batch.update(companyRef, {
         planId: "basic",
         planExpiry: admin.firestore.FieldValue.delete(),
         planExpiryMs: admin.firestore.FieldValue.delete(),
-        planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        planUpgradedAt: paidSwitchTs,
+        planUpgradedAtMs: paidSwitchMs,
         billingFrozenUsageLedger: [],
         billingBlockedDowngradePlanIds: [],
       });
@@ -223,7 +253,8 @@ export async function POST(req: NextRequest) {
         planExpiry: admin.firestore.Timestamp.fromMillis(newExpiryMs),
         // `useCompany` / billing pehle `planExpiryMs` dekhte hain — sirf Timestamp se purani high-tier din chipak jati thi.
         planExpiryMs: newExpiryMs,
-        planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        planUpgradedAt: paidSwitchTs,
+        planUpgradedAtMs: paidSwitchMs,
       });
     }
 
@@ -252,6 +283,57 @@ export async function POST(req: NextRequest) {
     });
 
     await batch.commit();
+
+    let paidSiblingMirror: Record<string, unknown> | null = null;
+    if (targetPlanId === "basic") {
+      paidSiblingMirror = {
+        planId: "basic",
+        planExpiry: admin.firestore.FieldValue.delete(),
+        planExpiryMs: admin.firestore.FieldValue.delete(),
+        planUpgradedAt: paidSwitchTs,
+        planUpgradedAtMs: paidSwitchMs,
+        billingFrozenUsageLedger: [],
+        billingBlockedDowngradePlanIds: [],
+      };
+    } else if (newExpiryMs != null) {
+      paidSiblingMirror = {
+        planId: targetPlanId,
+        planExpiry: admin.firestore.Timestamp.fromMillis(newExpiryMs),
+        planExpiryMs: newExpiryMs,
+        planUpgradedAt: paidSwitchTs,
+        planUpgradedAtMs: paidSwitchMs,
+      };
+    }
+    if (paidSiblingMirror) {
+      await applyOwnerPlanMirrorBatched(db, mirrorOwnerId, (docId) =>
+        docId === companyId ? {} : paidSiblingMirror!
+      );
+      const stripeCust =
+        typeof cdata.stripeCustomerId === "string" && cdata.stripeCustomerId.trim()
+          ? cdata.stripeCustomerId.trim()
+          : null;
+      const stripeSub =
+        typeof cdata.stripeSubscriptionId === "string" && cdata.stripeSubscriptionId.trim()
+          ? cdata.stripeSubscriptionId.trim()
+          : null;
+      if (targetPlanId === "basic") {
+        await persistAccountCanonicalPlanDoc(db, mirrorOwnerId, {
+          planId: "basic",
+          planExpiryMs: null,
+          planUpgradedAtMs: paidSwitchMs,
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+        });
+      } else if (newExpiryMs != null) {
+        await persistAccountCanonicalPlanDoc(db, mirrorOwnerId, {
+          planId: normalizePlanIdForClient(targetPlanId),
+          planExpiryMs: newExpiryMs,
+          planUpgradedAtMs: paidSwitchMs,
+          stripeCustomerId: stripeCust,
+          stripeSubscriptionId: stripeSub,
+        });
+      }
+    }
 
     return NextResponse.json({ ok: true, planChangeHistory });
   } catch (e: unknown) {

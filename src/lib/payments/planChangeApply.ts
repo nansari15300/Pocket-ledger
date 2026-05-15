@@ -10,6 +10,8 @@ import {
 } from "@/lib/billingFrozenPlanSnapshots";
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
+import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
+import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 
 /** Snapshot stored on payment docs + merged into admin plan-change History dialog. */
 export type PlanChangeHistoryFirestore = {
@@ -115,42 +117,70 @@ export async function applyPlanChangeOneTimeToFirestore(input: ApplyPlanChangeOn
   );
 
   const planExpiry = admin.firestore.Timestamp.fromMillis(newPlanExpiryMs);
-  const companyPatch: Record<string, unknown> = {
+  const tierSwitchMs = Date.now();
+  const planUpgradedAtTs = admin.firestore.Timestamp.fromMillis(tierSwitchMs);
+
+  /** Saari owned companies par yahi slice — `billingFrozen*` sirf checkout wali company (tier ramp). */
+  const commonCompanyPatch: Record<string, unknown> = {
     planId: targetPlanId,
-    planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+    planUpgradedAt: planUpgradedAtTs,
+    planUpgradedAtMs: tierSwitchMs,
     planExpiry,
     planExpiryMs: newPlanExpiryMs,
   };
   if (stripeSessionId) {
-    companyPatch.lastStripeCheckoutSessionId = stripeSessionId;
+    commonCompanyPatch.lastStripeCheckoutSessionId = stripeSessionId;
   }
   if (stripeCustomerId) {
-    companyPatch.stripeCustomerId = stripeCustomerId;
+    commonCompanyPatch.stripeCustomerId = stripeCustomerId;
   }
 
   const hist = planChangeHistory;
   const oldPid = normalizePlanIdForClient(
     hist.oldPlanId != null ? String(hist.oldPlanId) : previousPlanId != null ? String(previousPlanId) : undefined
   );
+  let frozenPatch: Record<string, unknown> | null = null;
   if (hist.changeKind === "upgrade" && oldPid !== "basic" && PAID_PLAN_IDS.has(oldPid)) {
     const prices = await getEffectivePlanPrices(oldPid);
-    const frozenPatch = buildMergedFrozenStateAfterPaidUpgrade({
-      existingLedgerRaw: cdata.billingFrozenUsageLedger,
-      existingBlockedRaw: cdata.billingBlockedDowngradePlanIds,
-      nowMs: Date.now(),
-      oldPlanId: oldPid,
-      oldExpiryMs: hist.oldExpiryMs,
-      oldYearly: prices.yearly,
-      // Webhook se pehle company doc — `planUpgradedAt` abhi **purane** tier ka start hai.
-      oldPlanStartedAtMs: resolveCompanyPlanTierStartedAtMs(cdata),
-      targetPlanId,
-    });
-    if (frozenPatch) {
-      Object.assign(companyPatch, frozenPatch);
-    }
+    frozenPatch =
+      buildMergedFrozenStateAfterPaidUpgrade({
+        existingLedgerRaw: cdata.billingFrozenUsageLedger,
+        existingBlockedRaw: cdata.billingBlockedDowngradePlanIds,
+        nowMs: Date.now(),
+        oldPlanId: oldPid,
+        oldExpiryMs: hist.oldExpiryMs,
+        oldYearly: prices.yearly,
+        oldPlanStartedAtMs: resolveCompanyPlanTierStartedAtMs(cdata),
+        targetPlanId,
+      }) ?? null;
   }
 
-  await companyRef.update(companyPatch);
+  const primaryPatch =
+    frozenPatch && Object.keys(frozenPatch).length > 0 ? { ...commonCompanyPatch, ...frozenPatch } : commonCompanyPatch;
+
+  const ownerId = String(cdata.ownerId ?? userId ?? "").trim();
+  if (ownerId) {
+    await applyOwnerPlanMirrorBatched(db, ownerId, (docId) =>
+      docId === companyId ? primaryPatch : commonCompanyPatch
+    );
+    // `users/{ownerId}` par canonical tier — SuperAdmin / sync-plan drift heal ke liye warm cache.
+    const stripeCustMerged =
+      (typeof stripeCustomerId === "string" && stripeCustomerId.trim() ? stripeCustomerId.trim() : null) ??
+      (typeof cdata.stripeCustomerId === "string" && cdata.stripeCustomerId.trim() ? cdata.stripeCustomerId.trim() : null);
+    const stripeSubMerged =
+      typeof cdata.stripeSubscriptionId === "string" && cdata.stripeSubscriptionId.trim()
+        ? cdata.stripeSubscriptionId.trim()
+        : null;
+    await persistAccountCanonicalPlanDoc(db, ownerId, {
+      planId: targetPlanId,
+      planExpiryMs: newPlanExpiryMs,
+      planUpgradedAtMs: tierSwitchMs,
+      stripeCustomerId: stripeCustMerged,
+      stripeSubscriptionId: stripeSubMerged,
+    });
+  } else {
+    await companyRef.update(primaryPatch);
+  }
 
   await companyRef.collection("subscription_history").add({
     ...planChangeHistory,

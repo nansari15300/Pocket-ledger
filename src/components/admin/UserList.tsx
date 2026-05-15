@@ -10,6 +10,7 @@ import { Badge } from "../ui/badge";
 import { useEffect, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { firestore as db } from "@/lib/firebase";
+import { computePresenceLooksOnline } from "@/lib/presenceDisplay";
 
 const getInitials = (name: string) => {
   if (!name) return "?";
@@ -30,7 +31,8 @@ const UserCard = ({ user, isSelected, onSelectUser }: { user: AppUser, isSelecte
         const unsub = onSnapshot(doc(db, "users", user.id), (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
-                setIsOnline(data.lastSeen?.toDate && (Date.now() - data.lastSeen.toDate().getTime()) < 90 * 1000);
+                // `online` + `lastSeen` dono — do browser / devices par consistent badge.
+                setIsOnline(computePresenceLooksOnline({ online: data.online, lastSeen: data.lastSeen }));
             }
         });
         return () => unsub();

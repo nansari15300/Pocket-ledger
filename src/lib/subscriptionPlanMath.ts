@@ -1,7 +1,7 @@
 import type { PlanId } from "@/config/plans";
 import { planTierIndex } from "@/config/plans";
 
-/** Keys for billing dropdowns (monthly … multi-year). */
+/** Keys: dropdown (max 1 yr) + legacy multi-year + `plan_change_only`. */
 export type SubscriptionTermKey =
   | "monthly"
   | "quarter"
@@ -19,21 +19,38 @@ export type SubscriptionTermKey =
   /** Paid → paid, **charge 0**: upar tier par bachi value → nayi yearly/daily rate par din; neeche/barabar tier par calendar end same (`BILLING_TERM_OPTIONS` me nahi). */
   | "plan_change_only";
 
+/** Billing / admin plan-date dropdown — max 1 year; purane multi-year keys DB/Stripe me reh sakte hain. */
 export const BILLING_TERM_OPTIONS: { value: SubscriptionTermKey; label: string }[] = [
   { value: "monthly", label: "Monthly" },
   { value: "quarter", label: "Quarterly" },
   { value: "half_year", label: "Half year" },
   { value: "year_1", label: "1 year" },
-  { value: "year_2", label: "2 years" },
-  { value: "year_3", label: "3 years" },
-  { value: "year_4", label: "4 years" },
-  { value: "year_5", label: "5 years" },
-  { value: "year_6", label: "6 years" },
-  { value: "year_7", label: "7 years" },
-  { value: "year_8", label: "8 years" },
-  { value: "year_9", label: "9 years" },
-  { value: "year_10", label: "10 years" },
 ];
+
+/** Purane sessions / metadata — initiate + webhook ab bhi `year_2`…`year_10` parse karein (UI me option nahi). */
+export const LEGACY_MULTI_YEAR_TERM_KEYS: SubscriptionTermKey[] = [
+  "year_2",
+  "year_3",
+  "year_4",
+  "year_5",
+  "year_6",
+  "year_7",
+  "year_8",
+  "year_9",
+  "year_10",
+];
+
+/** `/api/payments/initiate` + Stripe fulfill — dropdown terms + legacy multi-year; `plan_change_only` alag flow. */
+export const SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT = new Set<SubscriptionTermKey>([
+  ...BILLING_TERM_OPTIONS.map((o) => o.value),
+  ...LEGACY_MULTI_YEAR_TERM_KEYS,
+]);
+
+/** `/api/payments/plan-change-checkout` — checkout terms + zero-net “Just change plan”. */
+export const SUBSCRIPTION_TERM_KEYS_FOR_PLAN_CHANGE = new Set<SubscriptionTermKey>([
+  ...SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
+  "plan_change_only",
+]);
 
 /** Billing upgrade dropdown — `BILLING_TERM_OPTIONS` me nahi taaki `/api/payments/initiate` recurring is term ko na le. */
 export const PLAN_CHANGE_ONLY_SELECT_OPTION = {

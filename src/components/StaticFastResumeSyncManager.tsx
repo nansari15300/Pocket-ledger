@@ -9,7 +9,7 @@ import { shouldSkipEmbeddedStartupAuthChurn } from "@/lib/embeddedWarmBootstrapF
 import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
 import { useCompany } from "@/hooks/useCompany";
 
-/** APK/EXE fast resume: UI pehle local cache se khulta hai, sync/auth background me quietly refresh hote hain. */
+/** APK/EXE + web local-first: resume par outbox flush; `online`/foreground par registry/token mat chhedo — reload/dashboard jump kam. */
 export function StaticFastResumeSyncManager() {
   const { triggerSync, reloadLocalCompanyRegistry } = useCompany();
   const lastRunRef = useRef(0);
@@ -24,6 +24,9 @@ export function StaticFastResumeSyncManager() {
     let removeAppStateListener: (() => void) | undefined;
 
     const runBackgroundRefresh = (reason: string) => {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[ONLINE_EVENT]", "StaticFastResumeSyncManager:runBackgroundRefresh", { reason });
+      }
       const now = Date.now();
       // Standby se rapid duplicate events (visibility + Capacitor + online) aate hain; one small burst enough.
       if (now - lastRunRef.current < 2500) return;
@@ -34,38 +37,65 @@ export function StaticFastResumeSyncManager() {
         const embeddedClient =
           isStaticAppBuild() || (typeof window !== "undefined" && isCapacitorNativeApp());
         const uid = auth.currentUser?.uid ?? null;
-        // Pehli full warm ke baad cold `mount` par token + registry tick mat chhedo — attachment warm / SQLite ko priority; sync `online`/resume par
-        const skipAuthChurnOnMount =
+
+        /** Local-first: `online` / tab foreground par sirf outbox — har client (web + APK); `registryVersion` bump se listener rebuild + kabhi `/company`/`/dashboard` jump band. */
+        const quietResumeNoRegistryTick =
+          isLocalOnlyMode() &&
+          (reason === "online" || reason === "visible" || reason === "appStateChange");
+
+        /** Warm complete: purana behaviour — mount par bhi heavy tick mat. */
+        const skipEmbeddedWarmMount =
           reason === "mount" &&
           isLocalOnlyMode() &&
           embeddedClient &&
           shouldSkipEmbeddedStartupAuthChurn(null, uid);
 
-        void flushVoucherOutbox();
-        if (!skipAuthChurnOnMount) {
-          void auth.currentUser?.getIdToken(false).catch(() => {
-            // Offline APK startup ko slow/blocked mat karo; Firebase token next online event pe retry hoga.
+        /**
+         * App already online + session: mount par `getIdToken` + `triggerSync` mat — user ko "auth dubara" / full UI refresh na lage.
+         * Capacitor offline pehli open: `navigator.onLine` false → yahan skip nahi; registry tick se SQLite/Firestore align ho sakta hai.
+         */
+        const skipHeavyMountWhileOnlineSession =
+          reason === "mount" &&
+          isLocalOnlyMode() &&
+          Boolean(uid) &&
+          typeof navigator !== "undefined" &&
+          navigator.onLine !== false;
+
+        const skipRegistryAndToken =
+          quietResumeNoRegistryTick || skipEmbeddedWarmMount || skipHeavyMountWhileOnlineSession;
+
+        if (process.env.NODE_ENV !== "production") {
+          // `flushVoucherOutbox` andar `enableNetwork` chala sakta — yehi Firestore listener churn se "refresh" correlate hota hai.
+          console.log("[QUEUE_FLUSH]", "StaticFastResume→flushVoucherOutbox", {
+            reason,
+            skipRegistryAndToken,
           });
         }
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[StaticFastResumeSyncManager] background refresh", reason);
-        }
+        void flushVoucherOutbox();
 
-        if (skipAuthChurnOnMount) {
-          return;
-        }
-
-        // **Offline → online:** user ko "app refresh" feel aa raha tha; online event par registry/listener tick ko skip rakho.
-        // Outbox flush + token warm-up upar ho chuka hota hai, isliye data sync background me chalta rahega bina UI jump ke.
-        if (reason === "online") {
+        if (skipRegistryAndToken) {
           if (deferredRegistryTimerRef.current != null) {
             clearTimeout(deferredRegistryTimerRef.current);
             deferredRegistryTimerRef.current = null;
           }
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[StaticFastResumeSyncManager] quiet resume — outbox only / no registry tick", reason);
+            console.log("[SYNC_COMPLETE]", "StaticFastResume:quiet-resume-outbox-only", { reason });
+          }
           return;
         }
 
-        // Visibility/resume: listener tick abhi; SQLite mirror thoda defer (scroll na hile).
+        void auth.currentUser?.getIdToken(false).catch(() => {
+          // Offline startup: token fail ignore — next online `quiet` path bhi token force nahi karta.
+        });
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[StaticFastResumeSyncManager] background refresh", reason);
+        }
+
+        // Sirf zarurat par: listener + deferred SQLite mirror bump.
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[RELOAD_TRIGGER]", "StaticFastResume→triggerSync (non-quiet path)");
+        }
         triggerSync();
         if (deferredRegistryTimerRef.current != null) {
           clearTimeout(deferredRegistryTimerRef.current);

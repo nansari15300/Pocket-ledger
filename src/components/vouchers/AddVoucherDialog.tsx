@@ -53,7 +53,6 @@ import { approveVoucherWithHistory } from "@/lib/voucherActionsClient";
 import { getEffectiveHistorySettings } from "@/lib/voucherHistoryUtils";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { VoucherAttachmentFallbackContext } from "@/contexts/VoucherAttachmentFallbackContext";
-import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { writeSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 import { formatVoucherNumber, normalizePrefix, parseVoucherNumberPart } from "@/lib/voucherNumberFormat";
 import { BTN_SAVE_CLASS } from "@/components/vouchers/voucherButtonStyles";
@@ -1120,17 +1119,9 @@ export function AddVoucherDialog(props: any) {
   }, [editCompanyId, allCompanies, ctxCompany]);
   const navigatorOnline = useNavigatorOnline();
   /** Dialog company lane: APK local ⇒ SQLite/live snapshot; APK Firestore ⇒ onSnapshot taaki stale mirror `/company` na khenche. */
-  const { directServerWrites } = useServerDirectWrites();
-  const voucherSqlMirrorFirst = useMemo(
-    () => apkEntityWriteUsesLocalSqliteMirror(company),
-    [company, directServerWrites]
-  );
-  /** Offline + Firestore-mode company: sirf dekho — Save / Copy / Approve band (`editingDisabled` merge). */
-  /** Switch OFF par offline bhi save — policy andar `readServerDirectWritesPreferredSync`; context se memo dubale. */
-  const apkOfflineViewOnly = useMemo(
-    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline, directServerWrites]
-  );
+  const voucherSqlMirrorFirst = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
+  /** Offline + Firestore-mode company (non-embedded APK cloud): view-only — Save / Copy / Approve band. */
+  const apkOfflineViewOnly = useMemo(() => apkCloudCompanyOfflineViewOnly(company, navigatorOnline), [company, navigatorOnline]);
   const { user, customUser } = useAuth();
   /** Company Display settings se AD/BS/Both — recurring dialog labels + apply-from picker. */
   const { dateSystem, formatDate, formatDateBS, formatCurrencyForPrint } = useDate();
@@ -3422,8 +3413,12 @@ export function AddVoucherDialog(props: any) {
     </>
   );
 
-  const voucherAttachmentFallbackValue =
-    companyId && effectiveVoucher?.id ? { companyId, voucherId: String(effectiveVoucher.id) } : null;
+  // Har render naya `{ companyId, voucherId }` object = FilePreview blob effect dubara + thumb flash; ref stable rakho.
+  const voucherAttachmentFallbackValue = useMemo(
+    () =>
+      companyId && effectiveVoucher?.id ? { companyId, voucherId: String(effectiveVoucher.id) } : null,
+    [companyId, effectiveVoucher?.id]
+  );
 
   // Dialog-scope CompanyContext override: copy/compare me target alag ho sakta hai. Capacitor plain add/edit: shell context direct use.
   const overriddenCompanyContextValue = useMemo(() => {

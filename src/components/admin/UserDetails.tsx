@@ -1,8 +1,8 @@
 
 "use client";
 
-import { useState, useMemo } from "react";
-import { doc, updateDoc } from "firebase/firestore";
+import { useState, useMemo, useCallback } from "react";
+import { doc, updateDoc, writeBatch, Timestamp, deleteField } from "firebase/firestore";
 import { firestore as db } from "@/lib/firebase";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -10,11 +10,20 @@ import { Label } from '@/components/ui/label'
 import type { AppUser } from "@/app/(admin)/admin/users/page";
 import type { Company } from "@/app/(admin)/admin/types";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { Loader2, Filter, XCircle, Users, Dot } from "lucide-react";
 import { RoleSelector } from "./RoleSelector";
 import type { Role } from "@/utils/rbac";
 import { logActivity } from "@/hooks/useFirestore";
-import { getPlan } from "@/config/plans";
+import {
+  getPlan,
+  DEFAULT_PLANS,
+  normalizePlanIdForClient,
+  planTierIndex,
+  type PlanId,
+  type EntitlementKey,
+} from "@/config/plans";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatGB } from "@/lib/storageUsageClient";
 import { Avatar, AvatarImage, AvatarFallback } from "../ui/avatar";
 import { Badge } from "../ui/badge";
@@ -23,9 +32,44 @@ import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Input } from "../ui/input";
-import { ScrollArea } from "../ui/scroll-area";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
+
+/** Admin SDK reconcile — `users` canonical + owned companies drift (CompanyDetails jaisa). */
+async function postReconcileOwnerPlanFromAdmin(
+  firebaseUser: import("firebase/auth").User | null,
+  ownerId: string
+): Promise<void> {
+  const oid = ownerId.trim();
+  if (!oid || !firebaseUser) return;
+  try {
+    const token = await firebaseUser.getIdToken();
+    const res = await fetch("/api/admin/reconcile-owner-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ownerId: oid }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.warn("[UserDetails] reconcile-owner-plan", res.status, t);
+    }
+  } catch (e) {
+    console.warn("[UserDetails] reconcile-owner-plan", e);
+  }
+}
+
+/** CompanyDetails jaisa: `planId` + jahan `settings.*` undefined ho wahan default entitlements seed. */
+function buildPlanIdFirestorePatch(target: Company, planId: PlanId): Record<string, unknown> {
+  const planDefaults = DEFAULT_PLANS[planId].entitlements;
+  const settingsUpdate: Record<string, boolean> = {};
+  Object.keys(planDefaults).forEach((key) => {
+    const featureKey = key as EntitlementKey;
+    if (target.settings?.[featureKey] === undefined) {
+      settingsUpdate[`settings.${featureKey}`] = planDefaults[featureKey] as boolean;
+    }
+  });
+  return { planId, ...settingsUpdate };
+}
 
 const getInitials = (name: string) => {
   if (!name) return "?";
@@ -51,6 +95,7 @@ interface UserDetailsProps {
 export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompanies, sharedCompanies, isOnline }: UserDetailsProps) {
     const [isUpdating, setIsUpdating] = useState(false);
     const { toast } = useToast();
+    const { user: firebaseUser } = useAuth();
     
     const [ownedFilters, setOwnedFilters] = useState<Record<string, string>>({});
     const [sharedFilters, setSharedFilters] = useState<Record<string, string>>({});
@@ -62,6 +107,102 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
         allUsers.forEach(u => map.set(u.id, u.displayName || u.email));
         return map;
     }, [allUsers]);
+
+    /** Owned rows me highest tier — dropdown value (multi-company). */
+    const effectiveOwnedPlanId = useMemo((): PlanId => {
+        if (ownedCompanies.length === 0) return "basic";
+        let best: PlanId = "basic";
+        let bestTier = planTierIndex("basic");
+        for (const c of ownedCompanies) {
+            const pid = normalizePlanIdForClient(c.planId != null ? String(c.planId) : undefined);
+            const t = planTierIndex(pid);
+            if (t > bestTier) {
+                bestTier = t;
+                best = pid;
+            }
+        }
+        return best;
+    }, [ownedCompanies]);
+
+    /**
+     * SuperAdmin test: saari *owned* companies par ek hi `planId` + Basic par expiry/Stripe clear,
+     * phir server `reconcile-owner-plan` se `users/{ownerId}` canonical sync.
+     */
+    const applyTestPlanToAllOwnedCompanies = useCallback(
+        async (planId: PlanId) => {
+            if (currentUser?.role !== "SuperAdmin") return;
+            if (ownedCompanies.length === 0) {
+                toast({
+                    variant: "destructive",
+                    title: "No owned companies",
+                    description: "Is user ki koi owned company nahi — plan apply kahan karein.",
+                });
+                return;
+            }
+            setIsUpdating(true);
+            try {
+                const nowMs = Date.now();
+                const planUpgradedAt = Timestamp.fromMillis(nowMs);
+                const batch = writeBatch(db);
+                const ownerKey =
+                    (typeof ownedCompanies[0]?.ownerId === "string" && ownedCompanies[0].ownerId.trim()) ||
+                    String(user.uid || user.id).trim();
+
+                for (const c of ownedCompanies) {
+                    const base = buildPlanIdFirestorePatch(c, planId);
+                    const patch: Record<string, unknown> = {
+                        ...base,
+                        planUpgradedAt,
+                        planUpgradedAtMs: nowMs,
+                    };
+                    if (planId === "basic") {
+                        patch.planExpiry = deleteField();
+                        patch.planExpiryMs = deleteField();
+                        patch.stripeCustomerId = deleteField();
+                        patch.stripeSubscriptionId = deleteField();
+                    }
+                    batch.update(doc(db, "companies", c.id), patch);
+                }
+                await batch.commit();
+                await postReconcileOwnerPlanFromAdmin(firebaseUser, ownerKey);
+                await logActivity({
+                    byUserId: currentUser?.id,
+                    action: "USER_TEST_BULK_PLAN_APPLY",
+                    meta: {
+                        targetUserDocId: user.id,
+                        targetUid: user.uid,
+                        ownerKey,
+                        planId,
+                        companyIds: ownedCompanies.map((x) => x.id),
+                    },
+                    companyId: currentUser?.companyId ?? null,
+                });
+                toast({
+                    title: "Test plan applied",
+                    description: `${ownedCompanies.length} owned companies → "${planId}", user doc reconcile chala.`,
+                });
+            } catch (error) {
+                console.error(error);
+                toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: "Bulk plan update / reconcile fail — console dekho.",
+                });
+            } finally {
+                setIsUpdating(false);
+            }
+        },
+        [
+            currentUser?.role,
+            currentUser?.id,
+            currentUser?.companyId,
+            ownedCompanies,
+            user.id,
+            user.uid,
+            firebaseUser,
+            toast,
+        ]
+    );
 
     const onChangeRole = async (uid: string, role: Role) => {
         if (currentUser?.role !== 'SuperAdmin') return;
@@ -78,7 +219,7 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
             setIsUpdating(false);
         }
     }
-    
+
     const renderHeaderWithFilter = (key: string, label: string, filterState: Record<string, string>, setFilterState: Function, setActiveFilterState: Function, isNumeric = false) => {
         const isFiltered = !!filterState[key];
         return (
@@ -132,9 +273,9 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
         return (
             <div className="space-y-2">
                 <h4 className="font-semibold text-base">{title} ({filteredCompanies.length})</h4>
-                <div className="border rounded-lg">
-                    <ScrollArea className="h-64">
-                    <Table>
+                {/* Chhoti width: company table columns clip na hon — `overflow-auto` + table `w-max` se H/V scroll. */}
+                <div className="border rounded-lg max-w-full max-h-64 overflow-auto">
+                    <Table scrollContainer={false} className="w-max min-w-full">
                         <TableHeader>
                             <TableRow>
                                 {renderHeaderWithFilter('createdAt', 'Created Date', filters, setFilters, setActiveFilter)}
@@ -218,14 +359,13 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
                             ))}
                         </TableBody>
                     </Table>
-                   </ScrollArea>
                 </div>
             </div>
         )
     }
 
     return (
-        <Card className="h-full relative">
+        <Card className="h-full relative min-w-0">
              {isUpdating && (
                 <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
                     <Loader2 className="h-8 w-8 animate-spin" />
@@ -249,27 +389,55 @@ export function UserDetails({ user, currentUser, allUsers, onUpdate, ownedCompan
                 </div>
             </CardHeader>
 
-            <CardContent className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                    <Label>Email</Label>
-                    <p className="text-sm text-muted-foreground">{user.email}</p>
+            <CardContent className="mt-3 min-w-0 space-y-6">
+                {/* Email / Role / Status + test plan dropdown — ek box me taaki admin section clean rahe. */}
+                <div className="rounded-xl border border-border bg-muted/30 p-4 shadow-sm">
+                    <p className="mb-3 text-xs font-medium text-muted-foreground">
+                        Account summary{currentUser?.role === "SuperAdmin" ? " · Test plan = saari owned companies + user canonical sync" : ""}
+                    </p>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="space-y-2 min-w-0">
+                            <Label>Email</Label>
+                            <p className="text-sm text-muted-foreground break-all">{user.email}</p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Role</Label>
+                            <RoleSelector
+                                value={user.role}
+                                onChange={(value) => onChangeRole(user.id, value as Role)}
+                                disabled={currentUser?.role !== "SuperAdmin"}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Status</Label>
+                            <div className="flex items-center gap-2">
+                                <Switch checked={user.isActive !== false} disabled />
+                                <span className="text-sm">{user.isActive !== false ? "Active" : "Inactive"}</span>
+                            </div>
+                        </div>
+                        {currentUser?.role === "SuperAdmin" && ownedCompanies.length > 0 && (
+                            <div className="space-y-2 min-w-0">
+                                <Label htmlFor="pl-admin-user-test-plan">Test: plan (all owned)</Label>
+                                <Select
+                                    value={effectiveOwnedPlanId}
+                                    onValueChange={(v) => void applyTestPlanToAllOwnedCompanies(v as PlanId)}
+                                >
+                                    <SelectTrigger id="pl-admin-user-test-plan" className="w-full">
+                                        <SelectValue placeholder="Plan" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {(Object.values(DEFAULT_PLANS) as { id: PlanId; name: string }[]).map((p) => (
+                                            <SelectItem key={p.id} value={p.id}>
+                                                {p.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+                    </div>
                 </div>
-                <div className="space-y-2">
-                    <Label>Role</Label>
-                    <RoleSelector
-                        value={user.role}
-                        onChange={(value) => onChangeRole(user.id, value as Role)}
-                        disabled={currentUser?.role !== 'SuperAdmin'}
-                    />
-                </div>
-                <div className="space-y-2">
-                    <Label>Status</Label>
-                     <div className="flex items-center gap-2">
-                        <Switch checked={user.isActive !== false} disabled />
-                        <span>{user.isActive !== false ? "Active" : "Inactive"}</span>
-                     </div>
-                </div>
-                 <div className="space-y-4 md:col-span-3">
+                 <div className="space-y-4">
                     {ownedCompanies.length > 0 && (
                         <CompanyTable title="Owned by User" companies={ownedCompanies} filters={ownedFilters} setFilters={setOwnedFilters} setActiveFilter={setActiveOwnedFilter} isOwnedTable={true}/>
                     )}

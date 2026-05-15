@@ -4,17 +4,29 @@
 import type { User } from "firebase/auth";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter, usePathname } from "next/navigation";
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { auth, firestore } from "@/lib/firebase";
 import { slugify } from "@/lib/slugify";
 import { getCountryByIP } from "@/lib/getCountryByIP";
-import { doc, onSnapshot, setDoc, serverTimestamp, updateDoc, collection, query, where, getDocs, writeBatch, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, serverTimestamp, collection, query, where, getDocs, getDoc } from "firebase/firestore";
+import {
+  voidUpdateUsersDoc,
+  voidSetUsersDocMerge,
+  voidBatchRepointCompanyOwnerIds,
+  setUsersUidDocRoleMerge,
+  setAppSettingsAdminConfigSuperEmailsMerge,
+  updateUsersDocAwait,
+} from "@/lib/writeGateway/systemUserFirestore";
 import { logFirestorePermissionDenied } from "@/lib/firestoreRuleDebug";
 import type { Role } from "@/utils/rbac";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalAuthUser } from "@/lib/localApiClient";
 import { restoreRememberedLocalCompanyForFastBoot } from "@/lib/postAuthCompanyRoute";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { isElectronEnvironment } from "@/hooks/use-mobile";
+import { clearEmbeddedSessionUnlock } from "@/lib/embeddedDeviceLock";
 
 /** PWA offline: `await getDoc`/`getDocs` indefinitely hang sakta hai — pehle `onSnapshot` laga ke UI unblock (Firestore persistence + yaz fire-and-forget). */
 async function firebaseReadWithDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -59,6 +71,49 @@ export type AppUser = {
   lastSeen?: any
 }
 
+/**
+ * Remembered offline company unlock + selected company → synthetic Firebase-shaped user.
+ * Pehle sirf `isLocalOnlyMode()` tha; ab PWA web bhi jahan valid local lock session ho — plan tier SQLite/cache se, network/auth baad mein.
+ */
+function tryApplyRememberedLocalCompanyAuth(
+  setUser: React.Dispatch<React.SetStateAction<User | null>>,
+  setCustomUser: React.Dispatch<React.SetStateAction<AppUser | null>>,
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>,
+  fastLocalAuthRef: React.MutableRefObject<boolean>,
+): boolean {
+  if (typeof window === "undefined") return false;
+  const selectedCompanyId = readSelectedCompanyId();
+  if (!selectedCompanyId || !restoreRememberedLocalCompanyForFastBoot()) return false;
+  const localUser = getLocalAuthUser(selectedCompanyId);
+  if (!localUser?.id) return false;
+  fastLocalAuthRef.current = true;
+  const displayName = localUser.displayName || localUser.username || "Local User";
+  const localEmail = `${localUser.username || localUser.id}@local.pocket-ledger`;
+  const syntheticUser = {
+    uid: `local:${localUser.id}`,
+    email: localEmail,
+    displayName,
+    isAnonymous: false,
+    providerId: "local",
+    getIdToken: async () => {
+      throw new Error("LOCAL_FAST_START_NO_FIREBASE_TOKEN");
+    },
+  } as unknown as User;
+  setUser(syntheticUser);
+  setCustomUser({
+    id: syntheticUser.uid,
+    uid: syntheticUser.uid,
+    userDocId: syntheticUser.uid,
+    displayName,
+    email: localEmail,
+    role: (localUser.role || "User") as Role,
+    companyId: selectedCompanyId,
+    isActive: true,
+  });
+  setLoading(false);
+  return true;
+}
+
 type AuthContextType = {
   user: User | null;
   customUser: AppUser | null;
@@ -89,6 +144,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
   /** APK/EXE fast-start: local remembered unlock se temporary user banta hai; Firebase aaye to replace ho jayega. */
   const fastLocalAuthRef = useRef(false);
 
+  // `useEffect` se pehle paint: login/dashboard pe spinner flash kam — remembered local company turant hydrate.
+  useLayoutEffect(() => {
+    tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef);
+  }, []);
+
   useEffect(() => {
     // Auth flow is strictly login-based now; local guest bootstrap path intentionally removed.
     const clearPendingNullAuthTimer = () => {
@@ -100,6 +160,9 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
 
     const finalizeSignedOut = () => {
       clearPendingNullAuthTimer();
+      fastLocalAuthRef.current = false;
+      // EXE/APK device-lock: agla open dubara PIN/biometric maange — Firebase session alag clear hoti hai.
+      clearEmbeddedSessionUnlock();
       if (unsubUserDocRef.current) {
         unsubUserDocRef.current();
         unsubUserDocRef.current = null;
@@ -109,50 +172,10 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
       setLoading(false);
     };
 
-    const bootstrapFastLocalSession = () => {
-      if (!isLocalOnlyMode() || typeof window === "undefined") return false;
-      // Fast local auth must use this tab's company on browser refresh; localStorage is only new-tab fallback.
-      const selectedCompanyId = readSelectedCompanyId();
-      if (!selectedCompanyId || !restoreRememberedLocalCompanyForFastBoot()) return false;
-      const localUser = getLocalAuthUser(selectedCompanyId);
-      if (!localUser?.id) return false;
-      fastLocalAuthRef.current = true;
-      const displayName = localUser.displayName || localUser.username || "Local User";
-      const localEmail = `${localUser.username || localUser.id}@local.pocket-ledger`;
-      const syntheticUser = {
-        uid: `local:${localUser.id}`,
-        email: localEmail,
-        displayName,
-        isAnonymous: false,
-        providerId: "local",
-        // Company/plan sync may ask for a Firebase token; local fast-start has none, so fail softly in background.
-        getIdToken: async () => {
-          throw new Error("LOCAL_FAST_START_NO_FIREBASE_TOKEN");
-        },
-      } as unknown as User;
-      // Local fast-start user unlocks SQLite data immediately; real Firebase auth can still hydrate later for cloud sync.
-      setUser(syntheticUser);
-      setCustomUser({
-        id: syntheticUser.uid,
-        uid: syntheticUser.uid,
-        userDocId: syntheticUser.uid,
-        displayName,
-        email: localEmail,
-        role: (localUser.role || "User") as Role,
-        companyId: selectedCompanyId,
-        isActive: true,
-      });
-      setLoading(false);
-      return true;
-    };
-
-    // Do this before Firebase IndexedDB finishes hydrating so static APK opens last company without waiting on network/auth.
-    bootstrapFastLocalSession();
-
     const bootstrapUserSession = (firebaseUser: User) => {
       fastLocalAuthRef.current = false;
       if (isLocalOnlyMode()) {
-        // Local-first mode: avoid Firestore user-doc listeners to prevent permission-denied snapshot noise.
+        // Local-first mode: full `users` profile listener skip (permission noise) — slug `userDocId` ek baar resolve.
         const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
         setCustomUser({
           id: firebaseUser.uid,
@@ -165,12 +188,71 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
           isActive: true,
         });
         setLoading(false);
+        void (async () => {
+          const em = (firebaseUser.email || "").trim();
+          const looksOffline = typeof navigator !== "undefined" && !navigator.onLine;
+          const fetchCapMs = looksOffline ? 3200 : 22_000;
+          const dn = firebaseUser.displayName || em.split("@")[0] || "user";
+          const userDocIdByName = `${slugify(dn)}_${firebaseUser.uid}`;
+          let resolvedRef: ReturnType<typeof doc> | null = null;
+          try {
+            const uidSnap = await firebaseReadWithDeadline(
+              getDoc(doc(firestore, "users", firebaseUser.uid)),
+              fetchCapMs,
+            );
+            if (uidSnap?.exists()) resolvedRef = doc(firestore, "users", uidSnap.id);
+            else {
+              const slugSnap = await firebaseReadWithDeadline(
+                getDoc(doc(firestore, "users", userDocIdByName)),
+                fetchCapMs,
+              );
+              if (slugSnap?.exists()) resolvedRef = doc(firestore, "users", slugSnap.id);
+            }
+            if (!resolvedRef && em && !looksOffline) {
+              const snapshot = await firebaseReadWithDeadline(
+                getDocs(query(collection(firestore, "users"), where("email", "==", em))),
+                fetchCapMs,
+              );
+              const found =
+                snapshot?.docs.find((d) => d.id === firebaseUser.uid || d.id === userDocIdByName) ??
+                snapshot?.docs[0] ??
+                null;
+              if (found) resolvedRef = doc(firestore, "users", found.id);
+            }
+          } catch {
+            return;
+          }
+          if (!resolvedRef) return;
+          if (auth.currentUser?.uid !== firebaseUser.uid) return;
+          const resolvedDocId = resolvedRef.id;
+          setCustomUser((prev) =>
+            prev && prev.uid === firebaseUser.uid ? { ...prev, userDocId: resolvedDocId } : prev,
+          );
+        })();
         return;
+      }
+      // Static/APK/Electron: `users` onSnapshot / getDoc slow network par root spinner mat chipkao — SQLite UI pehle, profile baad mein merge.
+      if (
+        typeof window !== "undefined" &&
+        (isStaticAppBuild() || isCapacitorNativeApp() || isElectronEnvironment())
+      ) {
+        const displayNameEarly = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "User";
+        setCustomUser({
+          id: firebaseUser.uid,
+          uid: firebaseUser.uid,
+          userDocId: firebaseUser.uid,
+          displayName: displayNameEarly,
+          email: firebaseUser.email || "",
+          role: (firebaseUser.email === "nansari15300@gmail.com" ? "SuperAdmin" : "User") as Role,
+          companyId: null,
+          isActive: true,
+        });
+        setLoading(false);
       }
       const email = (firebaseUser.email || "").trim();
       (async () => {
         try {
-          /** Airplane / captive portal: network reads cap — `await setDoc` offline resolve nahi hota, isliye neeche writes `void` */
+          /** Airplane / captive portal: network reads cap — neeche user-doc seed writes `void` (offline resolve slow). */
           const looksOffline = typeof navigator !== "undefined" && !navigator.onLine;
           const fetchCapMs = looksOffline ? 3200 : 22_000;
           const displayName = firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "user";
@@ -239,11 +321,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
             if (existingByEmail) {
               userDocRef = doc(firestore, "users", existingByEmail.id);
               if (existingByEmail.id !== firebaseUser.uid && existingByEmail.id !== userDocIdByName) {
-                void updateDoc(userDocRef, {
+                voidUpdateUsersDoc(userDocRef.id, {
                   uid: firebaseUser.uid,
                   id: firebaseUser.uid,
                   lastLogin: serverTimestamp(),
-                }).catch(() => {});
+                } as Record<string, unknown>);
                 void (async () => {
                   try {
                     const companiesSnap = await firebaseReadWithDeadline(
@@ -253,11 +335,10 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                       fetchCapMs,
                     );
                     if (!companiesSnap || companiesSnap.empty) return;
-                    const batch = writeBatch(firestore);
-                    companiesSnap.docs.forEach((d) => {
-                      batch.update(doc(firestore, "companies", d.id), { ownerId: firebaseUser.uid });
-                    });
-                    void batch.commit().catch(() => {});
+                    voidBatchRepointCompanyOwnerIds(
+                      companiesSnap.docs.map((d) => d.id),
+                      firebaseUser.uid,
+                    );
                   } catch (error) {
                     if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
                       logFirestorePermissionDenied({
@@ -271,9 +352,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                 })();
               }
             } else {
-              void setDoc(
-                userDocRef,
-                {
+              voidSetUsersDocMerge(userDocRef.id, {
                   id: firebaseUser.uid,
                   uid: firebaseUser.uid,
                   email: firebaseUser.email,
@@ -284,15 +363,11 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                   isActive: true,
                   createdAt: serverTimestamp(),
                   lastLogin: serverTimestamp(),
-                },
-                { merge: true },
-              ).catch(() => {});
+                } as Record<string, unknown>);
             }
           } else {
             userDocRef = doc(firestore, "users", userDocIdByName);
-            void setDoc(
-              userDocRef,
-              {
+            voidSetUsersDocMerge(userDocRef.id, {
                 id: firebaseUser.uid,
                 uid: firebaseUser.uid,
                 email: null,
@@ -303,44 +378,43 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
                 isActive: true,
                 createdAt: serverTimestamp(),
                 lastLogin: serverTimestamp(),
-              },
-              { merge: true },
-            ).catch(() => {});
+              } as Record<string, unknown>);
           }
           if (unsubUserDocRef.current) unsubUserDocRef.current();
           unsubUserDocRef.current = onSnapshot(userDocRef, (docSnap) => {
           if (docSnap.exists()) {
             let userData = docSnap.data();
-            const userDocRefForUpdate = doc(firestore, "users", docSnap.id);
             if (userData.email === "nansari15300@gmail.com" && userData.role !== "SuperAdmin") {
-              updateDoc(userDocRefForUpdate, { role: "SuperAdmin" }).catch((error) => {
-                if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
-                  logFirestorePermissionDenied({
-                    page: "auth_bootstrap",
-                    operation: "update",
-                    path: `users/${docSnap.id}`,
-                    error,
-                  });
+              void (async () => {
+                try {
+                  await updateUsersDocAwait(docSnap.id, { role: "SuperAdmin" });
+                } catch (error) {
+                  if (shouldReportAuthBootstrapPermissionDenied(firebaseUser)) {
+                    logFirestorePermissionDenied({
+                      page: "auth_bootstrap",
+                      operation: "update",
+                      path: `users/${docSnap.id}`,
+                      error,
+                    });
+                  }
                 }
-              });
+              })();
               userData = { ...userData, role: "SuperAdmin" };
             }
             // Sync admin role so Firestore rules (isAdmin()) allow companies/vouchers for admin dashboard
             const role = userData.role || "User";
             if (role === "SuperAdmin" || role === "CompanyAdmin") {
-              const uidDocRef = doc(firestore, "users", firebaseUser.uid);
               const email = (firebaseUser.email ?? userData.email ?? "").trim();
               (async () => {
                 try {
-                  await setDoc(uidDocRef, { id: firebaseUser.uid, uid: firebaseUser.uid, role }, { merge: true });
+                  await setUsersUidDocRoleMerge(firebaseUser.uid, { id: firebaseUser.uid, uid: firebaseUser.uid, role });
                   if (email) {
-                    const adminConfigRef = doc(firestore, "app_settings", "admin_config");
-                    const adminSnap = await getDoc(adminConfigRef);
+                    const adminSnap = await getDoc(doc(firestore, "app_settings", "admin_config"));
                     const existing = (adminSnap.exists() ? adminSnap.data()?.superAdminEmails : null) ?? [];
                     const list = Array.isArray(existing) ? [...existing] : [];
                     if (!list.includes(email)) {
                       list.push(email);
-                      await setDoc(adminConfigRef, { superAdminEmails: list }, { merge: true });
+                      await setAppSettingsAdminConfigSuperEmailsMerge(list);
                     }
                   }
                 } catch (_) { /* ignore */ }
@@ -352,7 +426,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
               getCountryByIP()
                 .then((country) => {
                   if (country) {
-                    updateDoc(userDocRefForUpdate, { country }).catch(() => {});
+                    voidUpdateUsersDoc(docSnap.id, { country } as Record<string, unknown>);
                   }
                 })
                 .catch(() => {});
@@ -449,7 +523,7 @@ export const AuthProvider = ({ children, skipRedirects = false }: AuthProviderPr
               bootstrapUserSession(cu);
               return;
             }
-            if (fastLocalAuthRef.current && bootstrapFastLocalSession()) {
+            if (fastLocalAuthRef.current && tryApplyRememberedLocalCompanyAuth(setUser, setCustomUser, setLoading, fastLocalAuthRef)) {
               return;
             }
             finalizeSignedOut();

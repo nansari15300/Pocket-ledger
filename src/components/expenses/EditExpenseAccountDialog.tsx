@@ -61,7 +61,6 @@ import {
   apkCloudCompanyOfflineViewOnly,
   apkEntityWriteUsesLocalSqliteMirror,
 } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { useVouchers } from "@/hooks/useVouchers";
 
@@ -112,8 +111,7 @@ export function EditExpenseAccountDialog({ account, onAccountUpdated, onAccountD
 
 
   /** Pure-local=outbox lane; APK cloud lists SQLite mirror (`apkCloudEntityMasterReadFromSqliteMirror`). */
-  const { directServerWrites } = useServerDirectWrites();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
     [localSqlMirror, company]

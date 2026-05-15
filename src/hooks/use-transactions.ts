@@ -26,6 +26,7 @@ import {
   getAllocationTotal,
   OPENING_BALANCE_VOUCHER_ID,
 } from "@/lib/payment-allocation-utils";
+import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
 
 
 type EntityWithItems = { id: string; items: (Item | Staff | Account | ExpenseAccount | Party)[], openingBalance?: number, [key: string]: any };
@@ -889,8 +890,12 @@ export function useTransactions(
                 
                 // User
                 const uId = t.userId;
-                const userName = (userNames && uId && userNames[uId]) ? userNames[uId] : (t.userId || "");
-                allSearchableFields.push(userName.toLowerCase());
+                const userName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t)
+                  ? "Auto"
+                  : (userNames && uId && userNames[uId])
+                    ? userNames[uId]
+                    : (t.userId || "");
+                allSearchableFields.push(String(userName).toLowerCase());
                 
                 // Accounts/Particulars
                 const particularsText = getParticularsText(t, { ...journalAccountNames, ...userNames });

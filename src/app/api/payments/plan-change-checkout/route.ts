@@ -13,10 +13,10 @@ import {
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import {
-  BILLING_TERM_OPTIONS,
   classifyPlanChange,
   quotePaidPlanPurchase,
   daysLeftRounded,
+  SUBSCRIPTION_TERM_KEYS_FOR_PLAN_CHANGE,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { PAID_PLAN_IDS } from "@/lib/payments/stripeCheckoutFulfill";
@@ -26,6 +26,8 @@ import {
   PENDING_PLAN_CHANGE_TTL_MS,
 } from "@/lib/payments/planChangeApply";
 import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
+import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
+import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 
 type AdminKeysResult = {
   stored: GatewayKeys;
@@ -72,10 +74,8 @@ function stripeConfigHelpMessage(adminResult: AdminKeysResult): string {
 }
 
 // `plan_change_only`: paid→paid upgrade / renew-style zero net; paid **downgrade** sirf `/api/company/downgrade-plan`.
-const VALID_TERMS = new Set<SubscriptionTermKey>([
-  ...BILLING_TERM_OPTIONS.map((o) => o.value),
-  "plan_change_only",
-]);
+// Legacy multi-year keys: pending docs / old client — server par accept, naye UI dropdown me nahi.
+const VALID_TERMS = SUBSCRIPTION_TERM_KEYS_FOR_PLAN_CHANGE;
 
 type ProrationGateway = "stripe" | "khalti" | "esewa";
 
@@ -145,6 +145,7 @@ export async function POST(req: NextRequest) {
       /** Chhoota hua tier par kitna din/NPR — frozen pill ramp (pre-upgrade snapshot). */
       planUpgradedAt?: admin.firestore.Timestamp;
       planUpgradedAtMs?: number;
+      stripeCustomerId?: string;
       stripeSubscriptionId?: string;
       billingFrozenUsageLedger?: unknown;
       billingBlockedDowngradePlanIds?: unknown;
@@ -265,13 +266,17 @@ export async function POST(req: NextRequest) {
               targetPlanId,
             })
           : null;
-      batch.update(companyRef, {
+      const planSwitchMs = Date.now();
+      const planSwitchTs = admin.firestore.Timestamp.fromMillis(planSwitchMs);
+      const primaryCompanyUpdate: Record<string, unknown> = {
         planId: targetPlanId,
         planExpiry: admin.firestore.Timestamp.fromMillis(quote.newExpiryMs),
         planExpiryMs: quote.newExpiryMs,
-        planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        planUpgradedAt: planSwitchTs,
+        planUpgradedAtMs: planSwitchMs,
         ...(frozenPatch ?? {}),
-      });
+      };
+      batch.update(companyRef, primaryCompanyUpdate);
       batch.set(paymentRef, {
         paymentId: paymentDocId,
         userId: decoded.uid,
@@ -295,6 +300,35 @@ export async function POST(req: NextRequest) {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       await batch.commit();
+      const mirrorOwnerId = String(cdata.ownerId ?? decoded.uid ?? "").trim();
+      const siblingOnlyPatch: Record<string, unknown> = {
+        planId: targetPlanId,
+        planExpiry: admin.firestore.Timestamp.fromMillis(quote.newExpiryMs),
+        planExpiryMs: quote.newExpiryMs,
+        planUpgradedAt: planSwitchTs,
+        planUpgradedAtMs: planSwitchMs,
+      };
+      await applyOwnerPlanMirrorBatched(db, mirrorOwnerId, (docId) =>
+        docId === companyId ? {} : siblingOnlyPatch
+      );
+      // Owner `users/*` canonical — zero-net branch ne saari owned companies mirror kar di.
+      const stripeCust =
+        typeof cdata.stripeCustomerId === "string" && cdata.stripeCustomerId.trim()
+          ? cdata.stripeCustomerId.trim()
+          : null;
+      const stripeSub =
+        typeof cdata.stripeSubscriptionId === "string" && cdata.stripeSubscriptionId.trim()
+          ? cdata.stripeSubscriptionId.trim()
+          : null;
+      if (mirrorOwnerId) {
+        await persistAccountCanonicalPlanDoc(db, mirrorOwnerId, {
+          planId: targetPlanId,
+          planExpiryMs: quote.newExpiryMs,
+          planUpgradedAtMs: planSwitchMs,
+          stripeCustomerId: stripeCust,
+          stripeSubscriptionId: stripeSub,
+        });
+      }
       // Client toast: upgrade par end date pehle ho sakti hai — `planChangeHistory` se compare.
       return NextResponse.json({ ok: true, applied: true, quote, planChangeHistory });
     }

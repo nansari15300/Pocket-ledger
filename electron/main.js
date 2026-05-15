@@ -8,13 +8,30 @@ const {
   nativeImage,
 } = require("electron");
 const path = require("path");
+const fs = require("fs");
 const http = require("http");
+const os = require("os");
 const handler = require("serve-handler");
 
 /** Windows taskbar / Start menu grouping — `electron.app.*` default ID par Electron atom icon dikhta hai; `package.json` build.appId se match hona chahiye. */
 const WINDOWS_APP_USER_MODEL_ID = "com.pocketledger.desktop";
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
+
+// Do EXE instances = do `localhost` ports = Firebase Auth / IndexedDB alag origin ("login delete") — doosra instance band + pehla focus.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const wins = BrowserWindow.getAllWindows();
+    if (wins.length > 0) {
+      const w = wins[0];
+      if (w.isMinimized()) w.restore();
+      w.focus();
+    }
+  });
 }
 
 let staticServer = null;
@@ -49,6 +66,44 @@ function getWindowIcon() {
 // Keep a single source of truth for dev/prod behavior.
 function isDevMode() {
   return !app.isPackaged;
+}
+
+/** EXE: `localhost:PORT` = browser origin — port badle to IndexedDB + Firebase Auth "logout". Purani successful port persist karo. */
+const PL_ELECTRON_STATIC_PORT_FILE = "pl-electron-static-port.json";
+
+function readPersistedPackagedStaticPort() {
+  if (!app.isPackaged) return null;
+  try {
+    const f = path.join(app.getPath("userData"), PL_ELECTRON_STATIC_PORT_FILE);
+    const n = Number(JSON.parse(fs.readFileSync(f, "utf8")).port);
+    if (Number.isFinite(n) && n > 0 && n < 65536) return n;
+  } catch (_) {}
+  return null;
+}
+
+function writePersistedPackagedStaticPort(port) {
+  if (!app.isPackaged) return;
+  try {
+    const f = path.join(app.getPath("userData"), PL_ELECTRON_STATIC_PORT_FILE);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({ port }), "utf8");
+  } catch (_) {}
+}
+
+/** Pehle last-chalne-wala port, phir default 3000, phir kam-takraav fallbacks — `listen(0)` random kabhi mat (origin drift). */
+function packagedStaticPortCandidates(preferred) {
+  const persisted = readPersistedPackagedStaticPort();
+  const fallbacks = [37123, 38123, 39123, 40123, 41123];
+  const ordered = [...(persisted != null ? [persisted] : []), preferred, ...fallbacks];
+  const seen = new Set();
+  const out = [];
+  for (const n of ordered) {
+    if (typeof n === "number" && n > 0 && n < 65536 && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
 }
 
 function isAllowedFirebaseProxyTarget(targetUrl) {
@@ -124,18 +179,53 @@ function startStaticServer() {
     });
   });
 
+  // Packaged: port stable rakho — random `listen(0)` = naya origin = auth "delete". Multi-try + `userData` persist.
+  const parsedPreferred = Number.parseInt(process.env.PL_ELECTRON_STATIC_PORT || "3000", 10);
+  const preferred =
+    Number.isFinite(parsedPreferred) && parsedPreferred > 0 && parsedPreferred < 65536
+      ? parsedPreferred
+      : 3000;
+
   return new Promise((resolve, reject) => {
-    staticServer.once("error", reject);
-    // Use localhost origin so Firebase/Auth authorized-domain rules can match desktop flow.
-    staticServer.listen(0, "localhost", () => {
+    const finish = () => {
+      staticServer.removeAllListeners("error");
       const addressInfo = staticServer.address();
       if (!addressInfo || typeof addressInfo === "string") {
         reject(new Error("Unable to resolve static server port."));
         return;
       }
       staticServerPort = addressInfo.port;
+      writePersistedPackagedStaticPort(staticServerPort);
       resolve(staticServerPort);
-    });
+    };
+
+    const candidates = packagedStaticPortCandidates(preferred);
+    let candidateIndex = 0;
+
+    const tryNextCandidate = () => {
+      if (candidateIndex >= candidates.length) {
+        dialog.showErrorBox(
+          "Pocket Ledger",
+          "Local server ports are all busy (tried 3000 and fallbacks).\n\n" +
+            "Close other apps using those ports, then reopen.\n" +
+            "Your sign-in stays on the same port — changing ports looks like a logout."
+        );
+        reject(new Error("PL_PACKAGED_STATIC_PORT_EXHAUSTED"));
+        return;
+      }
+      const port = candidates[candidateIndex++];
+      staticServer.removeAllListeners("error");
+      staticServer.once("error", (err) => {
+        if (err && err.code === "EADDRINUSE") {
+          tryNextCandidate();
+          return;
+        }
+        reject(err);
+      });
+      staticServer.listen(port, "localhost", finish);
+    };
+
+    tryNextCandidate();
   });
 }
 
@@ -156,6 +246,16 @@ function getFocusedTabContents(win) {
   const state = windowTabs.get(win.id);
   if (!state || state.activeIndex < 0) return null;
   return state.tabs[state.activeIndex]?.webContents ?? null;
+}
+
+/** View → DevTools: native `toggleDevTools` role **BrowserWindow** ke khali host par lagta tha — active **BrowserView** tab par kholna zaroori. */
+function toggleDevToolsForActiveTab(win) {
+  const wc = getFocusedTabContents(win);
+  if (!wc || wc.isDestroyed()) return;
+  try {
+    if (wc.isDevToolsOpened()) wc.closeDevTools();
+    else wc.openDevTools({ mode: "detach" });
+  } catch (_) {}
 }
 
 /** BrowserView tab reload — native `{ role: "reload" }` galat webContents (khali window) par lagta tha */
@@ -579,7 +679,14 @@ function buildAppMenu() {
           },
         },
         { type: "separator" },
-        { role: "toggleDevTools" },
+        {
+          label: "Toggle Developer Tools",
+          accelerator: "CmdOrCtrl+Shift+I",
+          click: (_item, focusedWindow) => {
+            const win = focusedWindow ?? BrowserWindow.getFocusedWindow();
+            if (win) toggleDevToolsForActiveTab(win);
+          },
+        },
         { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
@@ -693,7 +800,8 @@ async function createWindow() {
   sendWindowMaxState(win);
 }
 
-app.whenReady().then(async () => {
+if (gotSingleInstanceLock) {
+  app.whenReady().then(async () => {
   ipcMain.handle("window-chrome-action", async (event, action) => {
     const win =
       resolveWindowForTabStripIpc(event.sender) || BrowserWindow.fromWebContents(event.sender);
@@ -759,6 +867,26 @@ app.whenReady().then(async () => {
     }
   });
 
+  /**
+   * Sync device list / Firestore `deviceLabel`: WebView UA sirf "Chrome (Windows)" deta hai —
+   * APK jaisa PC naam + OS string (hostname + platform release) main se.
+   */
+  ipcMain.handle("pl-device-display-info", async () => {
+    try {
+      const hostname = String(os.hostname() || "").trim() || "PC";
+      const platform = os.platform();
+      const release = String(os.release() || "").trim();
+      let osHuman = platform;
+      if (platform === "win32") osHuman = "Windows";
+      else if (platform === "darwin") osHuman = "macOS";
+      else if (platform === "linux") osHuman = "Linux";
+      const part = release ? `${osHuman} ${release}` : osHuman;
+      return `${hostname} (${part})`.replace(/\s+/g, " ").trim();
+    } catch (_) {
+      return "";
+    }
+  });
+
   ipcMain.on("pl-tab-strip-sync-done-from-app", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
@@ -770,7 +898,8 @@ app.whenReady().then(async () => {
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
-});
+  });
+}
 
 // Ensure temporary local server is closed on every quit path.
 app.on("before-quit", () => {

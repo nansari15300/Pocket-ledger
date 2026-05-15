@@ -32,7 +32,7 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
+import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import BsDatePicker from "../ui/BsDatePicker";
 import { Combobox } from "@/components/ui/combobox";
@@ -152,6 +152,11 @@ export function CreateContraForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachFileInputId = useId();
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Contra attach: stable URL array for FilePreview deps (no per-render `.filter` identity churn). */
+  const attachmentClientFileUrlsForPreview = useMemo(
+    () => files.filter((f): f is string => typeof f === "string"),
+    [files]
+  );
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -965,7 +970,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsLoading(false);
           return;
         }
-        if (isLocalOnlyMode()) {
+        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
@@ -1779,7 +1784,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                           <FilePreview
                             key={index}
                             file={file}
-                            attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                            attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                             onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                             className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                           />

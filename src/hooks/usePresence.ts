@@ -1,10 +1,8 @@
-
 "use client";
 
 import { useEffect, useRef } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { voidUpdateUserPresence } from "@/lib/writeGateway/systemUserFirestore";
 import { PRESENCE_HEARTBEAT_INTERVAL_MS } from "@/lib/presenceConstants";
 
 export function usePresence() {
@@ -17,54 +15,33 @@ export function usePresence() {
     // Only run when we know the actual user doc path (profile may live at users/slug_uid). Otherwise
     // we'd update users/uid and get permission error when that doc doesn't exist or is at a slug path.
     if (!customUser?.userDocId) return;
-    const userRef = doc(firestore, "users", customUser.userDocId);
+    const userDocId = customUser.userDocId;
 
-    // Set online immediately and start heartbeat
-    updateDoc(userRef, {
-        online: true,
-        lastSeen: serverTimestamp(),
-    }).catch(() => {
-        // Silently fail if update fails (e.g., user doesn't have permission)
-    });
+    // Set online immediately and start heartbeat — writes sirf gateway (`systemUserFirestore`).
+    voidUpdateUserPresence(userDocId, { online: true });
     isOnlineRef.current = true;
 
     // Heartbeat every 30 seconds (slightly longer to reduce frequency)
     intervalRef.current = setInterval(() => {
-        // Only update if still online (avoid unnecessary writes)
-        if (isOnlineRef.current) {
-            updateDoc(userRef, {
-                online: true,
-                lastSeen: serverTimestamp(),
-            }).catch(() => {
-                // Silently fail if update fails
-            });
-        }
+      if (isOnlineRef.current) {
+        voidUpdateUserPresence(userDocId, { online: true });
+      }
     }, PRESENCE_HEARTBEAT_INTERVAL_MS);
 
     const handleOffline = () => {
-        if (isOnlineRef.current) {
-            isOnlineRef.current = false;
-            updateDoc(userRef, {
-                online: false,
-                lastSeen: serverTimestamp(),
-            }).catch(() => {
-                // Silently fail if update fails
-            });
-        }
+      if (isOnlineRef.current) {
+        isOnlineRef.current = false;
+        voidUpdateUserPresence(userDocId, { online: false });
+      }
     };
-    
+
     const handleVisibilityChange = () => {
-        if (document.visibilityState === 'hidden') {
-            handleOffline();
-        } else if (!isOnlineRef.current) {
-            isOnlineRef.current = true;
-            updateDoc(userRef, {
-                online: true,
-                lastSeen: serverTimestamp(),
-            }).catch(() => {
-                // Silently fail if update fails
-            });
-        }
+      if (document.visibilityState === "hidden") {
+        handleOffline();
+      } else if (!isOnlineRef.current) {
+        isOnlineRef.current = true;
+        voidUpdateUserPresence(userDocId, { online: true });
+      }
     };
 
     window.addEventListener("beforeunload", handleOffline);
@@ -77,11 +54,9 @@ export function usePresence() {
       }
       window.removeEventListener("beforeunload", handleOffline);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      // Attempt to set offline on cleanup, although beforeunload is more reliable
-      handleOffline(); 
+      handleOffline();
     };
   }, [user, customUser?.userDocId]);
 
-  // This hook has no return value; it's purely for side effects.
   return null;
 }

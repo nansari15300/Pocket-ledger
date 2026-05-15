@@ -14,7 +14,8 @@ import { StaffGroupDetails } from "@/components/staff/StaffGroupDetails";
 import { TaxDetails } from "@/components/tax/TaxDetails";
 import { TaxGroupDetails } from "@/components/tax/TaxGroupDetails";
 import { ExpenseGroupDetails } from "@/components/expenses/ExpenseGroupDetails";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Account, AccountGroup } from "@/components/bank-cash/types";
 import type { Party, Group } from "@/components/party/types";
@@ -43,6 +44,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useReportPage } from "@/contexts/ReportPageContext";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useCompany } from "@/hooks/useCompany";
+import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { openPrintDirect } from "@/lib/printDirect";
 import { TransactionsTable } from "@/components/vouchers/TransactionsTable";
 import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
@@ -1246,9 +1248,8 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
   }, [selectedAccount?.accountType, selectedGroup, onPartySelectionChange]);
 
   // Merge vouchersUserNames with fetched userNames
-  const mergedUserNames = useMemo(() => {
-    return { ...vouchersUserNames, ...userNames };
-  }, [vouchersUserNames, userNames]);
+  // Voucher snapshot naam (Auto) ko page-level Firestore fetch se overwrite na hon
+  const mergedUserNames = useMemo(() => mergeLedgerUserDisplayNameMaps(vouchersUserNames || {}, userNames), [vouchersUserNames, userNames]);
 
   // useTransactions for mobile - account or group
   const accountContext = selectedAccount?.accountType === "bank" ? "account" : (selectedAccount?.accountType || "party");
@@ -1659,26 +1660,28 @@ function AccountsStatementPageContent({ onPartySelectionChange, mode = "account"
                   <Users className="h-5 w-5" />
                 </div>
               ) : item.account ? (
-                <Avatar className="h-8 w-8 text-xs flex-shrink-0 border">
-                  <AvatarImage src={(item.account.entity as any)?.fileUrl} alt={item.name} />
-                  <AvatarFallback className="bg-muted text-muted-foreground font-bold">
-                    {item.account.entity && 'isSpecial' in item.account.entity && item.account.entity.isSpecial ? (
+                <ResolvedEntityAvatar
+                  className="h-8 w-8 text-xs flex-shrink-0 border bg-muted text-muted-foreground font-bold"
+                  src={trimEntityFileUrlForPreview((item.account.entity as any)?.fileUrl) ?? undefined}
+                  alt={item.name}
+                  fallbackSlot={
+                    item.account.entity && "isSpecial" in item.account.entity && item.account.entity.isSpecial ? (
                       <Crown className="h-4 w-4 text-amber-500" />
-                    ) : item.account.accountType === 'party' ? (
+                    ) : item.account.accountType === "party" ? (
                       getInitials(item.name)
-                    ) : item.account.accountType === 'staff' ? (
+                    ) : item.account.accountType === "staff" ? (
                       <Briefcase className="h-4 w-4" />
-                    ) : item.account.accountType === 'tax' ? (
+                    ) : item.account.accountType === "tax" ? (
                       <Receipt className="h-4 w-4" />
-                    ) : item.account.accountType === 'expense' ? (
+                    ) : item.account.accountType === "expense" ? (
                       <TrendingUp className="h-4 w-4" />
-                    ) : item.account.accountType === 'bank' ? (
+                    ) : item.account.accountType === "bank" ? (
                       <Landmark className="h-4 w-4" />
                     ) : (
                       getInitials(item.name)
-                    )}
-                  </AvatarFallback>
-                </Avatar>
+                    )
+                  }
+                />
               ) : (
                 <div className="h-8 w-8 flex items-center justify-center bg-muted rounded-md text-muted-foreground flex-shrink-0">
                   <Landmark className="h-4 w-4" />

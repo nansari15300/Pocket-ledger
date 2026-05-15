@@ -38,6 +38,7 @@ import { toast } from "@/hooks/use-toast";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, firestore, signOutWithFirestoreTeardown } from "@/lib/firebase";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { maybeMarkEmbeddedPendingCompanyDataWarm } from "@/lib/embeddedPendingCompanyWarm";
 import { pruneRememberedLoginEmailIfDisabled } from "@/lib/loginRememberEmail";
 import { disableLocalGuest, isLocalGuestEnabled } from "@/lib/localGuestSession";
 import {
@@ -192,6 +193,8 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
     }
     // Online company: pehle se valid "remember company password" window — dialog skip
     if (!isOfflineCompanyStorage(company) && readCloudCompanyPasswordUnlockSession(user?.uid, company.id)) {
+      // APK/static: data warm overlay queue — `FirstDeviceCompanyHydrationOverlay` session flag.
+      maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
       setCompanyId(company.id);
       router.push("/dashboard");
       return;
@@ -207,8 +210,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
       setPasswordInput("");
       setRememberUnlockDays(0);
     } else {
-        setCompanyId(company.id);
-        router.push("/dashboard");
+      maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, company);
+      setCompanyId(company.id);
+      router.push("/dashboard");
     }
   };
 
@@ -256,6 +260,9 @@ export function CompanySelector({ companies: initialCompanies }: { companies: Co
         }
         clearLocalAuth(companyToUnlock.id);
         toast({ title: "Access Granted", description: `Welcome to ${companyToUnlock.name}.` });
+        if (!isOfflineCompanyStorage(row)) {
+          maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, companyToUnlock);
+        }
         setCompanyId(companyToUnlock.id);
         setCompanyToUnlock(null);
         setUsernameInput("");
@@ -772,6 +779,7 @@ export function CompanyActions({
       }
     }
     if (!isOfflineCompanyStorage(selectedCompany) && readCloudCompanyPasswordUnlockSession(user?.uid, selectedCompany.id)) {
+      maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
       setCompanyId(selectedCompany.id);
       return;
     }
@@ -786,6 +794,7 @@ export function CompanyActions({
       setPasswordInput("");
       setRememberUnlockDays(0);
     } else {
+        maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, selectedCompany);
         setCompanyId(selectedCompany.id);
     }
   };
@@ -832,6 +841,9 @@ export function CompanyActions({
         }
         clearLocalAuth(companyToUnlock.id);
         toast({ title: "Access Granted", description: `Switched to ${companyToUnlock.name}.` });
+        if (!isOfflineCompanyStorage(row)) {
+          maybeMarkEmbeddedPendingCompanyDataWarm(user?.uid, companyToUnlock);
+        }
         setCompanyId(companyToUnlock.id);
         setCompanyToUnlock(null);
         setUsernameInput("");

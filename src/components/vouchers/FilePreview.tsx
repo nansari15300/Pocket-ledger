@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useCallback, useEffect, useState, useRef } from "react";
 import Image from "next/image";
-import { Copy, Eye, FileText, Loader2, Trash2 } from "lucide-react";
+import { Copy, FileText, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
@@ -33,6 +33,7 @@ import {
   LOCAL_FILE_PREFIX,
 } from "@/lib/localPendingFiles";
 import { useVoucherAttachmentFallback } from "@/contexts/VoucherAttachmentFallbackContext";
+import { tryResolveRemoteUrlForStaleLocalAttachment } from "@/lib/resolveVoucherAttachmentRemoteUrl";
 import { isElectronDesktopApp } from "@/lib/isElectronDesktop";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import { useAttachmentHoldPointer } from "@/hooks/useAttachmentHoldPointer";
@@ -41,6 +42,41 @@ import {
   writeAttachmentHoldClipboard,
 } from "@/lib/attachmentHoldClipboard";
 import { toast as sonnerToast } from "sonner";
+
+/** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — FilePreview branch + ATTACHMENT_PREVIEW_DOWNGRADE proof. */
+const FILE_PREVIEW_FORENSIC =
+  typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+
+/** `next/image` + `blob:` / `data:` — internal fetch / paint race se `ERR_FILE_NOT_FOUND`; native `<img>` safe. */
+function isBlobOrDataDisplayUrl(u: string | null | undefined): boolean {
+  if (!u || typeof u !== "string") return false;
+  return u.startsWith("blob:") || u.startsWith("data:");
+}
+
+function logFilePreviewForensic(tag: string, payload: Record<string, unknown>) {
+  if (!FILE_PREVIEW_FORENSIC) return;
+  console.warn("[FORENSIC_FILE_PREVIEW]", { tag, ...payload });
+}
+
+/** Sirf tab jab `resolvedType==="other"` aur URL null — generic FILE icon fail point. */
+function logAttachmentPreviewDowngradeToGenericFile(
+  reasonTag: string,
+  fileValue: File | string,
+  resolvedUrl: string | null,
+  resolvedType: string,
+  extra?: Record<string, unknown>
+) {
+  if (!FILE_PREVIEW_FORENSIC) return;
+  if (resolvedType === "other" && (resolvedUrl == null || resolvedUrl === "")) {
+    console.warn("ATTACHMENT_PREVIEW_DOWNGRADE_TO_GENERIC_FILE", {
+      reasonTag,
+      originalFile: typeof fileValue === "string" ? fileValue : fileValue?.name,
+      resolvedUrl,
+      resolvedType,
+      ...extra,
+    });
+  }
+}
 
 /** JPG seedha browser decode; PDF = download + pdf.js + canvas — 3–6s pehli baar normal. Dubara same URL tez ho: LRU cache. */
 const PDF_THUMB_LRU_MAX = 40;
@@ -223,7 +259,7 @@ interface FilePreviewProps {
   /** object-contain = full image visible at best quality; object-cover = crop to fill (default). */
   objectFit?: "cover" | "contain";
   /**
-   * Hover par transaction table jaisa bada preview (image / PDF). Band karo jahan nested tooltip ho (gallery, tooltip ke andar FilePreview).
+   * Hover par bada side-panel (zoom) — default off: thumbnail click = open file; chaho to `true` se purana hover zoom wapas.
    */
   enableHoverFullPreview?: boolean;
   /** Thumbnail ke corner par chhota PDF/JPEG text; forms + gallery ke liye default on. */
@@ -260,7 +296,7 @@ export function FilePreview({
   disabled = false,
   storagePath,
   objectFit = "cover",
-  enableHoverFullPreview = true,
+  enableHoverFullPreview = false,
   showFormatBadge = true,
   attachmentGallery,
   attachmentClientFileUrls,
@@ -277,6 +313,19 @@ export function FilePreview({
   const layoutW = previewBox?.width ?? size;
   const layoutH = previewBox?.height ?? size;
   const layoutMaxEdge = Math.max(layoutW, layoutH);
+
+  // Sirf content fingerprints — naya array/object ref (parent tick / interval) par preview `useEffect` na chale, blob revoke flash na ho.
+  const attachmentClientUrlsFingerprint =
+    !Array.isArray(attachmentClientFileUrls) || attachmentClientFileUrls.length === 0
+      ? ""
+      : attachmentClientFileUrls.join("\u0001");
+  const attachmentGalleryFingerprint =
+    !attachmentGallery?.urls?.length
+      ? ""
+      : `${attachmentGallery.startIndex}\u0001${attachmentGallery.urls.join("\u0001")}`;
+  const voucherAttachmentFbFingerprint = voucherAttachmentFb
+    ? `${voucherAttachmentFb.companyId}\u0001${voucherAttachmentFb.voucherId}`
+    : "";
 
   /** Native/local file ke liye render-time sync fast-path (no Promise wait before `<img src>`). */
   const immediateLocalInfo = React.useMemo(() => {
@@ -555,8 +604,24 @@ export function FilePreview({
               nativeCachedRef = null;
             }
           }
-          // User-requested behavior: local path/url na mile to online me seedha network URL par render karo (no extra wait).
-          resolvedUrl = nativeCachedRef?.displayUrl || file;
+          // Policy: display kabhi raw signed HTTPS `<Image>` par mat — hamesha IndexedDB/native blob (online/offline same pipeline).
+          const warmEarly = await getOfflineCachedAttachmentBlob(file);
+          let probe: Blob | null = warmEarly && warmEarly.size > 0 ? warmEarly : null;
+          // APK: `navigator.onLine` false hone par bhi Storage SDK chal sakta hai — pehla paint yahi block ho raha tha.
+          const navOn =
+            typeof navigator !== "undefined" &&
+            (navigator.onLine || isCapacitorNativeApp());
+          if (!probe && navOn) {
+            probe = await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal);
+          }
+          if (probe && probe.size > 0) {
+            objectUrl = URL.createObjectURL(probe);
+            resolvedUrl = objectUrl;
+          } else if (nativeCachedRef?.displayUrl) {
+            resolvedUrl = nativeCachedRef.displayUrl;
+          } else {
+            resolvedUrl = null;
+          }
           try {
             resolvedName = decodeURIComponent(file.split("/").pop()?.split("?")[0] || "file");
           } catch {
@@ -584,6 +649,32 @@ export function FilePreview({
           else if (resolvedType === "image" && (formatLabel === "FILE" || formatLabel === "OTHER"))
             formatLabel = "IMAGE";
 
+          // Blob/native miss + label image: `<Image src="">` broken — generic file icon
+          if (!resolvedUrl && resolvedType === "image") {
+            resolvedType = "other";
+            logAttachmentPreviewDowngradeToGenericFile(
+              "https_branch_labeled_image_but_no_blob_or_native_displayUrl",
+              file,
+              resolvedUrl,
+              resolvedType,
+              {
+                warmEarlyBytes: warmEarly?.size ?? 0,
+                probeAfterHydrateBytes: probe?.size ?? 0,
+                navOn,
+              }
+            );
+          }
+
+          logFilePreviewForensic("https_url_branch_first_paint", {
+            originalFile: file,
+            resolvedUrl,
+            resolvedType,
+            offlineCacheWarmEarlyBytes: warmEarly?.size ?? 0,
+            probeBytes: probe?.size ?? 0,
+            hadNativeCachedRef: Boolean(nativeCachedRef?.displayUrl),
+            navOn,
+          });
+
           setFileInfo({
             url: resolvedUrl,
             type: resolvedType,
@@ -598,8 +689,13 @@ export function FilePreview({
             try {
               // 1) Offline/restart fast fallback: pehle local cache read try.
               let probe = await getOfflineCachedAttachmentBlob(file);
-              // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai).
-              if ((!probe || probe.size === 0) && !controller.signal.aborted) {
+              // 2) Cache miss + online: network se hydrate karo (is call me putCachedBlob bhi hota hai); offline par fetch mat — hang/spinner.
+              if (
+                (!probe || probe.size === 0) &&
+                !controller.signal.aborted &&
+                typeof navigator !== "undefined" &&
+                (navigator.onLine || isCapacitorNativeApp())
+              ) {
                 // Persist run ko component lifecycle se mat baandho; tile unmount ho tab bhi cache fill complete ho.
                 probe = await getRemoteAttachmentBlobPreferOfflineCache(file);
               }
@@ -676,6 +772,12 @@ export function FilePreview({
           } catch {
             /* cache miss; keep fallback flow */
           }
+          logFilePreviewForensic("object_path_branch_result", {
+            originalFile: file,
+            resolvedUrl,
+            resolvedType,
+            isStorageObjectPath,
+          });
         }
         // blob: — URL extension/label PDF nahi batata; fetch + MIME ya %PDF header (local voucher hover fix)
         if (file.startsWith("blob:")) {
@@ -740,6 +842,13 @@ export function FilePreview({
             }
           } catch {
             /* pending missing */
+          }
+          if (typeof file === "string" && file.startsWith(LOCAL_FILE_PREFIX)) {
+            logFilePreviewForensic("local_ref_branch_result", {
+              originalFile: file,
+              resolvedUrl,
+              resolvedType,
+            });
           }
         }
         if (resolvedType === "other") {
@@ -818,34 +927,103 @@ export function FilePreview({
           resolvedType === "image" &&
           resolvedUrl === file
         ) {
-          // Electron online: IndexedDB+Ffetch se pehle remote URL rakho — voucher/hover JPG web jaisa tez decode
-          if (typeof navigator !== "undefined" && navigator.onLine && isElectronDesktopApp()) {
+          const navOn = typeof navigator !== "undefined" && navigator.onLine;
+          // Electron online: remote URL pehle — tez decode; Capacitor online bhi (warm miss par background branch cover).
+          if (navOn && isElectronDesktopApp()) {
             /* resolvedUrl === file unchanged */
-          } else if (isCapacitorNativeApp()) {
-            // Capacitor/mobile fast path: preview card ko turant render karo; warm-cache blob hydration background flow par chhodo.
-            // Blob-prefetch yahan await karne se 20s timeout/retry chain lagti thi aur voucher edit thumbnail 10–30s late dikhta tha.
-            /* resolvedUrl === file unchanged */
+          } else if (navOn && isCapacitorNativeApp()) {
+            /* online APK: HTTPS first paint; offline case upar warmEarly se handle */
           } else {
+            // Web offline / Capacitor offline jahan ab bhi raw URL bacha ho — sirf cache/blob, network mat
+            try {
+              const imgBlob =
+                (await getOfflineCachedAttachmentBlob(file)) ||
+                (navOn ? await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal) : null) ||
+                (navOn ? await fetchBlobWithTimeout(file, PDF_REMOTE_FETCH_TIMEOUT_MS, controller.signal) : null);
+              if (imgBlob && imgBlob.size > 0 && !controller.signal.aborted) {
+                const imgKind = await sniffBlobKindForPreview(imgBlob);
+                if (imgKind === "image") {
+                  if (objectUrl) URL.revokeObjectURL(objectUrl);
+                  objectUrl = URL.createObjectURL(imgBlob);
+                  resolvedUrl = objectUrl;
+                }
+              }
+            } catch {
+              /* cache/network — icon fallback */
+            }
+          }
+        }
+        // Save ke turant baad: IndexedDB blob `syncPendingFiles` hata chuka ho, form abhi `local:` string dikhata ho — Firestore HTTPS se thumb restore (openAttachmentInApp jaisa).
+        if (
+          !resolvedUrl &&
+          typeof file === "string" &&
+          file.startsWith(LOCAL_FILE_PREFIX) &&
+          voucherAttachmentFb?.companyId &&
+          voucherAttachmentFb?.voucherId
+        ) {
           try {
-            const imgBlob =
-              (await getRemoteAttachmentBlobPreferOfflineCache(file, controller.signal)) ||
-              (await fetchBlobWithTimeout(file, PDF_REMOTE_FETCH_TIMEOUT_MS, controller.signal));
-            if (imgBlob && imgBlob.size > 0 && !controller.signal.aborted) {
-              const imgKind = await sniffBlobKindForPreview(imgBlob);
-              if (imgKind === "image") {
-                if (objectUrl) URL.revokeObjectURL(objectUrl);
-                objectUrl = URL.createObjectURL(imgBlob);
+            const clientList =
+              attachmentClientFileUrls ??
+              (attachmentGallery?.urls && attachmentGallery.urls.length > 0
+                ? [...attachmentGallery.urls]
+                : undefined);
+            const remote = await tryResolveRemoteUrlForStaleLocalAttachment(
+              voucherAttachmentFb.companyId,
+              voucherAttachmentFb.voucherId,
+              file,
+              clientList
+            );
+            if (remote && !isLocalFileRef(remote)) {
+              let probe: Blob | null = await getOfflineCachedAttachmentBlob(remote);
+              const navOn =
+                typeof navigator !== "undefined" && (navigator.onLine || isCapacitorNativeApp());
+              if ((!probe || probe.size === 0) && navOn && !controller.signal.aborted) {
+                probe = await getRemoteAttachmentBlobPreferOfflineCache(remote, controller.signal);
+              }
+              if (probe && probe.size > 0 && !controller.signal.aborted) {
+                objectUrl = URL.createObjectURL(probe);
                 resolvedUrl = objectUrl;
+                const kind = await sniffBlobKindForPreview(probe);
+                if (kind === "pdf") resolvedType = "pdf";
+                else if (kind === "image") resolvedType = "image";
+                else resolvedType = "other";
+              } else if (navOn && /^https?:\/\//i.test(remote)) {
+                resolvedUrl = remote;
+                const lbl = getAttachmentFormatLabel(remote);
+                const cleanUrl = remote.split("?")[0].toLowerCase();
+                if (lbl === "PDF" || cleanUrl.endsWith(".pdf") || cleanUrl.includes(".pdf")) {
+                  resolvedType = "pdf";
+                } else if (
+                  ["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG", "HEIC", "HEIF"].includes(lbl) ||
+                  cleanUrl.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)(\?|$)/)
+                ) {
+                  resolvedType = "image";
+                } else {
+                  resolvedType = "image";
+                }
+              }
+              try {
+                resolvedName = decodeURIComponent(remote.split("/").pop()?.split("?")[0] || "file");
+              } catch {
+                resolvedName = remote.split("/").pop()?.split("?")[0] || "file";
               }
             }
           } catch {
-            /* network — remote URL rehne do */
-          }
+            /* stale-resolve best-effort */
           }
         }
         // Render safety: URL source null ho to image/pdf force na karo; warna voucher edit me broken thumbnail flicker hota hai.
         if (!resolvedUrl) {
           resolvedType = "other";
+          logAttachmentPreviewDowngradeToGenericFile(
+            "final_guard_resolvedUrl_null_force_type_other",
+            file,
+            null,
+            "other",
+            {
+              typeofFile: typeof file === "string" ? "string" : "file",
+            }
+          );
         }
         try {
           resolvedName = decodeURIComponent(file.split("/").pop()?.split("?")[0] || "file");
@@ -887,6 +1065,21 @@ export function FilePreview({
       });
       setIsLoading(false);
 
+      logFilePreviewForensic("final_ui_state_after_setFileInfo", {
+        originalFile: typeof file === "string" ? file : file.name,
+        resolvedUrl,
+        resolvedType,
+        formatLabel,
+        finalUiKind:
+          resolvedType === "image" && resolvedUrl
+            ? "image"
+            : resolvedType === "pdf"
+              ? "pdf"
+              : !resolvedUrl
+                ? "generic_FILE_or_null_url"
+                : "other_non_image_pdf_with_url",
+      });
+
       if (resolvedType === "pdf") {
         setPdfThumbnailSafe(null); // clear previous so loading shows for this PDF
         // Rerender churn me turant regenerate mat karo; short debounce se duplicate work kam hota hai.
@@ -919,13 +1112,35 @@ export function FilePreview({
       clearTimeout(timeoutId);
       if (pdfThumbDebounceTimer) clearTimeout(pdfThumbDebounceTimer);
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      // Revoke turant mat: React/`<Image>` abhi `src` read kar chuka ho — next macrotick pe revoke = `blob:` GET fail kam.
+      const revokeLater = objectUrl;
+      if (revokeLater) {
+        setTimeout(() => {
+          try {
+            URL.revokeObjectURL(revokeLater);
+          } catch {
+            /* ignore */
+          }
+        }, 0);
+      }
       const thumb = thumbnailUrlRef.current;
       if (thumb && !pdfThumbBlobIsCached(thumb)) revokeThumbnailUrl(thumb);
       thumbnailUrlRef.current = null;
       setPdfThumbnail(null);
     };
-  }, [file, fileSize, resolvedStoragePath, layoutW, layoutH, generatePdfThumbnail, setPdfThumbnailSafe, revokeThumbnailUrl]);
+  }, [
+    file,
+    fileSize,
+    resolvedStoragePath,
+    layoutW,
+    layoutH,
+    generatePdfThumbnail,
+    setPdfThumbnailSafe,
+    revokeThumbnailUrl,
+    voucherAttachmentFbFingerprint,
+    attachmentClientUrlsFingerprint,
+    attachmentGalleryFingerprint,
+  ]);
 
   /** Thumbnail click + hover portal par double-click = browser / in-app open (same rules) */
   const canHoldCopyAttachment =
@@ -933,20 +1148,27 @@ export function FilePreview({
     !disabled &&
     ((typeof file === "string" && String(file).trim().length > 0) || file instanceof File);
 
-  /** Long-press + desktop hover par Copy button — ek hi payload/toast path */
+  /** Long-press + desktop hover par Copy button — ek hi payload/toast path; HTTPS ho to clipboard me link + session me PL paste. */
   const runHoldCopyNow = useCallback(async () => {
     const payload = buildHoldPayloadFromPreviewSource({
       file: file as File | string,
       storagePath: resolvedStoragePath,
     });
     if (!payload) return;
-    const ok = await writeAttachmentHoldClipboard(payload);
-    sonnerToast.success(ok ? "Attachment copied" : "Attachment ready to paste", {
+    const httpsFromProp =
+      typeof file === "string" && /^https?:\/\//i.test(String(file).trim()) ? String(file).trim() : undefined;
+    const httpsFromResolved =
+      viewFileInfo.url && /^https?:\/\//i.test(String(viewFileInfo.url)) ? String(viewFileInfo.url) : undefined;
+    const clipboardDisplayUrl = httpsFromProp ?? httpsFromResolved;
+    const ok = await writeAttachmentHoldClipboard(payload, { clipboardDisplayUrl });
+    sonnerToast.success(ok ? "Copied" : "Saved for paste in this tab", {
       description: ok
-        ? "Hold an empty Add File / Add photo area ~2s — saves as a new upload."
-        : "Clipboard blocked — copied in this tab only; hold empty slot to paste.",
+        ? clipboardDisplayUrl
+          ? "Download link on clipboard; Paste on empty slot still uses attachment copy (session backup)."
+          : "Use Paste on empty slot or ~2s hold there to add a new copy."
+        : "Clipboard blocked — try Paste on empty slot (uses last copy in this tab).",
     });
-  }, [file, resolvedStoragePath]);
+  }, [file, resolvedStoragePath, viewFileInfo.url]);
 
   const copyAttachmentHold = useAttachmentHoldPointer({
     disabled: !canHoldCopyAttachment,
@@ -975,7 +1197,14 @@ export function FilePreview({
           }
         : undefined;
     void openAttachmentInApp(viewFileInfo.url, { title: viewFileInfo.name, kind, gallery: g, serverFallback });
-  }, [viewFileInfo.url, viewFileInfo.type, viewFileInfo.name, attachmentGallery, attachmentClientFileUrls, voucherAttachmentFb]);
+  }, [
+    viewFileInfo.url,
+    viewFileInfo.type,
+    viewFileInfo.name,
+    attachmentGalleryFingerprint,
+    attachmentClientUrlsFingerprint,
+    voucherAttachmentFbFingerprint,
+  ]);
 
   const handlePreviewClick = (e: React.MouseEvent) => {
     if (children || disabled) return;
@@ -992,11 +1221,9 @@ export function FilePreview({
     !viewIsLoading &&
     (viewFileInfo.type === "image" || viewFileInfo.type === "pdf");
 
-  /** Mouse: hover se portal mat kholo — ~2s hold copy se clash; touch: tap-toggle jaise pehle */
+  /** Touch: portal tap-toggle; desktop fine pointer: hover-zoom sirf jab `enableHoverFullPreview` on ho */
   const tapInteractionMode = useTapInteractionMode();
-  /** Preview button se `AttachmentHoverPortal` kholne ke liye register callback */
-  const attachmentPortalOpenRef = useRef<(() => void) | null>(null);
-  
+
   const ThumbnailContent = () => {
     if (viewIsLoading || (viewFileInfo.type === "pdf" && isPdfLoading && !pdfThumbnail)) {
       return <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />;
@@ -1004,28 +1231,54 @@ export function FilePreview({
     
     switch (viewFileInfo.type) {
       case "image":
-        return children || (
-          <Image 
-            src={viewFileInfo.url!} 
-            alt={viewFileInfo.name} 
-            fill 
-            sizes={`${layoutMaxEdge}px`} 
-            className={objectFit === "contain" ? "object-contain" : "object-cover"} 
-            unoptimized 
-          />
+        return (
+          children ||
+          (isBlobOrDataDisplayUrl(viewFileInfo.url) ? (
+            // eslint-disable-next-line @next/next/no-img-element -- blob:/data: Next Image se `ERR_FILE_NOT_FOUND` race
+            <img
+              src={viewFileInfo.url!}
+              alt={viewFileInfo.name}
+              className={cn(
+                "absolute inset-0 h-full w-full",
+                objectFit === "contain" ? "object-contain" : "object-cover"
+              )}
+            />
+          ) : (
+            <Image
+              src={viewFileInfo.url!}
+              alt={viewFileInfo.name}
+              fill
+              sizes={`${layoutMaxEdge}px`}
+              className={objectFit === "contain" ? "object-contain" : "object-cover"}
+              unoptimized
+            />
+          ))
         );
       case "pdf":
         // Show PDF thumbnail if available, otherwise show icon
         if (pdfThumbnail) {
-          return children || (
-            <Image 
-              src={pdfThumbnail} 
-              alt={viewFileInfo.name} 
-              fill 
-              sizes={`${layoutMaxEdge}px`} 
-              className={objectFit === "contain" ? "object-contain" : "object-cover"} 
-              unoptimized 
-            />
+          return (
+            children ||
+            (isBlobOrDataDisplayUrl(pdfThumbnail) ? (
+              // eslint-disable-next-line @next/next/no-img-element -- PDF first-page thumb = object URL
+              <img
+                src={pdfThumbnail}
+                alt={viewFileInfo.name}
+                className={cn(
+                  "absolute inset-0 h-full w-full",
+                  objectFit === "contain" ? "object-contain" : "object-cover"
+                )}
+              />
+            ) : (
+              <Image
+                src={pdfThumbnail}
+                alt={viewFileInfo.name}
+                fill
+                sizes={`${layoutMaxEdge}px`}
+                className={objectFit === "contain" ? "object-contain" : "object-cover"}
+                unoptimized
+              />
+            ))
           );
         }
         // Fallback to icon if thumbnail generation fails
@@ -1085,6 +1338,27 @@ export function FilePreview({
       )}
     </div>
   );
+
+  /** PC hover par Copy — parent `pointer-events-none` taaki thumbnail click = open file (toolbar sirf buttons par hit). */
+  const finePointerCopyBar = canHoldCopyAttachment ? (
+    <div className="pointer-events-none absolute inset-0 z-[60] hidden items-start justify-center gap-1 bg-transparent pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:opacity-100">
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          void runHoldCopyNow();
+        }}
+      >
+        <Copy className="h-3 w-3 shrink-0" aria-hidden />
+        Copy
+      </Button>
+    </div>
+  ) : null;
 
   // Hover popup: PDF ke liye nested FilePreview mat chalao — dubara fetch + chhota timeout; wahi raster thumb bara dikhao
   const hoverPanel =
@@ -1173,12 +1447,7 @@ export function FilePreview({
       {showHoverFullPreview ? (
         <AttachmentHoverPortal
           triggerClassName="h-full w-full min-h-0 min-w-0"
-          /* Fine pointer: sirf Preview button / mobile tap — hover par turant bada panel nahi */
           openOnHover={tapInteractionMode}
-          onRegisterOpen={(fn) => {
-            attachmentPortalOpenRef.current = fn;
-          }}
-          /* PDF: img ke alawa canvas/blank par dblclick — Sale/Note/journal sab forms */
           onPreviewDoubleClick={
             viewFileInfo.type === "pdf" && viewFileInfo.url
               ? (e) => {
@@ -1198,45 +1467,14 @@ export function FilePreview({
         >
           <div className="relative h-full w-full min-h-0 min-w-0">
             {borderedPreview}
-            {/* Sirf fine pointer: coarse par `hidden` — hydration flash bhi nahi (JS tap flag se pehle) */}
-            <div className="pointer-events-none absolute inset-0 z-[60] hidden items-start justify-center gap-1 bg-transparent pt-0.5 opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  attachmentPortalOpenRef.current?.();
-                }}
-              >
-                <Eye className="h-3 w-3 shrink-0" aria-hidden />
-                Preview
-              </Button>
-              {canHoldCopyAttachment ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="pointer-events-auto h-7 gap-0.5 px-2 text-[10px] font-semibold shadow-md"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    void runHoldCopyNow();
-                  }}
-                >
-                  <Copy className="h-3 w-3 shrink-0" aria-hidden />
-                  Copy
-                </Button>
-              ) : null}
-            </div>
+            {finePointerCopyBar}
           </div>
         </AttachmentHoverPortal>
       ) : (
-        borderedPreview
+        <div className="relative h-full w-full min-h-0 min-w-0">
+          {borderedPreview}
+          {finePointerCopyBar}
+        </div>
       )}
     </div>
   );

@@ -64,7 +64,9 @@ import {
 } from "@/lib/fiscalPartitionRows";
 import { buildFiscalMergePartitionBannerLabel } from "@/lib/fiscalYearLabel";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
 import { prewarmHoverPreviewHttpsUrls } from "@/components/vouchers/attachmentHoverPreviewBody";
+import { updateAttachmentPrefetchPriorityFromVisibleRows } from "@/lib/attachmentPrefetchPriorityBuffer";
 
 export type { Context, Transaction };
 
@@ -656,6 +658,8 @@ export function TransactionsTable({
   useEffect(() => {
     if (visibleAttachmentUrls.length === 0) return;
     if (typeof window === "undefined") return;
+    // Full-company prefetch queue ko bhi visible URLs pehle — `peekAttachmentPrefetchPrioritySnapshot` mirror run me use
+    updateAttachmentPrefetchPriorityFromVisibleRows(visibleAttachmentUrls);
     const browserWindow = window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
@@ -665,7 +669,7 @@ export function TransactionsTable({
     let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     const runWarm = () => {
       // Idle-time warm keeps row mount responsive while making first hover near-instant.
-      void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 60 });
+      void prewarmHoverPreviewHttpsUrls(visibleAttachmentUrls, { signal: ac.signal, maxUrls: 220 });
     };
     if (typeof browserWindow.requestIdleCallback === "function") {
       idleHandle = browserWindow.requestIdleCallback(runWarm, { timeout: 450 });
@@ -1069,12 +1073,13 @@ export function TransactionsTable({
       const balanceSuffix = balance >= 0 ? "Dr" : "Cr";
       const balanceAbs = Math.abs(balance);
       const resolvedUserName = userNames && t.userId ? userNames[t.userId] : null;
-      const userName =
-        (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-        t.userDisplayName ||
-        t.userName ||
-        (t.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-        "N/A";
+      const userName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t)
+        ? "Auto"
+        : (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
+          t.userDisplayName ||
+          t.userName ||
+          (t.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
+          "N/A";
       const isItemQty = context === "item" && stockView === "qty";
       const formatAmountOrQty = (val: number) =>
         isItemQty && item ? `${formatQuantity(val)} ${displayUnit || ""}` : formatCurrency(val, { noSuffix: true, context: "transaction", noAnimation: true });

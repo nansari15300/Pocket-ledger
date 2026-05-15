@@ -16,13 +16,13 @@ import {
   upsertLocalCompany,
 } from "@/lib/localCompanyStore";
 import { mergeSharedWithIntoLocalCompanyUsers, parseLocalCompanyUserRows } from "@/lib/localCompanyUsers";
-import { higherPlanByTier, normalizePlanIdForClient, type PlanId } from "@/config/plans";
+import { higherPlanByTier, normalizePlanIdForClient, planTierIndex, type PlanId } from "@/config/plans";
 import type { BillingFrozenPlanSnapshot } from "@/lib/billingFrozenPlanSnapshots";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import type { CompanyDemoteReason } from "@/lib/companyDemote";
 import { isCurrentUserOwnerOfCompanyRow, reconcileOnlineMirrorsWithServer } from "@/lib/companyOnlineIntegrity";
 import { BUMP_LOCAL_COMPANY_REGISTRY_EVENT } from "@/lib/applyStripePlanToLocalCompany";
-import { readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
+import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
 import {
   syncCompanyPlanFromServer,
   markDailyAuthoritativePlanSyncDone,
@@ -274,16 +274,26 @@ function mergeOnlineCompanyWithLocalPlanOverlay(online: Company, localNorm: Comp
     authoritativeCompanyId?: string;
     offlineLicenseValidUntilMs?: number;
   };
-  const isLocalFirst =
-    raw?.storageOption === "local" ||
-    raw?.syncPolicy === "offline" ||
-    raw?.syncedFromCloud !== true;
   const le = planExpiryMsFromCompanyShape(localNorm);
   const oe = planExpiryMsFromCompanyShape(online);
   const lp = normalizePlanIdForClient(localNorm.planId);
   const op = normalizePlanIdForClient(online.planId);
-  const localPaid = lp !== "basic";
-  const onlineBasic = op === "basic";
+  const onlineUpMs =
+    typeof (online as unknown as { planUpgradedAtMs?: unknown }).planUpgradedAtMs === "number" &&
+    Number.isFinite((online as unknown as { planUpgradedAtMs: number }).planUpgradedAtMs)
+      ? (online as unknown as { planUpgradedAtMs: number }).planUpgradedAtMs
+      : 0;
+  const localUpMs =
+    typeof raw.planUpgradedAtMs === "number" && Number.isFinite(raw.planUpgradedAtMs) ? raw.planUpgradedAtMs : 0;
+  // Admin / sync-plan ne Firestore par naya `planUpgradedAtMs` likha ho — SQLite purana paid tier mat chipkao (billing UI turant sahi).
+  if (onlineUpMs > localUpMs) return online;
+  // Tier Firestore par neeche (demote) lekin SQLite ab bhi upar — server authoritative.
+  if (planTierIndex(op) < planTierIndex(lp)) return online;
+
+  const isLocalFirst =
+    raw?.storageOption === "local" ||
+    raw?.syncPolicy === "offline" ||
+    raw?.syncedFromCloud !== true;
   let useLocal = false;
   if (isLocalFirst) useLocal = true;
   // HATA: `localPaid && onlineBasic` — Firestore downgrade/basic authoritative ho tab bhi purana SQLite pro-plus `higherPlanByTier` se chipak jata tha (checkout vs profile mismatch).
@@ -456,9 +466,16 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
   livePlansRef.current = livePlans;
 
   const triggerSync = useCallback(() => {
+    // Offline→online: ye bump `useCompany` + `useVouchers` listeners re-bind karta — full reload nahi, lekin "refresh" jaisa.
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[RELOAD_TRIGGER]", "triggerSync → registryVersion++ (Firestore company queries re-subscribe)");
+    }
     setRegistryVersion((v) => v + 1);
   }, []);
   const reloadLocalCompanyRegistry = useCallback(() => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[RELOAD_TRIGGER]", "reloadLocalCompanyRegistry → localRegistryEpoch++ (SQLite mirror bump)");
+    }
     setLocalRegistryEpoch((v) => v + 1);
   }, []);
 
@@ -593,13 +610,33 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     const cached = readCompanyPlanLocalCache(String(raw.id || ""));
     if (cached) {
       const cp = normalizePlanIdForClient(cached.planId);
-      const sqliteBasic = planId === "basic";
-      const cachePaid = cp !== "basic";
-      const expBetter = sqliteMs == null || cached.planExpiryMs > sqliteMs;
-      if (cachePaid && (sqliteBasic || expBetter)) {
-        planId = cp;
-        rawMs = cached.planExpiryMs;
-        stripeSessionFromPlanCache = cached.lastStripeCheckoutSessionId;
+      const rawUpRaw = (raw as unknown as { planUpgradedAtMs?: unknown }).planUpgradedAtMs;
+      const rawUpMs =
+        typeof rawUpRaw === "number" && Number.isFinite(rawUpRaw) ? rawUpRaw : 0;
+      const cacheT = cached.updatedAtMs ?? 0;
+      const tierFromRow = planTierIndex(planId);
+      const tierFromCache = planTierIndex(cp);
+      // Firestore par plan switch cache ke baad — ya server tier cache se kam — purana Pro localStorage mat lao (SuperAdmin demote / sync-plan).
+      const serverSwitchNewerThanCache = rawUpMs > cacheT;
+      const serverTierLowerThanCache = tierFromRow < tierFromCache;
+      if (serverSwitchNewerThanCache || serverTierLowerThanCache) {
+        clearCompanyPlanLocalCache(String(raw.id || ""));
+      } else {
+        const sqliteBasic = planId === "basic";
+        const cachePaid = cp !== "basic";
+        const expBetter = sqliteMs == null || cached.planExpiryMs > sqliteMs;
+        if (cachePaid && sqliteBasic) {
+          planId = cp;
+          rawMs = cached.planExpiryMs;
+          stripeSessionFromPlanCache = cached.lastStripeCheckoutSessionId;
+        } else if (cachePaid && expBetter && planTierIndex(cp) > planTierIndex(planId)) {
+          planId = cp;
+          rawMs = cached.planExpiryMs;
+          stripeSessionFromPlanCache = cached.lastStripeCheckoutSessionId;
+        } else if (cachePaid && expBetter && planTierIndex(cp) === planTierIndex(planId)) {
+          rawMs = cached.planExpiryMs;
+          stripeSessionFromPlanCache = cached.lastStripeCheckoutSessionId;
+        }
       }
     }
     const planExpiryFromMs =
@@ -845,8 +882,8 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       embeddedClient &&
       shouldSkipEmbeddedStartupAuthChurn(user?.uid, auth.currentUser?.uid);
     // Embedded local-first: offline→online transition par immediate plan-sync rerender ko avoid karo (refresh-like jump).
-    const skipOnlinePlanSyncForEmbeddedLocal =
-      isLocalOnlyMode() && embeddedClient;
+    // Web "Local" data source bhi: `window` `online` par turant POST/auth churn na ho — session + SQLite pehle se theek.
+    const skipOnlinePlanSyncForLocalOnly = isLocalOnlyMode();
 
     // Browser timer ids — `NodeJS.Timeout` union avoid (tsc DOM vs @types/node)
     let planSyncIdleCallbackId: number | undefined;
@@ -872,7 +909,12 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const onOnline = () => {
-      if (skipOnlinePlanSyncForEmbeddedLocal) return;
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[ONLINE_EVENT]", "useCompany:planAuthoritative window online", {
+          skipOnlinePlanSyncForLocalOnly,
+        });
+      }
+      if (skipOnlinePlanSyncForLocalOnly) return;
       planSyncBurstRef.current = 0;
       runOnlineSync();
     };
@@ -1303,6 +1345,9 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
         }
         plDbgCompanyRecovery("reconcileOnline:selectedRemoved:clear+pushCompany", { selectedAtStart });
         plNavDbgCritical("useCompany.router.push./company [reconcileOnlineMirrors]", { selectedAtStart });
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[RELOAD_TRIGGER]", "useCompany:router.push(/company) after reconcileOnlineMirrorsWithServer");
+        }
         clearCompanyId();
         router.push("/company");
       }

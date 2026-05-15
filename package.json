@@ -14,6 +14,7 @@
     "build:webpack": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next build --webpack",
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint",
+    "check:gateway-writes": "node scripts/assert-no-firestore-mutations-outside-gateway.cjs",
     "typecheck": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
     "tsc": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
     "typecheck:light": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p tsconfig.typecheck.json",
@@ -34,16 +35,19 @@
     "cap:icons": "npx capacitor-assets generate --android --iconBackgroundColor \"#ffffff\" && node scripts/sync-android-launcher-foreground.js",
     "cap:open:android": "npx cap open android",
     "build:static": "node scripts/build-static.js",
-    "build:static:all": "npm run build:static && npm run cap:copy:android && npm run cap:copy:ios && npm run electron:build:win && npm run electron:build:linux"
+    "build:static:all": "npm run build:static && npm run cap:copy:android && npm run cap:copy:ios && npm run electron:build:win && npm run electron:build:linux",
+    "storage:cors": "node scripts/apply-firebase-storage-cors.cjs"
   },
   "dependencies": {
     "@capacitor-community/file-opener": "^6.0.1",
     "@capacitor/app": "^6.0.3",
     "@capacitor/browser": "^6.0.6",
+    "@capacitor/device": "^6.0.3",
     "@capacitor/filesystem": "^6.0.4",
     "@capacitor/network": "^6.0.4",
     "@capacitor/share": "^6.0.4",
     "@capawesome/capacitor-file-picker": "^6.2.0",
+    "@capgo/capacitor-native-biometric": "^6.0.4",
     "@codetrix-studio/capacitor-google-auth": "^3.4.0-rc.4",
     "@genkit-ai/google-genai": "^1.28.0",
     "@google-cloud/firestore": "^7.11.6",

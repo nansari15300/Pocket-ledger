@@ -522,6 +522,8 @@ export type ShowInAppPdfPreviewOptions = {
   title?: string;
   /** Share / download filename */
   fileName?: string;
+  /** Gallery jaisa parent: PDF overlay DOM hataane ke baad hardware-back parent ko wapas */
+  onAfterPreviewLayerRemoved?: () => void;
 };
 
 const PREVIEW_PRINT_HIDE_STYLE_ID = "in-app-pdf-preview-print-hide-toolbar";
@@ -583,6 +585,11 @@ export function showInAppPdfPreview(
     // Native back/close consistency: preview root ko same deferred remover se hatao taaki back-stack + click shield stable rahe.
     scheduleInAppAttachmentPreviewRootRemoval(root, () => {
       setAttachmentPreviewHardwareBackHandler(null);
+      try {
+        options?.onAfterPreviewLayerRemoved?.();
+      } catch {
+        /* ignore */
+      }
     });
   };
 
@@ -726,8 +733,10 @@ export function showInAppPdfPreview(
 
   let pinchActive = false;
   let pinchStartDist = 0;
-  /** Pinch gesture: Fit / ± ke baad current zoomPercent yahan anchor */
-  let pinchStartZoom = 100;
+  /** Har touchmove par pichhla finger-span — incremental zoom (noisy WebView pehla frame). */
+  let lastPinchDist = 0;
+  /** Do ungliyon ke beech minimum span — bahut chhota startDist = ratio jump. */
+  const MIN_PINCH_SPAN_PX = 28;
   /** Pinch midpoint — `applyViewZoomCss` scroll-anchor (PDF repaint band). */
   let pinchAnchorClientX = 0;
   let pinchAnchorClientY = 0;
@@ -914,6 +923,7 @@ export function showInAppPdfPreview(
         }
         pinchActive = false;
         pinchStartDist = 0;
+        lastPinchDist = 0;
         await new Promise<void>((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
         );
@@ -985,6 +995,7 @@ export function showInAppPdfPreview(
     if (!opts?.fromPinch) {
       pinchActive = false;
       pinchStartDist = 0;
+      lastPinchDist = 0;
     }
     zoomPercent = clampZoom(next);
     updateZoomLabel();
@@ -1065,10 +1076,12 @@ export function showInAppPdfPreview(
   const endPinchAndCommitPaint = () => {
     if (!pinchActive) {
       pinchStartDist = 0;
+      lastPinchDist = 0;
       return;
     }
     pinchActive = false;
     pinchStartDist = 0;
+    lastPinchDist = 0;
     if (previewCancelled.v) return;
     void setZoom(zoomPercent, {
       preserveAnchor: true,
@@ -1087,8 +1100,8 @@ export function showInAppPdfPreview(
       ev.preventDefault();
       pinchActive = true;
       const rawDist = touchDist(ev.touches);
-      pinchStartDist = Math.max(rawDist, 1);
-      pinchStartZoom = zoomPercent;
+      pinchStartDist = Math.max(rawDist, MIN_PINCH_SPAN_PX);
+      lastPinchDist = pinchStartDist;
       const t0 = ev.touches[0];
       const t1 = ev.touches[1];
       const midX = (t0.clientX + t1.clientX) * 0.5;
@@ -1102,12 +1115,26 @@ export function showInAppPdfPreview(
   scrollHost.addEventListener(
     "touchmove",
     (ev) => {
-      if (!usePdfJs || !pinchActive || ev.touches.length !== 2 || pinchStartDist <= 0) return;
-      // 2-finger move: hybrid `setZoom` — CSS har frame; threshold cross par hi PDF.js repaint queue.
-      ev.preventDefault();
+      if (!usePdfJs || ev.touches.length !== 2) return;
       const d = touchDist(ev.touches);
       if (d <= 0) return;
-      const ratio = d / pinchStartDist;
+      // Kabhi pehla stable 2-finger sample touchmove par — pinch yahin se shuru (touchstart miss).
+      if (!pinchActive || pinchStartDist <= 0) {
+        ev.preventDefault();
+        pinchActive = true;
+        pinchStartDist = Math.max(d, MIN_PINCH_SPAN_PX);
+        lastPinchDist = pinchStartDist;
+        const t0 = ev.touches[0]!;
+        const t1 = ev.touches[1]!;
+        const midX = (t0.clientX + t1.clientX) * 0.5;
+        const midY = (t0.clientY + t1.clientY) * 0.5;
+        const a = midpointToScrollClientAnchor(midX, midY);
+        pinchAnchorClientX = a.ax;
+        pinchAnchorClientY = a.ay;
+        return;
+      }
+      // 2-finger move: incremental ratio — `pinchStartZoom * (d/startDist)` pehle move par 50% jump deta tha.
+      ev.preventDefault();
       const t0 = ev.touches[0];
       const t1 = ev.touches[1];
       const midX = (t0.clientX + t1.clientX) * 0.5;
@@ -1115,7 +1142,9 @@ export function showInAppPdfPreview(
       const a = midpointToScrollClientAnchor(midX, midY);
       pinchAnchorClientX = a.ax;
       pinchAnchorClientY = a.ay;
-      void setZoom(clampZoom(pinchStartZoom * ratio), {
+      const ratio = d / Math.max(lastPinchDist, 1);
+      lastPinchDist = d;
+      void setZoom(clampZoom(zoomPercent * ratio), {
         preserveAnchor: true,
         anchorClientX: pinchAnchorClientX,
         anchorClientY: pinchAnchorClientY,
@@ -1309,4 +1338,31 @@ export function showInAppPdfPreview(
       }
     }
   });
+}
+
+/**
+ * Multi-attachment gallery: slide badalne se pehle khula PDF overlay band karo (Escape = `safeClose` + blob revoke).
+ * Warna purana blob URL zinda PDF.js / gallery `disposeSlideBlob` race.
+ */
+export function dismissOpenInAppPdfPreviewIfPresent(): void {
+  if (typeof document === "undefined") return;
+  const el = document.querySelector("[data-in-app-pdf-preview]");
+  if (!(el instanceof HTMLElement)) return;
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    try {
+      el.focus();
+    } catch {
+      /* ignore */
+    }
+  }
+  el.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Escape",
+      code: "Escape",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 }

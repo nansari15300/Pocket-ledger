@@ -1,8 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
-import crypto from "crypto";
+import { appendPaymentsCollectionDoc } from "@/lib/writeGateway/topLevelCollectionWrites";
 
 export async function GET(req: NextRequest) {
     const url = new URL(req.url);
@@ -15,24 +13,18 @@ export async function GET(req: NextRequest) {
     try {
         const decodedData = JSON.parse(atob(data));
         
-        const { status, transaction_uuid, total_amount, signed_field_names } = decodedData;
+        const { status, transaction_uuid, total_amount } = decodedData;
 
         // In a real app, you would verify the signature here.
         // For now, we will trust the status.
         
         if (status === 'COMPLETE' && transaction_uuid) {
-            // This is a simplified success case. You'd typically fetch metadata stored against the transaction_uuid
-            // to get companyId, userId, planId, etc.
-            // For now, we'll log it in a generic collection if we can't find companyId.
-            const collectionPath = `payments`; // A root collection as fallback
-            
-             await addDoc(collection(firestore, collectionPath), {
+            await appendPaymentsCollectionDoc({
                 paymentId: transaction_uuid,
                 amount: total_amount,
                 currency: 'NPR',
                 gateway: 'esewa',
                 status: 'completed',
-                createdAt: serverTimestamp(),
                 payload: decodedData, // Store full payload for audit
             });
         }

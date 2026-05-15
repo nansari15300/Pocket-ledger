@@ -1,11 +1,12 @@
 
 "use client";
 
-import { Suspense, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
+import { Suspense, useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
+import { isEmbeddedDeviceLockShell } from "@/lib/embeddedDeviceLock";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange } from "lucide-react";
+import { Fingerprint, Share2, Loader2, Hash, Eye, Palette, FileDigit, Zap, Building, ShieldAlert, Bell, Smartphone, ChevronLeft, PanelRight, CalendarRange, LockKeyhole } from "lucide-react";
 import { ManageShare } from "@/components/company/ManageShare";
 import usePermissions from "@/hooks/usePermissions";
 import { useCompany } from "@/hooks/useCompany";
@@ -22,21 +23,33 @@ import { DisplaySettings } from "@/components/settings/DisplaySettings";
 import { IdSettings } from "@/components/settings/IdSettings";
 import { NotificationSettings } from "@/components/settings/NotificationSettings";
 import { FiscalSplitSettings } from "@/components/settings/FiscalSplitSettings";
+import { AppLockSettings } from "@/components/settings/AppLockSettings";
 import { ManageDevices } from "@/components/settings/ManageDevices";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useSettingsList } from "@/contexts/SettingsListContext";
-import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
+import {
+    useEdgeSwipeDocumentCapture,
+    type EdgeSwipeDocumentOptions,
+} from "@/hooks/useMobileEdgeSwipe";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
 
-/** Poora settings list panel — parties master list jaisa rounded + visible stroke (`PartyList` / `AccountList`). */
+/** Settings list horizontal inset — scroll shell par ek hi layer taake left/right dono 4px barabar (ul par duble na ho) */
+const SETTINGS_NAV_INSET_X = "px-[4px]";
+
+/** Settings nav column — dashboard-jaisa halka sky fill + baen ribbon; device cards se grid gap 5px (page grid). */
 const SETTINGS_LIST_SHELL =
-  "rounded-lg border-[1.5px] border-gray-300 bg-background overflow-hidden dark:border-gray-600";
-/** Header ↔ items split — row dividers ke saath same weight. */
+  "app-chrome-sidebar-ribbon w-full min-w-0 rounded-lg border-2 border-sky-300/65 pl-dashboard-ribbon-sky overflow-hidden shadow-sm dark:border-sky-800/45";
+/** Header ↔ items split — row dividers ke saath same weight (list / sheet / desktop aside). */
 const SETTINGS_LIST_HEADER_RULE =
   "border-b-[1.5px] border-gray-300 dark:border-gray-600";
+/** Mobile detail: footer bar (pehle top par thi) — neeche `border-t` divider */
+const SETTINGS_MOBILE_DETAIL_FOOTER_RULE =
+  "border-t-[1.5px] border-gray-300 bg-background dark:border-gray-600";
+
+/** Daen kinara ~10mm — document capture; company/share/voucher… sab detail par list sheet swipe */
+const SETTINGS_LIST_SHEET_RIGHT_EDGE_OPTS: EdgeSwipeDocumentOptions = { edgeWidthMm: 10 };
 
 /**
  * Ek nav row — `PartyList.tsx` `cardClassName` ke saath align (selected = primary border + secondary fill).
@@ -59,6 +72,8 @@ const settingsNavItems = [
     { id: "sharing", title: "Manage Sharing", icon: Share2, permission: "manage_users_roles" as const, href: null },
     // Device sync settings (synced devices management).
     { id: "devices", title: "Device sync", icon: Smartphone, permission: "configure_company_settings" as const, href: null },
+    // EXE/APK: 6-digit PIN + optional biometric — nav mein sirf native shell par (neeche `shellLockEligible` filter).
+    { id: "app_lock", title: "App Lock", icon: LockKeyhole, permission: "configure_company_settings" as const, href: null },
     { id: "voucher", title: "Voucher Settings", icon: FileDigit, permission: "configure_company_settings" as const, href: null },
     { id: "theme", title: "Theme Settings", icon: Palette, permission: "configure_company_settings" as const, href: null },
     { id: "animation", title: "Animation Settings", icon: Zap, permission: "configure_company_settings" as const, href: null },
@@ -125,6 +140,7 @@ function useLayoutNarrow767(): boolean {
 function SettingsPageContent() {
     const { can } = usePermissions();
     const { user, loading: authLoading } = useAuth();
+    /** `loading`: company list / selection hydrate — isse pehle permissions+nav partial ho sakta hai */
     const { company, companyId, loading: companiesLoading } = useCompany();
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -138,20 +154,85 @@ function SettingsPageContent() {
     const [activeView, setActiveView] = useState<string>("");
 
     const canConfigureCompany = can("configure_company_settings");
+    /** EXE/APK par App Lock nav dikhao — `window` SSR par missing ho sakta hai; layout effect se client par sync. */
+    const [shellLockEligible, setShellLockEligible] = useState(false);
+    useLayoutEffect(() => {
+        setShellLockEligible(isEmbeddedDeviceLockShell());
+    }, []);
     /** Owner ne company settings band kiya ho — shared user ko theme/animation phir bhi (local-only). */
     const sharedLocalAppearanceOnly = Boolean(
         companyId && company && company.isOwned === false && !canConfigureCompany
     );
     const availableNavItems = useMemo(() => {
-        const allowed = settingsNavItems.filter((item) => can(item.permission));
+        const allowed = settingsNavItems.filter((item) => {
+            if (item.id === "app_lock") return shellLockEligible;
+            return can(item.permission);
+        });
         if (!sharedLocalAppearanceOnly) return allowed;
         const extra = settingsNavItems.filter(
             (item) =>
                 (item.id === "theme" || item.id === "animation") && !allowed.some((a) => a.id === item.id)
         );
         return [...allowed, ...extra];
-    }, [can, sharedLocalAppearanceOnly]);
+    }, [can, sharedLocalAppearanceOnly, shellLockEligible]);
     const canOpenThemeOrAnimation = canConfigureCompany || sharedLocalAppearanceOnly;
+
+    /** URL ya session me non-sharing tab maanga ho lekin nav abhi sirf Sharing (permissions hydrate race) — tab redirect / highlight mat lagao */
+    const wantsNonSharingTab = useMemo(() => {
+        const rawView = searchParams.get("view");
+        const persisted = readPersistedSettingsTab(companyId);
+        const viewNonSharing = Boolean(rawView && rawView !== "" && rawView !== "sharing");
+        const persistedNonSharing = Boolean(persisted && persisted !== "sharing");
+        return viewNonSharing || persistedNonSharing;
+    }, [searchParams, companyId]);
+
+    /** Owner / apni company: refresh par kabhi pehla frame sirf Sharing (customUser/role hydrate) — default Sharing sticky na ho */
+    const isLikelyOwnerOrOwnedCompany = useMemo(() => {
+        if (!company || !user?.uid) return false;
+        if (company.isOwned === true) return true;
+        if (company.ownerId && company.ownerId === user.uid) return true;
+        const oe = String(company.ownerEmail || "").toLowerCase().trim();
+        const ue = String(user.email || "").toLowerCase().trim();
+        return Boolean(oe && ue && oe === ue);
+    }, [company, user]);
+
+    /** Nav + tab init tab tak roko jab tak auth/company list ready na ho, ya sirf-Sharing transient (viewer staff par stall infinite nahi — owner match ke bina nahi) */
+    const settingsNavTransientStall = Boolean(
+        authLoading ||
+            companiesLoading ||
+            (company &&
+                user &&
+                availableNavItems.length === 1 &&
+                availableNavItems[0]?.id === "sharing" &&
+                (wantsNonSharingTab || isLikelyOwnerOrOwnedCompany))
+    );
+
+    /** Stall ke baad bhi list galat rahe to menu dikhado (infinite spinner na ho) */
+    const [settingsNavStallBypass, setSettingsNavStallBypass] = useState(false);
+    const stallBypassTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => {
+        if (stallBypassTimerRef.current != null) {
+            clearTimeout(stallBypassTimerRef.current);
+            stallBypassTimerRef.current = null;
+        }
+        if (!settingsNavTransientStall) {
+            setSettingsNavStallBypass(false);
+            return;
+        }
+        setSettingsNavStallBypass(false);
+        stallBypassTimerRef.current = setTimeout(() => {
+            stallBypassTimerRef.current = null;
+            setSettingsNavStallBypass(true);
+        }, 700);
+        return () => {
+            if (stallBypassTimerRef.current != null) {
+                clearTimeout(stallBypassTimerRef.current);
+                stallBypassTimerRef.current = null;
+            }
+        };
+    }, [settingsNavTransientStall]);
+
+    const settingsNavStall = settingsNavTransientStall && !settingsNavStallBypass;
 
     /** Ek daf'a purani `settingsPageState` LS hata — usePageMemory ab settings me nahi — stale "sharing" override band */
     useEffect(() => {
@@ -164,6 +245,7 @@ function SettingsPageContent() {
 
     /** Valid tab ko company-scoped sessionStorage me rakho — company load se pehle galat nav list se overwrite na ho */
     useEffect(() => {
+        if (settingsNavStall) return;
         if (!activeView || !availableNavItems.some((i) => i.id === activeView)) return;
         try {
             const k = settingsTabSessionStorageKey(companyId);
@@ -173,10 +255,11 @@ function SettingsPageContent() {
         } catch {
             /* ignore */
         }
-    }, [activeView, availableNavItems, companyId]);
+    }, [activeView, availableNavItems, companyId, settingsNavStall]);
 
     // Paint se pehle: ?view= (React + window) → valid tab; phir session fallback; invalidate URL mat rakho Manage Sharing tak
     useLayoutEffect(() => {
+        if (settingsNavStall) return;
         if (availableNavItems.length === 0) return;
         /** company hydrate se pehle `usePermissions` me role galat ho sakta hai → nav sirf sharing; voucher session wipe + refresh par Sharing sticky — isliye stall */
         if (companyId && !company) return;
@@ -231,10 +314,11 @@ function SettingsPageContent() {
             const first = availableNavItems[0]?.id ?? "company";
             setActiveView((prev) => (prev === "" ? first : prev));
         }
-    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router, companyId, company]);
+    }, [searchParams, availableNavItems, mobileSettingsUx, pathname, router, companyId, company, settingsNavStall]);
 
     // Shared user: URL / memory me `company` ho sakta hai jab wo ab nav me nahi — pehli allowed tab par le aao.
     useEffect(() => {
+        if (settingsNavStall) return;
         if (companyId && !company) return;
         if (availableNavItems.length === 0) return;
         /** Mobile list-first: khali activeView valid — yahan first tab mat thopo */
@@ -248,7 +332,7 @@ function SettingsPageContent() {
             router.replace(`${pathname}?view=${encodeURIComponent(next)}`, { scroll: false });
             syncSettingsViewQueryToBrowser(next);
         }
-    }, [company, companyId, availableNavItems, activeView, mobileSettingsUx, pathname, router]);
+    }, [company, companyId, availableNavItems, activeView, mobileSettingsUx, pathname, router, settingsNavStall]);
 
     const setActiveViewWithUrl = useCallback(
         (id: string) => {
@@ -271,6 +355,7 @@ function SettingsPageContent() {
 
     // Desktop: URL me default ?view= taaki share/refresh — mobile par mat inject karo (sirf list)
     useEffect(() => {
+        if (settingsNavStall) return;
         if (companyId && !company) return;
         if (mobileSettingsUx) return;
         const viewParam = searchParams.get("view");
@@ -278,22 +363,58 @@ function SettingsPageContent() {
             router.replace(`${pathname}?view=${encodeURIComponent(activeView)}`, { scroll: false });
             syncSettingsViewQueryToBrowser(activeView);
         }
-    }, [company, companyId, mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems]);
+    }, [company, companyId, mobileSettingsUx, activeView, pathname, searchParams, router, availableNavItems, settingsNavStall]);
 
     const selectedSetting = useMemo(() => {
         return availableNavItems.find(item => item.id === activeView) || null;
     }, [activeView, availableNavItems]);
 
     const openSettingsListSheet = useCallback(() => setSettingsListOpen(true), [setSettingsListOpen]);
-    // Daen kinara se swipe LEFT → sirf settings list (baen kinara + swipe RIGHT sirf app sidebar — dono alag)
-    const settingsListSwipe = useEdgeSwipeTrigger(
-        mobileSettingsUx && Boolean(activeView),
+
+    // Daen kinare se swipe → list sheet: `div` par pehle forms/scroll ne edge kha liya; `document` capture = har tab
+    useEdgeSwipeDocumentCapture(
+        mobileSettingsUx && Boolean(activeView) && !settingsListOpen,
         "right",
-        openSettingsListSheet
+        openSettingsListSheet,
+        SETTINGS_LIST_SHEET_RIGHT_EDGE_OPTS
+    );
+
+    /** History `pushState` + cleanup `history.back()` yahan mat: list item click → sheet band + `router.replace` ke turant `back()` naya `?view=` undo kar deta tha */
+    /** Footer: touch daen ⅓ se shuru + LEFT swipe → list sheet (alag screen-edge swipe se) */
+    const settingsFooterSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+    const onSettingsFooterTouchStart = useCallback((e: React.TouchEvent) => {
+        if (e.touches.length !== 1) {
+            settingsFooterSwipeStartRef.current = null;
+            return;
+        }
+        const t = e.touches[0];
+        const el = e.currentTarget as HTMLElement;
+        const r = el.getBoundingClientRect();
+        if (t.clientX < r.left + (r.width * 2) / 3) {
+            settingsFooterSwipeStartRef.current = null;
+            return;
+        }
+        settingsFooterSwipeStartRef.current = { x: t.clientX, y: t.clientY };
+    }, []);
+    const onSettingsFooterTouchEnd = useCallback(
+        (e: React.TouchEvent) => {
+            if (!settingsFooterSwipeStartRef.current || e.changedTouches.length !== 1) {
+                settingsFooterSwipeStartRef.current = null;
+                return;
+            }
+            const t = e.changedTouches[0];
+            const dx = t.clientX - settingsFooterSwipeStartRef.current.x;
+            const dy = Math.abs(t.clientY - settingsFooterSwipeStartRef.current.y);
+            settingsFooterSwipeStartRef.current = null;
+            if (dy > Math.abs(dx) * 0.65) return;
+            if (dx <= -44) openSettingsListSheet();
+        },
+        [openSettingsListSheet]
     );
 
     const renderNavButtons = (onPick?: () => void) => (
-        <ul className="list-none p-2 space-y-1" data-theme-list="account-list">
+        // Native scroll — Radix ScrollArea vertical track (~10px) nav list ko daen se patla dikhaata tha
+        <ul className="list-none space-y-1 py-1 w-full min-w-0" data-theme-list="account-list">
             {availableNavItems.map((item) => {
                 const isActive = activeView === item.id;
                 return (
@@ -314,6 +435,17 @@ function SettingsPageContent() {
             })}
         </ul>
     );
+
+    /** Stall dauran poori list ek saath — adhuri nav + galat highlight na dikhe */
+    const renderSettingsNavArea = (onPick?: () => void) =>
+        settingsNavStall ? (
+            <div className={cn("flex flex-col items-center justify-center gap-2 py-12 text-center text-sm text-muted-foreground", SETTINGS_NAV_INSET_X)}>
+                <Loader2 className="h-6 w-6 shrink-0 animate-spin" aria-hidden />
+                <span>Loading settings menu…</span>
+            </div>
+        ) : (
+            renderNavButtons(onPick)
+        );
 
     if (companyId && !company) {
         return (
@@ -338,6 +470,8 @@ function SettingsPageContent() {
                 ) : null;
             case "devices":
                 return can('configure_company_settings') ? <ManageDevices /> : null;
+            case "app_lock":
+                return <AppLockSettings />;
             case "voucher":
                 return can('configure_company_settings') ? <VoucherSettings /> : null;
             case "theme":
@@ -413,15 +547,14 @@ function SettingsPageContent() {
     if (mobileSettingsUx) {
         if (!activeView) {
             return (
-                <div className="h-full flex flex-col overflow-hidden min-h-0 px-2 pt-2 pb-2">
-                    <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
-                        <div className={cn("flex-shrink-0 px-4 py-3", SETTINGS_LIST_HEADER_RULE)}>
-                            <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                            <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
-                        </div>
-                        <ScrollArea className="min-h-0 flex-1">
-                            {renderNavButtons()}
-                        </ScrollArea>
+                // Ek hi shell — pehle baahar grey `px-2` tha; ab poora mobile list sky card jaisa desktop aside
+                <div className={cn("flex h-full min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                    <div className={cn("flex-shrink-0 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
+                        <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                        <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
+                    </div>
+                    <div className={cn("min-h-0 flex-1 overflow-y-auto overflow-x-hidden", SETTINGS_NAV_INSET_X)}>
+                        {renderSettingsNavArea()}
                     </div>
                 </div>
             );
@@ -429,50 +562,76 @@ function SettingsPageContent() {
 
         return (
             <>
-                <div
-                    className={cn("h-full flex flex-col overflow-hidden min-h-0 touch-pan-y")}
-                    onTouchStart={settingsListSwipe.onTouchStart}
-                    onTouchEnd={settingsListSwipe.onTouchEnd}
-                >
-                    <div className={cn("flex-shrink-0 px-2 py-2 flex items-center gap-2 min-h-[48px]", SETTINGS_LIST_HEADER_RULE)}>
+                <div className={cn("flex h-full min-h-0 flex-col overflow-hidden touch-pan-y")}>
+                    {/* Content pehle scroll; top bar hata kar neeche footer (user mobile UX) */}
+                    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+                        {settingsNavStall ? (
+                            <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+                                <Loader2 className="h-8 w-8 shrink-0 animate-spin" aria-hidden />
+                                <span>Loading settings…</span>
+                            </div>
+                        ) : (
+                            renderActiveView()
+                        )}
+                    </div>
+                    <div
+                        className={cn(
+                            "flex shrink-0 items-center gap-1.5 px-2 py-1 pb-[max(0.125rem,env(safe-area-inset-bottom))]",
+                            SETTINGS_MOBILE_DETAIL_FOOTER_RULE
+                        )}
+                        onTouchStart={onSettingsFooterTouchStart}
+                        onTouchEnd={onSettingsFooterTouchEnd}
+                    >
                         <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            className="shrink-0"
+                            className="h-7 w-7 shrink-0"
                             onClick={backToSettingsListOnly}
                             title="Back to settings list"
                             aria-label="Back to settings list"
                         >
-                            <ChevronLeft className="h-5 w-5" />
+                            <ChevronLeft className="h-4 w-4" />
                         </Button>
-                        <span className="font-medium truncate flex-1 min-w-0">
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
                             {selectedSetting?.title ?? "Settings"}
                         </span>
                         <Button
                             type="button"
                             variant="outline"
                             size="icon"
-                            className="shrink-0 h-9 w-9"
+                            className="h-7 w-7 shrink-0"
                             onClick={() => setSettingsListOpen(true)}
                             title="Open settings list"
                             aria-label="Open settings list"
                         >
-                            <PanelRight className="h-4 w-4" />
+                            <PanelRight className="h-3.5 w-3.5" />
                         </Button>
-                    </div>
-                    <div className="flex-1 min-h-0 overflow-y-auto">
-                        {renderActiveView()}
                     </div>
                 </div>
                 <Sheet open={settingsListOpen} onOpenChange={setSettingsListOpen}>
-                    <SheetContent side="right" className="w-[min(100vw-3rem,280px)] p-0 sm:max-w-[280px]">
-                        <SheetHeader className={cn("p-4 pb-2", SETTINGS_LIST_HEADER_RULE)}>
-                            <SheetTitle>Settings</SheetTitle>
-                        </SheetHeader>
-                        <ScrollArea className="h-[calc(100dvh-5rem)]">
-                            {renderNavButtons(() => setSettingsListOpen(false))}
-                        </ScrollArea>
+                    {/* `SETTINGS_LIST_SHELL` me `w-full` hai — seedha SheetContent par mat (viewport = 100% width); andar wrapper par */}
+                    <SheetContent
+                        side="right"
+                        className={cn(
+                            "flex h-full max-h-[100dvh] min-h-0 w-[60vw] max-w-[60vw] min-w-0 flex-col gap-0 overflow-hidden p-0",
+                            "[&>button]:hidden"
+                        )}
+                    >
+                        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+                            <SheetHeader className={cn("flex-shrink-0 space-y-1 py-3", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
+                                <SheetTitle className="text-left text-lg font-semibold tracking-tight">Settings</SheetTitle>
+                                <p className="text-left text-sm text-muted-foreground">Manage your app preferences.</p>
+                            </SheetHeader>
+                            <div
+                                className={cn(
+                                    "relative z-10 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pointer-events-auto touch-manipulation",
+                                    SETTINGS_NAV_INSET_X
+                                )}
+                            >
+                                {renderSettingsNavArea(() => setSettingsListOpen(false))}
+                            </div>
+                        </div>
                     </SheetContent>
                 </Sheet>
             </>
@@ -481,28 +640,34 @@ function SettingsPageContent() {
 
     return (
       <div className="h-full flex flex-col overflow-hidden">
-        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8 p-4 sm:p-6 md:p-8 flex-1 min-h-0 overflow-hidden">
-          
-          <aside className="flex flex-col min-h-0 overflow-hidden md:w-[280px] md:shrink-0 -mt-4 sm:-mt-6 md:-mt-8">
-              <div className="flex flex-col min-h-0 h-full pt-4 sm:pt-6 md:pt-8">
-                  <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
-                      <div className={cn("pb-4 flex-shrink-0 px-4 pt-1", SETTINGS_LIST_HEADER_RULE)}>
-                          <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
-                          <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
-                      </div>
-                      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden min-w-0">
-                        {renderNavButtons()}
-                      </div>
-                  </div>
+        {/* Baen list column ~30% patla (0.4fr→0.28fr, 300px→210px min); daen content zyada; nav scroll par L/R 4px same */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-[5px] overflow-hidden p-2 sm:p-3 md:grid-cols-[minmax(210px,0.28fr)_minmax(0,1fr)] md:p-3">
+          <aside className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden">
+            <div className={cn("flex min-h-0 h-full min-w-0 flex-1 flex-col overflow-hidden", SETTINGS_LIST_SHELL)}>
+              <div className={cn("flex-shrink-0 pb-3 pt-1", SETTINGS_LIST_HEADER_RULE, SETTINGS_NAV_INSET_X)}>
+                <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+                <p className="text-sm text-muted-foreground">Manage your app preferences.</p>
               </div>
+              {/* `scrollbar-gutter:stable` yahan mat — hamesha daen taraf ~scrollbar jitni khali strip (list chhoti ho tab bhi); main pane par stable rakha shake ke liye */}
+              <div className={cn("min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto", SETTINGS_NAV_INSET_X)}>
+                {renderSettingsNavArea()}
+              </div>
+            </div>
           </aside>
-  
-          <main className="min-h-0 w-full flex flex-col overflow-hidden min-w-0 -mt-4 sm:-mt-6 md:-mt-8 pt-4 sm:pt-6 md:pt-8">
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                  {renderActiveView()}
-              </div>
+
+          <main className="flex min-h-0 min-w-0 w-full flex-col overflow-hidden">
+            {/* `scrollbar-gutter:stable` — toggle/toast se scrollbar on/off par poora layout shift na ho (multi-device switch shake). */}
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]">
+              {settingsNavStall ? (
+                <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+                  <Loader2 className="h-8 w-8 shrink-0 animate-spin" aria-hidden />
+                  <span>Loading settings…</span>
+                </div>
+              ) : (
+                renderActiveView()
+              )}
+            </div>
           </main>
-  
         </div>
       </div>
   );

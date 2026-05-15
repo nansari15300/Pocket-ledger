@@ -47,7 +47,6 @@ import { MAX_IMAGE_BYTES_BEFORE_COMPRESS, MAX_IMAGE_MB_BEFORE_COMPRESS } from "@
 import { balanceOpeningBalanceWithCapital } from "@/lib/voucherActionsClient";
 import { useVouchers } from "@/hooks/useVouchers";
 import { apkCloudCompanyOfflineViewOnly, apkCloudEntityMasterReadFromSqliteMirror, apkEntityWriteUsesLocalSqliteMirror } from "@/lib/apkOnlineFirestoreWritePolicy";
-import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { getCompanyDocFromBrowserDb, listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
@@ -95,17 +94,13 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
   const { companyId, company } = useCompany();
   const navigatorOnline = useNavigatorOnline();
   /** Pure-local APK SQLite writes; APK cloud Firebase = Firestore saves par bhi dropdown lists SQLite mirror se (`apkCloudEntityMasterReadFromSqliteMirror`). */
-  const { directServerWrites } = useServerDirectWrites();
-  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company, directServerWrites]);
+  const localSqlMirror = useMemo(() => apkEntityWriteUsesLocalSqliteMirror(company), [company]);
   const sqliteListsOnlyNoSnapshot = useMemo(
     () => localSqlMirror || apkCloudEntityMasterReadFromSqliteMirror(company),
     [localSqlMirror, company]
   );
-  /** APK cloud offline + Server writes ON: sirf dekho. OFF par local save chal sakta hai — isliye deps me `directServerWrites`. */
-  const apkOfflineViewOnly = useMemo(
-    () => apkCloudCompanyOfflineViewOnly(company, navigatorOnline),
-    [company, navigatorOnline, directServerWrites]
-  );
+  /** Non-embedded APK cloud + offline: view-only. */
+  const apkOfflineViewOnly = useMemo(() => apkCloudCompanyOfflineViewOnly(company, navigatorOnline), [company, navigatorOnline]);
   const { processedGroups } = useVouchers();
   /** Dialog effect me Firestore fail hone par bhi latest list — deps me poora array na dalein (balance churn). */
   const processedGroupsRef = React.useRef(processedGroups);

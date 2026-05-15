@@ -16,20 +16,27 @@ function readRemoteServerUrl(): string | undefined {
 
 const useRemoteWeb = process.env.CAP_USE_REMOTE_WEB === "1" && Boolean(readRemoteServerUrl());
 
+/**
+ * Bundled APK WebView origin stable rakho (`https://localhost`) taaki Firebase Storage bucket CORS me
+ * `https://localhost` allow karke `fetch`/SDK requests block na hon (EXE = Electron localhost:port, alag origin).
+ */
+const serverConfig = useRemoteWeb
+  ? {
+      url: readRemoteServerUrl()!,
+      cleartext: false,
+      androidScheme: "https" as const,
+      hostname: "localhost",
+    }
+  : {
+      androidScheme: "https" as const,
+      hostname: "localhost",
+    };
+
 const config: CapacitorConfig = {
   appId: "com.pocketledger.app",
   appName: "Pocket Ledger",
   webDir: "out",
-  ...(useRemoteWeb
-    ? {
-        server: {
-          url: readRemoteServerUrl()!,
-          /** HTTPS host — LAN par plain HTTP ho to `cleartext: true` + CAP_REMOTE_HTTP flow alag rakho */
-          cleartext: false,
-          androidScheme: "https",
-        },
-      }
-    : {}),
+  server: serverConfig,
 };
 
 export default config;

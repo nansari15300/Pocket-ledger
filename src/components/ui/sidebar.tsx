@@ -100,8 +100,9 @@ export const SidebarTrigger = React.forwardRef<
   const { toggleSidebar, isMobile, setIsOpen } = useSidebar()
   
   const handleClick = () => {
+    // Mobile sheet: swipe se open + header button se show/hide dono — pehle sirf `true` tha, doosri tap no-op lagti thi.
     if (isMobile) {
-      setIsOpen(true);
+      setIsOpen((prev) => !prev);
     } else {
       toggleSidebar();
     }
@@ -147,6 +148,8 @@ export const Sidebar = React.forwardRef<
   const { isOpen, isMobile, setIsOpen } = useSidebar()
   const Comp = asChild ? Slot : "aside"
 
+  // History `pushState` yahan hata diya: LTR edge swipe + React Strict cleanup par `history.back()` galat “page back” / menu taps toot rahe the
+
   if (isMobile) {
     // In mobile view, sidebar is completely hidden and only shows in Sheet overlay
     // Return null to not render anything in the layout, Sheet will handle overlay
@@ -157,14 +160,15 @@ export const Sidebar = React.forwardRef<
           setIsOpen(open);
         }}>
           {/* User request: sidebar top-right cross icon hide (SheetContent close button). */}
-          <SheetContent side="left" className="w-64 p-0 [&>button]:hidden">
+          {/* Mobile: menu ~65% screen — poora full-width na le; swipe har page se `GlobalLeftEdgeOpenAppMenuSwipe` */}
+          <SheetContent side="left" className="w-[65vw] max-w-sm p-0 [&>button]:hidden">
             <SheetHeader>
               <SheetTitle className="sr-only">Main Menu</SheetTitle>
             </SheetHeader>
-            {/* Marker {...props} ke baad — hydration stable */}
+            {/* `relative z-10` + `pointer-events-auto` — Sheet chrome ke neeche nav links ka tap pakka rahe */}
             <div
               ref={ref}
-              className="flex h-full min-h-0 flex-col gap-0.5 overflow-y-auto bg-sidebar p-0.5 text-sidebar-foreground"
+              className="relative z-10 flex h-full min-h-0 flex-col gap-0.5 overflow-y-auto bg-sidebar p-0.5 text-sidebar-foreground pointer-events-auto touch-manipulation"
               {...props}
               data-pl-main-sidebar="1"
             >

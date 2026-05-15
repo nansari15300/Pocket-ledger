@@ -4,12 +4,14 @@ import { readCloudCompanyPasswordUnlockSession } from "@/lib/cloudCompanyPasswor
 import { readAnyStoredOfflineUnlockSessionForCompany, readStoredOfflineUnlockSession } from "@/lib/offlineCompanyUnlockRemember";
 import { setLocalAuthToken } from "@/lib/localApiClient";
 import { readSelectedCompanyId } from "@/lib/selectedCompanyStorage";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 
 export type PostAuthCompanyRoute = "/dashboard" | "/company";
 
 /**
- * Static/local startup: reuse remembered company unlock only for the last selected company.
- * If remembered window is valid, skip company picker and open dashboard directly.
+ * Post-login / root redirect: remembered offline ya cloud "remember password" → `/dashboard`.
+ * Static APK / `file:` / Capacitor + saved `companyId` → bhi `/dashboard` (browser web = `/company` jab remember na ho).
  */
 export function resolvePostAuthCompanyRoute(firebaseUid: string | undefined): PostAuthCompanyRoute {
   if (typeof window === "undefined") return "/company";
@@ -29,6 +31,16 @@ export function resolvePostAuthCompanyRoute(firebaseUid: string | undefined): Po
 
   // Online company with per-company password: valid "remember X days" window means no prompt needed.
   if (readCloudCompanyPasswordUnlockSession(firebaseUid, selectedCompanyId)) {
+    return "/dashboard";
+  }
+
+  // Static APK / file shell / Capacitor: browser jaisa `/company` pe rokna mat — last `companyId` ho to seedha dashboard
+  // (unlock zarurat ho to header/CompanyActions flow; logout par `clearSelectedCompanyId` picker ya login).
+  const embeddedLike =
+    isStaticAppBuild() ||
+    (typeof window !== "undefined" &&
+      (window.location.protocol === "file:" || isCapacitorNativeApp()));
+  if (embeddedLike && firebaseUid && selectedCompanyId) {
     return "/dashboard";
   }
 

@@ -132,10 +132,19 @@ export function useDeviceLimit() {
   }, []);
 
   const performReplaceAndRefresh = useCallback(async () => {
-    if (!companyId || !user?.uid) return;
-    await replaceMyOtherDevicesAndRegister(companyId, user.uid);
+    if (!companyId || !user?.uid || !company) return;
+    const isOwner =
+      !!company && (company.ownerId === user.uid || (user.email && company.ownerEmail === user.email));
+    const companyPlanIdNormalized: PlanId = normalizePlanIdForClient(company?.planId);
+    const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user.uid, company?.planId);
+    const planIdForDeviceSlots = isOwner ? accountPlanId : companyPlanIdNormalized;
+    const plan = getPlanFromPlans(livePlans, planIdForDeviceSlots);
+    const hasMultiDeviceSync = plan.entitlements.hasMultiDeviceSync === true;
+    const planMaxDevices = Math.max(1, Number(plan.entitlements.maxDevices) || 1);
+    const maxDevices = hasMultiDeviceSync ? planMaxDevices : 1;
+    await replaceMyOtherDevicesAndRegister(companyId, user.uid, maxDevices);
     runCheckRef.current?.();
-  }, [companyId, user?.uid]);
+  }, [companyId, user?.uid, company, livePlans, allCompanies]);
 
   const clearKickedAndRefresh = useCallback((): Promise<void> => {
     if (!companyId) return Promise.resolve();

@@ -60,11 +60,11 @@ export function mountGalleryImageZoom(
   scrollHost.appendChild(innerPad);
 
   let scale = 1;
-  const MIN_ZOOM = 0.5;
+  /** Fit width/height: lamba image ho to scale chhota zaroori ho sakta hai — pinch/zoom-out floor bhi yahi (purana MIN 0.5 = pinch bug). */
+  const FIT_SCALE_MIN = 0.02;
+  const MIN_ZOOM = FIT_SCALE_MIN;
   const MAX_ZOOM = 4;
   const ZOOM_STEP = 0.25;
-  /** Fit width/height: lamba image ho to scale 0.5 se chhota zaroori ho sakta hai */
-  const FIT_SCALE_MIN = 0.02;
 
   let baseLayoutW = 0;
   let baseLayoutH = 0;
@@ -110,7 +110,10 @@ export function mountGalleryImageZoom(
   let dragPanStartScrollT = 0;
 
   let pinchStartDist = 0;
-  let pinchStartScale = 1;
+  /** Frame-to-frame pinch — purana `startScale * (d/startDist)` pehle touchmove par noisy ratio = jump (WebView). */
+  let lastPinchDist = 0;
+  /** Do ungliyon ke beech kam se kam span — chhota baseline = zyada ratio = ek hi frame me zoom jump. */
+  const MIN_PINCH_SPAN_PX = 28;
 
   const updateGrabCursor = () => {
     const maxX = scrollHost.scrollWidth - scrollHost.clientWidth;
@@ -232,27 +235,38 @@ export function mountGalleryImageZoom(
   const onTouchStart = (e: TouchEvent) => {
     if (e.touches.length === 2) {
       abortManualPanForPinch();
-      pinchStartDist = touchDistance(e.touches[0]!, e.touches[1]!);
-      pinchStartScale = scale;
+      const raw = touchDistance(e.touches[0]!, e.touches[1]!);
+      pinchStartDist = Math.max(raw, MIN_PINCH_SPAN_PX);
+      lastPinchDist = pinchStartDist;
       if (pinchStartDist > 0) imgWrap.style.transition = "none";
     }
   };
 
   const onTouchMove = (e: TouchEvent) => {
-    if (e.touches.length !== 2 || pinchStartDist <= 0) return;
-    e.preventDefault();
+    if (e.touches.length !== 2) return;
     const d = touchDistance(e.touches[0]!, e.touches[1]!);
     if (d <= 0) return;
-    let next = pinchStartScale * (d / pinchStartDist);
+    // Pehla 2-finger move kabhi touchstart se pehle aata — yahan pinch shuru karo.
+    if (pinchStartDist <= 0) {
+      abortManualPanForPinch();
+      pinchStartDist = Math.max(d, MIN_PINCH_SPAN_PX);
+      lastPinchDist = pinchStartDist;
+      imgWrap.style.transition = "none";
+    }
+    e.preventDefault();
+    const ratio = d / Math.max(lastPinchDist, 1);
+    lastPinchDist = d;
+    let next = scale * ratio;
     next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
     scale = next;
     syncLayout({ skipTransition: true });
   };
 
   const endPinch = (e?: TouchEvent) => {
-    if (pinchStartDist <= 0) return;
+    if (pinchStartDist <= 0 && lastPinchDist <= 0) return;
     if (e && e.touches.length >= 2) return;
     pinchStartDist = 0;
+    lastPinchDist = 0;
     imgWrap.style.transition = "transform 0.15s ease-out";
     requestAnimationFrame(() => {
       if (baseLayoutW > 0) syncLayout({ skipTransition: true });

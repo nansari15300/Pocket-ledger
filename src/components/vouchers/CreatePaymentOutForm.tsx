@@ -34,7 +34,14 @@ import usePermissions from "@/hooks/usePermissions";
 import { assertCan, assertCanPerformBackdated, assertCanEdit, PermissionDeniedError, determineVoucherOwnership } from "@/lib/permissions/enforcePermission";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
+import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
+import { flushVoucherOutbox } from "@/lib/localVoucherOutbox";
+import {
+  findVoucherInLocalMirrorByNumberAndType,
+  getCompanyDocFromBrowserDb,
+  listCompanyDocsFromBrowserDb,
+} from "@/lib/localCompanyDocMirror";
+import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import type { CopyMasterDraftRequestPayload } from "./AddVoucherDialog";
 import BsDatePicker from "../ui/BsDatePicker";
@@ -279,6 +286,11 @@ export function CreatePaymentOutForm({
   const [isCreateExpenseAccountOpen, setIsCreateExpenseAccountOpen] = useState(false);
   const [copyAccountCreateHint, setCopyAccountCreateHint] = useState<string>("");
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Attach tile: har parent tick par naya `.filter` array na bane — FilePreview blob revoke/flash avoid. */
+  const attachmentClientFileUrlsForPreview = useMemo(
+    () => files.filter((f): f is string => typeof f === "string"),
+    [files]
+  );
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -921,8 +933,18 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
     
     try {
       const q = query(collection(firestore, `companies/${companyId}/vouchers`), where("type", "==", voucherType));
-      const querySnapshot = await getDocs(q);
-      const voucherNumbers = querySnapshot.docs.map(doc => doc.data().voucherNumber as string);
+      let voucherNumbers: string[] = [];
+      // APK/static offline: Firestore `getDocs` hang — next number SQLite mirror se (Payment In jaisa path).
+      if (isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine)) {
+        const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+        voucherNumbers = rows
+          .filter((r: { type?: string }) => String(r?.type ?? "") === String(voucherType))
+          .map((r: { voucherNumber?: string }) => String(r?.voucherNumber ?? ""))
+          .filter(Boolean);
+      } else {
+        const querySnapshot = await getDocs(q);
+        voucherNumbers = querySnapshot.docs.map((d) => d.data().voucherNumber as string);
+      }
       
       let maxNum = 0;
       voucherNumbers.forEach(numStr => {
@@ -978,6 +1000,19 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         }
     }
 }, [voucher, defaultVoucherData, form, isEditingAndConverting]);
+
+  // Outbox flush ke baad `local:` → HTTPS: `voucher.fileUrls` sync; same id par reset skip — stale `local:` preview fix (Payment In jaisa).
+  useEffect(() => {
+    if (!voucher?.id || savedVoucherId !== voucher.id) return;
+    const hasUnsavedFilePick = files.some((f) => f instanceof File);
+    if (hasUnsavedFilePick) return;
+    if (_isFileDirty) return;
+    const incoming = (voucher.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+    const cur = files.filter((f): f is string => typeof f === "string");
+    if (JSON.stringify(incoming) === JSON.stringify(cur)) return;
+    setFiles(incoming);
+    initialFilesRef.current = [...incoming];
+  }, [voucher?.id, voucher?.fileUrls, savedVoucherId, files, _isFileDirty]);
 
   
   useEffect(() => {
@@ -1084,7 +1119,12 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       
       if (isEdit) {
         // Check edit permission - determine ownership
+        // Offline: `getDoc` network par block — mirror se voucher row (save hang avoid).
+        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
         const fetchVoucher = async (cid: string, vid: string) => {
+          if (preferLocalReads) {
+            return await getCompanyDocFromBrowserDb(cid, "vouchers", vid);
+          }
           const voucherDoc = await getDoc(doc(firestore, `companies/${cid}/vouchers`, vid));
           return voucherDoc.exists() ? voucherDoc.data() : null;
         };
@@ -1097,14 +1137,29 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (voucher?.date) {
           originalVoucherDate = voucher.date?.toDate ? voucher.date.toDate() : new Date(voucher.date);
         } else if (savedVoucherId) {
-          const existingVoucher = allVouchers.find(v => v.id === savedVoucherId);
+          const existingVoucher = allVouchers.find((v) => v.id === savedVoucherId);
           if (existingVoucher?.date) {
-            originalVoucherDate = existingVoucher.date?.toDate ? existingVoucher.date.toDate() : new Date(existingVoucher.date);
+            originalVoucherDate = existingVoucher.date?.toDate
+              ? existingVoucher.date.toDate()
+              : new Date(existingVoucher.date);
           } else if (companyId) {
-            const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
-            if (voucherDoc.exists()) {
-              const voucherData = voucherDoc.data();
-              originalVoucherDate = voucherData.date?.toDate ? voucherData.date.toDate() : new Date(voucherData.date);
+            // Edit date baseline: offline par Firestore read mat karo — mirror row se `date`.
+            const preferLocalReadsDate = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+            if (preferLocalReadsDate) {
+              const row = await getCompanyDocFromBrowserDb(companyId, "vouchers", savedVoucherId);
+              if (row?.date != null) {
+                originalVoucherDate = (row as { date?: { toDate?: () => Date } }).date?.toDate?.()
+                  ? (row as { date: { toDate: () => Date } }).date.toDate()
+                  : new Date(row.date as string | number | Date);
+              }
+            } else {
+              const voucherDoc = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, savedVoucherId));
+              if (voucherDoc.exists()) {
+                const voucherData = voucherDoc.data();
+                originalVoucherDate = voucherData.date?.toDate
+                  ? voucherData.date.toDate()
+                  : new Date(voucherData.date);
+              }
             }
           }
         }
@@ -1137,13 +1192,24 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
       });
 
       if (!idArgForFirestore || data.voucherNumber !== voucher?.voucherNumber) {
-        const q = query(
-          collection(firestore, `companies/${companyId}/vouchers`),
-          where("voucherNumber", "==", data.voucherNumber),
-          where("type", "==", voucherType)
-        );
-        const existingVoucherSnap = await getDocs(q);
-        if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
+        // Duplicate check: offline par `getDocs` hang — mirror scan (outbox/SQLite-backed list).
+        const preferLocalReads = isLocalOnlyMode() || (typeof navigator !== "undefined" && !navigator.onLine);
+        let duplicateOtherId: string | null = null;
+        if (preferLocalReads) {
+          const hit = await findVoucherInLocalMirrorByNumberAndType(companyId, data.voucherNumber, voucherType);
+          if (hit && hit.id !== idArgForFirestore) duplicateOtherId = hit.id;
+        } else {
+          const q = query(
+            collection(firestore, `companies/${companyId}/vouchers`),
+            where("voucherNumber", "==", data.voucherNumber),
+            where("type", "==", voucherType)
+          );
+          const existingVoucherSnap = await getDocs(q);
+          if (!existingVoucherSnap.empty && existingVoucherSnap.docs[0].id !== idArgForFirestore) {
+            duplicateOtherId = existingVoucherSnap.docs[0].id;
+          }
+        }
+        if (duplicateOtherId) {
           sonnerToast.error("Duplicate Voucher Number", { id: toastId, description: "This voucher number is already in use." });
           setIsLoading(false);
           return;
@@ -1231,7 +1297,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsLoading(false);
           return;
         }
-        if (isLocalOnlyMode()) {
+        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
           // Copy-draft pehli insert: idArgForFirestore null — local placeholder bhi naya doc id (stale pass-through na ho).
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
@@ -1308,6 +1374,21 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
         if (voucherType === "payment_out" && Array.isArray(sanitizedData.allocations)) {
           // Refresh baseline after a successful save/sync so next edit can diff/add/remove correctly.
           initialAllocationsRef.current = sanitizedData.allocations.map((a: any) => ({ voucherId: a.voucherId, amount: getAllocationTotal(a) }));
+        }
+        // Save ke baad string URLs only — `File` rehne par flush/outbox pending delete ke baad preview doosri baar tut-ta tha.
+        {
+          const persistedUrls = (sanitizedData.fileUrls || []).filter((u: unknown): u is string => typeof u === "string");
+          setFiles(persistedUrls);
+          initialFilesRef.current = persistedUrls;
+        }
+        if (
+          (isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred()) &&
+          typeof navigator !== "undefined" &&
+          navigator.onLine
+        ) {
+          void flushVoucherOutbox().catch((err) => {
+            console.warn("[CreatePaymentOutForm] post-save outbox flush", err);
+          });
         }
 
         if (approveAfterSave && savedDoc?.id) {
@@ -2500,7 +2581,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                       <FilePreview
                         key={index}
                         file={file}
-                        attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                        attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                         onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                         className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                       />

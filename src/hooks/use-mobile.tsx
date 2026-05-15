@@ -4,6 +4,19 @@
 import * as React from "react"
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative"
 
+/** Electron shell (desktop app) — PDF external viewer policy ke liye. */
+export function isElectronEnvironment(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const w = window as unknown as { electron?: unknown; process?: { versions?: { electron?: string } } };
+    if (w.electron != null) return true;
+    if (w.process?.versions?.electron) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 // Check if device is actually a mobile device (phones + tablets)
 export function isRealMobileDevice(): boolean {
   if (typeof window === 'undefined') return false;

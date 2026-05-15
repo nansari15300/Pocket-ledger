@@ -1,13 +1,32 @@
 [
   {
     "origin": [
+      "https://localhost",
+      "http://localhost",
+      "capacitor://localhost",
       "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://localhost:55818",
+      "http://127.0.0.1:55818",
+      "http://localhost:54823",
+      "http://127.0.0.1:54823",
       "https://studio-5452513410-a3f5b.web.app",
       "https://studio-5452513410-a3f5b.firebaseapp.com",
       "https://pocket-ledger.com",
       "https://www.pocket-ledger.com"
     ],
-    "method": ["GET"],
-    "maxAgeSeconds": 3600
+    "method": ["GET", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Disposition",
+      "ETag",
+      "Accept-Ranges",
+      "x-goog-hash",
+      "x-goog-generation",
+      "x-goog-metageneration",
+      "x-goog-storage-class"
+    ]
   }
 ]

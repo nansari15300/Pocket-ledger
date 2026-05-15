@@ -58,7 +58,7 @@ import { saveVoucher, isVoucherLimitError, patchVoucherFields, softDeleteVoucher
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
-import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
+import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -388,6 +388,11 @@ export function SalaryForm({
   const [isCreateAccountOpen, setIsCreateAccountOpen] = useState(false);
   const [isCreateExpenseOpen, setIsCreateExpenseOpen] = useState(false);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Salary attach previews: stable `string[]` prop — warna interval re-render = blob revoke flicker. */
+  const attachmentClientFileUrlsForPreview = useMemo(
+    () => files.filter((f): f is string => typeof f === "string"),
+    [files]
+  );
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -1411,7 +1416,8 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
       let preGeneratedVoucherId: string | undefined;
       let allFileUrls: string[];
 
-      if (isLocalMode) {
+      // Nayi files: `saveVoucher` SQLite-first gate se match — APK + Server writes OFF + Firebase data source par `isLocalOnlyMode` false ho sakta tha.
+      if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
         if (newFiles.length > 0) {
           const totalNewBytes = newFiles.reduce((s, f) => s + (f.size || 0), 0);
           const limitCheck = await checkStorageLimit(companyId, company?.planId, { attachmentsBytes: totalNewBytes, storageBytes: totalNewBytes }, company?.storageOption);
@@ -2610,7 +2616,7 @@ async function processAndSave(data: SalaryFormValues, saveAndNew: boolean = fals
                             <FilePreview
                               key={index}
                               file={file}
-                              attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                              attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                               onRemove={allowAttachments && !fileAttachLockedByDialog && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                               className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                             />

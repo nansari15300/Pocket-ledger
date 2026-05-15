@@ -1,7 +1,7 @@
 "use client";
 
 import { Capacitor } from "@capacitor/core";
-import { isRealMobileDevice } from "@/hooks/use-mobile";
+import { isElectronEnvironment } from "@/hooks/use-mobile";
 
 /** Capacitor native check — dynamic import se pehle */
 function isCapacitorNative(): boolean {
@@ -13,13 +13,15 @@ function isCapacitorNative(): boolean {
 }
 
 /**
- * APK / real phone browser: in-app PDF.js overlay skip — turant Chrome Custom Tab (http) ya system PDF viewer (blob).
- * PC / tablet emulation desktop par: false, purana overlay / nayi tab.
+ * Sirf Capacitor **native** (APK): system / Custom Tab / FileOpener.
+ * Baaki sab (Electron, touch Windows, mobile browser, static HTTP): false — `showInAppPdfPreview` + PDF.js; touch ≠ APK.
  */
 export function shouldOpenPdfInExternalViewer(): boolean {
   if (typeof window === "undefined") return false;
+  // Pehle Capacitor native (APK) — Android WebView UA me `wv` ho sakta hai; `isElectronEnvironment` isse pehle na chalao
   if (isCapacitorNative()) return true;
-  return isRealMobileDevice();
+  if (isElectronEnvironment()) return false;
+  return false;
 }
 
 /** Blob → base64 data URL (Filesystem write ke liye) */

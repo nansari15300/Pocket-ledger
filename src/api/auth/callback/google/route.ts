@@ -2,8 +2,9 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
+import { setGoogleDriveUserTokenMerge } from "@/lib/writeGateway/oauthNestedWrites";
 
 type DecodedState = {
   returnPath?: string;
@@ -84,9 +85,7 @@ export async function GET(req: NextRequest) {
 
     const refreshToken = tokens.refresh_token || existing.refreshToken || null;
 
-    await setDoc(
-      tokenDocRef,
-      {
+    await setGoogleDriveUserTokenMerge(uid, {
         accessToken: tokens.access_token,
         refreshToken,
         expiryDate: tokens.expiry_date || null,
@@ -94,9 +93,7 @@ export async function GET(req: NextRequest) {
         tokenType: tokens.token_type || null,
         connectedEmail: decoded?.email || null,
         updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+      } as Record<string, unknown>);
 
     // ✅ Redirect back with success + same state so UI shows "Connected"
     const successUrl = new URL(returnPath, baseUrl);

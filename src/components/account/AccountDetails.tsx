@@ -64,7 +64,9 @@ import { useDate } from "@/hooks/useDate";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { EditAccountDialog } from "../bank-cash/EditAccountDialog";
 import BsDatePicker from "@/components/ui/BsDatePicker";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
+import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import {
   Dialog,
   DialogContent,
@@ -786,12 +788,19 @@ export function AccountDetails({
         <div className="border-b p-3 overflow-auto min-h-0 scrollbar-slim-dim">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
             <div className="flex items-center gap-2 sm:gap-4 flex-nowrap min-w-0 overflow-x-auto scrollbar-slim-dim">
-              <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                <AvatarImage src={account.fileUrl} alt={account.accountName} />
-                <AvatarFallback className="bg-muted text-muted-foreground">
-                  <Landmark className="h-6 w-6" />
-                </AvatarFallback>
-              </Avatar>
+              <EntityFileAttachmentHover
+                fileUrl={trimEntityFileUrlForPreview(account.fileUrl)}
+                triggerClassName="inline-flex shrink-0 rounded-full"
+              >
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={trimEntityFileUrlForPreview(account.fileUrl) ?? undefined}
+                  alt={account.accountName}
+                  fallbackSlot={
+                    <Landmark className="h-6 w-6 text-muted-foreground" />
+                  }
+                />
+              </EntityFileAttachmentHover>
               <div className="flex items-center gap-2 flex-nowrap min-w-0">
                 <h2 className="text-xl font-semibold truncate">{account.accountName}</h2>
                 {account.id !== 'all' && (

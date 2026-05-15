@@ -17,9 +17,12 @@ import { CapacitorAndroidBackButton } from "@/components/CapacitorAndroidBackBut
 import { VoucherOutboxFlushManager } from "@/components/VoucherOutboxFlushManager";
 import { StaticFastResumeSyncManager } from "@/components/StaticFastResumeSyncManager";
 import { OfflineWarmSyncManager } from "@/components/OfflineWarmSyncManager";
+import { CompanyAttachmentOfflineBackfillManager } from "@/components/CompanyAttachmentOfflineBackfillManager";
 import { LiveMirrorFolderMissingDialog } from "@/components/LiveMirrorFolderMissingDialog";
 import { FirstDeviceCompanyHydrationOverlay } from "@/components/FirstDeviceCompanyHydrationOverlay";
+import { EmbeddedDeviceLockGate } from "@/components/EmbeddedDeviceLockGate";
 import { FirstLoginWarmGateProvider } from "@/contexts/FirstLoginWarmGateContext";
+import { EmbeddedAttachmentPrefetchProvider } from "@/contexts/EmbeddedAttachmentPrefetchContext";
 import { primeLocalFileRefMetaRuntimeCache } from "@/lib/localPendingFiles";
 import { isPerfDebugEnabled } from "@/lib/perfDebug";
 
@@ -30,6 +33,10 @@ function PresenceManager() {
 
 export function Providers({ children }: { children: React.ReactNode }) {
     useEffect(() => {
+      if (process.env.NODE_ENV !== "production") {
+        // Root client mount — agar har navigation par dubara dikhe to remount/root cause alag.
+        console.log("[APP_BOOTSTRAP]", "Providers mount (client)");
+      }
       // Native startup warm: pending local file refs runtime cache prefill so sync fast-path null-hit kam ho.
       void primeLocalFileRefMetaRuntimeCache();
     }, []);
@@ -59,12 +66,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AuthProvider>
             <FirebaseErrorListener />
             <CompanyProvider>
+                <EmbeddedAttachmentPrefetchProvider>
                 {/* APK/static pehli login: full warm chalte waqt background warm band — gate overlay set karti hai */}
                 <FirstLoginWarmGateProvider>
                 <CapacitorAndroidBackButton />
                 <StaticFastResumeSyncManager />
                 {/* Online par masters/vouchers/plans SQLite + IndexedDB attachments preload */}
                 <OfflineWarmSyncManager />
+                {/* Online: mirror ki saari attachment URLs IndexedDB/native — offline par open jaisa online */}
+                <CompanyAttachmentOfflineBackfillManager />
                 <LiveMirrorFolderMissingDialog />
                 <PresenceManager />
                 <PrintLogoPreloader />
@@ -80,10 +90,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
                         </DialogBackHandlerProvider>
                     </BalanceModeProvider>
                 </DateProvider>
-                {/* Pehli device login: web = short hydrate; APK/static = poora data + attachment rows tak */}
+                {/* Pehli device login: web = short hydrate; APK/static = data mirror splash + background attachment cache */}
                 <FirstDeviceCompanyHydrationOverlay />
                 </FirstLoginWarmGateProvider>
+                </EmbeddedAttachmentPrefetchProvider>
             </CompanyProvider>
+            {/* EXE/APK: Firebase restore ke baad PIN/biometric overlay — Company tree ke upar full-screen */}
+            <EmbeddedDeviceLockGate />
         </AuthProvider>
       </ThemeProvider>
     )

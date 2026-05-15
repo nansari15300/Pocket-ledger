@@ -4,14 +4,16 @@
 import "server-only";
 import Stripe from "stripe";
 import * as admin from "firebase-admin";
-import type { PlanId } from "@/config/plans";
+import { normalizePlanIdForClient, type PlanId } from "@/config/plans";
 import { mergeGatewayKeysWithEnv, type GatewayKeys } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { applyPlanChangeOneTimeToFirestore } from "@/lib/payments/planChangeApply";
 import { findOwnedCompanyIdForUser } from "@/lib/payments/resolveStripeFirestoreCompany";
+import { applyOwnerPlanMirrorBatched } from "@/lib/server/mirrorOwnerCompanyPlanBilling";
+import { persistAccountCanonicalPlanDoc } from "@/lib/server/accountCanonicalPlan";
 import type { VerifiedLocalPlanApplyPayload } from "@/lib/payments/localStripePlanApplyTypes";
 import {
-  BILLING_TERM_OPTIONS,
+  SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
   termDurationMs,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
@@ -19,9 +21,8 @@ import {
 /** Paid SKUs only; basic stays free and is not granted via checkout. */
 export const PAID_PLAN_IDS = new Set<PlanId>(["advance", "pro", "pro-plus"]);
 
-const VALID_SUBSCRIPTION_TERM_KEYS = new Set(
-  BILLING_TERM_OPTIONS.map((o) => o.value)
-);
+// Purane Stripe metadata (`year_2`…) ab bhi parse — initiate route ke saath same set.
+const VALID_SUBSCRIPTION_TERM_KEYS = SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT;
 
 /**
  * Sirf env — scripts / quick checks. API routes ko `getStripeForPaymentsMerged` use karna chahiye:
@@ -369,10 +370,14 @@ export async function fulfillStripeCheckoutSessionCompleted(
     return { ok: false as const, reason: "company_not_found" };
   }
 
+  const coData = companySnap.data() as { ownerId?: string } | undefined;
+  const ownerId = String(coData?.ownerId ?? userId ?? "").trim();
+  const tierSwitchMs = Date.now();
   const patch: Record<string, unknown> = {
     planId,
     lastStripeCheckoutSessionId: session.id,
-    planUpgradedAt: admin.firestore.FieldValue.serverTimestamp(),
+    planUpgradedAt: admin.firestore.Timestamp.fromMillis(tierSwitchMs),
+    planUpgradedAtMs: tierSwitchMs,
   };
   if (planExpiry) {
     patch.planExpiry = planExpiry;
@@ -382,7 +387,22 @@ export async function fulfillStripeCheckoutSessionCompleted(
   if (stripeCustomerId) patch.stripeCustomerId = stripeCustomerId;
   if (stripeSubscriptionId) patch.stripeSubscriptionId = stripeSubscriptionId;
 
-  await companyRef.update(patch);
+  if (ownerId) {
+    await applyOwnerPlanMirrorBatched(db, ownerId, () => patch);
+    if (planId && PAID_PLAN_IDS.has(planId as PlanId)) {
+      const pid = normalizePlanIdForClient(planId);
+      const expiryCanon = planExpiryMs ?? (planExpiry ? planExpiry.toMillis() : null);
+      await persistAccountCanonicalPlanDoc(db, ownerId, {
+        planId: pid,
+        planExpiryMs: expiryCanon,
+        planUpgradedAtMs: tierSwitchMs,
+        stripeCustomerId: stripeCustomerId ?? null,
+        stripeSubscriptionId: stripeSubscriptionId ?? null,
+      });
+    }
+  } else {
+    await companyRef.update(patch);
+  }
 
   const planExpiryMsForMirror = planExpiryMs ?? (planExpiry ? planExpiry.toMillis() : null);
   const mirrorUid = userId?.trim();

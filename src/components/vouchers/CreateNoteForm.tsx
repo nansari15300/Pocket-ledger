@@ -52,7 +52,7 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVouch
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
+import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
 import { toast as sonnerToast } from "sonner";
 import { useVouchers } from "@/hooks/useVouchers";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -148,6 +148,11 @@ export function CreateNoteForm({
   const [items, setItems] = useState<Item[]>([]);
   const [expenseAccounts, setExpenseAccounts] = useState<ExpenseAccount[]>([]);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Voucher preview: stable string[] ref taaki background re-render par blob pipeline dubara na chale. */
+  const attachmentClientFileUrlsForPreview = useMemo(
+    () => files.filter((f): f is string => typeof f === "string"),
+    [files]
+  );
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -548,7 +553,7 @@ export function CreateNoteForm({
             setIsLoading(false);
             return;
           }
-          if (isLocalOnlyMode()) {
+          if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
             const { fileUrls: merged, preGeneratedVoucherId: preGen } =
               await appendLocalOnlyVoucherFilesToUrls({
                 companyId,
@@ -949,7 +954,7 @@ export function CreateNoteForm({
                         <FilePreview 
                           key={idx} 
                           file={file} 
-                          attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                          attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                           onRemove={
                             allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete
                               ? () => setFiles((prev) => prev.filter((_, i) => i !== idx))

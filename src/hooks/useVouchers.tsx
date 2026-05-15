@@ -19,6 +19,7 @@ import { errorEmitter } from "@/firebase/error-emitter";
 import { FirestorePermissionError } from "@/firebase/errors";
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import {
   BROWSER_DB_COLLECTION_BUMP,
   listCompanyDocsFromBrowserDb,
@@ -796,21 +797,38 @@ export const VoucherProvider = ({ children }: { children: ReactNode }) => {
             const rowsForSetter = Array.isArray(dataForUi)
               ? dataForUi.map(stripMirrorMetaForEntityListRow)
               : dataForUi;
-            // Snapshot = puri subcollection (Recent / dashboard dono ke liye sahi totals).
-            setter(rowsForSetter);
             // Har synced cloud company ke liye `company_docs` me debounced bake — airplane mode par pura ledger/masters SQLite se (sirf jo screen kholi thi wala data nahi).
             const persistSqliteFromSnap =
               !isGroup &&
               (shouldUseLocalCompanyData ||
                 isCloudBackedCompany(companyRef.current as CloudBackedCompanyShape));
-            if (persistSqliteFromSnap) {
-              const debounceKey = `${companyId}::${path}`;
-              clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
-              mirrorSnapshotTimersRef.current[debounceKey] = setTimeout(() => {
-                void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi, {
-                  cloudBackedOfflineCache: persistSqliteFromSnap && !shouldUseLocalCompanyData,
-                });
-              }, 500);
+            // Static/APK: Firestore snapshot sirf transport — pehle SQLite commit, phir UI sirf `listCompanyDocsFromBrowserDb` se (web cloud par seedha snapshot UI).
+            const staticSqliteFirst =
+              isStaticApkLedgerTransportMode() && persistSqliteFromSnap && !isGroup;
+            if (staticSqliteFirst) {
+              await mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi, {
+                cloudBackedOfflineCache: persistSqliteFromSnap && !shouldUseLocalCompanyData,
+              });
+              if (cancelled) return;
+              try {
+                const cached = await listCompanyDocsFromBrowserDb(companyId, path, { forBackupMerge: true });
+                const alive = (cached as any[]).filter((x) => x?.isDeleted !== true);
+                setter(sqliteCachedRowsForSetter(alive, orderByField));
+              } catch {
+                setter(rowsForSetter);
+              }
+            } else {
+              // Snapshot = puri subcollection (Recent / dashboard dono ke liye sahi totals) — web hybrid default.
+              setter(rowsForSetter);
+              if (persistSqliteFromSnap) {
+                const debounceKey = `${companyId}::${path}`;
+                clearTimeout(mirrorSnapshotTimersRef.current[debounceKey]);
+                mirrorSnapshotTimersRef.current[debounceKey] = setTimeout(() => {
+                  void mirrorCollectionDocsToBrowserDbSilent(companyId, path, dataForUi, {
+                    cloudBackedOfflineCache: persistSqliteFromSnap && !shouldUseLocalCompanyData,
+                  });
+                }, 500);
+              }
             }
           })();
         }, (error: any) => {

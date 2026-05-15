@@ -68,10 +68,6 @@ import { collectStaffIdsTouchedByUnapprovedVoucher } from "@/lib/voucherTouchesS
 import { getSuperAdminEmails } from "@/lib/superAdminEmails";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { isLocalOnlyMode } from "@/lib/localMode";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { useServerDirectWrites } from "@/contexts/ServerDirectWritesContext";
 
 
 type MenuItem = {
@@ -164,15 +160,6 @@ export function AppSidebar() {
   const { isOpen, isMobile, setIsOpen } = useSidebar();
   /** Static/Capacitor: sirf <Link> se route kabhi load nahi hota — router.push se SPA navigation pakka */
   const isStaticApp = isStaticAppBuild();
-  const { directServerWrites, setDirectServerWrites } = useServerDirectWrites();
-  /**
-   * Pehle sirf `static build && mobile` — `npm run dev` par `NEXT_PUBLIC_STATIC_BUILD` off rehta hai, switch kabhi nahi dikhta.
-   * Ab: APK | mobile + (static | local-only mode | dev) taaki web mobile / dev me bhi row dikhe; asar `shouldForceFirestoreWritesOnStaticOrApk` se sirf APK/static par.
-   */
-  const showServerWriteSwitch =
-    isCapacitorNativeApp() ||
-    (isMobile &&
-      (isStaticApp || isLocalOnlyMode() || process.env.NODE_ENV === "development"));
   const onNavLinkClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
       if (isStaticApp) {
@@ -635,27 +622,6 @@ export function AppSidebar() {
               <div className="pl-chrome-card app-chrome-top-ribbon pl-chrome-tone-amber w-full shrink-0 p-2">
                 {isOpen ? (
                   <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Account</p>
-                ) : null}
-                {showServerWriteSwitch ? (
-                  <div
-                    className="mb-2 flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2 py-1.5"
-                    title="ON: Save/update vouchers, masters, groups → Firestore turant. OFF: SQLite + outbox (online par sync). Reads list/detail SQLite mirror se. Sirf APK/static build par asar; dev mobile par UI dikh sakta hai."
-                  >
-                    {isOpen ? (
-                      <Label htmlFor="pl-server-writes-switch" className="max-w-[70%] cursor-pointer text-[11px] font-medium leading-snug">
-                        Server writes
-                      </Label>
-                    ) : (
-                      <span className="sr-only">Server writes</span>
-                    )}
-                    <Switch
-                      id="pl-server-writes-switch"
-                      checked={directServerWrites}
-                      onCheckedChange={setDirectServerWrites}
-                      aria-label="ON: direct server save; OFF: local SQLite first then sync"
-                      className={cn(!isOpen && "mx-auto")}
-                    />
-                  </div>
                 ) : null}
                 <SidebarMenu className="gap-0.5 py-1">{visibleBottomMenuItems.map(renderBottomNavRow)}</SidebarMenu>
               </div>

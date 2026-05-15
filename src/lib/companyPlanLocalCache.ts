@@ -13,24 +13,70 @@ export type CompanyPlanLocalCacheEntry = {
   planExpiryMs: number;
   lastStripeCheckoutSessionId?: string;
   updatedAtMs: number;
+  /** Server `sync-plan` RS256 — SQLite/planId edit se paid fake bypass mushkil. */
+  planEntitlementJws?: string;
+  entitlementVerifiedAtMs?: number;
+  entitlementSignatureOk?: boolean;
+  entitlementPlanIdFromJwt?: string;
+  entitlementPlanExpMsFromJwt?: number;
+  entitlementOfflineUntilMsFromJwt?: number;
+  /** JWT `device` claim === `getOrCreateClientDeviceId()` — clone / export mismatch flag. */
+  entitlementDeviceMatch?: boolean;
 };
 
 const TTL_MS = 400 * 24 * 60 * 60 * 1000;
 
-export function writeCompanyPlanLocalCache(
-  companyId: string,
-  partial: Pick<CompanyPlanLocalCacheEntry, "planId" | "planExpiryMs"> & {
-    lastStripeCheckoutSessionId?: string;
-  }
-): void {
+type WriteCompanyPlanLocalCacheInput = Pick<CompanyPlanLocalCacheEntry, "planId" | "planExpiryMs"> & {
+  lastStripeCheckoutSessionId?: string;
+} & Partial<
+  Pick<
+    CompanyPlanLocalCacheEntry,
+    | "planEntitlementJws"
+    | "entitlementVerifiedAtMs"
+    | "entitlementSignatureOk"
+    | "entitlementPlanIdFromJwt"
+    | "entitlementPlanExpMsFromJwt"
+    | "entitlementOfflineUntilMsFromJwt"
+    | "entitlementDeviceMatch"
+  >
+>;
+
+export function writeCompanyPlanLocalCache(companyId: string, partial: WriteCompanyPlanLocalCacheInput): void {
   if (typeof window === "undefined" || !companyId?.trim()) return;
   try {
+    const prev = readCompanyPlanLocalCache(companyId.trim());
     const entry: CompanyPlanLocalCacheEntry = {
       // Stripe/admin kabhi `proplus` bheje — localStorage me canonical `pro-plus` taaki UI/device/voucher sab align rahein
       planId: normalizePlanIdForClient(partial.planId.trim()),
       planExpiryMs: partial.planExpiryMs,
-      lastStripeCheckoutSessionId: partial.lastStripeCheckoutSessionId,
+      lastStripeCheckoutSessionId: partial.lastStripeCheckoutSessionId ?? prev?.lastStripeCheckoutSessionId,
       updatedAtMs: Date.now(),
+      planEntitlementJws:
+        partial.planEntitlementJws !== undefined ? partial.planEntitlementJws : prev?.planEntitlementJws,
+      entitlementVerifiedAtMs:
+        partial.entitlementVerifiedAtMs !== undefined
+          ? partial.entitlementVerifiedAtMs
+          : prev?.entitlementVerifiedAtMs,
+      entitlementSignatureOk:
+        partial.entitlementSignatureOk !== undefined
+          ? partial.entitlementSignatureOk
+          : prev?.entitlementSignatureOk,
+      entitlementPlanIdFromJwt:
+        partial.entitlementPlanIdFromJwt !== undefined
+          ? partial.entitlementPlanIdFromJwt
+          : prev?.entitlementPlanIdFromJwt,
+      entitlementPlanExpMsFromJwt:
+        partial.entitlementPlanExpMsFromJwt !== undefined
+          ? partial.entitlementPlanExpMsFromJwt
+          : prev?.entitlementPlanExpMsFromJwt,
+      entitlementOfflineUntilMsFromJwt:
+        partial.entitlementOfflineUntilMsFromJwt !== undefined
+          ? partial.entitlementOfflineUntilMsFromJwt
+          : prev?.entitlementOfflineUntilMsFromJwt,
+      entitlementDeviceMatch:
+        partial.entitlementDeviceMatch !== undefined
+          ? partial.entitlementDeviceMatch
+          : prev?.entitlementDeviceMatch,
     };
     window.localStorage.setItem(PREFIX_TOKEN + companyId.trim(), JSON.stringify(entry));
   } catch {
@@ -56,6 +102,7 @@ export function readCompanyPlanLocalCache(companyId: string): CompanyPlanLocalCa
     const p = JSON.parse(raw) as CompanyPlanLocalCacheEntry;
     if (!p?.planId?.trim() || typeof p.planExpiryMs !== "number" || !Number.isFinite(p.planExpiryMs)) return null;
     if (Date.now() - (p.updatedAtMs || 0) > TTL_MS) return null;
+    // Purane entries: optional entitlement fields missing — `?? undefined` behavior OK
     return p;
   } catch {
     return null;

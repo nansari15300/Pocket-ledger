@@ -44,8 +44,10 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
     const [uncontrolled, setUncontrolled] = React.useState(!!defaultChecked)
     const [motion, setMotion] = React.useState<"to-on" | "to-off" | null>(null)
     const motionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-    /** Controlled mode: pehli paint par anim mat chalao; baad me `checked` parent se aaye (master switch) tab bhi wahi motion jo click pe */
     const prevControlledCheckedRef = React.useRef<boolean | undefined>(undefined)
+    /** Header `GlobalFileHoverPreviewSwitch` jaisa: click pe turant motion; controlled me effect se duplicate na chale */
+    const skipNextPropMotionRef = React.useRef(false)
+    const lastClickTargetRef = React.useRef<boolean | null>(null)
 
     const checked = checkedProp !== undefined ? checkedProp : uncontrolled
 
@@ -56,8 +58,16 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
       }
     }, [])
 
+    const endMotionCycle = React.useCallback(() => {
+      setMotion(null)
+      skipNextPropMotionRef.current = false
+      lastClickTargetRef.current = null
+      motionTimerRef.current = null
+    }, [])
+
     React.useEffect(() => () => clearMotionTimer(), [clearMotionTimer])
 
+    /** Sirf parent-driven `checked` (revert / sync) — user click pe motion `handleClick` se hi */
     React.useEffect(() => {
       if (checkedProp === undefined) return
       const prev = prevControlledCheckedRef.current
@@ -66,14 +76,18 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
         return
       }
       if (prev === checkedProp) return
+
+      const optimisticMatch =
+        skipNextPropMotionRef.current && lastClickTargetRef.current === checkedProp
       prevControlledCheckedRef.current = checkedProp
+      if (optimisticMatch) return
+
       setMotion(checkedProp ? "to-on" : "to-off")
       clearMotionTimer()
       motionTimerRef.current = setTimeout(() => {
-        setMotion(null)
-        motionTimerRef.current = null
+        endMotionCycle()
       }, ANIM_MS)
-    }, [checkedProp, clearMotionTimer])
+    }, [checkedProp, clearMotionTimer, endMotionCycle])
 
     const setChecked = React.useCallback(
       (next: boolean) => {
@@ -87,16 +101,15 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
       onClick?.(e)
       if (disabled || e.defaultPrevented) return
       const next = !checked
+      // Controlled bhi: header switch jaisa same-frame motion (effect se pehle ek frame jump nahi)
+      skipNextPropMotionRef.current = true
+      lastClickTargetRef.current = next
+      setMotion(next ? "to-on" : "to-off")
+      clearMotionTimer()
+      motionTimerRef.current = setTimeout(() => {
+        endMotionCycle()
+      }, ANIM_MS)
       setChecked(next)
-      // Controlled: animation `checkedProp` wale effect se — warna motion + props dono ek saath ladte
-      if (checkedProp === undefined) {
-        setMotion(next ? "to-on" : "to-off")
-        clearMotionTimer()
-        motionTimerRef.current = setTimeout(() => {
-          setMotion(null)
-          motionTimerRef.current = null
-        }, ANIM_MS)
-      }
     }
 
     return (

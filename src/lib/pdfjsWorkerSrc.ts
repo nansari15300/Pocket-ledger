@@ -13,14 +13,31 @@ const LOCAL_PDF_WORKER_PATH = "/pdf.worker.min.mjs";
 /** Last-resort fallback when `version` is missing (keep aligned with installed `pdfjs-dist`). */
 export const PDFJS_WORKER_VERSION_FALLBACK = "5.6.205";
 
-/** Same-document origin par worker ka poora URL — `new URL("/", href)` avoids base-tag edge cases */
-export function resolvePdfJsWorkerHref(): string {
-  if (typeof window === "undefined") return LOCAL_PDF_WORKER_PATH;
+/** `file://` + nested `out/.../index.html`: har parent folder me `pdf.worker.min.mjs` probe (Next export worker sirf `out/` root par) */
+function collectLocalPdfWorkerHrefCandidates(): string[] {
+  if (typeof window === "undefined") return [LOCAL_PDF_WORKER_PATH];
+  const list: string[] = [];
   try {
-    return new URL(LOCAL_PDF_WORKER_PATH, window.location.origin).href;
+    if (window.location.protocol === "file:") {
+      let cur = new URL(window.location.href);
+      for (let i = 0; i < 10; i++) {
+        list.push(new URL("pdf.worker.min.mjs", cur.href).href);
+        const next = new URL("../", cur.href);
+        if (next.href === cur.href) break;
+        cur = next;
+      }
+      return list.length ? list : [LOCAL_PDF_WORKER_PATH];
+    }
+    list.push(new URL(LOCAL_PDF_WORKER_PATH, window.location.origin).href);
   } catch {
-    return LOCAL_PDF_WORKER_PATH;
+    list.push(LOCAL_PDF_WORKER_PATH);
   }
+  return list;
+}
+
+/** Pehli candidate — legacy `setPdfJsWorkerSrc` / imports */
+export function resolvePdfJsWorkerHref(): string {
+  return collectLocalPdfWorkerHrefCandidates()[0] ?? LOCAL_PDF_WORKER_PATH;
 }
 
 /**
@@ -33,21 +50,20 @@ export async function ensurePdfJsWorker(pdfjs: unknown, version?: string): Promi
   if (!ns?.GlobalWorkerOptions) return;
 
   const v = version || PDFJS_WORKER_VERSION_FALLBACK;
-  const localHref = resolvePdfJsWorkerHref();
-
-  ns.GlobalWorkerOptions.workerSrc = localHref;
-
-  const okLocal = await fetchWorkerProbe(localHref);
-  if (okLocal) return;
-
+  const locals = collectLocalPdfWorkerHrefCandidates();
   const cdn = `https://unpkg.com/pdfjs-dist@${v}/legacy/build/pdf.worker.min.mjs`;
-  const okCdn = await fetchWorkerProbe(cdn);
-  if (okCdn) {
+
+  for (const href of locals) {
+    ns.GlobalWorkerOptions.workerSrc = href;
+    if (await fetchWorkerProbe(href)) return;
+  }
+
+  if (await fetchWorkerProbe(cdn)) {
     ns.GlobalWorkerOptions.workerSrc = cdn;
     return;
   }
 
-  ns.GlobalWorkerOptions.workerSrc = localHref;
+  ns.GlobalWorkerOptions.workerSrc = locals[0] ?? resolvePdfJsWorkerHref();
 }
 
 async function fetchWorkerProbe(href: string): Promise<boolean> {

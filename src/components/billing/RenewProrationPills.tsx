@@ -27,7 +27,7 @@ type RenewProrationPillsProps = {
 };
 
 /**
- * Profile renew: billing table jaisa — **Usage** = isi tier par freeze; **Credit** = bacha + din left.
+ * Profile renew: billing table jaisa — **Usage** = isi tier par freeze; pink pill = **Balance** (bacha NPR + din left).
  */
 export function RenewProrationPills({
   plan,
@@ -54,14 +54,14 @@ export function RenewProrationPills({
     planYearly: plan.price.yearly,
     remainingMs,
   });
-  // Credit रु = `q.creditNpr` — din bhi isi se map (billing table renew column ke saath); `ledger.creditDaysLeft` alag accounting tha.
+  // Balance रु = `q.creditNpr` (internal name) — din isi se map; `ledger.creditDaysLeft` alag accounting tha.
   const creditDaysFromQuote = creditDaysEquivalentAtTargetYearly(q.creditNpr, plan.price.yearly);
 
   return (
     <div className={cn("flex w-full min-w-0 flex-col gap-[5px]", className)}>
       <div className={PROFILE_PRORATION_PILL_CREDIT_CLASS}>
         <span>
-          Credit ≈ रु {q.creditNpr.toFixed(2)} · {formatCreditPillDaysLeftDisplay(creditDaysFromQuote)}{" "}
+          Balance ≈ रु {q.creditNpr.toFixed(2)} · {formatCreditPillDaysLeftDisplay(creditDaysFromQuote)}{" "}
           {creditPillAdjustedDayWord(creditDaysFromQuote)} left
         </span>
       </div>

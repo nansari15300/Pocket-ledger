@@ -1,0 +1,204 @@
+"use client";
+
+/**
+ * Unified company-scoped write entry — nayi mutations yahi se karo taaki SQLite + outbox + plan gate ek pipeline rahe.
+ * Purane direct `setDoc`/`updateDoc` calls ko dheere-dheere yahan migrate karo (see repo grep).
+ */
+
+import { addDoc, collection, deleteDoc, doc, setDoc, updateDoc } from "@/lib/writeGateway/firestoreMutationsInternal";
+import { firestore } from "@/lib/firebase";
+import { isLocalOnlyMode } from "@/lib/localMode";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
+import { getLocalCompanyById } from "@/lib/localCompanyStore";
+import {
+  deleteCompanyDocFromBrowserDb,
+  getCompanyDocFromBrowserDb,
+  upsertCompanyDocInBrowserDb,
+  type UpsertCompanyBrowserOptions,
+} from "@/lib/localCompanyDocMirror";
+import { canSyncCompanyToServer, enqueueCompanyDocOutbox, type VoucherOutboxOp } from "@/lib/localVoucherOutbox";
+import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
+import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
+import { buildLedgerTombstoneFields } from "@/lib/ledgerTombstone";
+import { shouldForceFirestoreWritesOnStaticOrApk } from "@/lib/apkOnlineFirestoreWritePolicy";
+
+export type WriteEntityOperation = "create" | "update" | "delete";
+
+export type WriteEntityRequest = {
+  /** SQLite registry row id (often same as Firestore company id). */
+  companyId: string;
+  collectionName: string;
+  docId: string;
+  operation: WriteEntityOperation;
+  /** create/update payload; delete par optional (ignored). */
+  data?: Record<string, unknown>;
+  /** SQLite mirror flags + Firestore `setDoc` merge + auto-id create. */
+  options?: UpsertCompanyBrowserOptions & { useFirestoreAutoId?: boolean; merge?: boolean };
+};
+
+export type WriteEntityResult =
+  | { ok: true; docId: string }
+  | { ok: false; error: string };
+
+/** Firestore path ke liye authoritative company id (mirror company mismatch fix). */
+async function resolveFirestoreCompanyId(localCompanyId: string): Promise<string> {
+  const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
+  const raw = reg ? String((reg as Record<string, unknown>).authoritativeCompanyId || "").trim() : "";
+  return raw || localCompanyId.trim();
+}
+
+/** Local-first: SQLite UPSERT + sync_outbox — static/APK par registry row milte hi (pure local bhi), web cloud par nahi. */
+async function shouldWriteLocalLedgerFirst(localCompanyId: string): Promise<boolean> {
+  // Purana "Server writes" toggle hata — `shouldForceFirestoreWritesOnStaticOrApk` ab hamesha false; `saveVoucher` / masters isi gate se align.
+  if (shouldForceFirestoreWritesOnStaticOrApk()) return false;
+  const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
+  // Static bundle: company ledger seedha Firestore mat likho — SQLite + outbox hi sync bridge (web cloud unchanged).
+  if (isStaticAppBuild()) return !!reg;
+  if (!isLocalOnlyMode()) return false;
+  return canSyncCompanyToServer(localCompanyId);
+}
+
+async function mergeWithExistingLocalDoc(
+  companyId: string,
+  collectionName: string,
+  docId: string,
+  patch: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const existing = (await getCompanyDocFromBrowserDb(companyId, collectionName, docId)) ?? {};
+  return { ...existing, ...patch, id: docId };
+}
+
+/**
+ * Single write gate: pehle plan (vouchers), phir local SQLite+outbox jab allowed, warna Firestore.
+ * UI optimistic: yahan await ke baad caller apna state pehle hi update kar sakta tha — is function ko await karo.
+ */
+export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityResult> {
+  const companyId = String(req.companyId || "").trim();
+  const collectionName = String(req.collectionName || "").trim();
+  const rawOpts = req.options ?? {};
+  const { useFirestoreAutoId: useAutoId, merge: mergeSetDoc, ...upsertOpts } = rawOpts;
+  const docIdRaw = String(req.docId || "").trim();
+  const docIdRequired = !(useAutoId === true && req.operation === "create");
+  const docId = docIdRaw;
+  if (!companyId || !collectionName || (docIdRequired && !docId)) {
+    return { ok: false, error: "writeEntity: missing companyId, collectionName, or docId" };
+  }
+
+  if (collectionName === "vouchers") {
+    try {
+      await assertCompanyAllowsLedgerMutations(companyId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: msg };
+    }
+  }
+
+  const fsCompanyId = await resolveFirestoreCompanyId(companyId);
+  const colRef = collection(firestore, "companies", fsCompanyId, collectionName);
+  const effectiveDocId =
+    useAutoId === true && req.operation === "create" && !docIdRaw
+      ? typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `id_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+      : docId;
+  const docRef = doc(firestore, "companies", fsCompanyId, collectionName, effectiveDocId);
+
+  if (await shouldWriteLocalLedgerFirst(companyId)) {
+    if (req.operation === "delete") {
+      // Static/APK: hard-delete + ghost server doc avoid — tombstone SQLite + outbox `delete` (web local-only: purana hard path).
+      if (isStaticApkLedgerTransportMode()) {
+        let merged: Record<string, unknown>;
+        try {
+          merged = await mergeWithExistingLocalDoc(
+            companyId,
+            collectionName,
+            effectiveDocId,
+            buildLedgerTombstoneFields(effectiveDocId)
+          );
+          await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "sqlite tombstone failed" };
+        }
+        try {
+          await enqueueCompanyDocOutbox(companyId, collectionName, "delete", effectiveDocId, merged);
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "outbox delete enqueue failed" };
+        }
+        return { ok: true, docId: effectiveDocId };
+      }
+      const canFlush = await canSyncCompanyToServer(companyId);
+      if (canFlush && typeof navigator !== "undefined" && navigator.onLine) {
+        try {
+          await deleteDoc(docRef);
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "firestore delete failed" };
+        }
+      }
+      try {
+        await deleteCompanyDocFromBrowserDb(companyId, collectionName, effectiveDocId, { force: true, notify: true });
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : "local delete failed" };
+      }
+      return { ok: true, docId: effectiveDocId };
+    }
+
+    const patch = { ...(req.data || {}) } as Record<string, unknown>;
+    // create + setDoc merge: local pe bhi existing row ke upar shallow merge (Firestore merge semantics ke kareeb).
+    const merged =
+      req.operation === "create" && mergeSetDoc === true
+        ? await mergeWithExistingLocalDoc(companyId, collectionName, effectiveDocId, { ...patch, id: effectiveDocId })
+        : req.operation === "create"
+          ? ({ ...patch, id: effectiveDocId } as Record<string, unknown>)
+          : await mergeWithExistingLocalDoc(companyId, collectionName, effectiveDocId, patch);
+
+    try {
+      await upsertCompanyDocInBrowserDb(companyId, collectionName, effectiveDocId, merged, upsertOpts);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "sqlite upsert failed" };
+    }
+    const op: VoucherOutboxOp = req.operation === "create" ? "create" : "update";
+    try {
+      await enqueueCompanyDocOutbox(companyId, collectionName, op, effectiveDocId, merged);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "outbox enqueue failed" };
+    }
+    return { ok: true, docId: effectiveDocId };
+  }
+
+  // Remote-first (normal web Firebase mode): seedha Firestore — SQLite mirror listeners/`mirrorCollection` se aayega.
+  try {
+    if (req.operation === "delete") {
+      await deleteDoc(docRef);
+      await deleteCompanyDocFromBrowserDb(companyId, collectionName, effectiveDocId, { force: true, notify: true });
+      return { ok: true, docId: effectiveDocId };
+    }
+    if (useAutoId && req.operation === "create") {
+      const payload = { ...(req.data || {}), companyId: fsCompanyId };
+      const ref = await addDoc(colRef, payload);
+      return { ok: true, docId: ref.id };
+    }
+    if (req.operation === "create" && mergeSetDoc === true) {
+      await setDoc(
+        docRef,
+        { ...(req.data || {}), id: effectiveDocId, companyId: fsCompanyId },
+        { merge: true }
+      );
+      return { ok: true, docId: effectiveDocId };
+    }
+    if (req.operation === "create") {
+      await setDoc(docRef, { ...(req.data || {}), id: effectiveDocId, companyId: fsCompanyId });
+      return { ok: true, docId: effectiveDocId };
+    }
+    await updateDoc(docRef, req.data || {});
+    return { ok: true, docId: effectiveDocId };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "firestore write failed" };
+  }
+}
+
+/** UI fire-and-forget: errors console — permission UI `errorEmitter` abhi non-blocking callers rare. */
+export function writeEntityNonBlocking(req: WriteEntityRequest): void {
+  void writeEntity(req).catch((e) => {
+    console.warn("[writeEntityNonBlocking]", e);
+  });
+}

@@ -120,7 +120,9 @@ export async function writeAttachmentBlobToDataDir(path: string, blob: Blob): Pr
 /** DataDirectory path -> Blob. */
 export async function readAttachmentBlobFromDataDir(
   path: string,
-  contentType?: string | null
+  contentType?: string | null,
+  /** Row se aaya `sha256_hex` — mismatch par tamper/corrupt treat karke null. */
+  expectedSha256Hex?: string | null
 ): Promise<Blob | null> {
   const fs = await getFsModule();
   if (!fs) return null;
@@ -131,7 +133,17 @@ export async function readAttachmentBlobFromDataDir(
     });
     const raw = typeof row.data === "string" ? row.data : "";
     if (!raw) return null;
-    return base64RawToBlob(raw, contentType);
+    const blob = base64RawToBlob(raw, contentType);
+    const exp = expectedSha256Hex?.trim().toLowerCase();
+    if (exp) {
+      const { computeSha256HexFromBlob } = await import("@/lib/security/sha256Hex");
+      const got = (await computeSha256HexFromBlob(blob)).toLowerCase();
+      if (got !== exp) {
+        console.warn("[capacitorAttachmentFs] sha256 mismatch on read", { path, exp, got });
+        return null;
+      }
+    }
+    return blob;
   } catch {
     return null;
   }

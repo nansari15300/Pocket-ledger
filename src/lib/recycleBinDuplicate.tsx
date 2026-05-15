@@ -3,22 +3,13 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
-import {
-  Timestamp,
-  collection,
-  doc,
-  getDocs,
-  query,
-  serverTimestamp,
-  updateDoc,
-  where,
-} from "firebase/firestore";
+import { Timestamp, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
-import { enqueueCompanyDocOutbox } from "@/lib/localVoucherOutbox";
+import { listCompanyDocsFromBrowserDb } from "@/lib/localCompanyDocMirror";
+import { writeEntity } from "@/lib/writeGateway";
 import { registerImperativeDialogBack } from "@/contexts/DialogBackHandlerContext";
 
 type DuplicateDecision = "active_exists" | "restored" | "create_new";
@@ -165,8 +156,15 @@ export async function resolveRecycleBinDuplicate({
       deletedAt: null,
       restoredAt: Timestamp.now(),
     } as Record<string, unknown>;
-    await upsertCompanyDocInBrowserDb(companyId, collectionName, rid, merged);
-    await enqueueCompanyDocOutbox(companyId, collectionName, "update", rid, merged);
+    // Ek hi entry: plan gate (vouchers) + SQLite + outbox — seedha components se duplicate upsert/enqueue avoid.
+    const wr = await writeEntity({
+      companyId,
+      collectionName,
+      docId: rid,
+      operation: "update",
+      data: merged,
+    });
+    if (!wr.ok) return { decision: "create_new" };
     return { decision: "restored", restoredId: rid };
   }
 
@@ -201,11 +199,18 @@ export async function resolveRecycleBinDuplicate({
 
   if (!shouldRestore) return { decision: "create_new" };
 
-  await updateDoc(doc(firestore, `companies/${companyId}/${collectionName}`, recycled.id), {
-    isDeleted: false,
-    deletedAt: null,
-    restoredAt: serverTimestamp(),
+  const wr = await writeEntity({
+    companyId,
+    collectionName,
+    docId: recycled.id,
+    operation: "update",
+    data: {
+      isDeleted: false,
+      deletedAt: null,
+      restoredAt: serverTimestamp(),
+    },
   });
+  if (!wr.ok) return { decision: "create_new" };
 
   return { decision: "restored", restoredId: recycled.id };
 }

@@ -94,6 +94,27 @@ export default function CompaniesPage() {
     }
   }
 
+  /** Admin plan/expiry: same `ownerId` ki saari rows ek saath UI me sync. */
+  const handleSeveralCompaniesUpdated = (updatedList: Company[]) => {
+    setRows((prev) => {
+      const m = new Map(updatedList.map((u) => [u.id, u] as const));
+      return prev.map((c) => m.get(c.id) ?? c);
+    });
+    setSelectedCompany((prev) => {
+      if (!prev) return null;
+      const hit = updatedList.find((u) => u.id === prev.id);
+      return hit ?? prev;
+    });
+  };
+
+  const companiesSameOwner = useMemo(() => {
+    if (!selectedCompany) return [];
+    const oid = String(selectedCompany.ownerId ?? "").trim();
+    if (!oid) return [selectedCompany];
+    const list = rows.filter((c) => String(c.ownerId ?? "").trim() === oid);
+    return list.length > 0 ? list : [selectedCompany];
+  }, [rows, selectedCompany]);
+
   // Memoized logic to group companies by owner
   const groupedAndFilteredCompanies: GroupedCompany[] = useMemo(() => {
     if (users.length === 0 || rows.length === 0) return [];
@@ -198,7 +219,13 @@ export default function CompaniesPage() {
             {/* RIGHT */}
             <div className="h-full min-h-0 overflow-hidden">
                 {selectedCompany ? (
-                    <CompanyDetails company={selectedCompany} onUpdate={handleUpdateCompany} plans={plans} />
+                    <CompanyDetails
+                        company={selectedCompany}
+                        sameOwnerCompanies={companiesSameOwner}
+                        onUpdate={handleUpdateCompany}
+                        onSeveralCompaniesUpdated={handleSeveralCompaniesUpdated}
+                        plans={plans}
+                    />
                 ): (
                     <Card className="h-full flex items-center justify-center">
                         <CardContent className="text-center">

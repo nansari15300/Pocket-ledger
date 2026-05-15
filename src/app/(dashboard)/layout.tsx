@@ -24,7 +24,10 @@ import { ReportPartyViewProvider } from "@/contexts/ReportPartyViewContext";
 import { ReportListProvider } from "@/contexts/ReportListContext";
 import { SettingsListProvider } from "@/contexts/SettingsListContext";
 import { useSidebar } from "@/components/ui/sidebar";
-import { useEdgeSwipeTrigger } from "@/hooks/useMobileEdgeSwipe";
+import {
+  useEdgeSwipeDocumentCapture,
+  type EdgeSwipeDocumentOptions,
+} from "@/hooks/useMobileEdgeSwipe";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
 import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
@@ -32,11 +35,11 @@ import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
 import { useCompany } from "@/hooks/useCompany";
-import { getOrCreateDeviceId, getDeviceLabel, removeThisDevice } from "@/lib/deviceLimitClient";
+import { getOrCreateDeviceId, getDeviceLabel, resolveDeviceLabelForFirestoreAsync, removeThisDevice } from "@/lib/deviceLimitClient";
+import { shortDeviceLabelForList, deviceLabelTooltipIfTruncated } from "@/lib/deviceLabelDisplay";
 import { armDashboardRedirectGuard } from "@/lib/protectFromUnwantedDashboardRedirect";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
-import { ServerDirectWritesProvider } from "@/contexts/ServerDirectWritesContext";
 import { useNavigatorOnline } from "@/hooks/useNavigatorOnline";
 import { toast } from "sonner";
 import { apkCloudCompanyOfflineViewOnly, apkCloudFirestoreMasterWriteFromCompanyShape } from "@/lib/apkOnlineFirestoreWritePolicy";
@@ -182,11 +185,37 @@ function DeviceLimitOverlay() {
   const isCompanyOwner = !!company && (company.ownerId === user?.uid || (user?.email && company.ownerEmail === user.email));
   const ownerId = company?.ownerId ?? "";
   const currentDeviceId = typeof window !== "undefined" ? getOrCreateDeviceId() : "";
+  /** Native device label row: UA se mobile/desktop — `shortDeviceLabelForList` fallback. */
+  const thisDeviceNavKind = useMemo(
+    () =>
+      typeof navigator !== "undefined" &&
+      /Mobile|Android|iPhone|iPad|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        ? ("mobile" as const)
+        : ("desktop" as const),
+    [],
+  );
+  const thisDeviceLabelShort = useMemo(
+    () => shortDeviceLabelForList(thisDeviceLabel || undefined, thisDeviceNavKind),
+    [thisDeviceLabel, thisDeviceNavKind],
+  );
+  const thisDeviceLabelTip = useMemo(
+    () => deviceLabelTooltipIfTruncated(thisDeviceLabel || undefined, thisDeviceLabelShort),
+    [thisDeviceLabel, thisDeviceLabelShort],
+  );
 
   useEffect(() => {
     const id = getOrCreateDeviceId();
     setDeviceIdShort(id ? `...${id.slice(-8)}` : "");
     setThisDeviceLabel(typeof window !== "undefined" ? getDeviceLabel() : "");
+    // Native: `Device.getInfo()` se static label — overlay me bhi wahi dikhe (web par sirf UA, pehle se sync)
+    void (async () => {
+      try {
+        const label = await resolveDeviceLabelForFirestoreAsync();
+        if (label) setThisDeviceLabel(label);
+      } catch {
+        /* ignore */
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -370,7 +399,19 @@ function DeviceLimitOverlay() {
         <p><span className="font-medium text-foreground">User name:</span> {(user?.displayName ?? "").toString().trim() || (user?.email ? user.email.split("@")[0] : "") || "—"}</p>
         <p><span className="font-medium text-foreground">User email:</span> {user?.email || "—"}</p>
         <p><span className="font-medium text-foreground">Company:</span> {company?.name || "—"}</p>
-        <p><span className="font-medium text-foreground">This device:</span> {thisDeviceLabel || "—"}</p>
+        <p>
+          <span className="font-medium text-foreground">This device:</span>{" "}
+          {thisDeviceLabel ? (
+            <span
+              className="cursor-default underline decoration-dotted decoration-muted-foreground/60 underline-offset-2"
+              title={thisDeviceLabelTip}
+            >
+              {thisDeviceLabelShort}
+            </span>
+          ) : (
+            "—"
+          )}
+        </p>
       </div>
 
       {showReplaceOfferDialog && (
@@ -697,24 +738,38 @@ function DeviceLimitOverlay() {
   );
 }
 
-/** Mobile: left edge se swipe right → app sidebar Sheet khule (menu) */
-function DashboardMainWithEdgeSwipe({
+/** Stable opts ref — har render naya `{}` na bane warna `resize` effect bar-bar chale */
+/** `preventDefault` edge strip — LTR swipe = menu; browser “back” gesture na kha le */
+const LEFT_EDGE_OPEN_APP_MENU_OPTS: EdgeSwipeDocumentOptions = {
+  edgeWidthMm: 10,
+  blockOverscrollHistoryOnLeftEdge: true,
+};
+
+/**
+ * `/company` jaise bare routes par `main` swipe nahi tha — `document` capture se har page (embed chhod kar).
+ */
+function GlobalLeftEdgeOpenAppMenuSwipe() {
+  const pathname = usePathname();
+  const isMobile = useIsMobile();
+  const { isOpen, setIsOpen } = useSidebar();
+  const openMenu = useCallback(() => setIsOpen(true), [setIsOpen]);
+  const skipEmbed = Boolean(pathname?.startsWith("/embed"));
+  const enabled = Boolean(isMobile && !isOpen && !skipEmbed);
+  useEdgeSwipeDocumentCapture(enabled, "left", openMenu, LEFT_EDGE_OPEN_APP_MENU_OPTS);
+  return null;
+}
+
+/** Mobile: `touch-pan-y` vertical scroll; baen swipe ab `GlobalLeftEdgeOpenAppMenuSwipe` document par */
+function DashboardMainShell({
   children,
   className,
 }: {
   children: React.ReactNode;
   className?: string;
 }) {
-  const { isMobile, isOpen, setIsOpen } = useSidebar();
-  const openMenu = useCallback(() => setIsOpen(true), [setIsOpen]);
-  const swipe = useEdgeSwipeTrigger(Boolean(isMobile && !isOpen), "left", openMenu);
+  const isMobile = useIsMobile();
   return (
-    <main
-      // touch-pan-y: horizontal swipe JS ko mile, vertical scroll page par rahe
-      className={cn(isMobile && "touch-pan-y", className)}
-      onTouchStart={swipe.onTouchStart}
-      onTouchEnd={swipe.onTouchEnd}
-    >
+    <main className={cn(isMobile && "touch-pan-y", className)}>
       {children}
     </main>
   );
@@ -776,20 +831,30 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     const isEmbedRoute = pathname?.startsWith("/embed");
 
     if (noLayoutPages.includes(pathname)) {
-        return <>{children}</>;
+        return (
+            <>
+                <GlobalLeftEdgeOpenAppMenuSwipe />
+                {/* Mobile: `/company` par bhi horizontal edge “back” kam — `app-container` yahan nahi */}
+                <div className={cn(isMobile && "overscroll-x-none h-full min-h-0 w-full min-w-0")}>{children}</div>
+            </>
+        );
     }
 
     // Embed routes: content only (no app sidebar/header) — used when shown inside reports iframe
     if (isEmbedRoute) {
         return (
-            <div className="h-full w-full overflow-hidden bg-background">
-                {children}
-            </div>
+            <>
+                <GlobalLeftEdgeOpenAppMenuSwipe />
+                <div className={cn("h-full w-full overflow-hidden bg-background", isMobile && "overscroll-x-none")}>
+                    {children}
+                </div>
+            </>
         );
     }
 
     return (
          <>
+            <GlobalLeftEdgeOpenAppMenuSwipe />
             <AlarmPopup />
             {/* Month-end recurring vouchers: app-open trigger runner (company settings + user scope aware). */}
             <RecurringVoucherAutoRunner />
@@ -803,6 +868,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       "relative flex bg-background",
                       /** Mobile + desktop: `100vh`/h-screen Windows taskbar ke niche leak ho sakta hai (Electron); `dvh` visible area ke hisaab se */
                       "h-dvh max-h-dvh min-h-0",
+                      /** Mobile: horizontal edge overscroll se OS/browser history back kam ho */
+                      isMobile && "overscroll-x-none",
                       (pathname?.startsWith("/settings") ||
                         pathname?.startsWith("/gallery") ||
                         pathname?.startsWith("/billing/statement")) &&
@@ -823,7 +890,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                       <PlanAuthoritativeSyncBanner />
                       <ApkCloudOfflineViewBanner />
                       <ApkCloudOnlineSyncToast />
-                      <DashboardMainWithEdgeSwipe
+                      <DashboardMainShell
                         className={cn(
                           "flex min-h-0 flex-1 flex-col",
                           pathname?.startsWith("/settings") ||
@@ -834,7 +901,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
                         )}
                       >
                         {children}
-                      </DashboardMainWithEdgeSwipe>
+                      </DashboardMainShell>
                       <MobileFloatingButton />
                       {/* Mobile reports detail: PanelRight sheet trigger — footer daen */}
                       <ReportsMobileReportListFab />
@@ -855,21 +922,19 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ServerDirectWritesProvider>
-      <MobileViewProvider>
-        <SidebarProvider>
-          <DashboardProvider>
-            {/* Global file + avatar click preview — header pill se ON/OFF (AttachmentHoverPortal). */}
-            <FileHoverPreviewProvider>
-              {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
-              <DashboardDocumentTitleSync />
-              <ElectronTabStripSyncBridge />
-              <PlNavDebugOnDeviceOverlay />
-              <LayoutContent>{children}</LayoutContent>
-            </FileHoverPreviewProvider>
-          </DashboardProvider>
-        </SidebarProvider>
-      </MobileViewProvider>
-    </ServerDirectWritesProvider>
+    <MobileViewProvider>
+      <SidebarProvider>
+        <DashboardProvider>
+          {/* Global file + avatar click preview — header pill se ON/OFF (AttachmentHoverPortal). */}
+          <FileHoverPreviewProvider>
+            {/* Overlay LayoutContent ke bahar: `/company` jaisi bare routes par bhi trace dikhai de */}
+            <DashboardDocumentTitleSync />
+            <ElectronTabStripSyncBridge />
+            <PlNavDebugOnDeviceOverlay />
+            <LayoutContent>{children}</LayoutContent>
+          </FileHoverPreviewProvider>
+        </DashboardProvider>
+      </SidebarProvider>
+    </MobileViewProvider>
   );
 }

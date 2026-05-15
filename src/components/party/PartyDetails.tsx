@@ -6,7 +6,6 @@ import * as React from "react";
 import { toast } from "sonner";
 import { openPrintDirect } from "@/lib/printDirect";
 import type { Party, Group } from "@/components/party/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { Button } from "@/components/ui/button";
@@ -98,6 +97,7 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { formatVoucherEntryTimeLocal } from "@/lib/voucherDateNormalize";
 import { useTransactions } from "@/hooks/use-transactions";
 import { useIsMobile, useCalendarMonths } from "@/hooks/use-mobile";
@@ -432,10 +432,8 @@ export function PartyDetails({
     });
   }, [isLocalMode, companyId, company]);
   
-  // Merge prop userNames with locally fetched userNames
-  const mergedUserNames = useMemo(() => {
-    return { ...userNames, ...localFetchedUserNames };
-  }, [userNames, localFetchedUserNames]);
+  // Merge: voucher-sourced naam (e.g. recurring "Auto") ko local Firestore fetch se upar — `{...prop,...local}` se overwrite ho raha tha
+  const mergedUserNames = useMemo(() => mergeLedgerUserDisplayNameMaps(userNames || {}, localFetchedUserNames), [userNames, localFetchedUserNames]);
 
   const mobileSearchNames = useMemo(
     () => ({ ...resolvedJournalAccountNames, ...mergedUserNames }),
@@ -597,7 +595,7 @@ export function PartyDetails({
       const timeStr = formatVoucherEntryTimeLocal(t as Record<string, unknown>) || (d ? format(d, "h:mm a") : "");
       const amt = t.debit > 0 ? t.debit : t.credit;
       const bal = t.balance ?? t.runningBalance ?? 0;
-      const userStr = (userNames && t.userId && userNames[t.userId]) || "";
+      const userStr = (mergedUserNames && t.userId && mergedUserNames[t.userId]) || "";
       return (
         getTransactionQuickSearchHaystack(t, mobileSearchNames, "party", party.id).includes(q) ||
         dateStr.toLowerCase().includes(q) ||
@@ -609,7 +607,7 @@ export function PartyDetails({
         userStr.toLowerCase().includes(q)
       );
     });
-  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, userNames, mobileSearchNames, party.id]);
+  }, [sortedTransactions, mobileSearchTerm, dateSystem, formatDateBS, format, mergedUserNames, mobileSearchNames, party.id]);
 
   // Tail-window paging: page 1 = list ke ant (latest txn) — MobileTransactionsPager + useStatementReportMobilePaging jaisa; PC/mobile ek hi slice.
   const totalPages = rowsPerPage > 0 ? Math.max(1, Math.ceil(searchFilteredTransactions.length / rowsPerPage)) : 1;
@@ -1210,21 +1208,15 @@ export function PartyDetails({
                 </Button>
               )}
               <EntityFileAttachmentHover fileUrl={partyHeaderAttachmentUrl} triggerClassName="inline-flex shrink-0 rounded-full">
-                {(party as any).isSystemAccount ? (
-                  <Avatar className="h-12 w-12 text-lg flex-shrink-0">
-                    <AvatarImage src={partyHeaderAttachmentUrl ?? undefined} alt={party.name} />
-                    <AvatarFallback className="bg-muted text-muted-foreground">
-                      <FileDigit className="h-6 w-6" />
-                    </AvatarFallback>
-                  </Avatar>
-                ) : (
-                  <ResolvedEntityAvatar
-                    className="h-12 w-12 text-lg flex-shrink-0"
-                    src={partyHeaderAttachmentUrl ?? undefined}
-                    alt={party.name}
-                    fallbackText={getInitials(party.name)}
-                  />
-                )}
+                <ResolvedEntityAvatar
+                  className="h-12 w-12 text-lg flex-shrink-0"
+                  src={partyHeaderAttachmentUrl ?? undefined}
+                  alt={party.name}
+                  fallbackText={getInitials(party.name)}
+                  fallbackSlot={
+                    (party as any).isSystemAccount ? <FileDigit className="h-6 w-6 text-muted-foreground" /> : undefined
+                  }
+                />
               </EntityFileAttachmentHover>
               <div className="flex flex-col min-w-0 gap-0.5">
                 <div className="flex items-center gap-2 flex-nowrap min-w-0">

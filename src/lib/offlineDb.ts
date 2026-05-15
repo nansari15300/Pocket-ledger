@@ -1,6 +1,7 @@
 "use client";
 
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
+import { getBrowserIndexedDbHostScope } from "@/lib/localSqlite";
 
 /** Shared IndexedDB for offline data (companies, pending files). */
 const BASE_DB_NAME = "pocket-ledger-pending";
@@ -8,32 +9,47 @@ const BASE_DB_NAME = "pocket-ledger-pending";
 // Purane builds ne 8 tak bump kiya — v9 `offlineAttachmentBlobs`: warm-sync attachment bytes cache.
 const DB_VERSION = 9;
 
+/** Warm/preview dono isi naam se `openDB` kholte hain — forensic SAVE vs READ grep + drift guard. */
+export function getPendingIndexedDbFullName(): string {
+  const hostScope = typeof window === "undefined" ? "default" : getBrowserIndexedDbHostScope();
+  return `${BASE_DB_NAME}__${hostScope}`;
+}
+
+/** Forensic: pending-IDB open par namespace + stores proof (`NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1`). */
+function pendingIdbForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
       reject(new Error("IndexedDB not available"));
       return;
     }
-    const hostScope =
-      typeof window === "undefined"
-        ? "default"
-        : isCapacitorNativeApp()
-        ? // Native/app shell: port change ke baad bhi same IndexedDB naam chahiye, warna attachment cache restart pe "missing" dikhega.
-          "capacitor_native_embedded"
-        : (() => {
-            const ua = (typeof navigator !== "undefined" ? navigator.userAgent : "").toLowerCase();
-            if (ua.includes("electron")) {
-              // Electron shell me host/port drift (localhost vs 127.0.0.1, random port) par cache split na ho.
-              return "electron_embedded";
-            }
-            return `${window.location.hostname || "unknown"}${window.location.port ? `-${window.location.port}` : ""}`
-              .replace(/[^a-zA-Z0-9_.-]/g, "_")
-              .toLowerCase();
-          })();
+    // `localSqlite.getBrowserIndexedDbHostScope` se align — pehle yahan alag Electron rule tha (SQLite vs pending split risk).
+    const dbName = getPendingIndexedDbFullName();
+    const hostScope = typeof window === "undefined" ? "default" : getBrowserIndexedDbHostScope();
     // Host-scoped pending DB prevents localhost/prod pending queues from mixing.
-    const req = indexedDB.open(`${BASE_DB_NAME}__${hostScope}`, DB_VERSION);
+    const req = indexedDB.open(dbName, DB_VERSION);
     req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (pendingIdbForensicEnabled()) {
+        console.warn("[FORENSIC_DB_OPEN]", {
+          kind: "pocket-ledger-pending",
+          dbName,
+          hostScope,
+          idbVersion: db.version,
+          objectStoreNames: Array.from(db.objectStoreNames),
+          isCapacitorNativeApp: isCapacitorNativeApp(),
+          hostname: typeof window !== "undefined" ? window.location.hostname : null,
+          port: typeof window !== "undefined" ? window.location.port : null,
+          uaHasElectron:
+            typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron"),
+        });
+      }
+      resolve(db);
+    };
     req.onupgradeneeded = (e) => {
       const db = (e.target as IDBOpenDBRequest).result;
       // Sabhi `openDB()` consumers ke stores — nayi install / purane version se upgrade dono.
@@ -53,6 +69,16 @@ export function openDB(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains(name)) {
           db.createObjectStore(name, { keyPath: "id" });
         }
+      }
+      if (pendingIdbForensicEnabled()) {
+        console.warn("[FORENSIC_DB_OPEN_UPGRADE]", {
+          kind: "pocket-ledger-pending",
+          dbName,
+          hostScope,
+          oldVersion: e.oldVersion,
+          newVersion: e.newVersion,
+          objectStoreNamesAfter: Array.from(db.objectStoreNames),
+        });
       }
     };
   });

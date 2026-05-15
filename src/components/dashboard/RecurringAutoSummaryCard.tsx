@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { doc, updateDoc } from "firebase/firestore";
+import { updateCompanyRootFirestore } from "@/lib/writeGateway/companyRootFirestore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -21,7 +21,6 @@ import { useVouchers } from "@/hooks/useVouchers";
 import { useDashboardRecurringAccrual } from "@/hooks/useDashboardRecurringAccrual";
 import { buildCompanyFlowDrCrContext } from "@/lib/dashboardRecurringAccrual";
 import usePermissions from "@/hooks/usePermissions";
-import { firestore } from "@/lib/firebase";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -361,7 +360,7 @@ export function RecurringAutoSummaryCard({
             enabled: checked,
           },
         };
-        await updateDoc(doc(firestore, "companies", cid), patch);
+        await updateCompanyRootFirestore(cid, patch);
         try {
           const localRow = await getLocalCompanyById(cid);
           if (localRow) {

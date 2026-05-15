@@ -1,7 +1,6 @@
 
 'use client'
 import { useAdminAccess } from '@/hooks/useAdminAccess'
-import { listUsers } from '@/hooks/useFirestore'
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
@@ -9,10 +8,11 @@ import { Input } from '@/components/ui/input'
 import { Search, Users, UserCheck, UserX } from 'lucide-react'
 import { UserList } from '@/components/admin/UserList'
 import { UserDetails } from '@/components/admin/UserDetails'
-import { collection, getDocs, onSnapshot, query, doc, DocumentData } from 'firebase/firestore'
+import { collection, getDocs, onSnapshot, query, type DocumentData, type QueryDocumentSnapshot } from 'firebase/firestore'
 import { firestore as db } from '@/lib/firebase'
 import type { Company } from '@/app/(admin)/admin/types';
 import type { Role } from "@/utils/rbac";
+import { computePresenceLooksOnline } from "@/lib/presenceDisplay";
 
 
 export type AppUser = {
@@ -27,6 +27,46 @@ export type AppUser = {
   lastSeen?: any;
   [key: string]: any;
 };
+
+/** `id` = Firestore document id (unique key + `doc('users',id)`); `data().id` spread se overwrite na ho — duplicate rows / keys. */
+function mapUsersCollectionDoc(u: QueryDocumentSnapshot<DocumentData>): AppUser {
+  const d = u.data();
+  return {
+    ...d,
+    id: u.id,
+    uid: String(d.uid ?? d.id ?? u.id),
+  } as AppUser;
+}
+
+/** Ek hi Firebase `uid` (ya email) ke duplicate `users` docs — ek row; bina uid wale ko `doc:id` se unique rakho. */
+function dedupeAdminUserRows(users: AppUser[]): AppUser[] {
+  const keyOf = (u: AppUser) => {
+    const uid = String(u.uid || "").trim().toLowerCase();
+    if (uid) return `uid:${uid}`;
+    const em = String(u.email || "").trim().toLowerCase();
+    if (em) return `email:${em}`;
+    return `doc:${u.id}`;
+  };
+  const out = new Map<string, AppUser>();
+  for (const u of users) {
+    const k = keyOf(u);
+    const prev = out.get(k);
+    if (!prev) {
+      out.set(k, u);
+      continue;
+    }
+    const prefer =
+      u.id === u.uid && prev.id !== prev.uid
+        ? u
+        : prev.id === prev.uid && u.id !== u.uid
+          ? prev
+          : String(u.id).length <= String(prev.id).length
+            ? u
+            : prev;
+    out.set(k, prefer);
+  }
+  return [...out.values()];
+}
 
 
 export default function UsersPage() {
@@ -53,30 +93,30 @@ export default function UsersPage() {
             getDocs(companiesQuery)
         ]);
         
-        const validUsers = usersSnapshot.docs
-          .map(u => ({ id: u.id, uid: u.id, ...u.data() } as AppUser))
-          .filter(u => u.id === u.uid);
+        const mappedAll = usersSnapshot.docs.map(mapUsersCollectionDoc);
 
         const companiesList = companiesSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Company));
 
+        // SuperAdmin: saari global `users` rows (slug doc + `users/{uid}` dono); `id===uid` filter hata — warna zyada users hide ho jaate.
         let usersToList: AppUser[] = [];
         if (user.role === 'SuperAdmin') {
-            usersToList = validUsers;
+            usersToList = dedupeAdminUserRows(mappedAll);
         } else if (user.companyId) {
             const currentCompany = companiesList.find(c => c.id === user.companyId);
             if (currentCompany) {
                 const memberEmails = new Set([currentCompany.ownerEmail, ...(currentCompany.sharedWithEmails || [])].filter(Boolean));
-                usersToList = validUsers.filter(u => u.email && memberEmails.has(u.email));
+                usersToList = dedupeAdminUserRows(
+                  mappedAll.filter((u) => u.email && memberEmails.has(u.email)),
+                );
             }
         }
         
-        const uniqueUsers = Array.from(new Map(usersToList.map(u => [u.id, u])).values());
-        setRows(uniqueUsers);
+        setRows(usersToList);
 
-        if (uniqueUsers.length > 0 && !selectedUser) {
+        if (usersToList.length > 0 && !selectedUser) {
             const savedUserId = localStorage.getItem('selectedAdminUserId');
-            const userToSelect = savedUserId ? uniqueUsers.find(u => u.id === savedUserId) : null;
-            setSelectedUser(userToSelect || uniqueUsers[0]);
+            const userToSelect = savedUserId ? usersToList.find(u => u.id === savedUserId) : null;
+            setSelectedUser(userToSelect || usersToList[0]);
         }
 
       } catch (error) {
@@ -93,8 +133,18 @@ export default function UsersPage() {
         setAllCompanies(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Company)));
     });
     
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-        setAllUsers(snapshot.docs.map(u => ({ id: u.id, uid: u.id, ...u.data() } as AppUser)));
+    const unsubUsers = onSnapshot(collection(db, "users"), (snapshot) => {
+        const mapped = snapshot.docs.map(mapUsersCollectionDoc);
+        setAllUsers(mapped);
+        // SuperAdmin: rows + selected user Firestore se; `dedupeAdminUserRows` = same uid ke duplicate docs ek row.
+        if (user?.role === "SuperAdmin") {
+          setRows(dedupeAdminUserRows(mapped));
+          setSelectedUser((prev) => {
+            if (!prev) return prev;
+            const next = mapped.find((x) => x.id === prev.id);
+            return next ? ({ ...prev, ...next } as AppUser) : prev;
+          });
+        }
     });
 
 
@@ -102,7 +152,7 @@ export default function UsersPage() {
       unsubUsers();
       unsubCompanies();
     };
-  }, [user?.uid]);
+  }, [user?.uid, user?.role]);
 
   
   const handleSelectUser = useCallback((userToSelect: AppUser) => {
@@ -130,18 +180,27 @@ export default function UsersPage() {
 
   const { ownedCompanies, sharedCompanies } = useMemo(() => {
     if (!selectedUser || !selectedUser.email) return { ownedCompanies: [], sharedCompanies: [] };
-    const owned = allCompanies.filter(c => c.ownerId === selectedUser.id);
-    const shared = allCompanies.filter(c => c.sharedWithEmails?.includes(selectedUser.email!) && c.ownerId !== selectedUser.id);
+    const owned = allCompanies.filter(
+      (c) => c.ownerId === selectedUser.uid || c.ownerId === selectedUser.id
+    );
+    const shared = allCompanies.filter(
+      (c) =>
+        c.sharedWithEmails?.includes(selectedUser.email!) &&
+        c.ownerId !== selectedUser.uid &&
+        c.ownerId !== selectedUser.id
+    );
     return { ownedCompanies: owned, sharedCompanies: shared };
   }, [selectedUser, allCompanies]);
 
   const userStats = useMemo(() => {
-    const userList = user?.role === 'SuperAdmin' ? allUsers.filter(u => u.id === u.uid) : rows;
+    const raw = user?.role === "SuperAdmin" ? allUsers : rows;
+    const userList = dedupeAdminUserRows(raw);
     const total = userList.length;
-    const active = userList.filter(u => u.isActive !== false).length;
+    const active = userList.filter((u) => u.isActive !== false).length;
     const inactive = total - active;
-    const now = Date.now();
-    const online = userList.filter(u => u.lastSeen?.toDate && (now - u.lastSeen.toDate().getTime() < 90 * 1000)).length;
+    const online = userList.filter((u) =>
+      computePresenceLooksOnline({ online: u.online, lastSeen: u.lastSeen }),
+    ).length;
     const offline = total - online;
 
     return { total, active, inactive, online, offline };
@@ -149,8 +208,9 @@ export default function UsersPage() {
 
 
   if (loading) {
+    // `min-w-0` + minmax: grid column chhoti screen par overflow-x scroll de sake (warna table clip).
     return (
-        <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-full">
+        <div className="grid grid-cols-1 md:grid-cols-[360px_minmax(0,1fr)] gap-6 h-full min-w-0">
             <div>
                 <Skeleton className="h-12 w-full mb-4" />
                 <Skeleton className="h-24 w-full mb-4" />
@@ -166,8 +226,8 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-full">
-        <div className="flex flex-col gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-[360px_minmax(0,1fr)] gap-6 h-full min-w-0">
+        <div className="flex flex-col gap-4 min-w-0">
             <Card>
                 <CardHeader className="p-4">
                     <CardTitle className="text-base font-semibold">Users Status</CardTitle>
@@ -216,7 +276,7 @@ export default function UsersPage() {
                 onSelectUser={handleSelectUser}
             />
         </div>
-        <div>
+        <div className="min-w-0 overflow-x-auto">
             {selectedUser ? (
                 <UserDetails 
                     user={selectedUser} 
@@ -225,7 +285,7 @@ export default function UsersPage() {
                     currentUser={user as AppUser}
                     ownedCompanies={ownedCompanies}
                     sharedCompanies={sharedCompanies}
-                    isOnline={selectedUser.lastSeen?.toDate && (Date.now() - selectedUser.lastSeen.toDate().getTime()) < 90 * 1000}
+                    isOnline={computePresenceLooksOnline({ online: selectedUser.online, lastSeen: selectedUser.lastSeen })}
                 />
             ): (
                 <Card className="h-full flex items-center justify-center">

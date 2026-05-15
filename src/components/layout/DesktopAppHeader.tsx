@@ -74,6 +74,7 @@ import {
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { Badge } from "../ui/badge";
 import { useOnlineStatus } from "@/hooks/use-online-status";
+import { planSyncFailureUserMessage } from "@/lib/companyPlanServerSync";
 import { cn } from "@/lib/utils";
 import { useMasterDetailHeaderIdSnapshot } from "@/hooks/useMasterDetailHeaderIdSnapshot";
 import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
@@ -91,6 +92,26 @@ import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHove
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
+
+import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
+
+/** APK/static: background attachment cache — header ke niche patli strip (kam visible). */
+function EmbeddedAttachmentHeaderProgress() {
+  const { headerAttachmentPercent } = useEmbeddedAttachmentPrefetch();
+  if (headerAttachmentPercent == null) return null;
+  const w = Math.min(100, Math.max(0, Math.round(headerAttachmentPercent)));
+  return (
+    <div
+      className="pointer-events-none absolute bottom-0 left-0 right-0 z-40 h-[2px] overflow-hidden bg-muted/25 opacity-70"
+      aria-hidden
+    >
+      <div
+        className="h-full bg-primary/30 transition-[width] duration-500 ease-out"
+        style={{ width: `${w}%` }}
+      />
+    </div>
+  );
+}
 
 /** Electron desktop: header quick-action buttons strip collapsed — `main.js` View menu se bhi toggle */
 const PL_DESKTOP_QUICK_ACTIONS_KEY = "pl-desktop-header-quick-actions-collapsed";
@@ -666,13 +687,19 @@ function UserProfileButton() {
               : "Server responded; nothing to change locally.",
         });
       } else {
-        toast({
-          variant: "destructive",
-          title: "Could not sync plan",
-          description: r.reason?.includes("offline")
-            ? "Go online and try again."
-            : r.reason || "Check billing API / Firebase.",
-        });
+        // Offline / flight mode: sirf short copy — raw `network` machine reason mat dikhao (APK profile toast).
+        const navOff = typeof navigator !== "undefined" && !navigator.onLine;
+        const offlineUi =
+          r.reason === "offline" || (navOff && (r.reason === "network" || r.reason === "timeout"));
+        if (offlineUi) {
+          toast({ title: "You are offline" });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Could not sync plan",
+            description: planSyncFailureUserMessage(r.reason),
+          });
+        }
       }
     } finally {
       setPlanManualSyncing(false);
@@ -915,10 +942,10 @@ function UserProfileButton() {
                       {selectedCompanyCanUpgradeToPaidTier ? "Upgrade" : "Billing"}
                     </Button>
                   </div>
-                  {/* Sab stats vertical pills — expiry sabse niche; Credit/Usage upar */}
+                  {/* Sab stats vertical pills — expiry sabse niche; Balance / Usage upar */}
                   {/* Pills ke beech fixed 5px vertical gap */}
                   <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
-                    {/* Sirf company owner: Billing page jaisa Credit / Usage pills — shared company card me nahi. */}
+                    {/* Sirf company owner: Billing page jaisa Balance / Usage pills — shared company card me nahi. */}
                     {!selectedCompanyPlanLive.isFree ? (
                       <RenewProrationPills plan={selectedCompanyPlanLive} currentExpiryMs={profileProrationExpiryMs} />
                     ) : null}
@@ -988,7 +1015,7 @@ function UserProfileButton() {
                         profileProrationExpiryMs ??
                         (Number.isFinite(expiryDate.getTime()) ? expiryDate.getTime() : null);
                       const nowMsExp = Date.now();
-                      // Pill par sirf expiry date — din count Credit/Usage pills mein; yahan past date = Expired.
+                      // Pill par sirf expiry date — din count Balance/Usage pills mein; yahan past date = Expired.
                       const expiredPlan = expiryMs != null && expiryMs <= nowMsExp;
                       return (
                         <ProfilePlanStatPill tone="expiry">
@@ -1576,6 +1603,7 @@ export function DesktopAppHeader() {
 
   return (
     <header className="relative sticky top-0 z-30 border-b border-sidebar-border bg-background px-[2px] py-0.5">
+      <EmbeddedAttachmentHeaderProgress />
       {/* Static/Electron: icon sirf sidebar green brand card me — yahan extra black strip nahi (tab strip + duplicate lagta tha). */}
       {/* User request: single header card, but control alignment purane header flow jaisa rakho */}
       {/* User request: header container ko pink tone me dikhana */}
@@ -1590,8 +1618,9 @@ export function DesktopAppHeader() {
         {headerIsMobile ? (
           <div className="flex w-full min-w-0 items-center">
             {/* Sidebar ↔ company: exactly 4px (`mr-1`); outer header se sidebar ~2px. */}
-            <div className="mr-1 flex shrink-0 items-center">
-              <SidebarTrigger />
+            {/* `data-pl-no-edge-swipe-capture`: document capture `preventDefault` edge strip is touch se header button na mare */}
+            <div className="mr-1 flex shrink-0 items-center" data-pl-no-edge-swipe-capture>
+              <SidebarTrigger className="touch-manipulation" />
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
               <div className="min-w-0 flex-1">

@@ -62,6 +62,7 @@ export default function AdminShell({ children }: { children: React.ReactNode }) 
     </Link>
   )
 
+  // Admin borders/tables: `AdminRouteChrome` → `html.pl-admin-route` (globals.css), yahan extra class zaroori nahi.
   return (
     <div className="flex h-screen bg-background">
       <Sidebar className="border-r">

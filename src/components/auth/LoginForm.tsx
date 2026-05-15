@@ -36,7 +36,6 @@ import {
   readRememberEmailEnabled,
   readRememberedEmail,
 } from "@/lib/loginRememberEmail";
-import { isLocalOnlyMode } from "@/lib/localMode";
 import { resolvePostAuthCompanyRoute } from "@/lib/postAuthCompanyRoute";
 
 // One-time handling of redirect result (survives Strict Mode double-mount so we don't consume result twice)
@@ -59,9 +58,9 @@ export function LoginForm() {
   const [passwordAutofillGuard, setPasswordAutofillGuard] = useState(() => !readRememberEmailEnabled());
   const router = useRouter();
   const { toast } = useToast();
-  // Keep post-login navigation consistent: static/local can skip company picker only within valid remember window.
+  // Post-login: `resolvePostAuthCompanyRoute` — web = remember/empty → `/company`; static/APK = last company → `/dashboard`.
   const navigateAfterAuth = useCallback((firebaseUid: string | undefined, replace?: boolean) => {
-    const next = isLocalOnlyMode() ? resolvePostAuthCompanyRoute(firebaseUid) : "/company";
+    const next = resolvePostAuthCompanyRoute(firebaseUid);
     if (replace) {
       router.replace(next);
       return;

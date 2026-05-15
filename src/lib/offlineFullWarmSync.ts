@@ -2,7 +2,7 @@
 
 /**
  * Online hone par: plans localStorage merge, Firestore company root → SQLite pseudo-collection,
- * saari master/voucher mirrors parallel pull + HTTPS attachment blobs IndexedDB prefetch.
+ * saari master/voucher mirrors parallel pull + attachment bytes prefetch (HTTPS signed URL + raw Storage object-path).
  * `OfflineWarmSyncManager` ise debounced call karta — UI block na ho.
  */
 
@@ -20,6 +20,8 @@ import { decryptFirestoreCompanyDocIfNeeded, type ServerBackupCryptoContext } fr
 import { listCompanyDocsFromBrowserDb, upsertCompanyDocInBrowserDb } from "@/lib/localCompanyDocMirror";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
 import { prefetchHttpsAttachmentUrls } from "@/lib/offlineAttachmentUrlCache";
+import { peekAttachmentPrefetchPrioritySnapshot } from "@/lib/attachmentPrefetchPriorityBuffer";
+import { looksLikeFirebaseStorageObjectPath } from "@/lib/firebaseStorageDownloadUrl";
 import { auth } from "@/lib/firebase";
 import { markEmbeddedFullWarmSucceeded } from "@/lib/embeddedWarmBootstrapFlags";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
@@ -49,16 +51,53 @@ const SCRAPE_SKIP_KEYS = new Set([
   "approvalHistory",
 ]);
 
-/** Nested doc se HTTPS attachment URLs scrape — voucher `fileUrls`/party `documents`/`fileUrl`, etc. */
-export function scrapeHttpsAttachmentUrlsFromDocTree(value: unknown, out: Set<string>, depth: number): void {
+/** Forensic: warm/scrape/prefetch proof — `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1`. */
+function offlineWarmForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
+/** Nested doc se attachment URLs scrape — HTTPS + raw `voucher-files/` / `companies/` paths (prefetch + IndexedDB same keys). */
+export function scrapeHttpsAttachmentUrlsFromDocTree(
+  value: unknown,
+  out: Set<string>,
+  depth: number,
+  /** Parent object key — `fileUrls` par non-HTTPS/non-object strings forensic ke liye. */
+  parentKey?: string
+): void {
   if (depth > 28) return;
   if (typeof value === "string") {
     const s = value.trim();
-    if ((s.startsWith("http://") || s.startsWith("https://")) && s.length < 8000) out.add(s);
+    if (!s || s.length >= 8000) {
+      if (offlineWarmForensicEnabled() && s.length >= 8000) {
+        console.warn("[FORENSIC_SCRAPE_SKIP]", {
+          reason: "string_too_long",
+          length: s.length,
+          parentKey: parentKey ?? null,
+        });
+      }
+      return;
+    }
+    if (s.startsWith("http://") || s.startsWith("https://")) {
+      out.add(s);
+      return;
+    }
+    // Mirror/Firestore kabhi signed URL ke bina sirf Storage path string rakhta hai — pehle yahan miss → warm sync offline thumb nahi bharta tha.
+    if (looksLikeFirebaseStorageObjectPath(s)) {
+      out.add(s);
+      return;
+    }
+    if (offlineWarmForensicEnabled() && parentKey === "fileUrls") {
+      console.warn("[FORENSIC_SCRAPE_FILEURLS_NON_PREFETCHABLE]", {
+        parentKey,
+        valueSample: s.length > 800 ? `${s.slice(0, 800)}…` : s,
+        looksLikeFirebaseStorageObjectPath: false,
+        note: "voucher.fileUrls_slot_not_https_and_not_object_path_prefetch_will_skip",
+      });
+    }
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) scrapeHttpsAttachmentUrlsFromDocTree(item, out, depth + 1);
+    for (const item of value) scrapeHttpsAttachmentUrlsFromDocTree(item, out, depth + 1, parentKey);
     return;
   }
   if (value && typeof value === "object") {
@@ -66,7 +105,7 @@ export function scrapeHttpsAttachmentUrlsFromDocTree(value: unknown, out: Set<st
     for (const k of Object.keys(o)) {
       // History/changelog blobs nahi scrape — noise + size
       if (skipAttachmentScrapeKey(k)) continue;
-      scrapeHttpsAttachmentUrlsFromDocTree(o[k], out, depth + 1);
+      scrapeHttpsAttachmentUrlsFromDocTree(o[k], out, depth + 1, k);
     }
   }
 }
@@ -236,6 +275,8 @@ export async function runOfflineFullWarmSync(options: {
       // Auto-full cache mode: embedded app me strict warm caps se files offline miss ho rahi thi; upper budget badhao.
       maxTotalBytesApprox: isEmbeddedClient ? 2_500 * 1024 * 1024 : 350 * 1024 * 1024,
       maxUrls: isEmbeddedClient ? 20_000 : 2600,
+      // Ledger visible rows (buffer) pehle — baaki mirror URLs same run me peeche, skip nahi
+      prioritizeUrls: peekAttachmentPrefetchPrioritySnapshot(),
       signal,
       onItemDone: (done, total) => {
         onProgress?.({ kind: "attachment_item", localCompanyId: localTrim, done, total });
@@ -284,4 +325,137 @@ export async function runOfflineFullWarmSync(options: {
   }
 
   return result;
+}
+
+/** SQLite mirror se scrape + HTTPS prefetch summary — data overlay ke baad background strip ke liye. */
+export type EmbeddedAttachmentPrefetchSummary = {
+  attachmentUrlsSeen: number;
+  prefetchCachedNew: number;
+  prefetchSkippedCache: number;
+  prefetchFailures: number;
+};
+
+/**
+ * Data warm ke baad alag call: attachment bytes IndexedDB/native cache — UI block nahi, header % chal sakta hai.
+ */
+/** Optional caps — `CompanyAttachmentOfflineBackfillManager` web/PWA par bhi “poora mirror” prefetch chalata hai. */
+export type AttachmentPrefetchOverrides = {
+  maxUrls?: number;
+  maxTotalBytesApprox?: number;
+  concurrency?: number;
+};
+
+export async function runEmbeddedAttachmentPrefetchPhase(args: {
+  company: Company | null;
+  localCompanyId: string;
+  signal?: AbortSignal;
+  onProgressPercent?: (pct: number) => void;
+  /** Default: embedded vs browser alag budget; backfill manager yahan aggressive values bhej sakta hai. */
+  prefetchOverrides?: AttachmentPrefetchOverrides;
+}): Promise<EmbeddedAttachmentPrefetchSummary | null> {
+  const { company, localCompanyId, signal, onProgressPercent, prefetchOverrides } = args;
+  if (offlineWarmForensicEnabled()) {
+    console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
+      phase: "entry",
+      localCompanyId: localCompanyId.trim(),
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+      isCloudBackedCompanyShape: isCloudBackedCompanyShape(company),
+    });
+  }
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    onProgressPercent?.(100);
+    if (offlineWarmForensicEnabled()) {
+      console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
+        phase: "early_exit_offline_navigator",
+        navigatorOnLine: false,
+      });
+    }
+    return null;
+  }
+  const trim = localCompanyId.trim();
+  if (!trim || !isCloudBackedCompanyShape(company)) {
+    onProgressPercent?.(100);
+    if (offlineWarmForensicEnabled()) {
+      console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
+        phase: "early_exit_not_cloud_backed_or_empty_company_id",
+        trim,
+        isCloudBackedCompanyShape: isCloudBackedCompanyShape(company),
+      });
+    }
+    return null;
+  }
+
+  const isEmbeddedClient =
+    (typeof window !== "undefined" && isCapacitorNativeApp()) ||
+    (typeof window !== "undefined" && window.location.protocol === "file:");
+
+  const urls = await scrapeLocalMirrorAttachmentUrls(trim);
+  const attachmentUrlsSeen = urls.size;
+  if (offlineWarmForensicEnabled()) {
+    console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
+      phase: "post_scrape_local_mirror",
+      urlsScrapedDistinctCount: attachmentUrlsSeen,
+      sampleScrapedUrls: [...urls].slice(0, 50),
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
+  if (signal?.aborted) {
+    onProgressPercent?.(0);
+    return { attachmentUrlsSeen, prefetchCachedNew: 0, prefetchSkippedCache: 0, prefetchFailures: 0 };
+  }
+
+  if (attachmentUrlsSeen === 0) {
+    onProgressPercent?.(100);
+    if (offlineWarmForensicEnabled()) {
+      console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", { phase: "early_exit_zero_urls_after_scrape" });
+    }
+    return { attachmentUrlsSeen: 0, prefetchCachedNew: 0, prefetchSkippedCache: 0, prefetchFailures: 0 };
+  }
+
+  onProgressPercent?.(0);
+  const defaultMaxUrls = isEmbeddedClient ? 20_000 : 2600;
+  const defaultBudget = isEmbeddedClient ? 2_500 * 1024 * 1024 : 350 * 1024 * 1024;
+  const prefetch = await prefetchHttpsAttachmentUrls(urls, {
+    concurrency: Math.max(1, Math.min(8, prefetchOverrides?.concurrency ?? 6)),
+    maxTotalBytesApprox: prefetchOverrides?.maxTotalBytesApprox ?? defaultBudget,
+    maxUrls: prefetchOverrides?.maxUrls ?? defaultMaxUrls,
+    prioritizeUrls: peekAttachmentPrefetchPrioritySnapshot(),
+    signal,
+    onItemDone: (done, total) => {
+      const pct = total <= 0 ? 100 : Math.min(100, Math.round((done / Math.max(1, total)) * 100));
+      onProgressPercent?.(pct);
+    },
+    onItemLog: (ev) => {
+      if (offlineWarmForensicEnabled()) {
+        console.warn("[FORENSIC_EMBEDDED_PREFETCH_ITEM]", ev);
+      }
+      if (ev.ok) {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[runEmbeddedAttachmentPrefetchPhase:item]", { ok: true, url: ev.url });
+        }
+      } else {
+        console.warn("[runEmbeddedAttachmentPrefetchPhase:item]", { ok: false, url: ev.url, note: ev.note });
+      }
+    },
+  });
+
+  onProgressPercent?.(100);
+  if (offlineWarmForensicEnabled()) {
+    console.warn("[FORENSIC_EMBEDDED_PREFETCH_PHASE]", {
+      phase: "complete",
+      attachmentUrlsSeen,
+      prefetchCachedNew: prefetch.cachedNew,
+      prefetchSkippedCache: prefetch.skippedAlreadyCached,
+      prefetchFailedRaw: prefetch.failed,
+      prefetchSkippedBudget: prefetch.skippedBudget,
+      prefetchFailuresTotal: prefetch.failed + prefetch.skippedBudget,
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
+  return {
+    attachmentUrlsSeen,
+    prefetchCachedNew: prefetch.cachedNew,
+    prefetchSkippedCache: prefetch.skippedAlreadyCached,
+    prefetchFailures: prefetch.failed + prefetch.skippedBudget,
+  };
 }

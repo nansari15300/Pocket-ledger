@@ -68,8 +68,8 @@ import { cn } from "@/lib/utils";
 import { format, startOfDay, endOfDay, startOfMonth, endOfMonth, subDays } from "date-fns";
 import { FilePreview, prewarmPdfThumbnailsForGallery } from "@/components/vouchers/FilePreview";
 import {
-  looksLikeFirebaseStorageObjectPath,
   tryGetStoragePathFromFirebaseDownloadUrl,
+  normalizeFirebaseStorageObjectPathForSdk,
 } from "@/lib/firebaseStorageDownloadUrl";
 import { Combobox } from "@/components/ui/combobox";
 import { useDropzone } from "react-dropzone";
@@ -143,6 +143,18 @@ function getVoucherAttachmentMeta(
   fileIndex: number
 ): { storagePath?: string; fileSize?: number; sourceFileName?: string; contentType?: string } {
   const fromParser = tryGetStoragePathFromFirebaseDownloadUrl(url) ?? undefined;
+  // Mirror / SQLite kabhi HTTPS ke bajay encoded tail rakhta hai — `FilePreview` + PDF thumb ke liye SDK path banao.
+  const fromBareTail =
+    !fromParser && typeof url === "string" && !/^https?:\/\//i.test(url.trim())
+      ? normalizeFirebaseStorageObjectPathForSdk(url)
+      : "";
+  const fromNormalized =
+    fromBareTail &&
+    (/^voucher-files\//i.test(fromBareTail) ||
+      /^companies\//i.test(fromBareTail) ||
+      /^entity-files\//i.test(fromBareTail))
+      ? fromBareTail
+      : undefined;
   const arr = item?.files;
   if (Array.isArray(arr) && arr.length > 0) {
     const match = arr.find((f: any) => f && (f.url === url || f.downloadUrl === url));
@@ -155,9 +167,9 @@ function getVoucherAttachmentMeta(
     const sourceFileName = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : undefined;
     const ctRaw = match?.contentType ?? at?.contentType ?? match?.mimeType;
     const contentType = typeof ctRaw === "string" && ctRaw.includes("/") ? ctRaw.trim() : undefined;
-    return { storagePath: sp ?? fromParser, fileSize, sourceFileName, contentType };
+    return { storagePath: sp ?? fromParser ?? fromNormalized, fileSize, sourceFileName, contentType };
   }
-  return { storagePath: fromParser, fileSize: undefined, sourceFileName: undefined, contentType: undefined };
+  return { storagePath: fromParser ?? fromNormalized, fileSize: undefined, sourceFileName: undefined, contentType: undefined };
 }
 
 /** Tile neeche: URL se label; warna IndexedDB pending / voucher naam — JPEG, PDF, … */
@@ -184,15 +196,6 @@ function openKindFromGalleryCaption(caption: string, url: string): "pdf" | "imag
   )
     return "image";
   return "other";
-}
-
-/** Raw Storage object-path (`voucher-files/...`) ko direct `<img src>` me mat bhejo; `FilePreview` resolver handle karega. */
-function canRenderDirectGalleryImageUrl(rawUrl: string): boolean {
-  const value = String(rawUrl || "").trim();
-  if (!value) return false;
-  if (looksLikeFirebaseStorageObjectPath(value)) return false;
-  if (isLocalFileRef(value)) return false;
-  return true;
 }
 
 /** Footer card ke andar, Per page ke niche — chhota pager taaki poora footer patla rahe */
@@ -800,28 +803,8 @@ function CompanyFilesTab({ previewSize, onSizeChange, onEditVoucher }: { preview
                             style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
                           >
                             {(() => {
-                              const cleanU = String(url).split("?")[0].toLowerCase();
-                              // `local:` / raw storage-path par <img src> toot sakta hai; FilePreview fallback resolver se stable preview.
-                              const isDirectImg =
-                                canRenderDirectGalleryImageUrl(String(url)) &&
-                                formatCaption !== "PDF" &&
-                                (["JPG", "JPEG", "PNG", "GIF", "WEBP", "BMP", "SVG"].includes(formatCaption) ||
-                                  String(url).startsWith("data:image/") ||
-                                  /\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU));
-                              const openAtt = () =>
-                                void openAttachmentInApp(url, {
-                                  title: cleanFileName,
-                                  kind: openKindFromGalleryCaption(formatCaption, url),
-                                });
-                              return isDirectImg ? (
-                                // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
-                                <img
-                                  src={url}
-                                  alt=""
-                                  className="h-auto max-h-full w-full max-w-full cursor-pointer object-contain"
-                                  onClick={openAtt}
-                                />
-                              ) : (
+                              // Tile jaisa: signed URL `<img>` offline WebView me fail — `FilePreview` IndexedDB / blob path
+                              return (
                                 <FilePreview
                                   file={url}
                                   storagePath={attachMeta.storagePath}
@@ -1830,34 +1813,19 @@ function UnassignedDocumentsTab({ handleAttachToVoucher, previewSize, onSizeChan
                         className="flex shrink-0 items-center justify-center overflow-auto border-b border-blue-600/25 bg-white p-2 dark:bg-zinc-950"
                         style={{ width: GALLERY_HOVER_PREVIEW_BOX.width, height: GALLERY_HOVER_PREVIEW_BOX.height }}
                       >
-                        {(() => {
-                          const cleanU = String(file.url).split("?")[0].toLowerCase();
-                          const isImage =
-                            // Company tab jaisa guard: storage object path pe direct `<img>` avoid, warna broken tile dikhta hai.
-                            canRenderDirectGalleryImageUrl(file.url) &&
-                            (/\.(jpe?g|png|gif|webp|bmp|svg)$/.test(cleanU) || String(file.url).startsWith("data:image/"));
-                          return isImage ? (
-                            // eslint-disable-next-line @next/next/no-img-element -- tooltip large preview
-                            <img
-                              src={file.url}
-                              alt=""
-                              className="h-auto max-h-full w-full max-w-full cursor-pointer object-contain"
-                              onClick={openAtt}
-                            />
-                          ) : (
-                            <FilePreview
-                              file={file.url}
-                              storagePath={file.path}
-                              size={700}
-                              previewBox={GALLERY_HOVER_PREVIEW_BOX}
-                              objectFit="contain"
-                              enableHoverFullPreview={false}
-                              showFormatBadge={false}
-                              fileSize={file.size}
-                              holdAttachmentClipboard={false}
-                            />
-                          );
-                        })()}
+                        {(() => (
+                          <FilePreview
+                            file={file.url}
+                            storagePath={file.path}
+                            size={700}
+                            previewBox={GALLERY_HOVER_PREVIEW_BOX}
+                            objectFit="contain"
+                            enableHoverFullPreview={false}
+                            showFormatBadge={false}
+                            fileSize={file.size}
+                            holdAttachmentClipboard={false}
+                          />
+                        ))()}
                       </div>
                       <p className="border-b border-blue-600/25 bg-white px-2 py-1 text-center text-[10px] font-bold text-muted-foreground dark:bg-zinc-950">
                         {getAttachmentFormatLabel(file.url)}

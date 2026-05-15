@@ -2,7 +2,6 @@
 "use client";
 
 import type { Tax } from "@/components/tax/types";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Receipt } from "lucide-react";
@@ -20,6 +19,7 @@ import {
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
+import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
 
 export function TaxList({ 
     taxes, 
@@ -83,12 +83,12 @@ export function TaxList({
                             <div className="pl-master-list-row-leading">
                             <div className="relative flex-shrink-0">
                               <EntityFileAttachmentHover fileUrl={attachmentPreviewUrl} triggerClassName="inline-flex shrink-0 rounded-md">
-                                <Avatar className="h-8 w-8 text-sm bg-muted text-muted-foreground">
-                                  <AvatarImage src={attachmentPreviewUrl ?? undefined} alt={tax.name} />
-                                  <AvatarFallback>
-                                    <Receipt className="h-4 w-4" />
-                                  </AvatarFallback>
-                                </Avatar>
+                                <ResolvedEntityAvatar
+                                  className="h-8 w-8 text-sm bg-muted text-muted-foreground"
+                                  src={attachmentPreviewUrl ?? undefined}
+                                  alt={tax.name}
+                                  fallbackSlot={<Receipt className="h-4 w-4" />}
+                                />
                               </EntityFileAttachmentHover>
                               {(pendingApprovalByTaxId[tax.id] ?? 0) > 0 && (
                                 <span

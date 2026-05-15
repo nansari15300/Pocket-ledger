@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { doc, updateDoc, Timestamp } from "firebase/firestore";
+import { doc, updateDoc, Timestamp, writeBatch } from "firebase/firestore";
 import { firestore as db } from "@/lib/firebase";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,30 @@ import {
 import { ScrollArea } from "../ui/scroll-area";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCompany as useCompanyContext } from "@/hooks/useCompany";
+import { useAuth } from "@/hooks/useAuth";
+
+/** SuperAdmin panel: server par owned companies drift heal + `users` canonical (client me `firebase-admin` nahi). */
+async function postReconcileOwnerPlanFromAdmin(
+  firebaseUser: import("firebase/auth").User | null,
+  ownerId: string
+): Promise<void> {
+  const oid = ownerId.trim();
+  if (!oid || !firebaseUser) return;
+  try {
+    const token = await firebaseUser.getIdToken();
+    const res = await fetch("/api/admin/reconcile-owner-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ownerId: oid }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.warn("[CompanyDetails] reconcile-owner-plan", res.status, t);
+    }
+  } catch (e) {
+    console.warn("[CompanyDetails] reconcile-owner-plan", e);
+  }
+}
 
 
 // Get all possible entitlement keys from the default plans
@@ -120,13 +144,48 @@ const InfoPopupContent = ({ descriptions }: { descriptions: { en: string; ne: st
 };
 
 
+/** Firestore dot-path patch: jahan company setting undefined hai wahan plan default seed (admin `updatePlan` jaisa, per-row). */
+function buildPlanIdFirestorePatch(target: Company, planId: PlanId): Record<string, unknown> {
+    const planDefaults = DEFAULT_PLANS[planId].entitlements;
+    const settingsUpdate: Record<string, boolean> = {};
+    Object.keys(planDefaults).forEach((key) => {
+        const featureKey = key as EntitlementKey;
+        if (target.settings?.[featureKey] === undefined) {
+            settingsUpdate[`settings.${featureKey}`] = planDefaults[featureKey] as boolean;
+        }
+    });
+    return { planId, ...settingsUpdate };
+}
+
+/** Local `Company` preview: planId + missing settings keys ko defaults se bharo (UI list ke liye). */
+function companyAfterPlanIdPatch(target: Company, planId: PlanId): Company {
+    const planDefaults = DEFAULT_PLANS[planId].entitlements;
+    const nextSettings = { ...(target.settings || {}) } as Company["settings"];
+    (Object.keys(planDefaults) as EntitlementKey[]).forEach((featureKey) => {
+        if (nextSettings![featureKey] === undefined) {
+            (nextSettings as Record<string, unknown>)[featureKey] = planDefaults[featureKey] as unknown;
+        }
+    });
+    return { ...target, planId, settings: nextSettings };
+}
+
 interface CompanyDetailsProps {
     company: Company;
+    /** Same owner ki saari Firestore companies — plan tier ek account par sync (admin user request). */
+    sameOwnerCompanies: Company[];
     onUpdate: (updatedCompany: Company) => void;
+    /** Plan ya shared expiry ke baad kai rows ek saath — `rows` state ek hi tick me. */
+    onSeveralCompaniesUpdated: (updated: Company[]) => void;
     plans: Plan[];
 }
 
-export function CompanyDetails({ company, onUpdate, plans }: CompanyDetailsProps) {
+export function CompanyDetails({
+    company,
+    sameOwnerCompanies,
+    onUpdate,
+    onSeveralCompaniesUpdated,
+    plans,
+}: CompanyDetailsProps) {
     const [isUpdating, setIsUpdating] = useState(false);
     const [isResettingPassword, setIsResettingPassword] = useState(false);
     const [newPassword, setNewPassword] = useState("");
@@ -134,51 +193,88 @@ export function CompanyDetails({ company, onUpdate, plans }: CompanyDetailsProps
     const [isResetDialogOpen, setIsResetDialogOpen] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const { triggerSync, reloadLocalCompanyRegistry } = useCompanyContext();
+    const { user: firebaseUser } = useAuth();
 
     const updatePlan = async (planId: PlanId) => {
         setIsUpdating(true);
         try {
-            const planDefaults = DEFAULT_PLANS[planId].entitlements;
-            const settingsUpdate: Record<string, boolean> = {};
-            
-            Object.keys(planDefaults).forEach(key => {
-                const featureKey = key as EntitlementKey;
-                const companySetting = company.settings?.[featureKey];
-
-                if (companySetting === undefined) {
-                    settingsUpdate[`settings.${featureKey}`] = planDefaults[featureKey] as boolean;
-                }
-            });
-
-            await updateDoc(doc(db, 'companies', company.id), { planId, ...settingsUpdate });
-            onUpdate({ ...company, planId });
+            // Ek hi `ownerId` par jitni bhi companies — sab par wahi `planId` (per-company entitlement defaults jahan pehle undefined).
+            const targets =
+                sameOwnerCompanies.length > 0
+                    ? sameOwnerCompanies
+                    : [company];
+            // Ek hi waqt — saari owned companies par "Joined date" / ramp billing (`planUpgradedAt*`) align (user multi-company).
+            const nowMs = Date.now();
+            const planUpgradedAt = Timestamp.fromMillis(nowMs);
+            const batch = writeBatch(db);
+            const patched: Company[] = [];
+            for (const c of targets) {
+                batch.update(doc(db, "companies", c.id), {
+                    ...buildPlanIdFirestorePatch(c, planId),
+                    planUpgradedAt,
+                    planUpgradedAtMs: nowMs,
+                });
+                patched.push({
+                    ...companyAfterPlanIdPatch(c, planId),
+                    planUpgradedAt,
+                    planUpgradedAtMs: nowMs,
+                });
+            }
+            await batch.commit();
+            const ownerIdForReconcile = String((targets[0]?.ownerId ?? company.ownerId) ?? "").trim();
+            await postReconcileOwnerPlanFromAdmin(firebaseUser, ownerIdForReconcile);
+            onSeveralCompaniesUpdated(patched);
             triggerSync();
-            toast({ title: "Success", description: "Company plan updated." });
+            toast({
+                title: "Success",
+                description:
+                    targets.length > 1
+                        ? `Plan "${planId}" — is owner ki ${targets.length} companies par sync ho gaya.`
+                        : "Company plan updated.",
+            });
         } catch (error) {
             console.error(error);
             toast({ variant: "destructive", title: "Error", description: "Failed to update plan." });
         } finally {
             setIsUpdating(false);
         }
-    }
+    };
 
     const updateExpiry = async (isoDate: string) => {
         if (!isoDate) return;
         setIsUpdating(true);
         try {
             const at = Timestamp.fromDate(new Date(isoDate));
-            await updateDoc(doc(db, 'companies', company.id), { planExpiry: at });
-            onUpdate({ ...company, planExpiry: at });
+            const targets =
+                sameOwnerCompanies.length > 0
+                    ? sameOwnerCompanies
+                    : [company];
+            const batch = writeBatch(db);
+            const patched: Company[] = [];
+            for (const c of targets) {
+                batch.update(doc(db, "companies", c.id), { planExpiry: at });
+                patched.push({ ...c, planExpiry: at });
+            }
+            await batch.commit();
+            const ownerIdForReconcile = String((targets[0]?.ownerId ?? company.ownerId) ?? "").trim();
+            await postReconcileOwnerPlanFromAdmin(firebaseUser, ownerIdForReconcile);
+            onSeveralCompaniesUpdated(patched);
             reloadLocalCompanyRegistry();
             triggerSync();
-            toast({ title: "Success", description: "Plan expiry updated." });
+            toast({
+                title: "Success",
+                description:
+                    targets.length > 1
+                        ? `Plan expiry — is owner ki ${targets.length} companies par sync ho gaya.`
+                        : "Plan expiry updated.",
+            });
         } catch (error) {
             console.error(error);
             toast({ variant: "destructive", title: "Error", description: "Failed to update expiry." });
         } finally {
             setIsUpdating(false);
         }
-    }
+    };
 
     const resetCompanyPassword = async () => {
         if (!newPassword) {

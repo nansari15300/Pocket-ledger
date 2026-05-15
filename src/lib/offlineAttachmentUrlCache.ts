@@ -5,13 +5,14 @@
  * `FilePreview` / galley pe pehle yahan dekho → offline open after online preload.
  */
 
-import { openDB } from "@/lib/offlineDb";
+import { openDB, getPendingIndexedDbFullName } from "@/lib/offlineDb";
 import {
   looksLikeFirebaseStorageDownloadUrl,
   tryGetBlobFromFirebaseStorageDownloadUrl,
 } from "@/lib/storageGetBlobFromDownloadUrl";
 import {
   looksLikeFirebaseStorageObjectPath,
+  normalizeFirebaseStorageObjectPathForSdk,
   tryGetStoragePathFromFirebaseDownloadUrl,
 } from "@/lib/firebaseStorageDownloadUrl";
 import { storage } from "@/lib/firebase";
@@ -27,9 +28,15 @@ import {
 } from "@/lib/attachmentFileRefStore";
 import { Capacitor } from "@capacitor/core";
 import { getBlob, ref } from "firebase/storage";
+import { computeSha256HexFromBlob } from "@/lib/security/sha256Hex";
 
-/** Bade files / CDN video — prefetch budget se exclude (bytes). */
-export const OFFLINE_ATTACHMENT_MAX_CACHED_BYTES = 40 * 1024 * 1024;
+/** Forensic: build par `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — cache HIT/MISS / stable-key proof (temporary trace only). */
+function offlineAttachmentForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
+/** Bade PDF/scan offline bhi cache ho sakein — purana 40MB se kai vouchers miss ho rahe the. */
+export const OFFLINE_ATTACHMENT_MAX_CACHED_BYTES = 96 * 1024 * 1024;
 
 /** SHA-256 hex — stable IndexedDB primary key */
 export async function offlineAttachmentStoreId(urlStr: string): Promise<string> {
@@ -44,13 +51,36 @@ export async function offlineAttachmentStoreId(urlStr: string): Promise<string> 
 function getStableFirebaseObjectKey(urlStr: string): string | null {
   try {
     const raw = String(urlStr || "").trim();
-    const path = tryGetStoragePathFromFirebaseDownloadUrl(raw);
-    if (path) return `firebase-object:${path}`;
-    if (looksLikeFirebaseStorageObjectPath(raw)) {
-      return `firebase-object:${raw.replace(/^\/+/, "")}`;
+    const pathFromDownloadUrl = tryGetStoragePathFromFirebaseDownloadUrl(raw);
+    // Bare / encoded tail ko `voucher-files/…` me map karo taaki HTTPS vs relative same disk cache hit kare.
+    const normForSdk = normalizeFirebaseStorageObjectPathForSdk(raw);
+    let stable: string | null = null;
+    if (pathFromDownloadUrl) stable = `firebase-object:${pathFromDownloadUrl}`;
+    else if (
+      /^voucher-files\//i.test(normForSdk) ||
+      /^companies\//i.test(normForSdk) ||
+      /^entity-files\//i.test(normForSdk)
+    ) {
+      stable = `firebase-object:${normForSdk.replace(/^\/+/, "")}`;
     }
-    return null;
-  } catch {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_STABLE_KEY]", {
+        originalInput: urlStr,
+        trimmed: raw,
+        pathFromDownloadUrlParser: pathFromDownloadUrl,
+        normalizedPathForSdk: normForSdk,
+        stableFirebaseObjectKey: stable,
+      });
+    }
+    return stable;
+  } catch (e) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_STABLE_KEY]", {
+        originalInput: urlStr,
+        stableFirebaseObjectKey: null,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     return null;
   }
 }
@@ -66,12 +96,41 @@ function supportsOfflineAttachmentLookup(raw: string): boolean {
 
 async function getOfflineAttachmentStoreIdsForLookup(urlStr: string): Promise<string[]> {
   const trimmed = urlStr.trim();
-  if (!supportsOfflineAttachmentLookup(trimmed)) return [];
+  if (!supportsOfflineAttachmentLookup(trimmed)) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_STORE_IDS]", {
+        originalInput: urlStr,
+        trimmed,
+        supportsLookup: false,
+        hashIds: [],
+        stableFirebaseObjectKey: null,
+      });
+    }
+    return [];
+  }
   const ids: string[] = [];
-  ids.push(await offlineAttachmentStoreId(trimmed));
+  const primaryHash = await offlineAttachmentStoreId(trimmed);
+  ids.push(primaryHash);
   const stable = getStableFirebaseObjectKey(trimmed);
-  if (stable) ids.push(await offlineAttachmentStoreId(stable));
-  return Array.from(new Set(ids));
+  let stableHash: string | null = null;
+  if (stable) {
+    stableHash = await offlineAttachmentStoreId(stable);
+    ids.push(stableHash);
+  }
+  const uniq = Array.from(new Set(ids));
+  if (offlineAttachmentForensicEnabled()) {
+    console.warn("[FORENSIC_OFFLINE_CACHE_STORE_IDS]", {
+      originalInput: urlStr,
+      trimmed,
+      supportsLookup: true,
+      stableFirebaseObjectKey: stable,
+      hashIdPrimary: primaryHash,
+      hashIdStableAlias: stableHash,
+      hashIds: uniq,
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
+  return uniq;
 }
 
 async function getOfflineAttachmentStoreIdsForWrite(urlStr: string): Promise<string[]> {
@@ -99,12 +158,22 @@ async function getBlobFromFirebaseObjectPath(path: string): Promise<Blob | null>
   }
 }
 
-async function blobFromHybridFetch(url: string, signal?: AbortSignal): Promise<HybridFetchResult> {
-  if (looksLikeFirebaseStorageObjectPath(url)) {
+async function blobFromHybridFetch(
+  url: string,
+  signal?: AbortSignal,
+  /** Prefetch = lambi wait; UI hover/click = chhota cap taaki spinner 20s na atke */
+  timeoutMs: number = PREFETCH_REQUEST_TIMEOUT_MS
+): Promise<HybridFetchResult> {
+  const objectPathForSdk = normalizeFirebaseStorageObjectPathForSdk(url);
+  if (
+    /^voucher-files\//i.test(objectPathForSdk) ||
+    /^companies\//i.test(objectPathForSdk) ||
+    /^entity-files\//i.test(objectPathForSdk)
+  ) {
     // Mirrored rows me raw object-path ho to bhi cache hydrate ho; sirf HTTPS URLs par depend mat karo.
     const b = await runWithTimeoutSignal(
-      () => getBlobFromFirebaseObjectPath(url),
-      PREFETCH_REQUEST_TIMEOUT_MS,
+      () => getBlobFromFirebaseObjectPath(objectPathForSdk),
+      timeoutMs,
       signal
     ).catch(() => null);
     if (b && b.size > 0) {
@@ -118,7 +187,7 @@ async function blobFromHybridFetch(url: string, signal?: AbortSignal): Promise<H
   if (looksLikeFirebaseStorageDownloadUrl(url)) {
     const b = await runWithTimeoutSignal(
       (scopedSignal) => tryGetBlobFromFirebaseStorageDownloadUrl(url, scopedSignal),
-      PREFETCH_REQUEST_TIMEOUT_MS,
+      timeoutMs,
       signal
     ).catch(() => null);
     if (b && b.size > 0) {
@@ -128,7 +197,7 @@ async function blobFromHybridFetch(url: string, signal?: AbortSignal): Promise<H
   try {
     const res = await runWithTimeoutSignal(
       (scopedSignal) => fetch(url, { mode: "cors", credentials: "omit", signal: scopedSignal }),
-      PREFETCH_REQUEST_TIMEOUT_MS,
+      timeoutMs,
       signal
     );
     if (!res.ok) {
@@ -197,10 +266,12 @@ type PrefetchItemLogEvent = {
 const RETRYABLE_HTTP = new Set([429, 502, 503, 504]);
 const PREFETCH_MAX_RETRIES = 3;
 const PREFETCH_BASE_BACKOFF_MS = 350;
-/** Stability guard: mobile warm-sync me 6 se zyada parallel download network/task ko unstable bana sakte hain. */
-const PREFETCH_CONCURRENCY_HARD_MAX = 6;
+/** Stability guard: mobile warm-sync me zyada parallel download unstable; backfill 7 worker tak allow. */
+const PREFETCH_CONCURRENCY_HARD_MAX = 8;
 /** Per-item guard: hung request worker ko indefinite block na kare. */
 const PREFETCH_REQUEST_TIMEOUT_MS = 20_000;
+/** Hover / FilePreview / openAttachment — cache miss par poora warm timeout mat lagao (user “tick” slow feel). */
+const UI_ATTACHMENT_CACHE_MISS_TIMEOUT_MS = 7_500;
 
 /** Parent abort + timeout ko combine karke single request signal banata hai. */
 async function runWithTimeoutSignal<T>(
@@ -271,12 +342,46 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
       for (const id of ids) {
         const row = await getAttachmentFileRef("offline_cache", id);
         if (!row) continue;
-        const b = await readAttachmentBlobFromDataDir(row.filePath, row.contentType);
-        if (b && b.size > 0) return b;
+        const b = await readAttachmentBlobFromDataDir(
+          row.filePath,
+          row.contentType,
+          row.sha256Hex ?? undefined
+        );
+        if (b && b.size > 0) {
+          if (offlineAttachmentForensicEnabled()) {
+            console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+              originalInput: urlStr,
+              cacheHit: true,
+              blobSource: "native_data_dir_via_offline_cache_sqlite_row",
+              idMatched: id,
+              byteSize: b.size,
+              navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+            });
+          }
+          return b;
+        }
+      }
+      if (offlineAttachmentForensicEnabled()) {
+        console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+          originalInput: urlStr,
+          cacheHit: false,
+          blobSource: null,
+          idsTried: ids,
+          store: "native_offline_cache",
+          navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+        });
       }
       return null;
     }
     if (typeof indexedDB === "undefined") return null;
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_IDB_BLOB]", {
+        phase: "indexeddb_read_path_before_openDB",
+        dbName: getPendingIndexedDbFullName(),
+        store: "offlineAttachmentBlobs",
+        originalInputSample: String(urlStr).slice(0, 160),
+      });
+    }
     const db = await openDB();
     return await new Promise<Blob | null>((resolve) => {
       try {
@@ -284,6 +389,16 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
         const st = tx.objectStore("offlineAttachmentBlobs");
         const tryAt = (idx: number) => {
           if (idx >= ids.length) {
+            if (offlineAttachmentForensicEnabled()) {
+              console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+                originalInput: urlStr,
+                cacheHit: false,
+                blobSource: null,
+                idsTried: ids,
+                store: "indexeddb_offlineAttachmentBlobs",
+                navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+              });
+            }
             resolve(null);
             return;
           }
@@ -291,16 +406,42 @@ export async function getOfflineCachedAttachmentBlob(urlStr: string): Promise<Bl
           req.onerror = () => tryAt(idx + 1);
           req.onsuccess = () => {
             const row = req.result as CachedRow | undefined;
-            if (row?.blob && row.blob.size) resolve(row.blob);
-            else tryAt(idx + 1);
+            if (row?.blob && row.blob.size) {
+              if (offlineAttachmentForensicEnabled()) {
+                console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+                  originalInput: urlStr,
+                  cacheHit: true,
+                  blobSource: "indexeddb_offlineAttachmentBlobs",
+                  idMatched: ids[idx],
+                  byteSize: row.blob.size,
+                  navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+                });
+              }
+              resolve(row.blob);
+            } else tryAt(idx + 1);
           };
         };
         tryAt(0);
       } catch {
+        if (offlineAttachmentForensicEnabled()) {
+          console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+            originalInput: urlStr,
+            cacheHit: false,
+            blobSource: null,
+            error: "indexeddb_transaction_throw",
+          });
+        }
         resolve(null);
       }
     });
-  } catch {
+  } catch (e) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_READ]", {
+        originalInput: urlStr,
+        cacheHit: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     return null;
   }
 }
@@ -333,8 +474,28 @@ export async function getOfflineCachedAttachmentNativeRef(
 }
 
 async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
-  if (!blob?.size || blob.size > OFFLINE_ATTACHMENT_MAX_CACHED_BYTES) return;
+  if (!blob?.size || blob.size > OFFLINE_ATTACHMENT_MAX_CACHED_BYTES) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_PUT]", {
+        originalInput: urlStr,
+        skipped: true,
+        reason: !blob?.size ? "empty_blob" : "over_max_bytes",
+        blobSize: blob?.size ?? 0,
+      });
+    }
+    return;
+  }
   const ids = await getOfflineAttachmentStoreIdsForWrite(urlStr.trim());
+  if (offlineAttachmentForensicEnabled()) {
+    console.warn("[FORENSIC_OFFLINE_CACHE_PUT]", {
+      originalInput: urlStr,
+      blobSize: blob.size,
+      contentType: blob.type || null,
+      hashIdsWritten: ids,
+      targetStore: isCapacitorNativeApp() ? "native_offline_cache_sqlite+datadir" : "indexeddb_offlineAttachmentBlobs",
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
   if (isCapacitorNativeApp()) {
     // Capacitor/mobile: bytes file-system me; SQLite row me path+meta to avoid IndexedDB blob overhead.
     const canonicalId = ids[0];
@@ -342,6 +503,7 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
     const path = offlineCacheDataDirPath(canonicalId, blob.type || null);
     const ok = await writeAttachmentBlobToDataDir(path, blob);
     if (!ok) return;
+    const sha256Hex = await computeSha256HexFromBlob(blob);
     const meta: OfflineCacheMeta = { url: urlStr.trim(), cachedAtMs: Date.now() };
     // Same file ko multiple lookup keys (signed URL variants) se hit karne ke liye same path sab ids par map karo.
     for (const id of ids) {
@@ -353,6 +515,7 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
         size: blob.size,
         metaJson: JSON.stringify(meta),
         updatedAt: meta.cachedAtMs,
+        sha256Hex,
       });
     }
     return;
@@ -365,6 +528,15 @@ async function putCachedBlob(urlStr: string, blob: Blob): Promise<void> {
     contentType: blob.type?.trim() || null,
   };
   try {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_IDB_BLOB]", {
+        phase: "indexeddb_write_path_before_openDB",
+        dbName: getPendingIndexedDbFullName(),
+        store: "offlineAttachmentBlobs",
+        urlSample: urlStr.trim().slice(0, 160),
+        blobSize: blob.size,
+      });
+    }
     const db = await openDB();
     await new Promise<void>((resolve) => {
       const tx = db.transaction("offlineAttachmentBlobs", "readwrite");
@@ -395,12 +567,92 @@ export async function getRemoteAttachmentBlobPreferOfflineCache(
   signal?: AbortSignal
 ): Promise<Blob | null> {
   const trimmed = urlStr.trim();
-  if (!supportsOfflineAttachmentLookup(trimmed)) return null;
+  if (!supportsOfflineAttachmentLookup(trimmed)) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+        originalInput: urlStr,
+        trimmed,
+        outcome: "unsupported_lookup_string",
+        finalBlobSource: null,
+      });
+    }
+    return null;
+  }
   const cached = await getOfflineCachedAttachmentBlob(trimmed);
-  if (cached && cached.size > 0) return cached;
+  if (cached && cached.size > 0) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+        originalInput: urlStr,
+        trimmed,
+        outcome: "return_primary_cache_hit",
+        finalBlobSource: "indexeddb_or_native_cache_via_getOfflineCachedAttachmentBlob",
+        byteSize: cached.size,
+        navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+      });
+    }
+    return cached;
+  }
+  // Tail-only mirror key alag ho to normalized path se doosri cache key try karo.
+  const altKey = /^https?:\/\//i.test(trimmed) ? "" : normalizeFirebaseStorageObjectPathForSdk(trimmed);
+  if (altKey && altKey !== trimmed) {
+    const altCached = await getOfflineCachedAttachmentBlob(altKey);
+    if (altCached && altCached.size > 0) {
+      if (offlineAttachmentForensicEnabled()) {
+        console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+          originalInput: urlStr,
+          trimmed,
+          altKey,
+          outcome: "return_alt_key_cache_hit",
+          finalBlobSource: "indexeddb_or_native_cache_via_alt_normalized_key",
+          byteSize: altCached.size,
+          navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+        });
+      }
+      return altCached;
+    }
+  }
 
-  const fetchResult = await blobFromHybridFetch(trimmed, signal);
+  // Cache miss + offline: network/SDK fetch mat chalao — warna lamba hang / spinner (`HoverPreviewHttpsAwareImage`).
+  // APK WebView: `navigator.onLine` kabhi galat false hota hai jab Firebase chal raha ho — thumbnail mat roko.
+  if (typeof navigator !== "undefined" && !navigator.onLine && !isCapacitorNativeApp()) {
+    if (offlineAttachmentForensicEnabled()) {
+      console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+        originalInput: urlStr,
+        trimmed,
+        altKey: altKey || null,
+        outcome: "offline_bailout_no_network_fetch",
+        reason: "navigator.offline_and_not_capacitor",
+        finalBlobSource: null,
+        isCapacitorNativeApp: isCapacitorNativeApp(),
+      });
+    }
+    return null;
+  }
+
+  const fetchTarget = altKey && altKey !== trimmed && !/^https?:\/\//i.test(trimmed) ? altKey : trimmed;
+  const fetchResult = await blobFromHybridFetch(fetchTarget, signal, UI_ATTACHMENT_CACHE_MISS_TIMEOUT_MS);
   const fresh = fetchResult.blob;
+  if (offlineAttachmentForensicEnabled()) {
+    console.warn("[FORENSIC_OFFLINE_CACHE_REMOTE_PREFER]", {
+      originalInput: urlStr,
+      trimmed,
+      fetchTarget,
+      hybridFetchSource: fetchResult.source,
+      hybridFetchStatus: fetchResult.status,
+      hybridFetchError: fetchResult.error ?? null,
+      outcome: fresh && fresh.size > 0 ? "network_or_sdk_fresh_blob" : "fetch_returned_empty",
+      finalBlobSource:
+        fresh && fresh.size > 0
+          ? fetchResult.source === "firebase_sdk"
+            ? "firebase_sdk_getBlob_or_tryGetBlobFromFirebaseStorageDownloadUrl"
+            : fetchResult.source === "http_fetch"
+              ? "http_fetch_cors"
+              : String(fetchResult.source)
+          : null,
+      byteSize: fresh?.size ?? 0,
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
   if (fresh?.size && fresh.size <= OFFLINE_ATTACHMENT_MAX_CACHED_BYTES) {
     void putCachedBlob(trimmed, fresh);
   }
@@ -427,6 +679,8 @@ export async function prefetchHttpsAttachmentUrls(
     maxTotalBytesApprox?: number;
     /** Max DISTINCT URLs attempted */
     maxUrls?: number;
+    /** Visible ledger / UI — same run me pehle attempt; baaki mirror URLs skip nahi, sirf order */
+    prioritizeUrls?: readonly string[];
     signal?: AbortSignal;
     /** Har URL attempt complete — first-login overlay attachment row % ke liye */
     onItemDone?: (done: number, total: number) => void;
@@ -443,20 +697,46 @@ export async function prefetchHttpsAttachmentUrls(
       })
     ),
   ];
-  uniq.sort(); // deterministic
+  if (offlineAttachmentForensicEnabled()) {
+    const rawDistinct = [...new Set([...urls].map((u) => String(u || "").trim()).filter((s) => s.length > 0))];
+    const rejected = rawDistinct.filter((v) => !isEligibleAttachmentHttpsUrl(v) && !looksLikeFirebaseStorageObjectPath(v));
+    console.warn("[FORENSIC_PREFETCH_INPUT_FILTER]", {
+      rawDistinctCount: rawDistinct.length,
+      acceptedDistinctCount: uniq.length,
+      rejectedDistinctCount: rejected.length,
+      rejectedSample: rejected.slice(0, 60),
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
+  uniq.sort(); // deterministic — prioritize ke baad baaki company files stable order
   const maxUrls = typeof options?.maxUrls === "number" ? Math.max(0, options.maxUrls) : 2500;
-  const list = uniq.slice(0, maxUrls);
+  const seenOrdered = new Set<string>();
+  const ordered: string[] = [];
+  for (const raw of options?.prioritizeUrls ?? []) {
+    const value = String(raw || "").trim();
+    if (!isEligibleAttachmentHttpsUrl(value) && !looksLikeFirebaseStorageObjectPath(value)) continue;
+    if (seenOrdered.has(value)) continue;
+    seenOrdered.add(value);
+    ordered.push(value);
+  }
+  for (const value of uniq) {
+    if (seenOrdered.has(value)) continue;
+    seenOrdered.add(value);
+    ordered.push(value);
+  }
+  const list = ordered.slice(0, maxUrls);
   // Strict pool cap: caller kitni bhi badi value de, worker pool max 6 hi rahe.
   const concurrency = Math.max(1, Math.min(PREFETCH_CONCURRENCY_HARD_MAX, options?.concurrency ?? 6));
   let remainingBudget = typeof options?.maxTotalBytesApprox === "number" ? Math.max(0, options!.maxTotalBytesApprox!) : 350 * 1024 * 1024;
-  // Start diagnostics: empty/sliced list ya zero-budget cases ko first line me hi visible rakho.
-  console.log("[offlineAttachmentUrlCache] prefetch_start", {
-    inputUnique: uniq.length,
-    totalItems: list.length,
-    maxUrls,
-    concurrency,
-    remainingBudget,
-  });
+  if (process.env.NODE_ENV === "development") {
+    console.log("[offlineAttachmentUrlCache] prefetch_start", {
+      inputUnique: uniq.length,
+      totalItems: list.length,
+      maxUrls,
+      concurrency,
+      remainingBudget,
+    });
+  }
 
   const progress: PrefetchAttachmentsProgress = {
     cachedNew: 0,
@@ -497,8 +777,9 @@ export async function prefetchHttpsAttachmentUrls(
       const i = idx++;
       if (i >= list.length) return;
       const u = list[i];
-      // Worker start debug: kaunsa URL kis index par process ho raha hai, start par hi trace mile.
-      console.log("[offlineAttachmentUrlCache] worker_start", { index: i, total: list.length, url: u });
+      if (process.env.NODE_ENV === "development") {
+        console.log("[offlineAttachmentUrlCache] worker_start", { index: i, total: list.length, url: u });
+      }
       try {
         const existing = await getOfflineCachedAttachmentBlob(u);
         if (existing?.size) {
@@ -556,13 +837,14 @@ export async function prefetchHttpsAttachmentUrls(
             );
             break;
           }
-          // Cache write attempt debug: path/id calculation se pehle URL+size trace.
-          console.log("[offlineAttachmentUrlCache] cache_write_begin", {
-            url: u,
-            attempt,
-            size: blob.size,
-            contentType: blob.type || null,
-          });
+          if (process.env.NODE_ENV === "development") {
+            console.log("[offlineAttachmentUrlCache] cache_write_begin", {
+              url: u,
+              attempt,
+              size: blob.size,
+              contentType: blob.type || null,
+            });
+          }
           await putCachedBlob(u, blob);
           wrote = true;
           emitPrefetchLog(
@@ -612,5 +894,14 @@ export async function prefetchHttpsAttachmentUrls(
     options?.onItemDone?.(0, totalItems);
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, () => worker()));
+  if (offlineAttachmentForensicEnabled()) {
+    console.warn("[FORENSIC_PREFETCH_RUN_SUMMARY]", {
+      progress,
+      totalItems,
+      attemptedListLength: list.length,
+      maxUrlsApplied: maxUrls,
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
   return progress;
 }

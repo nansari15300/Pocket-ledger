@@ -1,31 +1,33 @@
 "use client";
 
 /**
- * Firestore → browser SQLite (company_docs) best-effort mirror.
- * Static/APK/Electron builds ke liye: har successful voucher write ke baad local DB update ho,
- * taaki baad mein offline read / sync layer isi source se attach ho sake.
+ * Firestore → browser SQLite (`company_docs`) best-effort mirror.
+ * After each successful outbox flush, refresh local rows so masters and vouchers match the server snapshot
+ * (timestamps, hydrated attachment URLs).
  *
  * Sync / download (local-first):
  * - Firestore → SQLite: `firestoreToLocalCompanyPull.pullCompanySubcollectionFromFirestoreToLocalDb` (prefetch) +
- *   `onSnapshot` → `mirrorCollectionDocsToBrowserDbSilent`
- * - Offline reads: `listCompanyDocsFromBrowserDb` (prefetch jab network kharab / pehle se cache)
- * - Writes: local SQLite + outbox (`localVoucherOutbox`) → Firestore flush jab online
+ *   `onSnapshot` → `mirrorCollectionDocsToBrowserDbSilent` (static bundle: UI reads via `listCompanyDocsFromBrowserDb`, e.g. `useVouchers`).
+ * - Offline reads: `listCompanyDocsFromBrowserDb` (prefetch when the network is bad or data is already cached).
+ * - Writes: local SQLite + outbox (`localVoucherOutbox`) → Firestore flush when online (`writeEntity` static path).
  */
 
 import { doc, getDoc, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { clearBrowserDbCache, getBrowserDb } from "@/lib/localSqlite";
 import { isLocalOnlyMode } from "@/lib/localMode";
+import { apkEmbeddedSqliteFirstWritesPreferred } from "@/lib/apkOnlineFirestoreWritePolicy";
 import { getLocalCompanyById } from "@/lib/localCompanyStore";
 import { decryptFirestoreCompanyDocIfNeeded, isEncryptedServerBackupDoc } from "@/lib/serverBackupEncryption";
 import { stampLocalMirrorBackedByFirestore } from "@/lib/localMirrorServerMeta";
+import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 
-/** UI/listeners ko batane ke liye: local `company_docs` update hua (static APk/Electron). */
+/** Notify UI/listeners that local `company_docs` changed (static / APK / Electron). */
 export const BROWSER_DB_COLLECTION_BUMP = "pocket-ledger-browser-db-bump";
 
 export type BrowserDbCollectionBumpDetail = { companyId: string; collection: string };
 
-/** Firestore write mirror ke turant baad lists refresh kar sakein (same tab). */
+/** After a Firestore-backed write mirror, allow lists to refresh (same tab). */
 export function notifyBrowserDbCollectionUpdated(companyId: string, collectionName: string): void {
   if (typeof window === "undefined" || !companyId || !collectionName) return;
   window.dispatchEvent(
@@ -35,9 +37,13 @@ export function notifyBrowserDbCollectionUpdated(companyId: string, collectionNa
   );
 }
 
-/** True when default mirror rules apply (`static`/local‑only). Cloud firebase companies ke liye alag explicit flag (neeche). */
+/**
+ * When to persist into SQLite `company_docs`: web "Local" data source, or embedded (Capacitor/static) wherever
+ * `enqueueCompanyDocOutbox` / flush runs. If this is false, upserts are skipped and queued server writes
+ * no longer line up with on-device lists (keep in sync with `VoucherOutboxFlushManager` scheduling).
+ */
 function shouldMirrorToBrowserDb(): boolean {
-  return isLocalOnlyMode();
+  return isLocalOnlyMode() || apkEmbeddedSqliteFirstWritesPreferred();
 }
 
 const MIRROR_SQLITE_ERROR_WINDOW_MS = 30_000;
@@ -52,7 +58,7 @@ function isSqliteBadParamError(error: unknown): boolean {
 }
 
 function shouldSkipMirrorWritesNow(): boolean {
-  // Error storm ke dauran mirror writes pause karo taaki UI freeze + log flood ruk sake.
+  // During an error storm, pause mirror writes to avoid UI freezes and log spam.
   return Date.now() < mirrorWritesTemporarilyDisabledUntilMs;
 }
 
@@ -64,7 +70,7 @@ function markMirrorSqliteErrorAndMaybePauseWrites(error: unknown): void {
   }
   mirrorSqliteErrorCount += 1;
   if (mirrorSqliteErrorCount >= MIRROR_SQLITE_ERROR_BURST_LIMIT) {
-    // Repeated sqlite misuse se loop na bane; 60s cool-down me app responsive rahega.
+    // Avoid tight loops on repeated sqlite misuse; 60s cool-down keeps the app responsive.
     mirrorWritesTemporarilyDisabledUntilMs = now + 60_000;
     console.warn("[localCompanyDocMirror] temporarily disabling browser-db mirror writes after repeated SQLite errors", error);
     mirrorSqliteErrorCount = 0;
@@ -72,14 +78,14 @@ function markMirrorSqliteErrorAndMaybePauseWrites(error: unknown): void {
   }
 }
 
-/** Explicit row-delete: kabhi-kabhi `force` ho (Firestore wipe ke baad merge ghost rokna) chahe mirror write path band ho */
+/** Row delete: optional `force` after a Firestore wipe to prevent merge ghosts even when the default mirror path is off. */
 function shouldApplyBrowserCompanyDocMutation(force?: boolean): boolean {
   if (force === true && typeof window !== "undefined") return true;
   return shouldMirrorToBrowserDb();
 }
 
 /**
- * Local JSON se Firestore-compatible values (Timestamp + nested).
+ * Deserialize local JSON into Firestore-compatible values (Timestamp + nested).
  */
 export function deserializeLocalDbValue(value: unknown): unknown {
   if (value === null || value === undefined) return value;
@@ -107,16 +113,15 @@ type VoucherProjectionRow = {
 };
 
 /**
- * Static build: ek company subcollection ke saare docs browser SQLite se (read-only cache).
- * Web bundle pe jaldi return — sql.js load avoid.
+ * Read one company subcollection document from browser SQLite (read-only cache); web bundle may skip sql.js.
+ * Typical use: invoice voucher fallback on static builds.
  */
-/** Ek doc (e.g. invoice voucher) — static build read fallback. */
 export async function getCompanyDocFromBrowserDb(
   companyId: string,
   collectionName: string,
   docId: string
 ): Promise<Record<string, unknown> | null> {
-  if (!isLocalOnlyMode() || typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
+  if (!shouldMirrorToBrowserDb() || typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
   try {
     const db = await getBrowserDb();
     if (!db) return null;
@@ -133,13 +138,37 @@ export async function getCompanyDocFromBrowserDb(
   }
 }
 
+/**
+ * Offline/static: avoid hanging `getDocs(where voucherNumber + type))` — scan the SQLite `company_docs` mirror for duplicates.
+ * Payment In/Out hot path: avoid indefinite Firestore waits in airplane mode on APK.
+ */
+export async function findVoucherInLocalMirrorByNumberAndType(
+  companyId: string,
+  voucherNumber: string,
+  voucherType: string
+): Promise<{ id: string } | null> {
+  if (typeof window === "undefined" || !companyId) return null;
+  try {
+    const rows = await listCompanyDocsFromBrowserDb(companyId, "vouchers");
+    const vn = String(voucherNumber ?? "").trim();
+    const vt = String(voucherType ?? "").trim();
+    const hit = rows.find(
+      (r: any) => String(r?.voucherNumber ?? "").trim() === vn && String(r?.type ?? "").trim() === vt
+    );
+    if (!hit?.id) return null;
+    return { id: String(hit.id) };
+  } catch {
+    return null;
+  }
+}
+
 export async function listCompanyDocsFromBrowserDb(
   companyId: string,
   collectionName: string,
-  /** Backup merge / recycle-bin duplicate: soft-deleted rows bhi dikhao */
+  /** Backup merge / recycle-bin duplicate flows: include soft-deleted rows. */
   options?: { forBackupMerge?: boolean; includeSoftDeleted?: boolean }
 ): Promise<any[]> {
-  if ((!options?.forBackupMerge && !isLocalOnlyMode()) || typeof window === "undefined" || !companyId || !collectionName) return [];
+  if ((!options?.forBackupMerge && !shouldMirrorToBrowserDb()) || typeof window === "undefined" || !companyId || !collectionName) return [];
   try {
     const db = await getBrowserDb();
     if (!db) return [];
@@ -163,12 +192,12 @@ export async function listCompanyDocsFromBrowserDb(
   }
 }
 
-/** Voucher lite rows: dashboard/recent quick paint ke liye projection table se cheap read. */
+/** Lightweight voucher rows for dashboard/recent UI via the projection table (cheap read). */
 export async function listVoucherSummaryProjectionFromBrowserDb(
   companyId: string,
   options?: { forBackupMerge?: boolean; limit?: number }
 ): Promise<VoucherProjectionRow[]> {
-  if ((!options?.forBackupMerge && !isLocalOnlyMode()) || typeof window === "undefined" || !companyId) return [];
+  if ((!options?.forBackupMerge && !shouldMirrorToBrowserDb()) || typeof window === "undefined" || !companyId) return [];
   try {
     const db = await getBrowserDb();
     if (!db) return [];
@@ -202,11 +231,11 @@ export async function listVoucherSummaryProjectionFromBrowserDb(
 }
 
 /**
- * Firestore snapshot values ko JSON-stable shape mein (Timestamps → portable object).
+ * Serialize Firestore snapshot values into JSON-stable form (Timestamps → portable objects).
  */
 function serializeForLocalDb(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  // Binary / File SQLite JSON column me nahi — omit (parent object keys skip jab undefined).
+  // Files/Blobs are not stored in the SQLite JSON column — omit (parent skips keys when undefined).
   if (typeof File !== "undefined" && value instanceof File) return undefined;
   if (typeof Blob !== "undefined" && value instanceof Blob) return undefined;
   if (typeof value === "bigint") return (value as bigint).toString();
@@ -233,7 +262,7 @@ function serializeForLocalDb(value: unknown): unknown {
   return value;
 }
 
-/** Voucher projection parsing: Timestamp/Date/string/epoch variants ko sortable ms me normalize. */
+/** Normalize voucher `date` from Timestamp/Date/string/epoch into sortable epoch ms. */
 function parseDateToMsLoose(raw: unknown): number | null {
   if (raw == null) return null;
   if (raw instanceof Date) {
@@ -261,7 +290,7 @@ function parseDateToMsLoose(raw: unknown): number | null {
   return null;
 }
 
-/** Voucher amount best-effort: common fields (`total`/`amount`/`grandTotal`) me se pehla finite number. */
+/** Best-effort voucher amount: first finite number among `total` / `amount` / `grandTotal` / `netAmount`. */
 function parseAmountLoose(raw: Record<string, unknown>): number | null {
   const keys = ["total", "amount", "grandTotal", "netAmount"];
   for (const k of keys) {
@@ -271,7 +300,7 @@ function parseAmountLoose(raw: Record<string, unknown>): number | null {
   return null;
 }
 
-/** Separate projection table maintain karo taaki dashboard/recent quick load me full JSON parse avoid ho. */
+/** Maintain a separate projection table so dashboard/recent views avoid parsing full voucher JSON. */
 async function upsertVoucherProjection(
   companyId: string,
   collectionName: string,
@@ -306,19 +335,21 @@ async function deleteVoucherProjection(companyId: string, collectionName: string
 }
 
 export type UpsertCompanyBrowserOptions = {
-  /** default true; snapshot batch ke liye false rakho */
+  /** default true; set false for snapshot batches */
   notify?: boolean;
-  /** Backup restore / `storageOption: local` jab `isLocalOnlyMode` false ho — mirror guard bypass */
+  /** Backup restore / `storageOption: local` when `isLocalOnlyMode` is false — bypass mirror guard */
   force?: boolean;
+  /** Firestore mirror/restore: skip paid-expiry read-only gate (server snapshot or import = trusted read). */
+  skipPlanMutationGate?: boolean;
 };
 
-/** Restore se pehle purani cache rows hatao — stale voucher merge na rahe */
+/** Before restore: clear old cached rows to avoid stale voucher merges */
 export async function deleteAllCompanyDocsForCompany(companyId: string): Promise<void> {
   try {
     const db = await getBrowserDb();
     if (!db || !companyId) return;
     db.prepare(`DELETE FROM company_docs WHERE company_id = ?`).run(companyId);
-    // Full wipe ke sath projection wipe bhi taaki stale dashboard rows na bache.
+    // Wipe projection rows with full company_docs wipe so stale dashboard rows do not remain.
     db.prepare(`DELETE FROM company_docs_projection WHERE company_id = ?`).run(companyId);
   } catch (e) {
     console.warn("[localCompanyDocMirror] deleteAllCompanyDocsForCompany failed", companyId, e);
@@ -326,19 +357,19 @@ export async function deleteAllCompanyDocsForCompany(companyId: string): Promise
 }
 
 export type DeleteCompanyBrowserDbOptions = {
-  /** Offline mirror ke alawa backup-merge path pe bhi row hataao (Firestore deleteDoc ke baad stale merge rokna). */
+  /** Also allow deletes on backup-merge paths, not only offline mirror (avoid stale merges after Firestore delete). */
   force?: boolean;
   notify?: boolean;
 };
 
-/** Firestore se doc permanently delete hone ke baad isi row ko SQLite mirror se hatado — mergeRemoteSnapshot extras se ghost list na बने. */
+/** After a permanent Firestore delete, remove the same row from the SQLite mirror — avoids ghost rows from mergeRemoteSnapshot extras. */
 export async function deleteCompanyDocFromBrowserDb(
   companyId: string,
   collectionName: string,
   docId: string,
   options?: DeleteCompanyBrowserDbOptions
 ): Promise<void> {
-  // `force`: backup-merge SQLite row hataao jab authoritative doc Firestore se delete ho chuka ho (extras merge ghotala).
+  // `force`: delete SQLite mirror row once the authoritative Firestore doc is gone (prevents extras-merge ghosts).
   if (!shouldApplyBrowserCompanyDocMutation(options?.force) || typeof window === "undefined" || !companyId || !collectionName || !docId) return;
   const notify = options?.notify !== false;
   try {
@@ -353,7 +384,7 @@ export async function deleteCompanyDocFromBrowserDb(
 }
 
 /**
- * Generic upsert into company_docs; errors swallow — main Firestore flow kabhi fail na ho.
+ * Generic upsert into `company_docs`; swallow errors so the main Firestore flow never fails because of SQLite.
  */
 export async function upsertCompanyDocInBrowserDb(
   companyId: string,
@@ -366,11 +397,15 @@ export async function upsertCompanyDocInBrowserDb(
   if (shouldSkipMirrorWritesNow()) return;
   const shouldNotify = options?.notify !== false;
   try {
+    // User-origin voucher SQLite writes: expired paid / strict JWT gate — mirror/restore paths `skipPlanMutationGate`.
+    if (collectionName === "vouchers" && options?.skipPlanMutationGate !== true) {
+      await assertCompanyAllowsLedgerMutations(companyId);
+    }
     const db = await getBrowserDb();
     if (!db) return;
     const json = JSON.stringify(serializeForLocalDb(data));
     const now = Date.now();
-    // SQLite UPSERT: static build ke single write path
+    // SQLite UPSERT: static build single write path
     db.prepare(
       `INSERT INTO company_docs(company_id, collection, id, data, updatedAt)
        VALUES(?,?,?,?,?)
@@ -379,12 +414,12 @@ export async function upsertCompanyDocInBrowserDb(
          updatedAt = excluded.updatedAt`
     ).run(companyId, collectionName, docId, json, now);
     await upsertVoucherProjection(companyId, collectionName, docId, data);
-    // Single-write paths: UI bump; Firestore snapshot batch → notify false (React pehle hi fresh).
+    // Single-write paths: bump UI; Firestore snapshot batches pass notify false (React already has fresh state).
     if (shouldNotify) notifyBrowserDbCollectionUpdated(companyId, collectionName);
   } catch (e) {
     if (isSqliteBadParamError(e)) {
       try {
-        // sql.js stale handle race aaye to one-time cache reset + retry se self-heal karo.
+        // sql.js stale handle race: one-time cache reset + retry for self-heal.
         clearBrowserDbCache();
         const retryDb = await getBrowserDb();
         if (retryDb) {
@@ -415,9 +450,9 @@ export async function upsertCompanyDocInBrowserDb(
 }
 
 /**
- * onSnapshot se aayi poori list SQLite mein — offline read + invoice party/items ke liye cache.
- * Har doc par notify nahi (performance / flood avoid).
- * `cloudBackedOfflineCache`: firebase storage company browser/PWA web par SQLite shadow — purane guard me yahan skip tha aur offline sirf jitna RAM/Firestore cache me tha wahi.
+ * Persist a full snapshot batch from `onSnapshot` into SQLite — offline reads and invoice party/item cache.
+ * Per-doc notify is off (performance / avoid event floods).
+ * `cloudBackedOfflineCache`: PWA/web Firebase companies may use SQLite as a shadow cache when the default mirror guard is off.
  */
 export async function mirrorCollectionDocsToBrowserDbSilent(
   companyId: string,
@@ -429,26 +464,35 @@ export async function mirrorCollectionDocsToBrowserDbSilent(
     return;
   const persistAllowed = shouldMirrorToBrowserDb() || options?.cloudBackedOfflineCache === true;
   if (!persistAllowed) return;
-  /** Web cloud path: upsertCompanyDoc gate `shouldMirrorToBrowserDb` false — `force` se SQLite hi likho */
+  /** Web cloud path: when `shouldMirrorToBrowserDb` is false, still write SQLite using `force` upserts */
   const forceUpsert = !shouldMirrorToBrowserDb();
   for (const row of docs) {
     const rec = row as { id?: string };
     const id = rec?.id as string | undefined;
     if (!id) continue;
     const payload = { ...(row as object), id } as Record<string, unknown>;
-    await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, { notify: false, force: forceUpsert });
+    await upsertCompanyDocInBrowserDb(companyId, collectionName, id, payload, {
+      notify: false,
+      force: forceUpsert,
+      skipPlanMutationGate: collectionName === "vouchers",
+    });
   }
 }
 
 /**
- * Voucher doc Firestore se read karke local DB mein same snapshot store karo (post-write truth).
+ * After flush / server confirm: read any company subcollection doc from Firestore and refresh the SQLite mirror.
+ * Applies to masters too — previously only vouchers were mirrored post-flush, so other devices could sync while this device stayed stale.
  */
-export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: string): Promise<void> {
-  if (!shouldMirrorToBrowserDb() || !companyId || !voucherId) return;
+export async function mirrorCompanyDocToBrowserDb(
+  companyId: string,
+  collectionName: string,
+  docId: string
+): Promise<void> {
+  if (!shouldMirrorToBrowserDb() || !companyId || !collectionName || !docId) return;
   try {
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     const fsCompanyId = String(reg?.authoritativeCompanyId || companyId).trim() || companyId;
-    const ref = doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId);
+    const ref = doc(firestore, `companies/${fsCompanyId}/${collectionName}`, docId);
     const snap = await getDoc(ref);
     if (!snap.exists()) return;
     let payload: Record<string, unknown> = { id: snap.id, ...(snap.data() as Record<string, unknown>) };
@@ -460,9 +504,18 @@ export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: 
     );
     if (dec) payload = dec;
     else if (isEncryptedServerBackupDoc(payload)) return;
-    /** Post-flush Firebase read confirm — orphans ko extras merge band kare META se (extras par stamp mat lagu). */
-    await upsertCompanyDocInBrowserDb(companyId, "vouchers", voucherId, stampLocalMirrorBackedByFirestore(payload));
+    // Server snapshot = trusted read path; voucher plan gate yahan nahi (flush already paid-gated upstream where needed).
+    await upsertCompanyDocInBrowserDb(companyId, collectionName, docId, stampLocalMirrorBackedByFirestore(payload), {
+      skipPlanMutationGate: true,
+    });
   } catch (e) {
-    console.warn("[localCompanyDocMirror] mirror voucher failed", voucherId, e);
+    console.warn("[localCompanyDocMirror] mirror company doc failed", collectionName, docId, e);
   }
+}
+
+/**
+ * Voucher-specific alias for older callers (keeps projection row updates in one place).
+ */
+export async function mirrorVoucherDocToBrowserDb(companyId: string, voucherId: string): Promise<void> {
+  await mirrorCompanyDocToBrowserDb(companyId, "vouchers", voucherId);
 }

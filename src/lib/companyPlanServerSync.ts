@@ -7,7 +7,10 @@
 import { getBillingApiUrl } from "@/lib/billingApiOrigin";
 import { bumpLocalCompanyRegistry } from "@/lib/applyStripePlanToLocalCompany";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
-import { clearCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
+import { clearCompanyPlanLocalCache, readCompanyPlanLocalCache, writeCompanyPlanLocalCache } from "@/lib/companyPlanLocalCache";
+import { normalizePlanIdForClient } from "@/config/plans";
+import { verifyPlanEntitlementJws } from "@/lib/security/planEntitlementJwtVerify";
+import { getOrCreateClientDeviceId } from "@/lib/security/deviceIdentity";
 
 /** ~7 min — interval timer ab useCompany me bandh (sirf calendar-day + online + manual); constant legacy docs ke liye. */
 export const PLAN_SERVER_SYNC_INTERVAL_MS = 7 * 60 * 1000;
@@ -56,6 +59,8 @@ export type ServerAuthoritativePlanPayload = {
   stripeSubscriptionId?: string | null;
   lastStripeCheckoutSessionId?: string | null;
   offlineLicenseValidUntilMs?: number;
+  /** Server RS256 — client `NEXT_PUBLIC_PLAN_ENTITLEMENT_JWT_PUBLIC_KEY_PEM` se verify. */
+  planEntitlementJws?: string | null;
 };
 
 export function writePlanAuthoritativeSyncTimestamp(localCompanyId: string, atMs: number = Date.now()): void {
@@ -125,6 +130,26 @@ export function recomputePlanSyncBannerState(
 
 export type SyncCompanyPlanResult = { ok: boolean; applied: boolean; reason?: string };
 
+/** Profile / toast: machine `reason` → user text. */
+export function planSyncFailureUserMessage(reason?: string): string {
+  if (!reason) return "Something went wrong. Try again.";
+  // APK: fetch fail ke turant baad `offline` event — pehle "network" return hone se bachao.
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return "You are offline";
+  }
+  if (reason === "offline") return "You are offline";
+  if (reason === "network" || reason === "timeout") {
+    return "Check your internet connection and try again.";
+  }
+  if (reason === "static_no_billing_api") {
+    return "Plan server is not configured for this build. Check your internet or contact support.";
+  }
+  if (reason === "token_error") return "Could not verify your login. Sign out and sign in again.";
+  if (reason === "missing_ids" || reason === "no_context") return "No company selected to sync.";
+  if (reason.startsWith("http_")) return "Plan server returned an error. Try again later.";
+  return reason;
+}
+
 /** Fetch timeout helper — static `serve`/APK par broken `/api/*` kabhi‑kabhi lambi pending rakhta hai UI block feel. */
 const PLAN_SYNC_FETCH_TIMEOUT_MS = 15_000;
 
@@ -138,16 +163,6 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Pro
   }
 }
 
-/**
- * APK/static export bundle me `/api/*` hota nahin — bina billing host ke POST bar‑bar waste + hang‑risk.
- * Prod static me `NEXT_PUBLIC_BILLING_API_ORIGIN=https://your-next.app` set karo jahan ye API live ho.
- */
-function shouldSkipPlanServerSyncDueToStaticExportWithoutApi(): boolean {
-  if (process.env.NEXT_PUBLIC_STATIC_BUILD !== "1") return false;
-  const origin = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_BILLING_API_ORIGIN?.trim() : "";
-  return !origin;
-}
-
 /** Plan sync POST: flaky dev server / billing proxy par 5xx ya TCP reset — bounded retry. */
 const PLAN_SYNC_FETCH_MAX_ATTEMPTS = 3;
 
@@ -158,9 +173,7 @@ export async function syncCompanyPlanFromServer(opts: {
   localCompanyId: string;
   getIdToken: () => Promise<string>;
 }): Promise<SyncCompanyPlanResult> {
-  if (shouldSkipPlanServerSyncDueToStaticExportWithoutApi()) {
-    return { ok: false, applied: false, reason: "static_no_billing_api" };
-  }
+  // Pehle network: token / POST se pehle clear "offline" message (static build bhi).
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, applied: false, reason: "offline" };
   }
@@ -185,7 +198,11 @@ export async function syncCompanyPlanFromServer(opts: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ companyId: firebaseCompanyId, localCompanyId }),
+    body: JSON.stringify({
+      companyId: firebaseCompanyId,
+      localCompanyId,
+      clientDeviceId: getOrCreateClientDeviceId(),
+    }),
   };
 
   /** Transient failures (ECONNRESET, aborted compile) pe dubara POST; deterministic errors (401/403) pe break. */
@@ -198,6 +215,9 @@ export async function syncCompanyPlanFromServer(opts: {
       const aborted =
         typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
       if (attempt === PLAN_SYNC_FETCH_MAX_ATTEMPTS) {
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          return { ok: false, applied: false, reason: "offline" };
+        }
         return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
       }
     }
@@ -211,6 +231,9 @@ export async function syncCompanyPlanFromServer(opts: {
       res = await fetchWithTimeout(syncPlanPath, fetchOpts, PLAN_SYNC_FETCH_TIMEOUT_MS);
     } catch (e: unknown) {
       const aborted = typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        return { ok: false, applied: false, reason: "offline" };
+      }
       return { ok: false, applied: false, reason: aborted ? "timeout" : "network" };
     }
   }
@@ -235,10 +258,45 @@ export async function syncCompanyPlanFromServer(opts: {
   if (planId === "basic") {
     clearCompanyPlanLocalCache(localCompanyId);
   } else if (planExpiryMs != null) {
+    const prevCache = readCompanyPlanLocalCache(localCompanyId);
+    const jwsField = (data as { planEntitlementJws?: string | null }).planEntitlementJws;
+    // `null` = server ne unsigned response bheja — purana JWS hatao; `undefined` = purana API deploy — pehle wala token optional preserve.
+    const jwsRaw =
+      typeof jwsField === "string"
+        ? jwsField.trim()
+        : jwsField === null
+          ? ""
+          : (prevCache?.planEntitlementJws || "").trim();
+    let entitlementSignatureOk = false;
+    let entitlementPlanIdFromJwt: string | undefined;
+    let entitlementPlanExpMsFromJwt: number | undefined;
+    let entitlementOfflineUntilMsFromJwt: number | undefined;
+    let entitlementDeviceMatch = false;
+    if (jwsRaw) {
+      const vr = await verifyPlanEntitlementJws(jwsRaw);
+      if (vr.ok) {
+        entitlementSignatureOk = true;
+        const c = vr.claims;
+        if (typeof c.plan === "string" && c.plan.trim()) entitlementPlanIdFromJwt = normalizePlanIdForClient(c.plan.trim());
+        if (typeof c.plan_exp === "number" && Number.isFinite(c.plan_exp)) entitlementPlanExpMsFromJwt = c.plan_exp;
+        if (typeof c.off_until === "number" && Number.isFinite(c.off_until)) entitlementOfflineUntilMsFromJwt = c.off_until;
+        const dev = getOrCreateClientDeviceId();
+        entitlementDeviceMatch = c.device === dev;
+      }
+    }
+    const nextJwsStored =
+      jwsField === null ? undefined : typeof jwsField === "string" ? jwsField.trim() || undefined : prevCache?.planEntitlementJws;
     writeCompanyPlanLocalCache(localCompanyId, {
       planId,
       planExpiryMs,
       lastStripeCheckoutSessionId: data.lastStripeCheckoutSessionId ?? undefined,
+      planEntitlementJws: nextJwsStored,
+      entitlementVerifiedAtMs: Date.now(),
+      entitlementSignatureOk,
+      entitlementPlanIdFromJwt,
+      entitlementPlanExpMsFromJwt,
+      entitlementOfflineUntilMsFromJwt,
+      entitlementDeviceMatch,
     });
   }
 

@@ -34,6 +34,7 @@ import { getAttachmentFormatLabel } from "@/lib/attachmentFormatLabel";
 import { openAttachmentInApp } from "@/lib/openAttachmentInApp";
 import { formatVoucherEntryTimeLocal, parseFirestoreDateFieldToJsDate } from "@/lib/voucherDateNormalize";
 import { highlightQueryInText } from "@/lib/highlightQueryInText";
+import { isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay } from "@/lib/ledgerUserColumnDisplay";
 
 /**
  * Ledger row Dr/Cr/Balance: kabhi Firestore/legacy `debit`/`credit` object ho — table me `[object Object]` na aaye.
@@ -476,6 +477,7 @@ export function getTransactionQuickSearchHaystack(
   ];
   const uid = t?.userId;
   if (uid && names[uid]) chunks.push(names[uid]);
+  if (isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(t)) chunks.push("Auto");
   if (context && contextId) {
     chunks.push(getOppositeAccountLabel(t, names, context, contextId, groupEntityType));
   }
@@ -852,12 +854,13 @@ export const TransactionRow = React.memo(
 
     // Show whatever user info is available for visible transaction rows.
     const resolvedUserName = userNames && transaction.userId ? userNames[transaction.userId] : null;
-    const displayName =
-      (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
-      transaction.userDisplayName ||
-      transaction.userName ||
-      (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
-      "N/A";
+    const displayName = isRecurringBsMonthlyAutoVoucherForLedgerUserDisplay(transaction)
+      ? "Auto"
+      : (resolvedUserName && resolvedUserName !== "Unknown" && resolvedUserName !== "N/A" ? resolvedUserName : null) ||
+        transaction.userDisplayName ||
+        transaction.userName ||
+        (transaction.userId === currentUserUid ? (currentUserDisplayName || "You") : null) ||
+        "N/A";
     const names = { ...journalAccountNames, ...userNames, ...(accountNames || {}) };
     const hlQ = String(textSearchHighlight ?? "").trim();
     const hl = (s: string) =>

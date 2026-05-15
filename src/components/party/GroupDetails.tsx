@@ -43,6 +43,7 @@ import {
   DEFAULT_TRANSACTION_SORT_ORDER,
 } from "@/lib/transactionSort";
 import { getTransactionQuickSearchHaystack } from "@/components/vouchers/transactionTableShared";
+import { mergeLedgerUserDisplayNameMaps } from "@/lib/ledgerUserColumnDisplay";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { cn } from "@/lib/utils";
@@ -450,9 +451,8 @@ export function GroupDetails({
   }, [isLocalMode, companyId, company]);
   
   // Merge prop userNames with locally fetched userNames
-  const mergedUserNames = useMemo(() => {
-    return { ...userNames, ...localFetchedUserNames };
-  }, [userNames, localFetchedUserNames]);
+  // Merge: recurring "Auto" jaise voucher naam Firestore fetch se overwrite na hon
+  const mergedUserNames = useMemo(() => mergeLedgerUserDisplayNameMaps(userNames || {}, localFetchedUserNames), [userNames, localFetchedUserNames]);
 
   const mobileSearchNames = useMemo(
     () => ({ ...journalAccountNames, ...mergedUserNames }),

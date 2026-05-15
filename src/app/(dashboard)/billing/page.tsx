@@ -38,7 +38,7 @@ import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell, TableFoo
 import { format as formatDateFns } from "date-fns";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
-import { useCompany } from "@/hooks/useCompany";
+import { useCompany, type Company as CompanyRow } from "@/hooks/useCompany";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
@@ -125,15 +125,39 @@ function toSafeDate(raw: unknown): Date | null {
   return null;
 }
 
+/** Owner + same SKU: kisi bhi owned row se joined / tier-start ms — billing par doosri company `N/A` na rahe. */
+function maxJoinedTierStartMsAmongOwnerPeers(
+  ownerUid: string,
+  planIdNorm: PlanId,
+  peers: readonly CompanyRow[]
+): number | null {
+  let best: number | null = null;
+  for (const p of peers) {
+    if (String(p.ownerId ?? "").trim() !== ownerUid) continue;
+    if (normalizePlanIdForClient(p.planId) !== planIdNorm) continue;
+    const r = p as Record<string, unknown>;
+    const fromTs = toSafeDate(r.planUpgradedAt)?.getTime();
+    const fromMs = typeof r.planUpgradedAtMs === "number" && Number.isFinite(r.planUpgradedAtMs) ? r.planUpgradedAtMs : null;
+    const fromJoined = toSafeDate(r.planJoinedAt)?.getTime();
+    const fromCreated = toSafeDate(r.createdAt)?.getTime();
+    const fromCreatedOn = toSafeDate(r.createdOn)?.getTime();
+    const ms = [fromTs, fromMs, fromJoined, fromCreated, fromCreatedOn].find((x) => x != null && !Number.isNaN(x)) ?? null;
+    if (ms != null && (best == null || ms > best)) best = ms;
+  }
+  return best;
+}
+
 /** Shared feature order for table, mobile cards, and PDF export. */
 const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
-  { key: "maxUsers", label: "Max Users (online)" },
-  { key: "maxUsersLocal", label: "Max Users (local)" },
-  // Row 3–4: devices (user request) — pehle companies/vouchers se upar.
-  { key: "maxDevices", label: "Max devices (online)" },
-  { key: "maxDevicesLocal", label: "Max devices (local)" },
+  // User request: company limits pehle — "per owner account" scope table ke top par clear.
   { key: "maxCompanies", label: "Max Companies (online)" },
   { key: "maxCompaniesLocal", label: "Max Companies (local)" },
+  { key: "maxUsers", label: "Max Users (online)" },
+  { key: "maxUsersLocal", label: "Max Users (local)" },
+  // Devices — number only (tick alag row `hasMultiDeviceSync`).
+  { key: "maxDevices", label: "Max devices (online)" },
+  { key: "hasMultiDeviceSync", label: "Only multi device sync" },
+  { key: "maxDevicesLocal", label: "Max devices (local)" },
   { key: "dailyVoucherLimit", label: "Daily Vouchers (online)" },
   { key: "dailyVoucherLimitLocal", label: "Daily Vouchers (local)" },
   { key: "monthlyVoucherLimit", label: "Monthly Vouchers (online)" },
@@ -145,6 +169,14 @@ const BILLING_FEATURES: { key: EntitlementKey; label: string }[] = [
   { key: "hasRoleBasedAccess", label: "Role-based access" },
   { key: "hasAuditLogs", label: "Audit logs" },
   { key: "hasPrioritySupport", label: "Priority support" },
+];
+
+/** Billing table/mobile: ✓/✗ wale rows (hasMultiDeviceSync = "Only multi device sync" alag row). */
+const BILLING_BOOLEAN_ICON_KEYS: EntitlementKey[] = [
+  "hasMultiDeviceSync",
+  "hasRoleBasedAccess",
+  "hasAuditLogs",
+  "hasPrioritySupport",
 ];
 
 /** Bahar wale boxes: user ne “bold” maanga — `border-2` + thoda dark outline (patle 1.5px se zyada dikhe). */
@@ -474,7 +506,7 @@ type BillingPaymentsStatementApiResponse = {
 export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { companyId, company, loading: companyLoading, refreshAuthoritativePlan } = useCompany();
+  const { companyId, company, loading: companyLoading, refreshAuthoritativePlan, allCompanies } = useCompany();
 
   // `/api/payments/*` + `/api/company/*` Firestore `companies/{docId}` padhte hain — restore/merge me SQLite row `id` ≠ cloud doc ho to `authoritativeCompanyId` sahi doc khulta hai.
   const billingFirestoreCompanyId = useMemo(() => {
@@ -489,7 +521,7 @@ export default function BillingPage() {
   const [plans, setPlans] = useState<Plan[]>(() => readCachedPlansList() ?? defaultPlansListFallback());
   const [loading, setLoading] = useState(true);
   const [selectedPlanId, setSelectedPlanId] = useState<PlanId>("basic");
-  /** Each plan column’s term (monthly … 10 yr) for Basic checkout + proration quotes. */
+  /** Each plan column’s term (dropdown max 1 yr) for Basic checkout + proration quotes. */
   const [colTerms, setColTerms] = useState<Record<PlanId, SubscriptionTermKey>>(() => {
     const o = {} as Record<PlanId, SubscriptionTermKey>;
     for (const id of ["basic", "advance", "pro", "pro-plus"] as PlanId[]) o[id] = "year_1";
@@ -509,7 +541,7 @@ export default function BillingPage() {
   const [gatewayAvailability, setGatewayAvailability] = useState<BillingGatewayAvailability | null>(null);
   /** "Just change plan" pehle AlertDialog — seedha Stripe/page na khule (user request). */
   const [planChangeOnlyTargetId, setPlanChangeOnlyTargetId] = useState<PlanId | null>(null);
-  /** Browser network — billing APIs + sync-plan sirf online; offline par buttons band + copy. */
+  /** Browser network — paid checkout / plan-change APIs online; offline par cached plan dikhta rahe + buttons band. */
   const [billingNavigatorOnline, setBillingNavigatorOnline] = useState(
     () => typeof window !== "undefined" && navigator.onLine
   );
@@ -609,13 +641,14 @@ export default function BillingPage() {
     }
   }, [currentPlanId]);
 
-  // Pehle dropdown me `plan_change_only` tha — ab sirf button; purana state invalid Select value na chhode.
+  // Pehle dropdown me `plan_change_only` / multi-year tha — ab sirf 4 option; invalid value `year_1` par clamp.
   useEffect(() => {
+    const allowed = new Set(BILLING_TERM_OPTIONS.map((o) => o.value));
     setColTerms((prev) => {
       let touched = false;
       const next = { ...prev };
       (Object.keys(next) as PlanId[]).forEach((id) => {
-        if (next[id] === "plan_change_only") {
+        if (!allowed.has(next[id])) {
           next[id] = "year_1";
           touched = true;
         }
@@ -746,15 +779,23 @@ export default function BillingPage() {
   }, [plans, currentPlanId]);
 
   const joinedDate = useMemo(() => {
-    // Show a meaningful join date even when planUpgradedAt is absent on older/static rows.
-    return (
+    // Pehle isi company doc; phir same owner + same `planId` ki koi aur row — plan multi-sync ke baad bhi purani row `N/A` na ho.
+    const direct =
       toSafeDate(company?.planUpgradedAt) ??
       toSafeDate((company as Record<string, unknown> | undefined)?.planJoinedAt) ??
       toSafeDate((company as Record<string, unknown> | undefined)?.createdAt) ??
       toSafeDate((company as Record<string, unknown> | undefined)?.createdOn) ??
-      null
-    );
-  }, [company]);
+      null;
+    if (direct) return direct;
+    const uid = user?.uid?.trim();
+    if (!uid || !company) return null;
+    if (String(company.ownerId ?? "").trim() !== uid) return null;
+    const planNorm = normalizePlanIdForClient(company.planId as PlanId | undefined);
+    const peerMs = maxJoinedTierStartMsAmongOwnerPeers(uid, planNorm, allCompanies);
+    if (peerMs == null) return null;
+    const d = new Date(peerMs);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }, [company, allCompanies, user?.uid]);
 
   const expiryDate = useMemo(() => {
     // Firestore `planExpiry` + legacy keys; SQLite mirror aksar sirf `planExpiryMs` rakhta hai — bina iske billing par "N/A".
@@ -886,7 +927,7 @@ export default function BillingPage() {
         doc.text(feature.label, left + 6, rowTextY);
         exportPlans.forEach((p, idx) => {
           const fv = getFeatureValue(p, feature.key);
-          const cellText = fv.showDeviceSyncTick ? `${fv.text} \u2713` : fv.text;
+          const cellText = fv.text;
           const x = left + featureColW + idx * planColW + 6;
           const wrapped = doc.splitTextToSize(String(cellText), planColW - 12) as string[];
           doc.text(wrapped[0] || "-", x, rowTextY);
@@ -1169,11 +1210,11 @@ export default function BillingPage() {
 
   const allFeaturesConfig = BILLING_FEATURES;
 
-  /** `showDeviceSyncTick`: max device rows — multi-device on ho to number ke saath green tick (alag row hata di). */
+  /** Feature cell: number / Unlimited / Yes–No; max devices = effective count (multi off → 1) bina side tick. */
   const getFeatureValue = (
     plan: Plan,
     key: EntitlementKey
-  ): { text: string; enabled: boolean; showDeviceSyncTick?: boolean } => {
+  ): { text: string; enabled: boolean } => {
     const value = plan.entitlements[key];
 
     // Online + Local column dono me `0` = Unlimited (billing table — admin PlanDetails placeholders ke saath align).
@@ -1200,7 +1241,7 @@ export default function BillingPage() {
       return { text: String(n), enabled: n > 0 };
     }
 
-    // Multi-device band = single device (Manage Devices / `useDeviceLimit` jaisa), chahe DB me purana maxDevices zyada ho.
+    // Multi-device band = single device (`useDeviceLimit` jaisa); sirf number — sync on/off alag row `hasMultiDeviceSync`.
     if (key === "maxDevices" || key === "maxDevicesLocal") {
       const raw =
         key === "maxDevicesLocal"
@@ -1209,7 +1250,7 @@ export default function BillingPage() {
       const stored = Math.max(1, Number(raw) || 1);
       const multi = plan.entitlements.hasMultiDeviceSync === true;
       const effective = multi ? stored : 1;
-      return { text: String(effective), enabled: true, showDeviceSyncTick: multi };
+      return { text: String(effective), enabled: true };
     }
 
     if (typeof value === "boolean") {
@@ -1391,7 +1432,7 @@ export default function BillingPage() {
             When you shifted from <strong className="text-foreground">{colPlan.name}</strong> to{" "}
             <strong className="text-foreground">{shiftedToLabel}</strong>, your usage was:
           </p>
-          {/* Credit pill chhodo — sirf usage snapshot (user request). */}
+          {/* Pink Balance pill hide — sirf frozen Usage snapshot. */}
           <div className={PRORATION_PILL_USAGE_FROZEN_CLASS}>
             <span>
               Usage: रु {snap.frozenUsageNpr.toFixed(2)}
@@ -1456,11 +1497,16 @@ export default function BillingPage() {
           {billingOfflineBlock ? (
             <div
               className={cn(
-                "rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-foreground mb-4",
+                "rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-foreground mb-4 space-y-1.5",
                 BILLING_OUTLINE_CLASS
               )}
             >
-              You&apos;re offline. Back online to subscribe, renew, upgrade, or use &quot;Just change plan&quot;.
+              {/* Offline par bhi SQLite + `companyPlanLocalCache` se current tier dikhe — sirf network wale actions band. */}
+              <p className="font-medium">You&apos;re offline</p>
+              <p className="text-muted-foreground leading-snug">
+                New payments and server-side plan changes need internet. Your plan on this device stays on the last
+                synced subscription and unlock session until you reconnect.
+              </p>
             </div>
           ) : null}
           {isPaidCompany && billingRenewFailureMessage ? (
@@ -1558,7 +1604,8 @@ export default function BillingPage() {
                       <p className="text-lg font-semibold mt-2">{p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id])}</p>
                       <div className="mt-3 space-y-2">
                         {allFeaturesConfig.map((feature) => {
-                          const { text, showDeviceSyncTick } = getFeatureValue(p, feature.key);
+                          const { text, enabled } = getFeatureValue(p, feature.key);
+                          const boolIcons = BILLING_BOOLEAN_ICON_KEYS.includes(feature.key);
                           return (
                             <div
                               key={`${p.id}-${feature.key}-mobile`}
@@ -1566,10 +1613,15 @@ export default function BillingPage() {
                             >
                               <span className="text-muted-foreground">{feature.label}</span>
                               <span className="font-medium text-right inline-flex items-center justify-end gap-1">
-                                {text}
-                                {showDeviceSyncTick ? (
-                                  <Check className="h-4 w-4 shrink-0 text-green-500" aria-hidden />
-                                ) : null}
+                                {boolIcons ? (
+                                  enabled ? (
+                                    <Check className="h-5 w-5 shrink-0 text-green-500" aria-hidden />
+                                  ) : (
+                                    <X className="h-5 w-5 shrink-0 text-red-500" aria-hidden />
+                                  )
+                                ) : (
+                                  <span className="tabular-nums">{text}</span>
+                                )}
                               </span>
                             </div>
                           );
@@ -1651,13 +1703,13 @@ export default function BillingPage() {
                                 <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
                                 {termDaysAdd === 1 ? "day" : "days"} of{" "}
                                 <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                <strong className="text-foreground">added on top of</strong> the Balance days you already
                                 have left.
                               </p>
                               <div className="flex flex-col items-center gap-1.5">
                                 <div className={PRORATION_PILL_CREDIT_CLASS}>
                                   <span>
-                                    Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                    Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
                                     <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                       {formatCreditPillDaysLeftDisplay(creditDaysPinkFromQuote)}
                                     </strong>{" "}
@@ -1862,13 +1914,13 @@ export default function BillingPage() {
                                 <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
                                 {termDaysAdd === 1 ? "day" : "days"} of{" "}
                                 <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                <strong className="text-foreground">added on top of</strong> the Balance days you already
                                 have left.
                               </p>
                               {billingShowUpgradePathParagraph(change) ? (
                                 <p className="text-[11px] text-muted-foreground leading-snug">
                                   Upgrade: {curRow.name} usage stays on {curRow.name}; on {p.name} usage starts at zero.
-                                  Remaining value credits toward {p.name} (≈{" "}
+                                  Remaining value counts toward {p.name} (≈{" "}
                                   <strong className="tabular-nums text-foreground">
                                     {creditDaysCarriedMob.toFixed(2)}
                                   </strong>{" "}
@@ -1880,7 +1932,7 @@ export default function BillingPage() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Credit ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                      Balance ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                         {creditDaysCarriedMob.toFixed(2)}
                                       </strong>{" "}
@@ -1899,7 +1951,7 @@ export default function BillingPage() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                      Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                         {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewMob)}
                                       </strong>{" "}
@@ -2102,7 +2154,7 @@ export default function BillingPage() {
                       {feature.label}
                     </TableCell>
                     {plans.map((p) => {
-                      const { text, enabled, showDeviceSyncTick } = getFeatureValue(p, feature.key);
+                      const { text, enabled } = getFeatureValue(p, feature.key);
                       const isSelected = p.id === selectedPlanId;
                       return (
                         <TableCell
@@ -2112,26 +2164,12 @@ export default function BillingPage() {
                             isSelected && "bg-muted"
                           )}
                         >
-                          {["hasRoleBasedAccess", "hasAuditLogs", "hasPrioritySupport"].includes(feature.key) ? (
+                          {BILLING_BOOLEAN_ICON_KEYS.includes(feature.key) ? (
                             enabled ? (
                               <Check className="h-5 w-5 mx-auto text-green-500 shrink-0" />
                             ) : (
                               <X className="h-5 w-5 mx-auto text-red-500 shrink-0" />
                             )
-                          ) : feature.key === "maxDevices" || feature.key === "maxDevicesLocal" ? (
-                            <span className="inline-flex items-center justify-center gap-1 flex-wrap max-w-full">
-                              <span
-                                className={cn(
-                                  "tabular-nums",
-                                  !enabled && text !== "Unlimited" && "text-muted-foreground"
-                                )}
-                              >
-                                {text}
-                              </span>
-                              {showDeviceSyncTick ? (
-                                <Check className="h-4 w-4 shrink-0 text-green-500" aria-label="Multi-device sync included" />
-                              ) : null}
-                            </span>
                           ) : (
                             <span
                               className={cn(
@@ -2208,7 +2246,7 @@ export default function BillingPage() {
                                 <strong className="tabular-nums text-foreground">{termDaysAdd}</strong>{" "}
                                 {termDaysAdd === 1 ? "day" : "days"} of{" "}
                                 <span className="font-medium">{p.name}</span> access. After payment, this time is{" "}
-                                <strong className="text-foreground">added on top of</strong> the credit days you already
+                                <strong className="text-foreground">added on top of</strong> the Balance days you already
                                 have left.
                               </p>
                               {billingShowUpgradePathParagraph(change) ? (
@@ -2228,7 +2266,7 @@ export default function BillingPage() {
                                   <div className="flex flex-col items-center gap-1.5 max-w-[280px] mx-auto">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Credit ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                        Balance ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                           {creditCarriedDesk.toFixed(2)}
                                         </strong>{" "}
@@ -2247,7 +2285,7 @@ export default function BillingPage() {
                                   <div className="flex flex-col items-center gap-1.5">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Credit ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                        Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                           {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewDesk)}
                                         </strong>{" "}

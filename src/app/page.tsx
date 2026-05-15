@@ -5,8 +5,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import { LoadingSpinner } from '@/components/layout/LoadingSpinner';
-import { isLocalOnlyMode } from '@/lib/localMode';
 import { resolvePostAuthCompanyRoute } from '@/lib/postAuthCompanyRoute';
+import { isStaticAppBuild } from '@/lib/isStaticAppBuild';
+import { isCapacitorNativeApp } from '@/lib/isCapacitorNative';
+import { isElectronEnvironment } from '@/hooks/use-mobile';
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
@@ -21,13 +23,24 @@ export default function LoginPage() {
     }
     if (postAuthNavigateOnceRef.current) return;
     postAuthNavigateOnceRef.current = true;
-    // Static/local: valid remember-window ho to `/company` skip karke seedha `/dashboard`.
-    const next = isLocalOnlyMode() ? resolvePostAuthCompanyRoute(user.uid) : '/company';
+    // Valid offline/cloud "remember" ho to `/company` skip; warna company picker — web + static dono par same rule.
+    const next = resolvePostAuthCompanyRoute(user.uid);
     router.replace(next);
   }, [user, loading, router]);
 
-  if (loading || user) {
-      return <LoadingSpinner />;
+  // Auth restore / Firestore user-doc bootstrap: `user` null + `loading` true — login form mat dikhao (1s flash band).
+  if (loading) {
+    return <LoadingSpinner />;
+  }
+  // Session mil gaya: embedded shell par lamba circle kam — route replace tak blank background (device-lock overlay alag se).
+  if (user) {
+    const embeddedQuick =
+      typeof window !== 'undefined' &&
+      (isStaticAppBuild() || isCapacitorNativeApp() || isElectronEnvironment());
+    if (embeddedQuick) {
+      return <div className="min-h-screen bg-background" aria-busy="true" />;
+    }
+    return <LoadingSpinner />;
   }
 
   return (

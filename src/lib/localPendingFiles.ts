@@ -2,9 +2,10 @@
 
 import { openDB } from "./offlineDb";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { doc, getDoc, updateDoc, type DocumentReference } from "firebase/firestore";
+import { doc, getDoc, type DocumentReference } from "firebase/firestore";
 import { storage } from "@/lib/firebase";
 import { firestore } from "@/lib/firebase";
+import { writeEntity } from "@/lib/writeGateway";
 import { Capacitor } from "@capacitor/core";
 import { isCapacitorNativeApp } from "@/lib/isCapacitorNative";
 import {
@@ -13,6 +14,7 @@ import {
   readAttachmentBlobFromDataDir,
   writeAttachmentBlobToDataDir,
 } from "@/lib/capacitorAttachmentFs";
+import { computeSha256HexFromBlob } from "@/lib/security/sha256Hex";
 import {
   deleteAttachmentFileRef,
   getAttachmentFileRef,
@@ -21,6 +23,25 @@ import {
 } from "@/lib/attachmentFileRefStore";
 
 const STORE = "pendingFiles";
+
+/** Forensic: `NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG=1` — pending replace vs append + delete order proof. */
+function localPendingFilesForensicEnabled(): boolean {
+  return typeof process !== "undefined" && process.env.NEXT_PUBLIC_ATTACHMENT_FORENSIC_DEBUG === "1";
+}
+
+/** `companies/{cid}/{col}/{id}` par partial patch — direct `updateDoc` ki jagah write gateway. */
+async function patchCompanyDocViaGateway(docRef: DocumentReference, patch: Record<string, unknown>): Promise<void> {
+  const m = /^companies\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(docRef.path);
+  if (!m) throw new Error(`[localPendingFiles] invalid ref path: ${docRef.path}`);
+  const r = await writeEntity({
+    companyId: m[1],
+    collectionName: m[2],
+    docId: m[3],
+    operation: "update",
+    data: patch,
+  });
+  if (r.ok === false) throw new Error(r.error);
+}
 
 /** Party/Bank/Staff/Item pending sync ke liye bhi yahi ref (pehle sirf vouchers tha). */
 const PENDING_SYNC_COLLECTIONS = new Set(["vouchers", "parties", "bank_accounts", "staff", "items"]);
@@ -241,7 +262,11 @@ async function getPendingFileById(
     if (!row) return null;
     const meta = parsePendingMeta(row.metaJson);
     if (!meta) return null;
-    const blob = await readAttachmentBlobFromDataDir(row.filePath, row.contentType);
+    const blob = await readAttachmentBlobFromDataDir(
+      row.filePath,
+      row.contentType,
+      row.sha256Hex ?? undefined
+    );
     if (!blob || blob.size <= 0) return null;
     return {
       id: localId,
@@ -255,8 +280,45 @@ async function getPendingFileById(
       createdAt: meta.createdAt,
     };
   }
-  const pending = await getPendingFiles();
-  return pending.find((row) => row.id === localId) ?? null;
+  // Direct `get(id)` — `getAll` se zyada reliable + race kam (flush/hydrate hot path).
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const store = tx.objectStore(STORE);
+    const req = store.get(localId.trim());
+    req.onsuccess = () => {
+      db.close();
+      const row = req.result as (PendingFilePayload & { createdAt?: number }) | undefined;
+      if (!row?.blob) {
+        resolve(null);
+        return;
+      }
+      const blob = row.blob;
+      if (!(blob instanceof Blob) || blob.size <= 0) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        id: row.id,
+        blob,
+        contentType: row.contentType || blob.type || "application/octet-stream",
+        docPath: row.docPath,
+        field: row.field,
+        arrayIndex: row.arrayIndex,
+        storagePathPrefix: row.storagePathPrefix,
+        fileName: row.fileName,
+        createdAt: row.createdAt,
+      });
+    };
+    req.onerror = () => {
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+      reject(req.error);
+    };
+  });
 }
 
 /** Preview / open: `local:uuid` → blob (Capacitor: DataDirectory file, web/electron: IndexedDB). */
@@ -303,14 +365,58 @@ export async function uploadPendingLocalFileRef(
   const current = data[item.field];
   if (Array.isArray(current)) {
     const arr = [...current];
-    const idx = arr.findIndex((v) => v === `${LOCAL_FILE_PREFIX}${item.id}`);
+    const needle = `${LOCAL_FILE_PREFIX}${item.id}`;
+    const idx = arr.findIndex((v) => v === needle);
+    const oldArraySnapshot = [...arr];
+    const action: "replace_at_index" | "append_unmatched" =
+      idx >= 0 ? "replace_at_index" : "append_unmatched";
     if (idx >= 0) arr[idx] = url;
     else arr.push(url);
-    await updateDoc(docRef, { [item.field]: arr });
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_UPLOAD]", {
+        phase: "uploadPendingLocalFileRef",
+        localId: item.id,
+        needleMatched: needle,
+        matchedIndex: idx,
+        action,
+        oldArray: oldArraySnapshot,
+        newArray: arr,
+        note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+        navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+      });
+    }
+    await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
   } else {
-    await updateDoc(docRef, { [item.field]: url });
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_UPLOAD]", {
+        phase: "uploadPendingLocalFileRef",
+        localId: item.id,
+        field: item.field,
+        action: "scalar_field_replace",
+        oldValue: current,
+        newValue: url,
+        note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+      });
+    }
+    await patchCompanyDocViaGateway(docRef, { [item.field]: url });
+  }
+  if (localPendingFilesForensicEnabled()) {
+    console.warn("[FORENSIC_PENDING_UPLOAD]", {
+      phase: "uploadPendingLocalFileRef",
+      localId: item.id,
+      step: "AFTER_GATEWAY_PATCH_BEFORE_PENDING_DELETE",
+      pendingBytesStillPresentUntilRemovePendingFile: true,
+    });
   }
   await removePendingFile(item.id);
+  if (localPendingFilesForensicEnabled()) {
+    console.warn("[FORENSIC_PENDING_UPLOAD]", {
+      phase: "uploadPendingLocalFileRef",
+      localId: item.id,
+      step: "AFTER_REMOVE_PENDING_FILE_COMPLETE",
+      pendingBytesDeleted: true,
+    });
+  }
   return url;
 }
 
@@ -321,6 +427,7 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
     const path = pendingFileDataDirPath(payload.id, payload.fileName);
     const ok = await writeAttachmentBlobToDataDir(path, payload.blob);
     if (!ok) throw new Error("Failed to persist pending attachment in DataDirectory");
+    const sha256Hex = await computeSha256HexFromBlob(payload.blob);
     const meta: PendingFileMeta = {
       docPath: payload.docPath,
       field: payload.field,
@@ -337,6 +444,7 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
       size: payload.blob.size || 0,
       metaJson: JSON.stringify(meta),
       updatedAt: createdAt,
+      sha256Hex,
     });
     // Freshly persisted local file: sync render/open fast-path ke liye runtime cache seed karo.
     const fileUri = await getAttachmentFileUriFromDataDir(path);
@@ -359,9 +467,31 @@ export async function putPendingFile(payload: PendingFilePayload): Promise<void>
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
-    store.put({ ...payload, createdAt });
-    tx.oncomplete = () => { db.close(); resolve(); };
-    tx.onerror = () => { db.close(); reject(tx.error); };
+    const row = { ...payload, createdAt };
+    store.put(row);
+    tx.oncomplete = () => {
+      db.close();
+      // Web preview: `getLocalFileRefMetaSync` / UI — native `putPendingFile` jaisa runtime cache seed (IDB ke alawa fast path).
+      setLocalFileRefMetaCache({
+        id: payload.id,
+        contentType: payload.contentType || payload.blob.type || "application/octet-stream",
+        fileName: payload.fileName,
+        size: payload.blob.size || 0,
+        createdAt,
+        docPath: payload.docPath,
+        field: payload.field,
+        storagePathPrefix: payload.storagePathPrefix,
+      });
+      resolve();
+    };
+    tx.onerror = () => {
+      try {
+        db.close();
+      } catch {
+        /* ignore */
+      }
+      reject(tx.error);
+    };
   });
 }
 
@@ -372,7 +502,11 @@ export async function getPendingFiles(): Promise<PendingFilePayload[]> {
     for (const row of rows) {
       const meta = parsePendingMeta(row.metaJson);
       if (!meta) continue;
-      const blob = await readAttachmentBlobFromDataDir(row.filePath, row.contentType);
+      const blob = await readAttachmentBlobFromDataDir(
+        row.filePath,
+        row.contentType,
+        row.sha256Hex ?? undefined
+      );
       if (!blob || blob.size <= 0) continue;
       out.push({
         id: row.id,
@@ -399,12 +533,27 @@ export async function getPendingFiles(): Promise<PendingFilePayload[]> {
 }
 
 export async function removePendingFile(id: string): Promise<void> {
+  if (localPendingFilesForensicEnabled()) {
+    console.warn("[FORENSIC_PENDING_REMOVE]", {
+      phase: "removePendingFile_start",
+      localId: id,
+      note: "pending_bytes_deleted_here_SQLite_mirror_update_is_separate_async",
+      navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+    });
+  }
   if (isCapacitorNativeApp()) {
     const row = await getAttachmentFileRef("pending_file", id);
     if (row?.filePath) await deleteAttachmentBlobFromDataDir(row.filePath);
     await deleteAttachmentFileRef("pending_file", id);
     // Delete ke baad stale URI reuse na ho.
     localFileRefMetaRuntimeCache.delete(id);
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_REMOVE]", {
+        phase: "removePendingFile_done_native",
+        localId: id,
+        hadFilePath: Boolean(row?.filePath),
+      });
+    }
     return;
   }
   const db = await openDB();
@@ -417,6 +566,9 @@ export async function removePendingFile(id: string): Promise<void> {
   });
   // Web/electron path me bhi stale cache clean.
   localFileRefMetaRuntimeCache.delete(id);
+  if (localPendingFilesForensicEnabled()) {
+    console.warn("[FORENSIC_PENDING_REMOVE]", { phase: "removePendingFile_done_indexeddb", localId: id });
+  }
 }
 
 /**
@@ -441,17 +593,70 @@ export async function syncOnePendingFile(
 
     if (Array.isArray(current)) {
       const arr = [...current];
-      const idx = arr.findIndex((v) => v === `${LOCAL_FILE_PREFIX}${item.id}`);
+      const needle = `${LOCAL_FILE_PREFIX}${item.id}`;
+      const idx = arr.findIndex((v) => v === needle);
+      const oldArraySnapshot = [...arr];
+      const action: "replace_at_index" | "append_unmatched" =
+        idx >= 0 ? "replace_at_index" : "append_unmatched";
       if (idx >= 0) arr[idx] = url;
       else arr.push(url);
-      await updateDoc(docRef, { [item.field]: arr });
+      if (localPendingFilesForensicEnabled()) {
+        console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
+          phase: "syncOnePendingFile",
+          localId: item.id,
+          needleMatched: needle,
+          matchedIndex: idx,
+          action,
+          oldArray: oldArraySnapshot,
+          newArray: arr,
+          note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+          navigatorOnLine: typeof navigator !== "undefined" ? navigator.onLine : undefined,
+        });
+      }
+      await patchCompanyDocViaGateway(docRef, { [item.field]: arr });
     } else {
-      await updateDoc(docRef, { [item.field]: url });
+      if (localPendingFilesForensicEnabled()) {
+        console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
+          phase: "syncOnePendingFile",
+          localId: item.id,
+          field: item.field,
+          action: "scalar_field_replace",
+          oldValue: current,
+          newValue: url,
+          note: "STEP_FIRESTORE_PATCH_NEXT_then_removePendingFile_after_await",
+        });
+      }
+      await patchCompanyDocViaGateway(docRef, { [item.field]: url });
     }
 
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
+        phase: "syncOnePendingFile",
+        localId: item.id,
+        step: "AFTER_GATEWAY_PATCH_BEFORE_PENDING_DELETE",
+        pendingBytesStillPresentUntilRemovePendingFile: true,
+      });
+    }
     await removePendingFile(item.id);
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
+        phase: "syncOnePendingFile",
+        localId: item.id,
+        step: "AFTER_REMOVE_PENDING_FILE_COMPLETE",
+        pendingBytesDeleted: true,
+        success: true,
+      });
+    }
     return { success: true };
   } catch (e: any) {
+    if (localPendingFilesForensicEnabled()) {
+      console.warn("[FORENSIC_PENDING_SYNC_ONE]", {
+        phase: "syncOnePendingFile",
+        localId: item.id,
+        success: false,
+        error: e?.message || String(e),
+      });
+    }
     return { success: false, error: e?.message || String(e) };
   }
 }

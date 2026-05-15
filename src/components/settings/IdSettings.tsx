@@ -10,8 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { useCompany } from "@/hooks/useCompany";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { doc, updateDoc } from "firebase/firestore";
-import { firestore } from "@/lib/firebase";
+import { updateCompanyRootFirestore } from "@/lib/writeGateway/companyRootFirestore";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -63,8 +62,7 @@ export function IdSettings() {
     }
     setIsLoading(true);
     try {
-      const companyRef = doc(firestore, "companies", companyId);
-      await updateDoc(companyRef, { idSettings: data });
+      await updateCompanyRootFirestore(companyId, { idSettings: data });
       toast({ title: "Success", description: "ID settings have been updated." });
     } catch (error) {
       console.error("Error updating ID settings:", error);

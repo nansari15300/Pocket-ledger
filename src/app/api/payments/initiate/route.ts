@@ -7,8 +7,8 @@ import { getAdminDb } from "@/lib/firebaseAdmin";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
 import {
-  BILLING_TERM_OPTIONS,
   grossPriceNpr,
+  SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
@@ -77,15 +77,14 @@ type Body = {
   billingCycle: "monthly" | "yearly";
   /** When billingCycle is yearly: 1–10 (total term length for Stripe recurring / amount). */
   periodYears?: number;
-  /** Full term (monthly, quarter, … year_10); when set, drives Stripe `recurring` + server price check. */
+  /** Full term (monthly … year_10 legacy); when set, drives Stripe `recurring` + server price check. */
   subscriptionTermKey?: string;
   /** Donations (free/basic) vs paid plan checkout — webhook uses this to skip plan upgrade. */
   billingIntent?: "donation" | "subscribe";
 };
 
-const VALID_SUBSCRIPTION_TERM_KEYS = new Set(
-  BILLING_TERM_OPTIONS.map((o) => o.value)
-);
+// UI max 1 yr — purane `year_2`… keys ab bhi allow taaki pending Stripe sessions fail na hon.
+const VALID_SUBSCRIPTION_TERM_KEYS = SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT;
 
 /** Maps app term keys to Stripe `recurring` on Checkout `price_data` (subscription mode). */
 function stripeRecurringFromTerm(termKey: SubscriptionTermKey): {

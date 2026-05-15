@@ -51,7 +51,7 @@ import { saveVoucher, isVoucherLimitError, approveVoucherWithHistory, patchVouch
 import { formatVoucherNumber, parseVoucherNumberPart, normalizePrefix } from "@/lib/voucherNumberFormat";
 import { checkStorageLimit, incrementCompanyStorage } from "@/lib/storageUsageClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { appendLocalOnlyVoucherFilesToUrls } from "@/lib/voucherLocalAttachmentUpload";
+import { appendLocalOnlyVoucherFilesToUrls, shouldStageNewVoucherFilesAsLocalPending } from "@/lib/voucherLocalAttachmentUpload";
 import { sendTransactionAlert, isAmountOverOneLakh, getChangedFieldLabels } from "@/lib/transactionAlerts";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useResetLinkStateOnCopyTargetCompany } from "@/hooks/useResetLinkStateOnCopyTargetCompany";
@@ -369,6 +369,11 @@ export function CreateJournalForm({
   const [journalTaxPrefillName, setJournalTaxPrefillName] = React.useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<(File|string)[]>([]);
+  /** Journal tiles: memo string URLs — FilePreview main effect unnecessary re-run kam. */
+  const attachmentClientFileUrlsForPreview = useMemo(
+    () => files.filter((f): f is string => typeof f === "string"),
+    [files]
+  );
   const [savePdfAsImage, setSavePdfAsImage] = useState(false);
   const showPdfAsImageToggle = useMemo(
     () =>
@@ -1402,7 +1407,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
           setIsLoading(false);
           return;
         }
-        if (isLocalOnlyMode()) {
+        if (await shouldStageNewVoucherFilesAsLocalPending(companyId)) {
           const voucherIdForLocalAttachments =
             isEditingAndConverting && voucher?.id
               ? null
@@ -2517,7 +2522,7 @@ const { isDirty: _isFormFieldsDirty } = form.formState;
                         <FilePreview 
                           key={index} 
                           file={file} 
-                          attachmentClientFileUrls={files.filter((f): f is string => typeof f === "string")}
+                          attachmentClientFileUrls={attachmentClientFileUrlsForPreview}
                           onRemove={allowAttachments && fileAttachmentLimits.maxFileCount > 0 && fileAttachmentLimits.allowDelete ? () => setFiles(prev => prev.filter((_, i) => i !== index)) : undefined}
                           className={!allowAttachments || fileAttachmentLimits.maxFileCount === 0 ? "pointer-events-none opacity-60" : ""}
                         />

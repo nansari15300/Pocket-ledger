@@ -51,6 +51,7 @@ import { countOnlineCompanySlotsForOwner, maxOnlineCompaniesForPlan } from "@/li
 import { listLocalCompanies } from "@/lib/localCompanyStore";
 import { getFiscalRangeForCountry } from "@/lib/fiscalRange";
 import { isForceLocalCompanyCreationBuild } from "@/lib/localMode";
+import { isStaticAppBuild } from "@/lib/isStaticAppBuild";
 import { upsertLocalCompany } from "@/lib/localCompanyStore";
 import { type LocalCompanyUserRecord, upsertUserInList } from "@/lib/localCompanyUsers";
 
@@ -443,6 +444,44 @@ export function CreateCompanyForm({
           planId: "basic",
           planExpiry: Timestamp.fromDate(expiryDate),
         });
+        // Static/APK: SQLite registry row abhi banao taaki `initializeCompanyDataClient` → `writeEntity` (outbox) path chale, web cloud flow same.
+        if (isStaticAppBuild()) {
+          await upsertLocalCompany({
+            id: companyId,
+            name: values.companyName,
+            address: values.address ?? "",
+            phone: values.phone ?? "",
+            email: values.email ?? "",
+            pan: values.pan ?? "",
+            country: values.country,
+            password: passwordEnabled ? (values.password ?? null) : null,
+            logoUrl,
+            fiscalYearStart: toLocalIso(values.fiscalYearStart),
+            fiscalYearEnd: toLocalIso(values.fiscalYearEnd),
+            storageOption: "firebase",
+            ownerId: effectiveUserId,
+            ownerEmail: effectiveUserEmail,
+            createdAt: Date.now(),
+            sharedWith: [],
+            sharedWithEmails: ensureSuperAdminInSharedEmails(
+              effectiveUserEmail ? [effectiveUserEmail] : [],
+              customUser?.email,
+              customUser?.role === "SuperAdmin"
+            ),
+            planId: "basic",
+            planExpiry: expiryDate.toISOString(),
+            isDeleted: false,
+            syncedFromCloud: true,
+            syncPolicy: "online",
+            authoritativeCompanyId: companyId,
+            adminUsername:
+              passwordEnabled && (values.password || "").trim()
+                ? (effectiveUserEmail.includes("@")
+                    ? effectiveUserEmail.split("@")[0].trim().toLowerCase()
+                    : "admin")
+                : null,
+          } as Parameters<typeof upsertLocalCompany>[0]);
+        }
         await initializeCompanyDataClient(companyId, effectiveUserId);
       }
 
