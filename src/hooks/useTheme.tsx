@@ -2,6 +2,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from 'react';
+import { PRO_PRIMARY_CLASS, PRO_THEME_CLASS } from "@/lib/proTheme";
 
 type Theme = "theme-pure-white" | "theme-vagawa" | "theme-soft-green" | "theme-dim-soft-green" | "theme-soft-blue" | "theme-sky-blue" | "theme-soft-yellow" | "theme-soft-pink" | "theme-colorfull" | "theme-pro";
 type PrimaryColor = "primary-pure-white" | "primary-vagawa" | "primary-soft-green" | "primary-dim-soft-green" | "primary-soft-blue" | "primary-sky-blue" | "primary-soft-yellow" | "primary-soft-pink" | "primary-colorfull" | "primary-pro";
@@ -17,8 +18,9 @@ type ThemeContextType = {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
-  const [theme, setThemeState] = useState<Theme>('theme-pure-white');
-  const [primaryColor, setPrimaryColorState] = useState<PrimaryColor>('primary-pure-white');
+  // Naya device / localStorage khali: Pro theme + accent default (Settings se badla ja sakta hai)
+  const [theme, setThemeState] = useState<Theme>(PRO_THEME_CLASS);
+  const [primaryColor, setPrimaryColorState] = useState<PrimaryColor>(PRO_PRIMARY_CLASS);
   const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {

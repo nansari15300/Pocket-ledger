@@ -41,9 +41,9 @@ import { toast } from "@/hooks/use-toast";
 import { doc, deleteField, serverTimestamp, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
-import { isLocalOnlyMode } from "@/lib/localMode";
 import { getLocalCompanyById, upsertLocalCompany } from "@/lib/localCompanyStore";
 import type { Company } from "@/hooks/useCompany";
+import { sendRecycleBinMovedAlert } from "@/lib/transactionAlerts";
 import {
   isOnlineCompanyRow,
   buildDuplicateNameCountMap,
@@ -112,27 +112,31 @@ export function DangerZone() {
         movedToAdminRecycleAt: deleteField(),
       };
 
-      if (isLocalOnlyMode()) {
-        // Cloud / mirrored companies: Firestore source of truth — warna mirror dubara SQLite ko purani row se overwrite kar deta hai.
-        if (isOnline) {
-          await updateDoc(doc(firestore, `companies/${targetId}`), moveToBinUpdate);
-        }
-        if (existingLocalCompany) {
-          await upsertLocalCompany({
-            ...existingLocalCompany,
-            id: targetId,
-            isDeleted: true,
-            deletedAt: Date.now(),
-          });
-        } else if (!isOnline) {
-          throw new Error("Local company not found");
-        }
-      } else {
+      // Online: Firestore; local-only (basic/web SQLite): sirf upsert — web par Firestore doc nahi hota
+      if (isOnline) {
         await updateDoc(doc(firestore, `companies/${targetId}`), moveToBinUpdate);
+      }
+      if (existingLocalCompany) {
+        await upsertLocalCompany({
+          ...existingLocalCompany,
+          id: targetId,
+          isDeleted: true,
+          deletedAt: Date.now(),
+        });
+      } else if (!isOnline) {
+        throw new Error("Local company not found");
       }
       toast({
         title: "Company Moved to Bin",
         description: `"${targetName}" has been moved to the recycle bin.`,
+      });
+      void sendRecycleBinMovedAlert(targetId, targetCompany ?? null, {
+        entityKind: "company",
+        entityId: targetId,
+        entityName: String(targetName || "Company"),
+        performedByUserId: user?.uid,
+        performedByEmail: user?.email ?? undefined,
+        performedByName: user?.displayName ?? customUser?.displayName ?? undefined,
       });
       if (companyId === targetId) clearCompanyId();
       setSelectedCompanyToDeleteId("");

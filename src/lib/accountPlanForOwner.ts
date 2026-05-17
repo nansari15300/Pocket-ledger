@@ -39,3 +39,50 @@ export function resolveEffectiveAccountPlanId(
   if (fromOwned) return fromOwned;
   return normalizePlanIdForClient(activeCompanyPlanId);
 }
+
+type CompanyPlanRow = {
+  planId?: string | null | undefined;
+  isOwned?: boolean;
+  ownerId?: string;
+  ownerEmail?: string | null;
+};
+
+/** Firebase user is owner of this company row (billing / account SKU). */
+export function isCompanyOwnedByFirebaseUser(
+  company: CompanyPlanRow | null | undefined,
+  firebaseUid: string | undefined | null,
+  firebaseEmail?: string | null
+): boolean {
+  if (!company) return false;
+  if (company.isOwned === true) return true;
+  const uid = String(firebaseUid || "").trim();
+  const oid = String(company.ownerId || "").trim();
+  if (uid && oid && uid === oid) return true;
+  const ue = String(firebaseEmail || "")
+    .toLowerCase()
+    .trim();
+  const oe = String(company.ownerEmail || "")
+    .toLowerCase()
+    .trim();
+  return !!ue && !!oe && ue === oe;
+}
+
+/**
+ * Active company ke liye plan tier:
+ * - **Owned** → account-level best owned SKU (`resolveEffectiveAccountPlanId`)
+ * - **Shared** → isi company doc ka `planId` (owner subscription — shared user ka apna basic plan yahan mix na ho)
+ */
+export function resolvePlanIdForActiveCompany(
+  company: CompanyPlanRow | null | undefined,
+  allCompanies: ReadonlyArray<CompanyPlanRow>,
+  firebaseUid: string | undefined | null,
+  firebaseEmail?: string | null
+): PlanId {
+  if (!company) {
+    return resolveEffectiveAccountPlanId(allCompanies, firebaseUid, null);
+  }
+  if (isCompanyOwnedByFirebaseUser(company, firebaseUid, firebaseEmail)) {
+    return resolveEffectiveAccountPlanId(allCompanies, firebaseUid, company.planId);
+  }
+  return normalizePlanIdForClient(company.planId);
+}

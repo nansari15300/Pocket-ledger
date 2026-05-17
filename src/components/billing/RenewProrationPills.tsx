@@ -23,6 +23,8 @@ type RenewProrationPillsProps = {
   currentExpiryMs: number | null;
   /** Profile me fixed 1-year renew quote; billing table user term change se alag. */
   term?: SubscriptionTermKey;
+  /** Company display symbol — `useDisplayCurrency().displaySymbol`. */
+  currencySymbol?: string;
   className?: string;
 };
 
@@ -33,6 +35,7 @@ export function RenewProrationPills({
   plan,
   currentExpiryMs,
   term = "year_1",
+  currencySymbol = "Rs.",
   className,
 }: RenewProrationPillsProps) {
   if (plan.isFree) return null;
@@ -61,13 +64,13 @@ export function RenewProrationPills({
     <div className={cn("flex w-full min-w-0 flex-col gap-[5px]", className)}>
       <div className={PROFILE_PRORATION_PILL_CREDIT_CLASS}>
         <span>
-          Balance ≈ रु {q.creditNpr.toFixed(2)} · {formatCreditPillDaysLeftDisplay(creditDaysFromQuote)}{" "}
+          Balance ≈ {currencySymbol} {q.creditNpr.toFixed(2)} · {formatCreditPillDaysLeftDisplay(creditDaysFromQuote)}{" "}
           {creditPillAdjustedDayWord(creditDaysFromQuote)} left
         </span>
       </div>
       <div className={PROFILE_PRORATION_PILL_USAGE_CLASS}>
         <span>
-          Usage: रु {ledger.frozenUsageNpr.toFixed(2)}
+          Usage: {currencySymbol} {ledger.frozenUsageNpr.toFixed(2)}
           {formatUsageLineSuffixProfile(ledger.frozenUsageNpr, plan.price.yearly, q.grossNpr)}
         </span>
       </div>

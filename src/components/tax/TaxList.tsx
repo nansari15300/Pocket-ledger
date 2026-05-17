@@ -18,6 +18,7 @@ import {
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { EntityFileAttachmentHover } from "@/components/entity/EntityFileAttachmentHover";
 import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ResolvedEntityAvatar } from "@/components/entity/ResolvedEntityAvatar";
@@ -100,8 +101,9 @@ export function TaxList({
                           {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
                           <TooltipTrigger
                             type="button"
+                            data-pl-list-name=""
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            className={masterListNameTriggerCn}
                           >
                             {tax.name}
                           </TooltipTrigger>

@@ -31,6 +31,7 @@ import { toast as sonnerToast } from "sonner";
 import { Combobox } from "../ui/combobox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { useDate } from "@/hooks/useDate";
+import { fireRecycleBinMovedAlertForCompanyDoc } from "@/lib/transactionAlerts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Calendar } from "../ui/calendar";
 import { cn } from "@/lib/utils";
@@ -454,6 +455,11 @@ export function EditPartyDialog({ party, onPartyUpdated, onPartyDeleted, childre
         });
       }
         toast({ title: "Party Moved to Bin", description: `"${party.name}" has been moved to the recycle bin.`});
+        void fireRecycleBinMovedAlertForCompanyDoc(companyId, "parties", party.id, party.name, {
+          uid: user?.uid,
+          email: user?.email,
+          name: user?.displayName,
+        });
         onPartyDeleted(party.id);
         setIsOpen(false);
         setIsDeleteDialogOpen(false);

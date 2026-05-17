@@ -8,6 +8,7 @@ import { trimEntityFileUrlForPreview } from "@/lib/trimEntityFileUrlForPreview";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { Landmark, Crown } from "lucide-react";
@@ -126,11 +127,9 @@ export function AccountList({
                       {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
                       <TooltipTrigger
                         type="button"
+                        data-pl-list-name=""
                         onPointerDown={(e) => e.stopPropagation()}
-                        className={cn(
-                          "pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none",
-                          isSpecial && "text-amber-600"
-                        )}
+                        className={cn(masterListNameTriggerCn, isSpecial && "text-amber-600")}
                       >
                         {account.accountName}
                       </TooltipTrigger>

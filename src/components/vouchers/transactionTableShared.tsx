@@ -26,7 +26,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import usePermissions from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
-import { txnSelectedMainRowCn, txnSelectedNarrationRowCn } from "@/lib/listSelectionChrome";
+import { txnSelectedMainRowCn, txnSelectedNarrationRowCn, txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import { getAllocationTotal } from "@/lib/payment-allocation-utils";
 import type { Item } from "@/components/items/types";
 import { motion } from "framer-motion";
@@ -782,6 +782,19 @@ export const TransactionRow = React.memo(
     /** Spend-wise group shell ke andar: sirf outer card border — row par alag pill mat banao */
     spendWiseInGroupCard = false,
   }: any) => {
+    /* Main + narration hover ek block — narration par mouse par bhi dono rows highlight (globals.css [data-pl-txn-hovered]) */
+    const [pairHovered, setPairHovered] = React.useState(false);
+    const mainRowRef = React.useRef<HTMLTableRowElement>(null);
+    const narrRowRef = React.useRef<HTMLTableRowElement>(null);
+    const onPairHoverEnter = React.useCallback(() => setPairHovered(true), []);
+    const clearPairHoverIfLeavingBlock = React.useCallback((e: React.MouseEvent) => {
+      const rel = e.relatedTarget;
+      if (rel instanceof Node) {
+        if (mainRowRef.current?.contains(rel) || narrRowRef.current?.contains(rel)) return;
+      }
+      setPairHovered(false);
+    }, []);
+
     // Merge fiscal mode: FY ke beech full-width divider — amounts / row actions nahi.
     if (transaction.type === FISCAL_YEAR_PARTITION_ROW_TYPE) {
       const span = typeof fullRowColSpan === "number" && fullRowColSpan > 0 ? fullRowColSpan : 12;
@@ -1156,7 +1169,7 @@ export const TransactionRow = React.memo(
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+              <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
                 <MoreVertical className="h-4 w-4 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
@@ -1323,6 +1336,10 @@ export const TransactionRow = React.memo(
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
         /* globals.css [data-pl-txn-selected] — theme stripe/bg par orange box dikhe */
+        ref={mainRowRef}
+        onMouseEnter={onPairHoverEnter}
+        onMouseLeave={clearPairHoverIfLeavingBlock}
+        data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-check-focus={isCheckModeFocused ? "true" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
@@ -1399,9 +1416,13 @@ export const TransactionRow = React.memo(
         style={isRowAnimationEnabled && animateLayout ? { isolation: "isolate", willChange: "transform" } : undefined}
         role="button"
         tabIndex={-1}
+        ref={narrRowRef}
+        onMouseEnter={onPairHoverEnter}
+        onMouseLeave={clearPairHoverIfLeavingBlock}
         onClick={() => onRowSelect?.(transaction)}
         onDoubleClick={() => onRowClick?.(transaction)}
         data-txn-stripe={txnStripeAttr}
+        data-pl-txn-hovered={pairHovered ? "" : undefined}
         data-pl-txn-selected={txnRowSelectedChrome ? "" : undefined}
         data-pl-spend-wise-group={useRowSpendBorders ? swColor : undefined}
         data-pl-spend-edge={useRowSpendBorders ? spendWiseEdgeAttr : undefined}
@@ -1415,7 +1436,8 @@ export const TransactionRow = React.memo(
           !spendWiseInGroupCard && "border-b",
           txnStripeBgClass,
           checkMarkNarrBorder,
-          !inSpendWiseGroup && "border-black [&>td]:border-black",
+          /* Sirf neeche horizontal line — left/right vertical border mat ([&>td]:border-black se side line aa jati thi) */
+          !inSpendWiseGroup && "border-b border-black [&>td]:border-x-0 [&>td]:border-t-0 [&>td]:border-b-0",
           isBillWise && "-mt-1.5",
           spendWiseNarrInset,
           /* Group card: narration par upar ki line mat (txn + narration ek block) */

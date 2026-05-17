@@ -1,3 +1,5 @@
+import { getCurrencySymbolForCode } from "@/lib/worldCurrencies";
+import type { RegionalPlanPricesMap } from "@/lib/billingRegionalPricing";
 
 export type PlanId = "basic" | "advance" | "pro" | "pro-plus";
 
@@ -92,11 +94,14 @@ export interface Plan {
   id: PlanId;
   name: string;
   tagline: string;
-  currency: "NPR" | "USD";
+  /** ISO 4217 — admin base catalog currency (`billing_pricing.baseCurrency`). */
+  currency: string;
   price: {
     monthly: number; // price per month in currency units (e.g., NPR)
     yearly: number;  // discounted annual price (12m - discount)
   };
+  /** Nepal / SAARC / International — admin alag rate; user country se region pick. */
+  regionalPrices?: RegionalPlanPricesMap;
   commissionRate?: number; // Commission percentage for distributors
   isFree?: boolean; // Mark plan as free regardless of price
   discountPercentage?: number;
@@ -408,11 +413,19 @@ export function numericEntitlement(
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-export function formatPrice(plan: Plan, cycle: BillingCycle = "monthly", forceShowPrice = false): string {
+export function formatPrice(
+  plan: Plan,
+  cycle: BillingCycle = "monthly",
+  forceShowPrice = false,
+  /** Company/user display symbol — billing page `useDisplayCurrency` se pass karo. */
+  displaySymbolOverride?: string
+): string {
   if (plan.isFree && !forceShowPrice) return "Free";
   const amount = plan.price[cycle];
-  const suffix = plan.currency === "NPR" ? "रु" : plan.currency;
+  const suffix =
+    displaySymbolOverride?.trim() ||
+    getCurrencySymbolForCode(plan.currency) ||
+    plan.currency;
   if (amount === 0 && !forceShowPrice) return "Free";
-  // NPR formatting (simple):
   return `${suffix} ${amount.toLocaleString("en-IN")}/${cycle === "monthly" ? "mo" : "yr"}`;
 }

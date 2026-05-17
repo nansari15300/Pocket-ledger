@@ -9,7 +9,7 @@ import { Permission, PermissionGroups } from "@/lib/permissions";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { getLocalAuthToken, getLocalAuthUser, LOCAL_AUTH_CHANGED_EVENT } from "@/lib/localApiClient";
 import { isLocalOnlyMode } from "@/lib/localMode";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 
 
 export type UserRole = "viewer" | "data-entry" | "accountant" | "editor" | "manager" | "owner";
@@ -222,10 +222,12 @@ const usePermissions = () => {
             return true;
         };
 
-        const effectivePlanId = resolveEffectiveAccountPlanId(
+        // Shared user: company.owner ka planId (advance file limit 2); owned: account-level best SKU
+        const effectivePlanId = resolvePlanIdForActiveCompany(
+          company,
           allCompanies,
           customUser?.uid,
-          company?.planId
+          customUser?.email
         );
         const plan = getPlanFromPlans(livePlans, effectivePlanId);
         const roleFileLimits = config.fileAttachmentLimits?.[role] || { maxFileCount: 0, allowImage: false, allowPDF: false, allowDelete: false };

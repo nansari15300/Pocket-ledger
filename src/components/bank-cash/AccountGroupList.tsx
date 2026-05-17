@@ -20,6 +20,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from 'next/link';
 import { isSystemParentGroup } from "@/lib/system-groups"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerStrongCn } from "@/lib/listSelectionChrome";
 
 export function AccountGroupList({
   groups,
@@ -88,8 +89,9 @@ export function AccountGroupList({
                           {/* asChild hata — Framer layout + span ref = setRef infinite loop */}
                           <TooltipTrigger
                             type="button"
+                            data-pl-list-name=""
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="pl-master-list-row-name-strong cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            className={masterListNameTriggerStrongCn}
                           >
                             {group.name}
                           </TooltipTrigger>

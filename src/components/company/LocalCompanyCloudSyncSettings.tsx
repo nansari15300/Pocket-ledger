@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/useAuth";
+import { useCompany } from "@/hooks/useCompany";
 import { useToast } from "@/hooks/use-toast";
 import { getLocalCompanyById, upsertLocalCompany, type LocalCompanyDoc } from "@/lib/localCompanyStore";
 import { isOfflineCompanyStorage } from "@/lib/companyUnlockGate";
@@ -26,6 +27,7 @@ type Props = {
 /** Sirf device-local companies — Firestore companies par ye card hide. */
 export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const { user } = useAuth();
+  const { reloadLocalCompanyRegistry } = useCompany();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState({
@@ -38,6 +40,13 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
   const cfg = readCloudSyncConfigFromCompany(company);
   const [enabled, setEnabled] = useState(cfg.cloudSyncEnabled);
   const [provider, setProvider] = useState<CloudSyncProviderId>(cfg.cloudSyncProvider ?? "google_drive");
+
+  // Parent `company` refresh (registry bump) par checkbox state sync — tick UI + SQLite align
+  useEffect(() => {
+    const next = readCloudSyncConfigFromCompany(company);
+    setEnabled(next.cloudSyncEnabled);
+    if (next.cloudSyncProvider) setProvider(next.cloudSyncProvider);
+  }, [company]);
 
   const refreshStatus = useCallback(async () => {
     const s = await getLocalCloudSyncStatus(companyId);
@@ -59,6 +68,7 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
     const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
     if (!reg) return;
     await upsertLocalCompany({ ...reg, ...patch } as LocalCompanyDoc);
+    reloadLocalCompanyRegistry();
   };
 
   const onToggleEnabled = async (checked: boolean) => {
@@ -146,10 +156,16 @@ export function LocalCompanyCloudSyncSettings({ companyId, company }: Props) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <label className="flex items-center gap-2">
-          <Checkbox checked={enabled} onCheckedChange={(v) => void onToggleEnabled(v === true)} />
-          <span className="text-sm">Enable cloud sync</span>
-        </label>
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="local-company-cloud-sync-enabled"
+            checked={enabled}
+            onCheckedChange={(v) => void onToggleEnabled(v === true)}
+          />
+          <Label htmlFor="local-company-cloud-sync-enabled" className="text-sm font-normal cursor-pointer">
+            Enable cloud sync
+          </Label>
+        </div>
 
         {enabled ? (
           <>

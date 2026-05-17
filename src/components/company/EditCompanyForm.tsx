@@ -39,6 +39,11 @@ import { Label } from "@/components/ui/label";
 import { Combobox } from "@/components/ui/combobox";
 import { useToast } from "@/hooks/use-toast";
 import { countries } from "@/lib/countries";
+import { CountryCurrencyCombobox } from "@/components/shared/CountryCurrencyCombobox";
+import {
+  getDefaultCurrencyForCountry,
+  resolveCurrencyCountryKey,
+} from "@/lib/worldCurrencies";
 import { useCompany } from "@/hooks/useCompany";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions from "@/hooks/usePermissions";
@@ -102,6 +107,8 @@ const formSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email." }).optional().or(z.literal("")),
   pan: z.string().optional(),
   country: z.string().min(1, { message: "Please select a country." }),
+  /** Searchable currency row (country name key) — save par `currencyCode` + `currencySymbol` derive. */
+  billingCurrencyCountry: z.string().min(1, { message: "Please select a currency." }),
   password: z.string().optional(),
   confirmPassword: z.string().optional(),
   fiscalYearStart: z.date().optional(),
@@ -168,6 +175,8 @@ export function EditCompanyForm() {
   const [editLocalSaving, setEditLocalSaving] = useState(false);
   const [localUserToRemove, setLocalUserToRemove] = useState<ExistingLocalCompanyUser | null>(null);
   const [removeLocalUserLoading, setRemoveLocalUserLoading] = useState(false);
+  /** User ne currency alag se chuna ho to country change par auto-sync mat karo. */
+  const currencyPickedManuallyRef = useRef(false);
 
   // When plan does not allow avatar, clear any queued file
   useEffect(() => {
@@ -222,6 +231,7 @@ export function EditCompanyForm() {
       email: "",
       pan: "",
       country: "Nepal",
+      billingCurrencyCountry: "Nepal",
       password: "",
       confirmPassword: "",
       confirmPasswordToSave: "",
@@ -265,6 +275,7 @@ export function EditCompanyForm() {
             email: company.email || "",
             pan: company.pan || "",
             country: company.country || "Nepal",
+            billingCurrencyCountry: resolveCurrencyCountryKey(company),
             fiscalYearStart: safeGetDate(company.fiscalYearStart),
             fiscalYearEnd: safeGetDate(company.fiscalYearEnd),
             password: "",
@@ -281,6 +292,7 @@ export function EditCompanyForm() {
             companyUserPassword: "",
         });
         setEncryptCompanyEnabled(company.encryptServerBackup === true);
+        currencyPickedManuallyRef.current = false;
         // Edit open par add-user section default बंद रखो to avoid accidental duplicate user create.
         setAddCompanyUserEnabled(false);
         setQueuedCompanyUsers([]);
@@ -288,7 +300,8 @@ export function EditCompanyForm() {
   }, [company, form]);
 
   const loadExistingLocalUsers = useCallback(async () => {
-    if (!companyId || !isLocalOnlyMode()) {
+    // Local company: sirf company login — existing multi-user list mat dikhao
+    if (!companyId || !isLocalOnlyMode() || (company && isOfflineCompanyStorage(company))) {
       setExistingLocalUsers([]);
       return;
     }
@@ -299,7 +312,7 @@ export function EditCompanyForm() {
     } catch {
       setExistingLocalUsers([]);
     }
-  }, [companyId]);
+  }, [companyId, company]);
 
   useEffect(() => {
     void loadExistingLocalUsers();
@@ -443,6 +456,7 @@ export function EditCompanyForm() {
         logoUrl = await getDownloadURL(snapshot.ref);
       }
       
+      const currencyRow = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
       const updateData: Record<string, any> = {
           name: values.name,
           address: values.address,
@@ -450,6 +464,8 @@ export function EditCompanyForm() {
           email: values.email,
           pan: values.pan,
           country: values.country,
+          currencyCode: currencyRow.currencyCode,
+          currencySymbol: currencyRow.symbol,
           logoUrl: logoUrl,
           fiscalYearStart: values.fiscalYearStart || null,
           fiscalYearEnd: values.fiscalYearEnd || null,
@@ -596,6 +612,8 @@ export function EditCompanyForm() {
               email: values.email ?? "",
               pan: values.pan ?? "",
               country: values.country ?? "",
+              currencyCode: currencyRow.currencyCode,
+              currencySymbol: currencyRow.symbol,
               logoUrl,
               fiscalYearStart: fiscalStartIso,
               fiscalYearEnd: fiscalEndIso,
@@ -775,17 +793,32 @@ export function EditCompanyForm() {
   }
   
   const handleDelete = async () => {
-    if (!companyId) {
+    if (!companyId || !company) {
       toast({ variant: "destructive", title: "Error", description: "No company selected." });
       return;
     }
     setIsLoading(true);
     try {
-      await updateDoc(doc(firestore, `companies/${companyId}`), {
-        isDeleted: true,
-        deletedAt: serverTimestamp(),
-      });
+      const deviceLocalCo = isOfflineCompanyStorage(company);
+      const existingLocal = await getLocalCompanyById(companyId, { includeDeleted: true });
+      if (!deviceLocalCo) {
+        await updateDoc(doc(firestore, `companies/${companyId}`), {
+          isDeleted: true,
+          deletedAt: serverTimestamp(),
+        });
+      }
+      if (existingLocal) {
+        await upsertLocalCompany({
+          ...existingLocal,
+          id: companyId,
+          isDeleted: true,
+          deletedAt: Date.now(),
+        });
+      } else if (deviceLocalCo) {
+        throw new Error("Local company not found");
+      }
       toast({ title: "Company Moved to Bin", description: `"${company?.name}" has been moved.` });
+      reloadLocalCompanyRegistry();
       clearCompanyId();
     } catch (error) {
       console.error("Error moving to bin:", error);
@@ -797,8 +830,8 @@ export function EditCompanyForm() {
   };
 
   const deviceLocalCoForUi = company ? isOfflineCompanyStorage(company) : true;
-  const showAddUserCard =
-    !!company && (!deviceLocalCoForUi || (isLocalOnlyMode() && deviceLocalCoForUi));
+  // Local company: sirf company login (admin username + password) — multi "Add user" nahi
+  const showAddUserCard = !!company && !deviceLocalCoForUi;
 
   if (companyLoading) {
     return (
@@ -991,7 +1024,12 @@ export function EditCompanyForm() {
                           <Combobox
                               options={countries.map(country => ({ value: country, label: country }))}
                               value={field.value}
-                              onChange={(value) => field.onChange(value)}
+                              onChange={(value) => {
+                                field.onChange(value);
+                                if (!currencyPickedManuallyRef.current) {
+                                  form.setValue("billingCurrencyCountry", value, { shouldDirty: true });
+                                }
+                              }}
                               placeholder="Select country"
                           />
                       </FormControl>
@@ -999,11 +1037,36 @@ export function EditCompanyForm() {
                       </FormItem>
                   )}
               />
+              <FormField
+                  control={form.control}
+                  name="billingCurrencyCountry"
+                  render={({ field }: any) => (
+                      <FormItem>
+                      <FormLabel>Currency</FormLabel>
+                      <FormControl>
+                          <CountryCurrencyCombobox
+                              value={field.value}
+                              onChange={(value) => {
+                                currencyPickedManuallyRef.current = true;
+                                field.onChange(value);
+                              }}
+                              placeholder="Search country or currency"
+                              popoverModal
+                          />
+                      </FormControl>
+                      <FormDescription>
+                        Default from country; search by country name. Used for amounts and billing display.
+                      </FormDescription>
+                      <FormMessage />
+                      </FormItem>
+                  )}
+              />
             </div>
             
-            {isLocalOnlyMode() && (
+            {deviceLocalCoForUi && (
             <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-                {/* Admin + optional server-backup encryption (same login username/password drives crypto session). */}
+                {/* Local company: ek hi login (username + password); multi-user Add Company User alag section me nahi. */}
+                {isLocalOnlyMode() && (
                 <FormItem>
                   <div className="flex items-center justify-between rounded-md border border-black p-3">
                     <div>
@@ -1021,17 +1084,18 @@ export function EditCompanyForm() {
                     />
                   </div>
                 </FormItem>
+                )}
                   <FormField
                     control={form.control}
                     name="adminUsername"
                     render={({ field }: any) => (
                       <FormItem>
-                        <FormLabel>Admin Username (Company Login)</FormLabel>
+                        <FormLabel>Username (Company Login)</FormLabel>
                         <FormControl>
                           <Input placeholder="e.g., admin_user" {...field} value={field.value ?? ""} />
                         </FormControl>
                         <FormDescription>
-                          Used for offline login and for encryption when enabled — together with the password below.
+                          Open this company with this username and the password below — rules apply only inside this company.
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -1303,7 +1367,7 @@ export function EditCompanyForm() {
             </div>
             )}
 
-            {isLocalOnlyMode() && existingLocalUsers.length > 0 && (
+            {!deviceLocalCoForUi && isLocalOnlyMode() && existingLocalUsers.length > 0 && (
               <div className="rounded-md border border-black p-3">
                 {/* List ke saath Edit/Remove: turant SQLite update (Save Changes zaroori nahi). */}
                 <p className="text-sm font-medium mb-2">Existing Company Users ({existingLocalUsers.length})</p>

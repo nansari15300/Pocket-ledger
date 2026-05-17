@@ -1,7 +1,7 @@
 
 "use client";
 
-import { RotateCcw, Trash2, ArrowRight, ArrowUpCircle } from "lucide-react";
+import { RotateCcw, Trash2, ArrowRight, ArrowUpCircle, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PermissionButton } from "@/components/permission";
@@ -50,6 +50,8 @@ interface RecycleBinItemProps {
     item: DeletedItem;
     onRestore: (item: DeletedItem) => void;
     onDelete: (item: DeletedItem) => void;
+    /** Deleted voucher: read-only edit dialog kholo. */
+    onViewVoucher?: (item: DeletedItem) => void;
     /** e.g. "90 days to delete permanently" or "45 days until permanent delete" */
     daysToPermanentDeleteText?: string | null;
     /** When true, Restore and Delete Permanently buttons are disabled (e.g. Visible to Company admin tab) */
@@ -75,6 +77,7 @@ export function RecycleBinItem({
     item,
     onRestore,
     onDelete,
+    onViewVoucher,
     daysToPermanentDeleteText,
     disableActions,
     restoreDisabled,
@@ -88,6 +91,8 @@ export function RecycleBinItem({
     const isCompanyCard = item.isRootCollection === true || item.collectionPath === "companies";
     const useLocalRecycleBinButtons =
         isCompanyCard && typeof localRecycleBinRestore === "boolean" && typeof localRecycleBinPermanentDelete === "boolean";
+    // `type` category label "Voucher"; path `vouchers` authoritative for view action.
+    const isDeletedVoucher = item.collectionPath === "vouchers";
 
     return (
         <li
@@ -198,6 +203,18 @@ export function RecycleBinItem({
 
             {/* Buttons – always below content, ~50% smaller */}
             <div className="flex flex-wrap gap-1.5 items-center justify-end pt-3 mt-1 border-t border-border/60">
+                {isDeletedVoucher && onViewVoucher && (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onViewVoucher(item)}
+                        className="h-5 min-w-0 px-1.5 text-[10px] flex-shrink-0"
+                    >
+                        <Eye className="mr-0.5 h-2.5 w-2.5" />
+                        <span>View</span>
+                    </Button>
+                )}
                 {!isConverted && (
                     <>
                         {canRestoreCompany ? (

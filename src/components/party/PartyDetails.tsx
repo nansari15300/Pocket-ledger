@@ -90,7 +90,9 @@ import { EntityAlarmPopup } from "@/components/messages/EntityAlarmPopup";
 import { LinkPaymentToTxnsDialog } from "@/components/vouchers/LinkPaymentToTxnsDialog";
 import { TransactionsTable, type Context, type VisibleColumns, type TransactionColumnKey } from "@/components/vouchers/TransactionsTable";
 import { TransactionTableSortDropdown, type TransactionSortBy, type TransactionSortOrder } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterCheckboxPill, LedgerFooterTextPill, LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterCheckboxPill, ledgerFooterRowCn } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterPaginationBar } from "@/components/vouchers/LedgerFooterPaginationBar";
+import { ROWS_PER_PAGE_OPTIONS_DEFAULT, rowsPerPageSelectValue } from "@/lib/rowsPerPageSelect";
 import { LedgerFooterColumnsMenu } from "@/components/vouchers/LedgerFooterColumnsMenu";
 import { StatementCheckModeFooterControls } from "@/components/vouchers/StatementCheckModeFooterControls";
 import { useStatementLedgerCheckModePaging } from "@/hooks/useStatementLedgerCheckModePaging";
@@ -1388,8 +1390,13 @@ export function PartyDetails({
         </div>
         {/* Footer: fixed at bottom of details pane (screen anusar) */}
         <div className="py-2 px-4 border-t overflow-auto min-h-0 scrollbar-slim-dim flex-shrink-0 mt-auto bg-background">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-y-2 min-w-max">
-            <div className="flex min-w-0 flex-nowrap items-center gap-1.5 min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground">
+          <div className={cn("flex min-w-max flex-col gap-y-2 sm:flex-row sm:items-center", ledgerFooterRowCn)}>
+            <div
+              className={cn(
+                ledgerFooterRowCn,
+                "min-w-0 overflow-x-auto scrollbar-slim-dim text-sm text-muted-foreground"
+              )}
+            >
               <LedgerFooterCheckboxPill
                 id="show-narration-party"
                 checked={showNarration}
@@ -1439,63 +1446,30 @@ export function PartyDetails({
                 hiddenCount={statementCheck.hiddenCount}
               />
             </div>
-            <div className="flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim flex-shrink-0">
-              <TransactionTableSortDropdown
-                sortBy={sortBy}
-                sortOrder={sortOrder}
-                onSortChange={(by, order) => {
-                  setSortBy(by);
-                  setSortOrder(order);
-                }}
-                viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
-              />
-              {/* Tail paging: page 1 = latest; chevrons (<< oldest page #, < older chunk, > newer, >> newest page 1) */}
-              <LedgerFooterTextPill>Page {currentPage} of {totalPages}</LedgerFooterTextPill>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronsLeft className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <LedgerFooterChromePill className="px-1">
-
-              <Select
-                value={`${rowsPerPage}`}
-                onValueChange={(value) => {
-                  setRowsPerPage(Number(value) || 0);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
-                  <SelectValue placeholder={`${rowsPerPage}`} />
-                </SelectTrigger>
-                <SelectContent side="top">
-                  {[10, 20, 30, 50].map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>{pageSize}</SelectItem>
-                  ))}
-                  <SelectItem value="0">All</SelectItem>
-                </SelectContent>
-              </Select>
-              </LedgerFooterChromePill><Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(currentPage - 1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button type="button" variant="chromePill" size="icon" className="h-8 w-8 shrink-0"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-              >
-                <ChevronsRight className="h-4 w-4" />
-              </Button>
-              <LedgerFooterTextPill>Total Trxn {statusFilteredTransactions.length}</LedgerFooterTextPill>
-            </div>
+            <LedgerFooterPaginationBar
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(by, order) => {
+                setSortBy(by);
+                setSortOrder(order);
+              }}
+              viewMode={balanceMode === "bill_wise" ? "bill_wise" : "statement"}
+              currentPage={currentPage}
+              totalPages={totalPages}
+              setCurrentPage={setCurrentPage}
+              rowsPerPageSelectValue={rowsPerPageSelectValue(
+                rowsPerPage,
+                ROWS_PER_PAGE_OPTIONS_DEFAULT,
+                "10"
+              )}
+              onRowsPerPageChange={(value) => {
+                setRowsPerPage(Number(value) || 0);
+                setCurrentPage(1);
+              }}
+              beforeCount={desktopPaginationMeta.beforeCount}
+              afterCount={desktopPaginationMeta.afterCount}
+              totalCount={statusFilteredTransactions.length}
+            />
           </div>
         </div>
       </div>

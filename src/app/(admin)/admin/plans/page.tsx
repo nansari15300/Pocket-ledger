@@ -23,6 +23,7 @@ import {
 } from "@/lib/plansCatalogCache";
 import { PlanList } from "@/components/admin/plans/PlanList";
 import { PlanDetails } from "@/components/admin/plans/PlanDetails";
+import { BillingRegionalSettings } from "@/components/admin/plans/BillingRegionalSettings";
 
 export default function PlansPage() {
     useAdminAccess(['SuperAdmin']);
@@ -261,7 +262,8 @@ export default function PlansPage() {
     }
 
     return (
-        <div className="h-full p-6">
+        <div className="h-full p-6 space-y-4">
+            <BillingRegionalSettings />
             <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-6 h-full min-h-0">
                 <div className="flex flex-col h-full min-h-0 gap-4">
                     {missingPlansDoc && (

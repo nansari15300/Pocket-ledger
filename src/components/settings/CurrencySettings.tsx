@@ -8,28 +8,25 @@ import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { doc, updateDoc } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { isCompanyNotFoundError, COMPANY_NOT_SYNCED_MESSAGE } from "@/lib/companyUpdateGuard";
 import { Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-
-const CURRENCY_SYMBOL_OPTIONS = [
-  { value: "Rs.", label: "Rs." },
-  { value: "₹", label: "₹ (Rupee sign)" },
-  { value: "$", label: "$" },
-  { value: "NPR", label: "NPR" },
-] as const;
+import { CountryCurrencyCombobox } from "@/components/shared/CountryCurrencyCombobox";
+import {
+  getDefaultCurrencyForCountry,
+  resolveCurrencyCountryKey,
+} from "@/lib/worldCurrencies";
 
 const currencySettingsSchema = z.object({
   decimalPlaces: z.number().int().min(0).max(10),
   showDrCr: z.boolean(),
   showCurrencySymbol: z.boolean(),
-  currencySymbol: z.string(),
+  billingCurrencyCountry: z.string().min(1),
 });
 
 type CurrencySettingsValues = z.infer<typeof currencySettingsSchema>;
@@ -45,7 +42,7 @@ export function CurrencySettings() {
       decimalPlaces: 2,
       showDrCr: true,
       showCurrencySymbol: true,
-      currencySymbol: "Rs.",
+      billingCurrencyCountry: "Nepal",
     },
   });
 
@@ -55,7 +52,7 @@ export function CurrencySettings() {
         decimalPlaces: company.decimalPlaces ?? 2,
         showDrCr: company.showDrCr ?? true,
         showCurrencySymbol: company.showCurrencySymbol ?? true,
-        currencySymbol: company.currencySymbol ?? "Rs.",
+        billingCurrencyCountry: resolveCurrencyCountryKey(company),
       });
     }
   }, [company, form]);
@@ -65,6 +62,7 @@ export function CurrencySettings() {
       toast({ variant: "destructive", title: "No company selected." });
       return;
     }
+    const row = getDefaultCurrencyForCountry(data.billingCurrencyCountry);
     setIsLoading(true);
     try {
       const companyRef = doc(firestore, "companies", companyId);
@@ -72,7 +70,8 @@ export function CurrencySettings() {
         decimalPlaces: data.decimalPlaces,
         showDrCr: data.showDrCr,
         showCurrencySymbol: data.showCurrencySymbol,
-        currencySymbol: data.currencySymbol,
+        currencyCode: row.currencyCode,
+        currencySymbol: row.symbol,
       });
       toast({ title: "Success", description: "Currency settings have been updated." });
     } catch (error) {
@@ -87,6 +86,8 @@ export function CurrencySettings() {
     return <Skeleton className="h-48 w-full" />;
   }
 
+  const previewRow = getDefaultCurrencyForCountry(form.watch("billingCurrencyCountry"));
+
   return (
     <Card>
       <CardHeader>
@@ -98,6 +99,26 @@ export function CurrencySettings() {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <FormField
+              control={form.control}
+              name="billingCurrencyCountry"
+              render={({ field }: any) => (
+                <FormItem>
+                  <FormLabel>Currency (search by country)</FormLabel>
+                  <FormControl>
+                    <CountryCurrencyCombobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Search country or currency"
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Display symbol: {previewRow.symbol} ({previewRow.currencyCode}) — used in vouchers, dashboard, and billing.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name="decimalPlaces"
@@ -124,7 +145,7 @@ export function CurrencySettings() {
                       Show Dr/Cr Suffix
                     </FormLabel>
                     <FormDescription>
-                      Display 'Dr' or 'Cr' next to balance amounts.
+                      Display &apos;Dr&apos; or &apos;Cr&apos; next to balance amounts.
                     </FormDescription>
                   </div>
                   <FormControl>
@@ -155,33 +176,6 @@ export function CurrencySettings() {
                       onCheckedChange={field.onChange}
                     />
                   </FormControl>
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="currencySymbol"
-              render={({ field }: any) => (
-                <FormItem>
-                  <FormLabel>Currency Symbol</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger className="max-w-xs">
-                        <SelectValue placeholder="Select symbol" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {CURRENCY_SYMBOL_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    Symbol used for amounts in the app and in alerts (e.g. Rs., ₹, $).
-                  </FormDescription>
-                  <FormMessage />
                 </FormItem>
               )}
             />

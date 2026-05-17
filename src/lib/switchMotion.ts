@@ -7,6 +7,8 @@ export const SWITCH_ANIM_MS = 400;
 export const SWITCH_KNOB_W_PX = Math.round(54 * 0.8 * 0.75);
 export const SWITCH_KNOB_PAD_PX = 3;
 export const SWITCH_TRACK_H_PX = Math.round(36 * 0.7 * 0.75);
+/** Header file-preview 3-step switch — +1px taaki andar i icon bina nudge ke center ho */
+export const HEADER_FILE_PREVIEW_SWITCH_TRACK_H_PX = SWITCH_TRACK_H_PX + 1;
 
 export const SWITCH_KNOB_LEFT_OFF = `${SWITCH_KNOB_PAD_PX}px`;
 export const SWITCH_KNOB_LEFT_MID = `calc(50% - ${SWITCH_KNOB_W_PX / 2}px)`;

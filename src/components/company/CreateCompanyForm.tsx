@@ -29,6 +29,8 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { Combobox } from "@/components/ui/combobox";
 import { cn } from "@/lib/utils";
 import { countries } from "@/lib/countries";
+import { CountryCurrencyCombobox } from "@/components/shared/CountryCurrencyCombobox";
+import { getDefaultCurrencyForCountry } from "@/lib/worldCurrencies";
 
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -70,6 +72,7 @@ const formSchema = z
       .optional(),
     pan: z.string().optional(),
     country: z.string().min(1, { message: "Please select a country." }),
+    billingCurrencyCountry: z.string().min(1, { message: "Please select a currency." }),
     password: z.string().optional(),
     confirmPassword: z.string().optional(),
     fiscalYearStart: z.date().optional(),
@@ -78,6 +81,8 @@ const formSchema = z
     companyUserUsername: z.string().optional(),
     companyUserRole: z.string().optional(),
     companyUserPassword: z.string().optional(),
+    /** Local company login username (Firestore online companies use email share instead). */
+    adminUsername: z.string().optional(),
   })
   .refine(
     (data) => {
@@ -136,6 +141,11 @@ export function CreateCompanyForm({
   const hasFreeOnlineSlot = maxOnlineSlots > 0 && usedOnlineSlots < maxOnlineSlots;
   /** Sirf static APK / NEXT_PUBLIC_LOCAL_ONLY_MODE: browse "local" mode se alag (warna option kabhi dikhta hi nahi) */
   const forceLocalCompanyCreation = isForceLocalCompanyCreationBuild();
+  /** Web/browser: local company create band — sirf static/APK device-only path */
+  const staticBuildAllowsLocalCompany = isStaticAppBuild();
+  const willCreateAsLocal =
+    staticBuildAllowsLocalCompany &&
+    (forceLocalCompanyCreation || !hasFreeOnlineSlot || creationMode === "local");
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -146,6 +156,7 @@ export function CreateCompanyForm({
       email: "",
       pan: "",
       country: "Nepal",
+      billingCurrencyCountry: "Nepal",
       password: "",
       confirmPassword: "",
       fiscalYearStart: undefined,
@@ -155,6 +166,7 @@ export function CreateCompanyForm({
       // "manager" is used as admin-like company user role in existing permission model.
       companyUserRole: "manager",
       companyUserPassword: "",
+      adminUsername: "",
     },
     mode: "onChange",
   });
@@ -167,6 +179,7 @@ export function CreateCompanyForm({
     const { start, end } = getFiscalRangeForCountry(selectedCountry);
     form.setValue("fiscalYearStart", start, { shouldDirty: false });
     form.setValue("fiscalYearEnd", end, { shouldDirty: false });
+    form.setValue("billingCurrencyCountry", selectedCountry, { shouldDirty: false });
   }, [selectedCountry, form]);
 
 
@@ -228,7 +241,8 @@ export function CreateCompanyForm({
     const usedO = user?.uid ? countOnlineCompanySlotsForOwner(allCompanies, user.uid) : 0;
     const freeOnlineSlotNow = maxO > 0 && usedO < maxO;
     const createAsLocalOnly =
-      isForceLocalCompanyCreationBuild() || !freeOnlineSlotNow || creationMode === "local";
+      isStaticAppBuild() &&
+      (isForceLocalCompanyCreationBuild() || !freeOnlineSlotNow || creationMode === "local");
 
     if (!user?.uid) {
       toast({
@@ -236,6 +250,19 @@ export function CreateCompanyForm({
         title: "Authentication Error",
         // Login is required even in local-only mode so plan/settings can sync per user.
         description: "Please login first to create a company.",
+      });
+      return;
+    }
+
+    // Web: online slot ke bina local company mat banao — device-only static build par hi
+    if (!isStaticAppBuild() && !freeOnlineSlotNow) {
+      toast({
+        variant: "destructive",
+        title: "Online company required on web",
+        description:
+          maxO === 0
+            ? "Your plan does not include cloud companies on the browser. Upgrade at Billing, or use the Pocket Ledger app on your device for offline-only companies."
+            : `All ${maxO} online slot${maxO === 1 ? "" : "s"} are in use. Free a slot, upgrade, or create an offline company in the mobile app.`,
       });
       return;
     }
@@ -358,10 +385,11 @@ export function CreateCompanyForm({
         const emailPrefixForAdmin =
           effectiveUserEmail.includes("@") ? effectiveUserEmail.split("@")[0].trim().toLowerCase() : "";
         const defaultAdminUsername = emailPrefixForAdmin || "admin";
+        const adminLoginUsername = (values.adminUsername || "").trim() || defaultAdminUsername;
         if (passwordEnabled && (values.password || "").trim()) {
           const pw = (values.password || "").trim();
           localCompanyUsers = upsertUserInList(localCompanyUsers, {
-            username: defaultAdminUsername,
+            username: adminLoginUsername,
             displayName: "Admin",
             role: "manager",
             password: pw,
@@ -389,6 +417,7 @@ export function CreateCompanyForm({
             });
           }
         }
+        const currencyRow = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         // Static local-first: company root doc local table me store karo; Firebase write skip.
         await upsertLocalCompany({
           id: companyId,
@@ -398,6 +427,8 @@ export function CreateCompanyForm({
           email: values.email ?? "",
           pan: values.pan ?? "",
           country: values.country,
+          currencyCode: currencyRow.currencyCode,
+          currencySymbol: currencyRow.symbol,
           // Password only when toggle enabled; otherwise keep company open without password.
           password: passwordEnabled ? (values.password ?? null) : null,
           logoUrl,
@@ -415,10 +446,11 @@ export function CreateCompanyForm({
           isDeleted: false,
           // Sirf jab company password set ho + admin row bhi bani ho — warna galat username doc par na save ho.
           adminUsername:
-            passwordEnabled && (values.password || "").trim() ? defaultAdminUsername : null,
+            passwordEnabled && (values.password || "").trim() ? adminLoginUsername : null,
           localCompanyUsers,
         });
       } else {
+        const currencyRowOnline = getDefaultCurrencyForCountry(values.billingCurrencyCountry);
         await setDoc(doc(firestore, "companies", companyId), {
           name: values.companyName,
           address: values.address ?? "",
@@ -426,6 +458,8 @@ export function CreateCompanyForm({
           email: values.email ?? "",
           pan: values.pan ?? "",
           country: values.country,
+          currencyCode: currencyRowOnline.currencyCode,
+          currencySymbol: currencyRowOnline.symbol,
           // Password only when toggle enabled; otherwise keep company open without password.
           password: passwordEnabled ? (values.password ?? null) : null,
           logoUrl,
@@ -454,6 +488,8 @@ export function CreateCompanyForm({
             email: values.email ?? "",
             pan: values.pan ?? "",
             country: values.country,
+            currencyCode: currencyRowOnline.currencyCode,
+            currencySymbol: currencyRowOnline.symbol,
             password: passwordEnabled ? (values.password ?? null) : null,
             logoUrl,
             fiscalYearStart: toLocalIso(values.fiscalYearStart),
@@ -651,10 +687,30 @@ export function CreateCompanyForm({
               </FormItem>
             )}
           />
+          <FormField
+            control={form.control}
+            name="billingCurrencyCountry"
+            render={({ field }: any) => (
+              <FormItem>
+                <FormLabel className="text-xs sm:text-sm">Currency</FormLabel>
+                <FormControl>
+                  <CountryCurrencyCombobox
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Search country or currency"
+                  />
+                </FormControl>
+                <FormDescription className="text-xs">
+                  Defaults from country; search by country name.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
 
-        {/* Jab plan me online slot bachi ho: cloud vs device-only — bina slot ke sirf local + short notice */}
-        {!forceLocalCompanyCreation && hasFreeOnlineSlot && (
+        {/* Sirf static/APK: local vs online — web/browser par ye choice nahi */}
+        {staticBuildAllowsLocalCompany && !forceLocalCompanyCreation && hasFreeOnlineSlot && (
           <div className="space-y-2 rounded-md border border-black bg-muted/30 p-3">
             <FormLabel className="text-xs sm:text-sm">Save company as</FormLabel>
             <FormDescription className="text-xs">
@@ -676,11 +732,18 @@ export function CreateCompanyForm({
             </RadioGroup>
           </div>
         )}
-        {!forceLocalCompanyCreation && !hasFreeOnlineSlot && (
+        {staticBuildAllowsLocalCompany && !forceLocalCompanyCreation && !hasFreeOnlineSlot && (
           <p className="rounded-md border border-dashed border-muted-foreground/30 p-2 text-xs text-muted-foreground">
             {maxOnlineSlots === 0
               ? "Your plan does not include online companies. This company will be saved only on this device."
               : `All ${maxOnlineSlots} online company slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). This company will be saved only on this device.`}
+          </p>
+        )}
+        {!staticBuildAllowsLocalCompany && !hasFreeOnlineSlot && (
+          <p className="rounded-md border border-dashed border-amber-500/40 bg-amber-500/5 p-2 text-xs text-muted-foreground">
+            {maxOnlineSlots === 0
+              ? "On web, companies must sync to the cloud. Upgrade your plan at Billing to create a company here."
+              : `All ${maxOnlineSlots} online slot${maxOnlineSlots === 1 ? " is" : "s are"} in use (${usedOnlineSlots}/${maxOnlineSlots}). Upgrade or remove an online company first.`}
           </p>
         )}
 
@@ -784,9 +847,33 @@ export function CreateCompanyForm({
           )}
         </div>
 
-        {passwordEnabled && (
+        {passwordEnabled && willCreateAsLocal && (
+          <FormField
+            control={form.control}
+            name="adminUsername"
+            render={({ field }: any) => (
+              <FormItem>
+                <FormLabel className="text-xs sm:text-sm">Username (Company Login)</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder="e.g., admin_user"
+                    className="text-xs sm:text-sm"
+                    {...field}
+                    value={field.value ?? ""}
+                  />
+                </FormControl>
+                <FormDescription className="text-xs">
+                  Login to open this company on this device — together with the password above.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+
+        {passwordEnabled && !willCreateAsLocal && (
         <div className="space-y-4 rounded-md border border-black bg-muted/25 p-3 dark:border-black dark:bg-muted/15">
-          {/* Company user management section highlight: user fields grouped with distinct color. */}
+          {/* Online company: optional extra users (email share) — local path me hide. */}
           <FormItem>
             <div className="flex items-center justify-between rounded-md border p-3">
               <div>

@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/popover";
 import { Info } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { LedgerFooterChromePill } from "@/components/vouchers/ledgerFooterChrome";
+import { LedgerFooterChromePill, LEDGER_FOOTER_PILL_H } from "@/components/vouchers/ledgerFooterChrome";
+import { cn } from "@/lib/utils";
 
 type Props = {
   idPrefix: string;
@@ -54,7 +55,7 @@ export function StatementCheckModeFooterControls({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0 rounded-full"
+            className={cn(LEDGER_FOOTER_PILL_H, "w-8 shrink-0 rounded-full px-0")}
             aria-label="Check mode shortcuts"
           >
             <Info className="h-4 w-4 text-muted-foreground" />

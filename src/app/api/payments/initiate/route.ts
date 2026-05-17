@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
+import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
 import {
+  getEsewaEpayV2FormUrl,
   isBillingGatewayAvailable,
   mergeGatewayKeysWithEnv,
   parseGatewayPaymentFlags,
@@ -11,13 +13,18 @@ import {
 } from "@/ai/flows/gateway-keys";
 import { getAdminDb } from "@/lib/firebaseAdmin";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
-import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
+import { getEffectiveRegionalCheckout } from "@/lib/server/getEffectivePlanPrices";
+import type { BillingRegionId } from "@/lib/billingRegions";
+import { billingCurrencyToGatewayCode } from "@/lib/billingRegions";
 import {
-  grossPriceNpr,
   SUBSCRIPTION_TERM_KEYS_FOR_CHECKOUT,
   type SubscriptionTermKey,
 } from "@/lib/subscriptionPlanMath";
 import { getPublicAppOriginForPaymentRedirects } from "@/lib/checkoutPublicOrigin";
+import {
+  PENDING_SUBSCRIPTION_CHECKOUTS_COLLECTION,
+  PENDING_SUBSCRIPTION_CHECKOUT_TTL_MS,
+} from "@/lib/payments/pendingSubscriptionCheckout";
 type AdminKeysResult = {
   stored: GatewayKeys;
   adminReadOk: boolean;
@@ -86,6 +93,8 @@ type Body = {
   subscriptionTermKey?: string;
   /** Donations (free/basic) vs paid plan checkout — webhook uses this to skip plan upgrade. */
   billingIntent?: "donation" | "subscribe";
+  /** User company country → Nepal / SAARC / International checkout amount. */
+  billingRegion?: BillingRegionId;
 };
 
 // UI max 1 yr — purane `year_2`… keys ab bhi allow taaki pending Stripe sessions fail na hon.
@@ -108,6 +117,10 @@ export async function POST(req: NextRequest) {
   try {
     const body: Body = await req.json();
     const { planId, gateway, amount, currency, userId, companyId, billingCycle, billingIntent } = body;
+    const billingRegion: BillingRegionId =
+      body.billingRegion === "saarc" || body.billingRegion === "international"
+        ? body.billingRegion
+        : "nepal";
 
     if (!companyId?.trim()) {
       throw new Error("companyId is required for checkout.");
@@ -130,17 +143,37 @@ export async function POST(req: NextRequest) {
           ? "monthly"
           : (`year_${periodYears}` as SubscriptionTermKey);
 
-    // Paid subscribe: amount hamesha server se (Admin + app_settings/plans) — client Firestore merge / cache drift se mismatch na ho.
-    // Donation (basic): client amount (NPR × 100 paisa) hi charge.
-    let chargePaisa = Math.round(Number(amount) || 0);
+    // Paid subscribe: amount + currency server se (regional prices + FX) — client symbol-only change se mismatch na ho.
+    let chargeMinor = Math.round(Number(amount) || 0);
+    let checkoutCurrency = billingCurrencyToGatewayCode(currency || "npr");
     if (intent === "subscribe" && planId && !DEFAULT_PLANS[planId]?.isFree) {
-      const prices = await getEffectivePlanPrices(planId);
-      chargePaisa = Math.round(grossPriceNpr(subscriptionTermKey, prices.monthly, prices.yearly) * 100);
-    } else if (intent === "donation" && chargePaisa <= 0) {
-      throw new Error("Invalid donation amount.");
+      const regional = await getEffectiveRegionalCheckout(planId, subscriptionTermKey, billingRegion);
+      chargeMinor = regional.amountMinor;
+      checkoutCurrency = regional.currency;
+    } else if (intent === "donation") {
+      if (billingRegion !== "nepal") {
+        throw new Error("Donations are only supported in NPR (Nepal region).");
+      }
+      chargeMinor = Math.round(Number(amount) || 0);
+      checkoutCurrency = "npr";
+      if (chargeMinor <= 0) throw new Error("Invalid donation amount.");
+    }
+
+    if (gateway === "khalti" || gateway === "esewa") {
+      if (billingRegion !== "nepal" || checkoutCurrency !== "npr") {
+        return NextResponse.json(
+          {
+            error: "Khalti and eSewa only support NPR (Nepal). Use Stripe for SAARC / International.",
+            code: "gateway_currency_mismatch",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const appOrigin = getPublicAppOriginForPaymentRedirects(req);
+    const db = getAdminDb();
+    const amountNpr = chargeMinor / 100;
     const adminResult = await getGatewayKeysFromAdmin();
     const keys = mergeGatewayKeysWithEnv(adminResult.stored);
     const paymentFlags = parseGatewayPaymentFlags(adminResult.stored as Record<string, unknown>);
@@ -167,9 +200,9 @@ export async function POST(req: NextRequest) {
             line_items: [
             {
                 price_data: {
-                currency,
+                currency: checkoutCurrency,
                 product_data: { name: productLabel },
-                unit_amount: chargePaisa,
+                unit_amount: chargeMinor,
                 recurring,
                 },
                 quantity: 1,
@@ -209,7 +242,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
             gateway: "khalti",
             publicKey: keys.khaltiPublicKey,
-            amount: chargePaisa,
+            amount: chargeMinor,
+            currency: checkoutCurrency,
             product_identity: planId,
             product_name: `Plan ${planId}`,
             returnUrl: `${appOrigin}/billing/khalti/success`,
@@ -230,7 +264,23 @@ export async function POST(req: NextRequest) {
         }
         const transaction_uuid = uuidv4();
         const product_code = keys.esewaMerchantCode;
-        const total_amount_in_rupees = chargePaisa / 100;
+        const total_amount_in_rupees = amountNpr;
+        await db.collection(PENDING_SUBSCRIPTION_CHECKOUTS_COLLECTION).doc(transaction_uuid).set({
+          companyId: companyId.trim(),
+          userId: userId.trim(),
+          planId,
+          gateway: "esewa",
+          billingIntent: intent,
+          subscriptionTermKey,
+          billingCycle,
+          periodYears: String(periodYears),
+          billingRegion,
+          amountNpr,
+          currency: checkoutCurrency,
+          status: "pending",
+          expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + PENDING_SUBSCRIPTION_CHECKOUT_TTL_MS),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         
         const message_parts = [
             `total_amount=${total_amount_in_rupees}`,
@@ -244,10 +294,7 @@ export async function POST(req: NextRequest) {
             .update(message)
             .digest('base64');
             
-        const isTestMode = product_code === 'EPAYTEST';
-        const eSewaUrl = isTestMode 
-            ? "https://uat.esewa.com.np/epay/main" 
-            : "https://epay.esewa.com.np/api/epay/main/v2/form";
+        const eSewaUrl = getEsewaEpayV2FormUrl(product_code);
         
         return NextResponse.json({
             gateway: "esewa",

@@ -8,9 +8,11 @@ import {
   type PlanChangeHistoryFirestore,
 } from "@/lib/payments/planChangeApply";
 import {
+  getKhaltiPaymentVerifyUrl,
   isBillingGatewayAvailable,
   mergeGatewayKeysWithEnv,
   parseGatewayPaymentFlags,
+  resolveKhaltiSecretKeyFromEnv,
   type GatewayKeys,
 } from "@/ai/flows/gateway-keys";
 
@@ -89,10 +91,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Amount does not match quoted renewal" }, { status: 400 });
     }
 
-    const khaltiSecret =
-      process.env.KHALTI_SECRET_KEY?.trim() || process.env.KHALTI_TEST_SECRET_KEY?.trim();
+    const khaltiSecret = resolveKhaltiSecretKeyFromEnv();
     if (khaltiSecret) {
-      const verifyRes = await fetch("https://khalti.com/api/v2/payment/verify/", {
+      const verifyRes = await fetch(getKhaltiPaymentVerifyUrl(), {
         method: "POST",
         headers: {
           Authorization: `Key ${khaltiSecret}`,

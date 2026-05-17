@@ -1,44 +1,32 @@
-import { cn } from "@/lib/utils";
-
-/** Master-detail list — selected row (orange border + peach bg, group-statement / screenshot). */
+/** Master-detail list — selected: orange border + peach bg (screenshot / git reference). */
 export const masterListSelectedCn =
-  "border-orange-400 bg-orange-50 shadow-sm dark:border-orange-500 dark:bg-orange-950/40";
+  "border-[1.5px] border-orange-400 bg-orange-50 shadow-sm dark:border-orange-500 dark:bg-orange-950/40";
 
-/** Unselected — gray border; hover par halka orange hint. */
+/** Unselected — halka gray border; hover color globals.css + group-hover (Link wrap). */
 export const masterListUnselectedCn =
-  "border-gray-300 dark:border-gray-600 border-[1.5px] hover:border-orange-300/80 hover:bg-orange-50/30";
+  "border border-gray-200 bg-transparent shadow-none transition-[border-color,background-color] duration-200 dark:border-gray-600";
+
+/** TooltipTrigger (party naam) — 4K `button` black-border rule se bachne ke liye shared class + data-pl-list-name */
+export const masterListNameTriggerCn =
+  "pl-master-list-row-name block w-full cursor-default truncate border-0 border-transparent bg-transparent p-0 text-left shadow-none outline-none appearance-none";
+
+/** Group list naam — `pl-master-list-row-name-strong` */
+export const masterListNameTriggerStrongCn =
+  "pl-master-list-row-name-strong block w-full cursor-default truncate border-0 border-transparent bg-transparent p-0 text-left shadow-none outline-none appearance-none";
 
 export const masterListUnselectedCompactCn =
-  "border-gray-300 dark:border-gray-600 hover:border-orange-300/80 hover:bg-orange-50/30";
+  "border border-gray-200 bg-transparent shadow-none transition-[border-color,background-color] duration-200 dark:border-gray-600";
 
-/** Ledger txn row — selected block border (primary blue ki jagah orange-400). */
-const TXN_SEL = "#fb923c";
-
-/** Main transaction row — selected + narration ek orange box. */
-export function txnSelectedMainRowCn(showNarrationRow: boolean) {
-  return cn(
-    "[&>td]:!transition-none [&>td]:bg-orange-50/90 dark:[&>td]:bg-orange-950/35 [&>td:first-child]:overflow-hidden [&>td:last-child]:overflow-hidden",
-    `[&>td]:[box-shadow:inset_0_2px_0_0_${TXN_SEL}]`,
-    !showNarrationRow && `[&>td]:[box-shadow:inset_0_2px_0_0_${TXN_SEL},inset_0_-2px_0_0_${TXN_SEL}]`,
-    `[&>td:first-child]:[box-shadow:inset_2px_0_0_0_${TXN_SEL},inset_0_2px_0_0_${TXN_SEL}]`,
-    !showNarrationRow &&
-      `[&>td:first-child]:[box-shadow:inset_2px_0_0_0_${TXN_SEL},inset_0_2px_0_0_${TXN_SEL},inset_0_-2px_0_0_${TXN_SEL}]`,
-    `[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_${TXN_SEL},inset_0_2px_0_0_${TXN_SEL}]`,
-    !showNarrationRow &&
-      `[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_${TXN_SEL},inset_0_2px_0_0_${TXN_SEL},inset_0_-2px_0_0_${TXN_SEL}]`,
-    !showNarrationRow &&
-      "[&>td:first-child]:rounded-tl-xl [&>td:first-child]:rounded-bl-xl [&>td:last-child]:rounded-tr-xl [&>td:last-child]:rounded-br-xl",
-    showNarrationRow && "[&>td:first-child]:rounded-tl-xl [&>td:last-child]:rounded-tr-xl"
-  );
+/** Ledger txn row — selected: flat bg highlight (globals.css theme color); box outline nahi. */
+export function txnSelectedMainRowCn(_showNarrationRow: boolean) {
+  return "[&>td]:!transition-none [&>td]:bg-orange-50/90 dark:[&>td]:bg-orange-950/35";
 }
 
-/** Narration sub-row — selected block ka neeche wala hissa. */
+/** Narration sub-row — selected txn block ka neeche wala hissa (same flat bg). */
 export function txnSelectedNarrationRowCn() {
-  return cn(
-    "[&>td]:!transition-none [&>td]:bg-orange-50/90 dark:[&>td]:bg-orange-950/35",
-    `[&>td]:[box-shadow:inset_0_-2px_0_0_${TXN_SEL}]`,
-    `[&>td:first-child]:[box-shadow:inset_2px_0_0_0_${TXN_SEL},inset_0_-2px_0_0_${TXN_SEL}]`,
-    `[&>td:last-child]:[box-shadow:inset_-2px_0_0_0_${TXN_SEL},inset_0_-2px_0_0_${TXN_SEL}]`,
-    "[&>td:first-child]:rounded-bl-xl [&>td:first-child]:overflow-hidden [&>td:last-child]:rounded-br-xl [&>td:last-child]:overflow-hidden"
-  );
+  return "[&>td]:!transition-none [&>td]:bg-orange-50/90 dark:[&>td]:bg-orange-950/35";
 }
+
+/** Transaction table — header filter + row 3-dot: circle border/ring hatao (`data-pl-txn-icon-btn`). */
+export const txnTableIconBtnCn =
+  "rounded-sm border-0 shadow-none ring-0 ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0 hover:bg-muted/40";

@@ -17,7 +17,7 @@ export const companyProfileTabsList =
 export const companyProfileTabsList3 =
   "grid h-auto min-h-11 w-full max-w-md grid-cols-3 gap-1 rounded-md border border-black bg-muted/80 p-1 items-stretch";
 export const companyProfileTabsTrigger =
-  "flex h-full min-h-9 items-center justify-center rounded-full border-0 py-0 shadow-none data-[state=active]:border data-[state=active]:border-black data-[state=active]:bg-blue-500 data-[state=active]:text-white data-[state=inactive]:bg-transparent";
+  "flex h-full min-h-9 items-center justify-center rounded-full border-0 py-0 shadow-none text-foreground data-[state=inactive]:bg-transparent data-[state=inactive]:text-foreground data-[state=active]:border data-[state=active]:border-black data-[state=active]:bg-blue-500 data-[state=active]:text-white";
 
 /** Company Profile + Manage Sharing outer card shell */
 export const settingsDetailCardShell = `border border-black ${companyProfilePageBg}`;

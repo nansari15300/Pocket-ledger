@@ -71,9 +71,44 @@ export const ESEWA_UAT_MERCHANT_CODE = 'EPAYTEST';
 
 /**
  * Official eSewa Epay v2 UAT HMAC secret — public test-only value from eSewa docs (not a live merchant secret).
- * Use only with EPAYTEST + uat.esewa.com.np; test wallet IDs 9806800001–5 / Nepal@123 per same page.
+ * Use with EPAYTEST + rc-epay UAT form URL; test wallet 9806800001–5 / Nepal@123.
  */
 export const ESEWA_UAT_SECRET_KEY = '8gBm/:&EnhH.1/q';
+
+/** Epay v2 form POST — UAT `rc-epay` (not legacy `uat.esewa.com.np`, DNS often fails). */
+export const ESEWA_EPAY_V2_FORM_URL_UAT = 'https://rc-epay.esewa.com.np/api/epay/main/v2/form';
+export const ESEWA_EPAY_V2_FORM_URL_LIVE = 'https://epay.esewa.com.np/api/epay/main/v2/form';
+
+/** Merchant EPAYTEST → rc UAT; else production v2 form. Optional env override for either. */
+export function getEsewaEpayV2FormUrl(merchantCode: string): string {
+  const override = process.env.ESEWA_EPAY_FORM_URL?.trim();
+  if (override) return override;
+  const code = merchantCode.trim();
+  return code === ESEWA_UAT_MERCHANT_CODE ? ESEWA_EPAY_V2_FORM_URL_UAT : ESEWA_EPAY_V2_FORM_URL_LIVE;
+}
+
+/** Khalti widget sandbox public key — khalti-checkout-web docs / test-admin merchant. */
+export const KHALTI_UAT_PUBLIC_KEY = 'test_public_key_dc74e0fd57cb46cd93832aee0a507256';
+
+/** Khalti payment verify (sandbox + live both use v2 on khalti.com). */
+export const KHALTI_PAYMENT_VERIFY_URL = 'https://khalti.com/api/v2/payment/verify/';
+
+export function isKhaltiSandboxPublicKey(publicKey: string): boolean {
+  return publicKey.trim().startsWith('test_public_key_');
+}
+
+/** Optional `KHALTI_VERIFY_URL` override; default official v2 verify endpoint. */
+export function getKhaltiPaymentVerifyUrl(): string {
+  const override = process.env.KHALTI_VERIFY_URL?.trim();
+  return override || KHALTI_PAYMENT_VERIFY_URL;
+}
+
+/** Server verify — `KHALTI_SECRET_KEY` or `KHALTI_TEST_SECRET_KEY` (pair with test_public_key_*). */
+export function resolveKhaltiSecretKeyFromEnv(): string | undefined {
+  const s =
+    process.env.KHALTI_SECRET_KEY?.trim() || process.env.KHALTI_TEST_SECRET_KEY?.trim();
+  return s || undefined;
+}
 
 const keysDocRef = doc(firestore, 'app_settings', 'payment_gateways');
 
@@ -84,13 +119,16 @@ function isDevPaymentFallbackEnabled(): boolean {
 
 function pickStr(v: string | undefined): string | undefined {
   const t = v?.trim();
-  return t ? t : undefined;
+  if (!t) return undefined;
+  // `.env.example` placeholders — treat as unset so dev UAT fallbacks apply
+  if (/^your_/i.test(t) || /^changeme$/i.test(t) || /^placeholder$/i.test(t)) return undefined;
+  return t;
 }
 
 /**
- * Merge stored gateway doc with server env (Stripe/Khalti/eSewa; eSewa UAT only in dev when still empty).
- * Khalti: Firestore → KHALTI_TEST_PUBLIC_KEY → NEXT_PUBLIC_KHALTI_PUBLIC_KEY / KHALTI_PUBLIC_KEY (local + cloud naming mismatch avoid).
- * eSewa: Firestore → ESEWA_MERCHANT_CODE / ESEWA_SECRET_KEY → dev UAT defaults.
+ * Merge stored gateway doc with server env (Stripe/Khalti/eSewa; Khalti/eSewa UAT in dev when still empty).
+ * Khalti: Firestore → KHALTI_TEST_PUBLIC_KEY → NEXT_PUBLIC_* / KHALTI_PUBLIC_KEY → dev `KHALTI_UAT_PUBLIC_KEY`.
+ * eSewa: Firestore → ESEWA_* env → dev EPAYTEST + UAT secret.
  * Payment API route should pass `stored` from Firebase Admin read — client `getGatewayKeys()` cannot run unauthenticated on the server.
  */
 export function mergeGatewayKeysWithEnv(stored: GatewayKeys): GatewayKeys {
@@ -102,7 +140,8 @@ export function mergeGatewayKeysWithEnv(stored: GatewayKeys): GatewayKeys {
     pickStr(stored.khaltiPublicKey) ??
     pickStr(process.env.KHALTI_TEST_PUBLIC_KEY) ??
     pickStr(process.env.NEXT_PUBLIC_KHALTI_PUBLIC_KEY) ??
-    pickStr(process.env.KHALTI_PUBLIC_KEY);
+    pickStr(process.env.KHALTI_PUBLIC_KEY) ??
+    (isDevPaymentFallbackEnabled() ? KHALTI_UAT_PUBLIC_KEY : undefined);
   const esewaCodeStored = pickStr(stored.esewaMerchantCode);
   const esewaSecretStored = pickStr(stored.esewaSecretKey);
   const esewaCode =

@@ -119,6 +119,13 @@ export function AlertsTab({
     if (kind === "large_amount") return "Large amount added";
     if (kind === "edited") return "Transaction edited";
     if (kind === "deleted") return "Transaction deleted";
+    if (kind === "recycle_bin") {
+      const ek = String((n as any).entityKind || "");
+      if (ek === "voucher") return "Voucher in recycle bin";
+      if (ek === "company") return "Company in recycle bin";
+      if (ek === "master") return "Record in recycle bin";
+      return "In recycle bin";
+    }
     // Recurring vouchers ke liye dedicated title taaki Alerts/Auto tab dono me clear badge text aaye.
     if (kind === "auto_created") return "Auto created voucher";
     return "Alert";
@@ -351,7 +358,11 @@ export function AlertsTab({
                     const securityAttemptCount = securityAttemptCountMap[securityKey] || 1;
                     const canChat = onStartChat && isSecurityAlert && (n as any).attemptedBy?.uid && (n as any).attemptedBy.uid !== user?.uid;
                     const isTransactionAlert = (n as any).type === "transaction_alert";
-                    const hasOpenEdit = isTransactionAlert && (n as any).voucherId && (n as any).companyId;
+                    const isRecycleBinAlert = (n as any).type === "recycle_bin_alert";
+                    const hasOpenEdit =
+                      (isTransactionAlert || isRecycleBinAlert) &&
+                      (n as any).voucherId &&
+                      (n as any).companyId;
                     const timeAgo = n.timestamp?.toDate ? formatDistanceToNow(n.timestamp.toDate(), { addSuffix: true }) : "";
                     const voucherNo = (n as any).voucherNumber;
                     const amountFormatted = (n as any).amountFormatted;
@@ -398,12 +409,19 @@ export function AlertsTab({
                         label: "Alarm date",
                         right: <span className="text-sm">{alarmDateDisplay}</span>,
                       }] : []),
-                      ...(!isSecurityAlert && !isAlarm && (voucherNo || amountStr) ? [{
-                        label: voucherNo ?? "—",
+                      ...(!isSecurityAlert && !isAlarm && (isRecycleBinAlert || voucherNo || amountStr || (n as any).entityName) ? [{
+                        label: isRecycleBinAlert
+                          ? String((n as any).entityName || voucherNo || "—")
+                          : (voucherNo ?? "—"),
                         right: (
                           <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                            {amountStr ? <span className="text-sm font-medium">{amountStr}</span> : null}
-                            {hasOpenEdit && (onOpenVoucher
+                            {amountStr && !isRecycleBinAlert ? <span className="text-sm font-medium">{amountStr}</span> : null}
+                            {isRecycleBinAlert ? (
+                              <Link href="/recycle-bin" className="text-primary font-medium text-xs sm:text-sm underline underline-offset-2 hover:no-underline">
+                                Open Recycle Bin
+                              </Link>
+                            ) : null}
+                            {hasOpenEdit && !isRecycleBinAlert && (onOpenVoucher
                               ? (
                                   <button
                                     type="button"
@@ -435,7 +453,7 @@ export function AlertsTab({
                       }] : []),
                       {
                         label: timeAgo || "—",
-                        right: hasOpenEdit
+                        right: hasOpenEdit && !isRecycleBinAlert
                           ? onOpenHistory
                             ? (
                                 <button

@@ -91,6 +91,7 @@ import {
 import { GlobalFileHoverPreviewSwitch } from "@/components/layout/GlobalFileHoverPreviewSwitch";
 import { CopyLedgerHeaderButton } from "@/components/ledger/CopyLedgerHeaderButton";
 import { RenewProrationPills } from "@/components/billing/RenewProrationPills";
+import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { getCompanyPlanExpiryMsFromDoc } from "@/lib/companyPlanExpiryMs";
 
 import { useEmbeddedAttachmentPrefetch } from "@/contexts/EmbeddedAttachmentPrefetchContext";
@@ -449,66 +450,66 @@ function HeaderActions() {
     <>
       {/* ✅ Sale — global preview switch ab fullscreen icon ke paas (right cluster) */}
       <AddVoucherDialog defaultTab="sale" voucher={undefined} isOpen={openSale} onOpenChange={setOpenSale}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSale(true)} data-theme-btn="add-sale">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenSale(true)} data-theme-btn="add-sale">
           <ShoppingBag className="mr-1 h-4 w-4" /> Add Sale
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Purchase */}
       <AddVoucherDialog defaultTab="purchase" voucher={undefined} isOpen={openPurchase} onOpenChange={setOpenPurchase}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPurchase(true)} data-theme-btn="add-purchase">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenPurchase(true)} data-theme-btn="add-purchase">
           <ShoppingCart className="mr-1 h-4 w-4" /> Add Purchase
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Payment In */}
       <AddVoucherDialog defaultTab="payment_in" voucher={undefined} isOpen={openPaymentIn} onOpenChange={setOpenPaymentIn}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentIn(true)} data-theme-btn="payment-in">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenPaymentIn(true)} data-theme-btn="payment-in">
           <ArrowRight className="mr-1 h-4 w-4" /> Payment In
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Payment Out */}
       <AddVoucherDialog defaultTab="payment_out" voucher={undefined} isOpen={openPaymentOut} onOpenChange={setOpenPaymentOut}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenPaymentOut(true)} data-theme-btn="payment-out">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenPaymentOut(true)} data-theme-btn="payment-out">
           <ArrowLeft className="mr-1 h-4 w-4" /> Payment Out
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* Journal – opens AddVoucherDialog with journal tab */}
       <AddVoucherDialog defaultTab="journal" voucher={undefined} isOpen={openJournal} onOpenChange={setOpenJournal}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenJournal(true)}>
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenJournal(true)}>
           <FileText className="mr-1 h-4 w-4" /> Journal
         </PermissionButton>
       </AddVoucherDialog>
 
       {/* ✅ Salary */}
       <AddVoucherDialog defaultTab="add_salary" voucher={undefined} isOpen={openSalary} onOpenChange={setOpenSalary}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} onClick={() => setOpenSalary(true)} data-theme-btn="add-salary">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} onClick={() => setOpenSalary(true)} data-theme-btn="add-salary">
           <FileDigit className="mr-1 h-4 w-4" /> Add Salary
         </PermissionButton>
       </AddVoucherDialog>
 
       <CreatePartyDialog onPartyCreated={() => {}} isOpen={isCreatePartyOpen} onOpenChange={setIsCreatePartyOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-party">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-party">
           <Users className="mr-1 h-4 w-4" /> Add Party
         </PermissionButton>
       </CreatePartyDialog>
 
       <CreateItemDialog onItemCreated={() => {}} isOpen={isCreateItemOpen} onOpenChange={setIsCreateItemOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-item">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-item">
           <BookText className="mr-1 h-4 w-4" /> Add Item
         </PermissionButton>
       </CreateItemDialog>
 
       <CreateBankAccountDialog onAccountCreated={() => {}} isOpen={isCreateAccountOpen} onOpenChange={setIsCreateAccountOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-bank">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-bank">
           <Landmark className="mr-1 h-4 w-4" /> Add Bank
         </PermissionButton>
       </CreateBankAccountDialog>
 
       <CreateStaffDialog onStaffCreated={() => {}} groups={[]} isOpen={isCreateStaffOpen} onOpenChange={setIsCreateStaffOpen}>
-        <PermissionButton permission="create_records" variant="outline" size="sm" className={buttonClass} data-theme-btn="add-staff">
+        <PermissionButton permission="create_records" variant="chromePill" size="sm" className={buttonClass} data-theme-btn="add-staff">
           <Briefcase className="mr-1 h-4 w-4" /> Add Staff
         </PermissionButton>
       </CreateStaffDialog>
@@ -606,6 +607,7 @@ function UserProfileButton() {
   const router = useRouter();
   const { user } = useAuth();
   const { company, allCompanies, refreshAuthoritativePlan } = useCompany();
+  const { displaySymbol } = useDisplayCurrency();
   const { toast } = useToast();
   const { isOnline } = useOnlineStatus();
   const livePlans = useLivePlans();
@@ -947,7 +949,11 @@ function UserProfileButton() {
                   <div className="mt-1.5 flex w-full min-w-0 flex-col gap-[5px]">
                     {/* Sirf company owner: Billing page jaisa Balance / Usage pills — shared company card me nahi. */}
                     {!selectedCompanyPlanLive.isFree ? (
-                      <RenewProrationPills plan={selectedCompanyPlanLive} currentExpiryMs={profileProrationExpiryMs} />
+                      <RenewProrationPills
+                        plan={selectedCompanyPlanLive}
+                        currentExpiryMs={profileProrationExpiryMs}
+                        currencySymbol={displaySymbol}
+                      />
                     ) : null}
                     <ProfilePlanStatPill tone="companyStorage">
                       {/* Label: account-wide storage mode + baaki MB — "All storage" user-facing copy. */}

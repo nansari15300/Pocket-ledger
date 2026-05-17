@@ -17,8 +17,9 @@ export const MasterListRow = React.forwardRef<
     data-pl-list-row=""
     data-pl-list-selected={selected ? "" : undefined}
     className={cn(
-      "pl-master-list-item bg-card text-card-foreground",
-      selected && masterListSelectedCn,
+      /* Unselected: bg-transparent — har theme me flat list; selected par theme bg */
+      "pl-master-list-item text-card-foreground",
+      selected ? masterListSelectedCn : "bg-transparent",
       className
     )}
     {...props}

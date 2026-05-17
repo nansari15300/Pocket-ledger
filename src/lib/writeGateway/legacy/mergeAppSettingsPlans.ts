@@ -68,6 +68,10 @@ export function mergeAppSettingsPlansDoc(raw: Record<string, unknown> | null | u
         ...defaultPlan.price,
         ...(firestorePlan?.price || {}),
       },
+      regionalPrices: {
+        ...(defaultPlan.regionalPrices || {}),
+        ...(firestorePlan?.regionalPrices || {}),
+      },
       isFree: firestorePlan?.isFree ?? defaultPlan.isFree,
       ...(discountPercentage != null && !Number.isNaN(Number(discountPercentage))
         ? { discountPercentage }

@@ -40,8 +40,9 @@
   .pl-master-list-ul {
     @apply flex flex-col gap-[3px] p-1;
   }
+  /* List row: unselected halka border — globals.css theme hover/selected se control */
   .pl-master-list-item {
-    @apply min-w-0 max-w-full overflow-hidden cursor-pointer rounded-md border p-1 transition-all duration-200;
+    @apply min-w-0 max-w-full overflow-hidden cursor-pointer rounded-md p-1 transition-[border-color,background-color] duration-200;
   }
   /* Master–detail list: tabs/search/buttons compact — `data-pl-master-list-chrome` (ResponsiveMasterDetail + listView) */
   /* Row 1/2: fallback — asli sizing `tabs.tsx` listChrome + `Input listChrome` + Button size=list */
@@ -88,6 +89,14 @@
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.55),
       0 1px 2px rgba(15, 23, 42, 0.08);
+  }
+  /* Pro pill — 1px + soft depth; border-color Tailwind odd/even / theme CSS se (black mat) */
+  .pl-chrome-btn-drop {
+    border-width: 1px !important;
+    border-style: solid !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.06) !important;
   }
   /* Dashboard-jaisa mild tones: kuch dim, kuch halka white, over-saturated colors avoid */
   .pl-chrome-tone-sky {
@@ -556,31 +565,117 @@ body.theme-colorfull [data-theme-table="transactions"] table tfoot td {
   border-bottom-color: #000 !important;
 }
 
-/* Colorfull: har action button alag single color (header + list/detail pages) */
-body.theme-colorfull [data-theme-btn="add-sale"] { background: hsl(142 55% 42%) !important; color: white !important; border-color: hsl(142 55% 35%) !important; }
-body.theme-colorfull [data-theme-btn="add-sale"]:hover { background: hsl(142 55% 36%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="add-purchase"] { background: hsl(210 70% 48%) !important; color: white !important; border-color: hsl(210 70% 40%) !important; }
-body.theme-colorfull [data-theme-btn="add-purchase"]:hover { background: hsl(210 70% 42%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="payment-in"] { background: hsl(168 60% 38%) !important; color: white !important; border-color: hsl(168 60% 32%) !important; }
-body.theme-colorfull [data-theme-btn="payment-in"]:hover { background: hsl(168 60% 32%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="payment-out"] { background: hsl(0 65% 48%) !important; color: white !important; border-color: hsl(0 65% 40%) !important; }
-body.theme-colorfull [data-theme-btn="payment-out"]:hover { background: hsl(0 65% 42%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="add-salary"] { background: hsl(262 55% 52%) !important; color: white !important; border-color: hsl(262 55% 44%) !important; }
-body.theme-colorfull [data-theme-btn="add-salary"]:hover { background: hsl(262 55% 45%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="add-party"] { background: hsl(25 85% 52%) !important; color: white !important; border-color: hsl(25 85% 44%) !important; }
-body.theme-colorfull [data-theme-btn="add-party"]:hover { background: hsl(25 85% 45%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="add-item"] { background: hsl(45 90% 48%) !important; color: hsl(45 90% 12%) !important; border-color: hsl(45 90% 40%) !important; }
-body.theme-colorfull [data-theme-btn="add-item"]:hover { background: hsl(45 90% 42%) !important; color: hsl(45 90% 12%) !important; }
-body.theme-colorfull [data-theme-btn="add-bank"] { background: hsl(199 75% 45%) !important; color: white !important; border-color: hsl(199 75% 38%) !important; }
-body.theme-colorfull [data-theme-btn="add-bank"]:hover { background: hsl(199 75% 38%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="add-staff"] { background: hsl(320 60% 48%) !important; color: white !important; border-color: hsl(320 60% 40%) !important; }
-body.theme-colorfull [data-theme-btn="add-staff"]:hover { background: hsl(320 60% 42%) !important; color: white !important; }
-body.theme-colorfull [data-theme-btn="statement"] { background: hsl(142 45% 88%) !important; color: hsl(142 55% 22%) !important; border-color: hsl(142 40% 75%) !important; }
-body.theme-colorfull [data-theme-btn="statement"]:hover { background: hsl(142 45% 82%) !important; color: hsl(142 55% 18%) !important; }
-body.theme-colorfull [data-theme-btn="bill-wise"] { background: hsl(210 50% 88%) !important; color: hsl(210 55% 22%) !important; border-color: hsl(210 45% 75%) !important; }
-body.theme-colorfull [data-theme-btn="bill-wise"]:hover { background: hsl(210 50% 82%) !important; color: hsl(210 55% 18%) !important; }
-body.theme-colorfull [data-theme-btn="add-group"] { background: hsl(160 55% 42%) !important; color: white !important; border-color: hsl(160 55% 35%) !important; }
-body.theme-colorfull [data-theme-btn="add-group"]:hover { background: hsl(160 55% 36%) !important; color: white !important; }
+/* Colorfull: action btn — bg + border same hue se thoda dark (pic-4 jaisa match) */
+body.theme-colorfull [data-theme-btn="add-sale"] { background: hsl(142 55% 42%) !important; color: white !important; border-color: hsl(142 55% 30%) !important; }
+body.theme-colorfull [data-theme-btn="add-sale"]:hover { background: hsl(142 55% 36%) !important; border-color: hsl(142 55% 26%) !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"] { background: hsl(210 70% 48%) !important; color: white !important; border-color: hsl(210 70% 34%) !important; }
+body.theme-colorfull [data-theme-btn="add-purchase"]:hover { background: hsl(210 70% 42%) !important; border-color: hsl(210 70% 30%) !important; }
+body.theme-colorfull [data-theme-btn="payment-in"] { background: hsl(168 60% 38%) !important; color: white !important; border-color: hsl(168 60% 26%) !important; }
+body.theme-colorfull [data-theme-btn="payment-in"]:hover { background: hsl(168 60% 32%) !important; border-color: hsl(168 60% 22%) !important; }
+body.theme-colorfull [data-theme-btn="payment-out"] { background: hsl(0 65% 48%) !important; color: white !important; border-color: hsl(0 65% 34%) !important; }
+body.theme-colorfull [data-theme-btn="payment-out"]:hover { background: hsl(0 65% 42%) !important; border-color: hsl(0 65% 30%) !important; }
+body.theme-colorfull [data-theme-btn="add-salary"] { background: hsl(262 55% 52%) !important; color: white !important; border-color: hsl(262 55% 38%) !important; }
+body.theme-colorfull [data-theme-btn="add-salary"]:hover { background: hsl(262 55% 45%) !important; border-color: hsl(262 55% 34%) !important; }
+body.theme-colorfull [data-theme-btn="add-party"] { background: hsl(25 85% 52%) !important; color: white !important; border-color: hsl(25 85% 38%) !important; }
+body.theme-colorfull [data-theme-btn="add-party"]:hover { background: hsl(25 85% 45%) !important; border-color: hsl(25 85% 34%) !important; }
+body.theme-colorfull [data-theme-btn="add-item"] { background: hsl(45 90% 48%) !important; color: hsl(45 90% 12%) !important; border-color: hsl(45 90% 34%) !important; }
+body.theme-colorfull [data-theme-btn="add-item"]:hover { background: hsl(45 90% 42%) !important; border-color: hsl(45 90% 30%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"] { background: hsl(199 75% 45%) !important; color: white !important; border-color: hsl(199 75% 32%) !important; }
+body.theme-colorfull [data-theme-btn="add-bank"]:hover { background: hsl(199 75% 38%) !important; border-color: hsl(199 75% 28%) !important; }
+body.theme-colorfull [data-theme-btn="add-staff"] { background: hsl(320 60% 48%) !important; color: white !important; border-color: hsl(320 60% 34%) !important; }
+body.theme-colorfull [data-theme-btn="add-staff"]:hover { background: hsl(320 60% 42%) !important; border-color: hsl(320 60% 30%) !important; }
+body.theme-colorfull [data-theme-btn="statement"] { background: hsl(142 45% 88%) !important; color: hsl(142 55% 22%) !important; border-color: hsl(142 40% 68%) !important; }
+body.theme-colorfull [data-theme-btn="statement"]:hover { background: hsl(142 45% 82%) !important; border-color: hsl(142 40% 62%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"] { background: hsl(210 50% 88%) !important; color: hsl(210 55% 22%) !important; border-color: hsl(210 45% 68%) !important; }
+body.theme-colorfull [data-theme-btn="bill-wise"]:hover { background: hsl(210 50% 82%) !important; border-color: hsl(210 45% 62%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"] { background: hsl(160 55% 42%) !important; color: white !important; border-color: hsl(160 55% 30%) !important; }
+body.theme-colorfull [data-theme-btn="add-group"]:hover { background: hsl(160 55% 36%) !important; border-color: hsl(160 55% 26%) !important; }
+
+/* Pro / light / soft themes: quick-action + footer pills — pic-4 blue/indigo (black border override mat) */
+body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
+body.theme-pro main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive):not([data-pl-txn-icon-btn]),
+body.theme-pro footer button.pl-chrome-btn-drop:not(.border-0),
+body.theme-pro span.pl-chrome-btn-drop,
+body.theme-pure-white header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
+body.theme-pure-white main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive),
+body.theme-pure-white span.pl-chrome-btn-drop,
+body:not(.theme-pro):not(.theme-pure-white):not(.theme-colorfull) header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
+body:not(.theme-pro):not(.theme-pure-white):not(.theme-colorfull) main button.pl-chrome-btn-drop:not(.border-0):not(.bg-primary):not(.bg-destructive),
+body:not(.theme-pro):not(.theme-pure-white):not(.theme-colorfull) span.pl-chrome-btn-drop {
+  border-width: 1px !important;
+}
+
+/* Pro: header quick actions — Party "Add Note" jaisa dim blue; bg thoda bold, border same hue */
+body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]) {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(147 197 253) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]):hover {
+  background-color: rgb(191 219 254) !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(96 165 250) !important;
+}
+/* Pro: detail Add Note — header pills ke saath same token (odd/even indigo mat) */
+body.theme-pro main button[data-theme-detail="add-note"]:not(.border-0) {
+  background-color: rgb(219 234 254) !important;
+  background-image: none !important;
+  color: rgb(30 58 138) !important;
+  border-color: rgb(147 197 253) !important;
+}
+body.theme-pro main button[data-theme-detail="add-note"]:not(.border-0):hover {
+  background-color: rgb(191 219 254) !important;
+  border-color: rgb(96 165 250) !important;
+}
+
+/* Header file-preview switch — light green track + border (themes/4K black mat) */
+body[class*="theme-"] [data-pl-header-preview-switch] {
+  border-width: 2px !important;
+  border-color: rgb(134 239 172) !important;
+  background-color: rgb(240 253 244) !important;
+  background-image: none !important;
+}
+body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="hover"],
+body[class*="theme-"] [data-pl-header-preview-switch][data-preview-mode="click"] {
+  border-color: rgb(74 222 128) !important;
+  background-color: rgb(220 252 231) !important;
+}
+/* i icon — light blue, koi black circle/border nahi */
+body[class*="theme-"] [data-pl-header-preview-info] {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: rgb(56 189 248) !important;
+}
+body[class*="theme-"] [data-pl-header-preview-info]:hover {
+  color: rgb(14 165 233) !important;
+  background-color: rgb(224 242 254) !important;
+}
+
+/* PC ledger footer — parent pill + rows select (black box mat) */
+body[class*="theme-"] [data-pl-footer-parent-pill] {
+  border-width: 1px !important;
+}
+body[class*="theme-"] [data-pl-footer-meta] {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+body[class*="theme-"] [data-pl-footer-rows-select] {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* Colorfull header pills: border bg se dark — odd/even mat */
+body.theme-colorfull header button[data-theme-btn],
+body.theme-colorfull main button[data-theme-btn] {
+  border-width: 1px !important;
+}
 
 /* Colorfull: sidebar nav cards – 25% kam bold (saturation ~75%, lightness thoda up) */
 body.theme-colorfull [data-theme-nav] {
@@ -654,11 +749,8 @@ body.theme-colorfull [data-theme-nav="admin"] { background: hsl(262 41% 52%) !im
 body.theme-colorfull [data-theme-nav="admin"]:hover { background: hsl(262 41% 46%) !important; color: white !important; }
 body.theme-colorfull [data-theme-nav="admin"][data-active="true"] { background: hsl(262 41% 44%) !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.12); }
 
-/* Colorfull: account list cards aur tabs – 50% color (sidebar card jaisa soft tint) */
-body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border {
-  background: hsl(var(--colorfull-tint)) !important;
-}
-body.theme-colorfull [data-theme-list="account-list"] [class*="rounded-md"].border[class*="border-primary"] {
+/* Colorfull: account list — sirf selected row par soft tint (unselected flat) */
+body.theme-colorfull [data-theme-list="account-list"] [data-pl-list-selected] {
   background: hsl(var(--colorfull-tint-active)) !important;
 }
 /* Tabs (Parties/Groups): dono active aur inactive button jaisa color */
@@ -1438,13 +1530,20 @@ button.day_selected.is-today.has-transactions {
   [data-theme-table="transactions"] .transaction-main-row + .narration-row > td {
     border-top-width: 0 !important;
     border-bottom-width: 0 !important;
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
+  }
+  [data-theme-table="transactions"] tbody tr.narration-row > td:first-child,
+  [data-theme-table="transactions"] tbody tr.narration-row > td:last-child {
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
   }
   
   /* Input and form element borders */
   input,
   textarea,
   select,
-  button:not([class*="border-0"]),
+  button:not([class*="border-0"]):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
   [type="text"],
   [type="number"],
   [type="email"],
@@ -1563,15 +1662,29 @@ button.day_selected.is-today.has-transactions {
   
   /* Tailwind border utilities - double thickness (except border-0) */
   /* 4K ma sabai borders moto ra pure black */
-  .border:not(.border-0),
-  .border-t:not(.border-0),
-  .border-r:not(.border-0),
-  .border-b:not(.border-0),
-  .border-l:not(.border-0),
-  .border-x:not(.border-0),
-  .border-y:not(.border-0) {
+  .border:not(.border-0):not([data-pl-list-row]),
+  .border-t:not(.border-0):not([data-pl-list-row]),
+  .border-r:not(.border-0):not([data-pl-list-row]),
+  .border-b:not(.border-0):not([data-pl-list-row]),
+  .border-l:not(.border-0):not([data-pl-list-row]),
+  .border-x:not(.border-0):not([data-pl-list-row]),
+  .border-y:not(.border-0):not([data-pl-list-row]) {
     border-width: 3px !important;
     border-color: #000000 !important;
+  }
+  /* 4K: master list row — halka theme border (moti black mat) */
+  [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-width: 1px !important;
+    border-color: hsl(var(--border) / 0.55) !important;
+  }
+  [data-pl-list-row]:not([data-pl-list-selected]):hover {
+    border-color: hsl(var(--primary) / 0.65) !important;
+  }
+  body.theme-pro [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: rgb(209 213 219) !important;
+  }
+  body.theme-pro [data-pl-list-row]:not([data-pl-list-selected]):hover {
+    border-color: rgb(251 146 60 / 0.75) !important;
   }
   
   /* Elements with border style set should have 3px width on 4K */
@@ -1825,11 +1938,11 @@ button.day_selected.is-today.has-transactions {
      BUTTONS - All button variants (Quick Action, Header, etc.)
      ============================================ */
   
-  /* All buttons - Quick action buttons, header buttons, etc. */
-  button:not(.border-0),
-  [role="button"]:not(.border-0),
-  [type="button"]:not(.border-0),
-  [type="submit"]:not(.border-0) {
+  /* All buttons — pro chrome pill exclude */
+  button:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
+  [role="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
+  [type="button"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]),
+  [type="submit"]:not(.border-0):not(.pl-chrome-btn-drop):not(.pl-master-list-row-name):not(.pl-master-list-row-name-strong):not([data-pl-list-name]):not([data-pl-txn-icon-btn]) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -1846,24 +1959,49 @@ button.day_selected.is-today.has-transactions {
     border-color: #000000 !important;
   }
   
-  /* Quick action buttons in header */
-  [class*="header"] button,
-  [class*="Header"] button,
-  header button,
-  [data-header] button,
-  [class*="quick-action"],
-  [class*="QuickAction"],
-  [class*="action-button"],
-  [class*="ActionButton"] {
+  /* Quick action buttons in header — pro chrome pill exclude (odd/even border rehne do) */
+  [class*="header"] button:not(.pl-chrome-btn-drop):not([data-pl-header-preview-switch]):not([data-pl-header-preview-info]),
+  [class*="Header"] button:not(.pl-chrome-btn-drop):not([data-pl-header-preview-switch]):not([data-pl-header-preview-info]),
+  header button:not(.pl-chrome-btn-drop):not([data-pl-header-preview-switch]):not([data-pl-header-preview-info]),
+  [data-header] button:not(.pl-chrome-btn-drop):not([data-pl-header-preview-switch]):not([data-pl-header-preview-info]),
+  [class*="quick-action"]:not(.pl-chrome-btn-drop),
+  [class*="QuickAction"]:not(.pl-chrome-btn-drop),
+  [class*="action-button"]:not(.pl-chrome-btn-drop),
+  [class*="ActionButton"]:not(.pl-chrome-btn-drop) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
+  /* 4K: pro pill — 1px + shadow; border-color Tailwind/theme (black mat) */
+  button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]),
+  span.pl-chrome-btn-drop {
+    border-width: 1px !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  }
+  /* 4K + Pro: header pills — Add Note blue (global .border black override mat) */
+  body.theme-pro header button.pl-chrome-btn-drop:not(.border-0):not([data-pl-txn-icon-btn]) {
+    border-color: rgb(147 197 253) !important;
+    background-color: rgb(219 234 254) !important;
+    color: rgb(30 58 138) !important;
+  }
+  /* 4K: file-preview switch — green track + light blue i (black border mat) */
+  body[class*="theme-"] [data-pl-header-preview-switch] {
+    border-width: 2px !important;
+    border-color: rgb(134 239 172) !important;
+    background-color: rgb(240 253 244) !important;
+  }
+  body[class*="theme-"] [data-pl-header-preview-info] {
+    border: none !important;
+    color: rgb(56 189 248) !important;
+    background: transparent !important;
+  }
   
-  /* Icon buttons */
-  button[class*="icon"],
-  button[class*="Icon"],
-  [class*="icon-button"],
-  [class*="IconButton"] {
+  /* Icon buttons — transaction filter/3-dot exclude */
+  button[class*="icon"]:not([data-pl-txn-icon-btn]),
+  button[class*="Icon"]:not([data-pl-txn-icon-btn]),
+  [class*="icon-button"]:not([data-pl-txn-icon-btn]),
+  [class*="IconButton"]:not([data-pl-txn-icon-btn]) {
     border-width: 3px !important;
     border-color: #000000 !important;
   }
@@ -2231,6 +2369,31 @@ button.day_selected.is-today.has-transactions {
   [class*="Quote"] {
     border-width: 2px !important;
   }
+
+  /* Transaction table icon buttons — 4K `button[class*="icon"]` / global border se circle mat */
+  [data-theme-table="transactions"] [data-pl-txn-icon-btn],
+  [data-theme-table="transactions"] thead th button,
+  [data-theme-table="transactions"] tbody td.w-10 button,
+  [data-theme-table="transactions"] tbody td button[data-pl-txn-icon-btn] {
+    border: none !important;
+    border-width: 0 !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* Master list naam — TooltipTrigger `<button>` par 4K moti black border mat */
+  [data-pl-list-row] button.pl-master-list-row-name,
+  [data-pl-list-row] button.pl-master-list-row-name-strong,
+  [data-pl-list-row] [data-pl-list-name],
+  [data-theme-list="account-list"] button.pl-master-list-row-name,
+  [data-theme-list="account-list"] button.pl-master-list-row-name-strong {
+    border: none !important;
+    border-width: 0 !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+    background: transparent !important;
+  }
 }
 
 /* Master–detail list: tabs/search — utilities ke baad force (Tailwind lib scan + listChrome props) */
@@ -2314,16 +2477,26 @@ body.theme-pro [data-pl-company-profile-chrome] select {
 }
 [data-pl-company-profile-chrome] button[role="combobox"],
 [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-[data-pl-company-profile-chrome] button[class*="border"],
+/* Radix Checkbox bhi `border` class use karta hai — gray field rule se checked tick hide na ho */
+/* `border-0` wale TabsTrigger is selector me mat aaye — warna active tab par safed text + gray bg (text dikhe nahi) */
+[data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]),
 body.theme-colorfull main [data-pl-company-profile-chrome] button[role="combobox"],
 body.theme-colorfull main [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]),
 body.theme-pro [data-pl-company-profile-chrome] button[role="combobox"],
 body.theme-pro [data-pl-company-profile-chrome] button[data-theme-detail="date-range"],
-body.theme-pro [data-pl-company-profile-chrome] button[class*="border"] {
+body.theme-pro [data-pl-company-profile-chrome] button[class*="border"]:not([role="checkbox"]):not([role="tab"]) {
   border-color: #000 !important;
   border-width: 1px !important;
   background-color: hsl(var(--muted) / 0.72) !important;
+}
+/* Company Profile: checked checkbox — primary fill + tick visible (Pro theme) */
+[data-pl-company-profile-chrome] button[role="checkbox"][data-state="checked"],
+body.theme-pro [data-pl-company-profile-chrome] button[role="checkbox"][data-state="checked"],
+body.theme-colorfull main [data-pl-company-profile-chrome] button[role="checkbox"][data-state="checked"] {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border-color: hsl(var(--primary)) !important;
 }
 [data-pl-company-profile-chrome] [role="tablist"],
 [data-pl-company-profile-chrome] [role="tab"],
@@ -2352,6 +2525,13 @@ body.theme-pro [data-pl-company-profile-chrome] [role="tab"] {
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   border-radius: 9999px !important;
+}
+/* Inactive pill: dark text on transparent/muted list — white-on-gray bug fix ke baad readable */
+[data-pl-company-profile-chrome] [role="tab"][data-state="inactive"],
+body.theme-colorfull main [data-pl-company-profile-chrome] [role="tab"][data-state="inactive"],
+body.theme-pro [data-pl-company-profile-chrome] [role="tab"][data-state="inactive"] {
+  color: hsl(var(--foreground)) !important;
+  background-color: transparent !important;
 }
 [data-pl-company-profile-chrome] [role="tab"][data-state="active"],
 body.theme-colorfull main [data-pl-company-profile-chrome] [role="tab"][data-state="active"],
@@ -2537,17 +2717,13 @@ body.theme-pro main .space-y-4 > .rounded-lg.border.bg-card:nth-child(7n + 7) {
   background-color: #eef2ff !important;
   background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
 }
-/* Pro: master-detail list rows — dashboard ribbon mat; pehle jaisa safed/gray border (Party/Bank/Staff Card rows) */
-body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card,
-body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card {
+/* Pro: legacy Card rows — unselected halka border (purane Card markup) */
+body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card:not([data-pl-list-selected]),
+body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card:not([data-pl-list-selected]) {
+  border-width: 1px !important;
   border-color: rgb(209 213 219) !important;
-  border-width: 1.5px !important;
-  background-color: hsl(220 14% 99.5%) !important;
+  background-color: transparent !important;
   background-image: none !important;
-}
-body.theme-pro.dark main [data-theme-list="account-list"] .rounded-lg.border.bg-card,
-body.theme-pro.dark main .pl-master-list-ul .rounded-lg.border.bg-card {
-  border-color: rgb(75 85 99) !important;
 }
 body.theme-pro main [data-theme-list="account-list"] .rounded-lg.border.bg-card.border-primary,
 body.theme-pro main .pl-master-list-ul .rounded-lg.border.bg-card.border-primary,
@@ -2756,41 +2932,52 @@ body.theme-pro main [role="tab"][data-state="active"]:hover {
     color: hsl(330 80% 90%) !important;
     border-color: hsl(330 45% 42%) !important;
   }
-  /* Pro mobile list rows — gray/orange global rule override; dashboard rose cards */
+  /* Pro mobile list — unselected halka gray border; hover orange hint */
   body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]),
   body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
   body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-color: #fbcfe8 !important;
-    border-width: 1.5px !important;
-    background-color: #fff1f2 !important;
-    background-image: linear-gradient(
-      90deg,
-      rgba(255, 241, 242, 0.98) 0%,
-      #ffffff 50%,
-      rgba(252, 231, 243, 0.9) 100%
-    ) !important;
+    border-width: 1px !important;
+    border-style: solid !important;
+    border-color: rgb(209 213 219) !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s ease, background-color 0.15s ease !important;
   }
+  body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: rgb(251 146 60) !important;
+    background-color: rgb(255 247 237 / 0.45) !important;
+  }
+  /* Mobile Pro list — selected orange + peach (pink ribbon gradient hatao) */
   body.theme-pro main [data-pl-master-list-chrome] [data-pl-list-selected],
   body.theme-pro main [data-pl-master-list-chrome] [data-theme-list="account-list"] [data-pl-list-selected],
   body.theme-pro main [data-pl-master-list-chrome] .pl-master-list-ul [data-pl-list-selected] {
-    border-color: #ec4899 !important;
-    background-color: #fce7f3 !important;
-    background-image: linear-gradient(
-      90deg,
-      rgba(252, 231, 243, 0.98) 0%,
-      #ffffff 50%,
-      rgba(251, 207, 232, 0.92) 100%
-    ) !important;
-    box-shadow: 0 1px 2px 0 rgb(236 72 153 / 0.12) !important;
+    border-color: rgb(251 146 60) !important;
+    background-color: rgb(255 247 237) !important;
+    background-image: none !important;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
   }
   body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]) {
-    border-color: hsl(330 35% 28%) !important;
-    background-color: hsl(330 28% 14%) !important;
+    border-width: 1px !important;
+    border-color: rgb(75 85 99) !important;
+    background-color: transparent !important;
     background-image: none !important;
   }
+  body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+  body.theme-pro.dark main [data-pl-master-list-chrome] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
+    border-color: rgb(249 115 22) !important;
+    background-color: rgb(67 20 7 / 0.28) !important;
+  }
   body.theme-pro.dark main [data-pl-master-list-chrome] [data-pl-list-selected] {
-    border-color: hsl(330 65% 52%) !important;
-    background-color: hsl(330 32% 20%) !important;
+    border-color: rgb(249 115 22) !important;
+    background-color: rgb(67 20 7 / 0.4) !important;
     background-image: none !important;
   }
   body.theme-pro main [data-pl-master-list-chrome] .pl-mlc-search-row input {
@@ -2847,10 +3034,10 @@ body.theme-pro [data-theme-table="transactions"] tbody tr[data-txn-stripe="1"]:n
 }
 
 /* ========== All themes: har container/box — sirf 1px black line ========== */
-body[class*="theme-"] main .rounded-lg.border,
-body[class*="theme-"] main .rounded-md.border,
-body[class*="theme-"] main .rounded-lg.border.bg-card,
-body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm,
+body[class*="theme-"] main .rounded-lg.border:not([data-pl-list-row]),
+body[class*="theme-"] main .rounded-md.border:not([data-pl-list-row]),
+body[class*="theme-"] main .rounded-lg.border.bg-card:not([data-pl-list-row]),
+body[class*="theme-"] main .rounded-lg.border.bg-card.shadow-sm:not([data-pl-list-row]),
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-md.border,
 body[class*="theme-"] [data-pl-main-sidebar] .rounded-lg.border,
 body[class*="theme-"] header .rounded-lg.border,
@@ -2882,6 +3069,19 @@ body[class*="theme-"] [data-theme-table="transactions"] thead th {
   border-left-width: 0 !important;
   border-right-width: 0 !important;
 }
+/* Transaction table — filter + 3-dot icon buttons: circular black border/ring hatao (saari themes + 4K) */
+body[class*="theme-"] [data-theme-table="transactions"] [data-pl-txn-icon-btn],
+body[class*="theme-"] [data-theme-table="transactions"] thead th button,
+body[class*="theme-"] [data-theme-table="transactions"] tbody td.w-10 button,
+body[class*="theme-"] [data-theme-table="transactions"] tbody td button[data-pl-txn-icon-btn] {
+  border: none !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  --tw-ring-width: 0px !important;
+  --tw-ring-offset-width: 0px !important;
+}
 /* Main row ↔ narration ke beech horizontal line band; group ke baad sirf bottom line */
 body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row),
 body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row:has(+ .narration-row) > td {
@@ -2893,8 +3093,20 @@ body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + 
   border-left-width: 0 !important;
   border-right-width: 0 !important;
 }
+/* Narration row — left/right vertical line band; neeche ki horizontal line tr par */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:first-child,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) > td:last-child {
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
+}
 body[class*="theme-"] [data-theme-table="transactions"] .transaction-main-row + .narration-row:not([data-pl-spend-wise-group]):not([data-pl-spend-in-group-card]) {
   border-top-width: 0 !important;
+  border-left-width: 0 !important;
+  border-right-width: 0 !important;
   border-bottom-width: 1px !important;
   border-bottom-color: #000 !important;
 }
@@ -2986,10 +3198,11 @@ body.theme-pure-white .bg-secondary {
   background-color: #ffffff !important;
   color: #111827 !important;
 }
-body.theme-pure-white [data-theme-btn] {
+/* Pure white: chrome pill par pro odd/even rehne do; legacy btn white */
+body.theme-pure-white button[data-theme-btn]:not(.pl-chrome-btn-drop) {
   background-color: #ffffff !important;
   color: #111827 !important;
-  border: 1px solid #000 !important;
+  border-color: #374151 !important;
 }
 body.theme-pure-white main .rounded-lg.border.bg-card,
 body.theme-pure-white main .rounded-lg.border.bg-card.shadow-sm,
@@ -3119,36 +3332,73 @@ body.theme-pro .pl-dashboard-ribbon-indigo {
   background-image: linear-gradient(90deg, rgba(238, 242, 255, 0.98) 0%, #ffffff 50%, rgba(219, 234, 254, 0.92) 100%) !important;
 }
 
-/* Pro: master list row — ribbon off; selected alag (orange) taaki gray rule override na kare */
-body.theme-pro [data-pl-list-row]:not([data-pl-list-selected]),
-body.theme-pro main [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
-body.theme-pro main .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
-  background-color: hsl(var(--card)) !important;
+/* Master list — unselected halka border; hover orange (Link/li parent se — row :hover miss fix) */
+body[class*="theme-"] [data-pl-list-row]:not([data-pl-list-selected]) {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: rgb(229 231 235) !important;
+  background-color: transparent !important;
   background-image: none !important;
-  border-color: rgb(209 213 219) !important;
-  border-width: 1.5px !important;
+  box-shadow: none !important;
+  transition: border-color 0.15s ease, background-color 0.15s ease !important;
 }
-body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]),
-body.theme-pro.dark main [data-theme-list="account-list"] [data-pl-list-row]:not([data-pl-list-selected]),
-body.theme-pro.dark main .pl-master-list-ul [data-pl-list-row]:not([data-pl-list-selected]) {
-  border-color: rgb(75 85 99) !important;
-}
-/* Selected account/party/group list row — orange border + peach bg (group-statement screenshot) */
-body.theme-pro [data-pl-list-selected],
-body.theme-pro main [data-theme-list="account-list"] [data-pl-list-selected],
-body.theme-pro main .pl-master-list-ul [data-pl-list-selected] {
+body[class*="theme-"] [data-pl-list-row]:not([data-pl-list-selected]):hover,
+body[class*="theme-"] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+body[class*="theme-"] [data-theme-list="account-list"] .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]) {
   border-color: rgb(251 146 60) !important;
+  background-color: rgb(255 247 237 / 0.45) !important;
+}
+/* Selected — saari themes: orange border + peach (screenshot) */
+body[class*="theme-"] [data-pl-list-selected] {
   border-width: 1.5px !important;
+  border-style: solid !important;
+  border-color: rgb(251 146 60) !important;
   background-color: rgb(255 247 237) !important;
   background-image: none !important;
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
 }
-body.theme-pro.dark [data-pl-list-selected],
-body.theme-pro.dark main [data-theme-list="account-list"] [data-pl-list-selected],
-body.theme-pro.dark main .pl-master-list-ul [data-pl-list-selected] {
+body[class*="theme-"].dark [data-pl-list-selected],
+body.theme-pro.dark [data-pl-list-selected] {
   border-color: rgb(249 115 22) !important;
   background-color: rgb(67 20 7 / 0.4) !important;
-  background-image: none !important;
+}
+
+/* Master list naam (TooltipTrigger button) — row ke andar alag black box mat; selected row ka border sirf bahar */
+body[class*="theme-"] [data-pl-list-row] button.pl-master-list-row-name,
+body[class*="theme-"] [data-pl-list-row] button.pl-master-list-row-name-strong,
+body[class*="theme-"] [data-pl-list-row] [data-pl-list-name],
+body[class*="theme-"] [data-theme-list="account-list"] [data-pl-list-row] button.pl-master-list-row-name,
+body[class*="theme-"] [data-theme-list="account-list"] [data-pl-list-row] button.pl-master-list-row-name-strong {
+  border: none !important;
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+  appearance: none !important;
+}
+body[class*="theme-"] [data-pl-list-selected] button.pl-master-list-row-name,
+body[class*="theme-"] [data-pl-list-selected] button.pl-master-list-row-name-strong,
+body[class*="theme-"] [data-pl-list-selected] [data-pl-list-name] {
+  border: none !important;
+  border-width: 0 !important;
+  background: transparent !important;
+}
+
+/* Pro dark: unselected border thoda gehra */
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]) {
+  border-color: rgb(75 85 99) !important;
+}
+body.theme-pro.dark .pl-master-list-ul > li:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro.dark .pl-master-list-ul > li:hover > a > [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro.dark .pl-master-list-ul > li > a:hover > [data-pl-list-row]:not([data-pl-list-selected]),
+body.theme-pro.dark [data-pl-list-row]:not([data-pl-list-selected]):hover {
+  border-color: rgb(249 115 22) !important;
+  background-color: rgb(67 20 7 / 0.28) !important;
 }
 
 /* ========== Spend-wise view: har theme — green/pink/blue group box + inflow green (pic 2/3) ========== */
@@ -3281,14 +3531,12 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-w
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr[data-pl-spend-wise-group="blue"][data-pl-spend-edge~="bottom"] > td:last-child {
   border-bottom-right-radius: 0.75rem;
 }
-/* Selected ledger txn — orange box (main + narration); theme stripe/bg !important se upar */
+/* Selected ledger txn — orange box + peach bg (screenshot); saari themes */
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
-  background-color: rgb(255 247 237 / 0.95) !important;
   transition: none !important;
+  background-color: rgb(255 247 237 / 0.95) !important;
 }
-body.theme-pro.dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
-body.theme-pro.dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td,
 body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td,
 body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td {
   background-color: rgb(67 20 7 / 0.35) !important;
@@ -3304,18 +3552,14 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-mai
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:first-child {
   box-shadow: inset 2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0.75rem !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected] > td:last-child {
   box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:last-child {
   box-shadow: inset -2px 0 0 0 #fb923c, inset 0 2px 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
-}
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:first-child {
-  border-top-left-radius: 0.75rem !important;
-  border-bottom-left-radius: 0.75rem !important;
-}
-body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row[data-pl-txn-selected]:not(:has(+ .narration-row)) > td:last-child {
   border-top-right-radius: 0.75rem !important;
   border-bottom-right-radius: 0.75rem !important;
 }
@@ -3329,13 +3573,76 @@ body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[d
   box-shadow: inset 0 -2px 0 0 #fb923c !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:first-child {
-  box-shadow: inset 2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  /* Selected: narration par sirf neeche line — left vertical mat */
+  box-shadow: inset 0 -2px 0 0 #fb923c !important;
   border-bottom-left-radius: 0.75rem !important;
 }
 body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row[data-pl-txn-selected] > td:last-child {
-  box-shadow: inset -2px 0 0 0 #fb923c, inset 0 -2px 0 0 #fb923c !important;
+  box-shadow: inset 0 -2px 0 0 #fb923c !important;
   border-bottom-right-radius: 0.75rem !important;
 }
+
+/* Ledger txn hover — [data-pl-txn-hovered] (JS pair): main+narration dono; 1px orange; selected 2px upar */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
+  background-color: rgb(255 247 237 / 0.45) !important;
+  box-shadow: none !important;
+  border-top-color: transparent !important;
+  border-bottom-color: transparent !important;
+}
+/* Pair hover: main ↔ narration beech double line na aaye */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+  border-bottom-width: 0 !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected])[data-pl-txn-hovered] > td {
+  border-top-width: 0 !important;
+}
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td,
+body[class*="theme-"].dark [data-theme-table="transactions"] tbody tr.narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td {
+  background-color: rgb(67 20 7 / 0.28) !important;
+}
+/* Main pair — top + sides 1px */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td {
+  box-shadow: inset 0 1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
+  border-top-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:has(+ .narration-row[data-pl-txn-hovered]) > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c !important;
+  border-top-right-radius: 0.75rem !important;
+}
+/* Sirf main (narration nahi) — poora 1px box */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td {
+  box-shadow: inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:first-child {
+  box-shadow: inset 1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-top-left-radius: 0.75rem !important;
+  border-bottom-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered]:not(:has(+ .narration-row)) > td:last-child {
+  box-shadow: inset -1px 0 0 #fb923c, inset 0 1px 0 0 #fb923c, inset 0 -1px 0 0 #fb923c !important;
+  border-top-right-radius: 0.75rem !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+/* Narration pair — bottom + sides 1px */
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group]):not([data-pl-spend-wise-inflow]):not([data-pl-spend-wise-outflow]):not([data-pl-spend-wise-opening])[data-pl-txn-hovered] > td {
+  box-shadow: inset 0 -1px 0 0 #fb923c !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:first-child {
+  /* Hover: narration par sirf neeche 1px — left/right vertical mat */
+  box-shadow: inset 0 -1px 0 0 #fb923c !important;
+  border-bottom-left-radius: 0.75rem !important;
+}
+body[class*="theme-"] [data-theme-table="transactions"] tbody tr.transaction-main-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] + .narration-row:not([data-pl-txn-selected]):not([data-pl-spend-wise-group])[data-pl-txn-hovered] > td:last-child {
+  box-shadow: inset 0 -1px 0 0 #fb923c !important;
+  border-bottom-right-radius: 0.75rem !important;
+}
+
 /* Spend-wise: main + narration ek pill — beech me koi line nahi */
 body[class*="theme-"] [data-theme-table="transactions"] tr[data-pl-spend-wise-group].transaction-main-row:has(+ .narration-row[data-pl-spend-wise-group]) > td {
   border-bottom-width: 0 !important;

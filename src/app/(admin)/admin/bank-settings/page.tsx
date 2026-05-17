@@ -13,6 +13,7 @@ import {
   parseGatewayPaymentFlags,
   ESEWA_UAT_MERCHANT_CODE,
   ESEWA_UAT_SECRET_KEY,
+  KHALTI_UAT_PUBLIC_KEY,
   type GatewayKeys,
   type GatewayPaymentFlags,
   type BillingGatewayId,
@@ -164,10 +165,11 @@ export default function BankSettingsPage() {
       try {
         const keys = await getGatewayKeys();
         const base = toGatewayFormDefaults(keys);
-        // `next dev`: pre-fill official eSewa UAT fields when Firestore is empty so you can save once or pay without saving.
+        // `next dev`: pre-fill official Khalti/eSewa UAT when Firestore empty — save once or pay without saving.
         const devPrefill =
           process.env.NODE_ENV === 'development'
             ? {
+                khaltiPublicKey: base.khaltiPublicKey.trim() || KHALTI_UAT_PUBLIC_KEY,
                 esewaMerchantCode: base.esewaMerchantCode.trim() || ESEWA_UAT_MERCHANT_CODE,
                 esewaSecretKey: base.esewaSecretKey.trim() || ESEWA_UAT_SECRET_KEY,
               }
@@ -259,8 +261,8 @@ export default function BankSettingsPage() {
                   ariaLabel="About payment gateway settings"
                   label={
                     <>
-                      Manage API keys for Stripe, Khalti, and eSewa (stored in Firestore). In development, eSewa UAT
-                      (EPAYTEST) is suggested when fields are empty; Stripe/Khalti still need your own test keys or{' '}
+                      Manage API keys for Stripe, Khalti, and eSewa (stored in Firestore). In development, Khalti sandbox
+                      public key and eSewa EPAYTEST apply when fields are empty; Stripe still needs your test secret or{' '}
                       <code className="text-[11px]">.env.local</code> — see <code className="text-[11px]">.env.example</code>.
                     </>
                   }
@@ -322,7 +324,11 @@ export default function BankSettingsPage() {
                                 <FormItem>
                                 <FormLabel>Khalti Public Key</FormLabel>
                                 <FormControl>
-                                    <Input placeholder="live_public_key_..." {...field} value={field.value ?? ''} />
+                                    <Input
+                                      placeholder="test_public_key_... or live_public_key_..."
+                                      {...field}
+                                      value={field.value ?? ''}
+                                    />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>

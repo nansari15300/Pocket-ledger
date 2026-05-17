@@ -16,6 +16,7 @@ import {
 } from "@/components/entity/EntityListQuickFilterBar";
 import { filterAndSortMasterEntityListRows } from "@/lib/filterMasterEntityListRows"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 
 interface ExpenseAccountListProps {
   accounts: ExpenseAccount[];
@@ -99,8 +100,9 @@ export function ExpenseAccountList({
                           <Tooltip>
                             <TooltipTrigger
                               type="button"
+                              data-pl-list-name=""
                               onPointerDown={(e) => e.stopPropagation()}
-                              className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                              className={masterListNameTriggerCn}
                             >
                               {account.name}
                             </TooltipTrigger>

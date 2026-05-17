@@ -37,6 +37,8 @@ import { getAllocationTotal, OPENING_BALANCE_VOUCHER_ID } from "@/lib/payment-al
 import { isLocalOnlyMode } from "@/lib/localMode";
 import { generateLocalVoucherIdForCreate } from "@/lib/localEntityIds";
 import { isCompanyNotFoundError } from "@/lib/companyUpdateGuard";
+import { sendRecycleBinMovedAlert } from "@/lib/writeGateway/legacy/recycleBinAlerts";
+import type { Company } from "@/hooks/useCompany";
 import { LOCAL_MIRROR_META_SERVER_CONFIRMED_KEY, PL_CLIENT_OFFLINE_FIRST_PERSIST_MS } from "@/lib/localMirrorServerMeta";
 import { beginApkLedgerAsyncWriteShield } from "@/lib/apkLedgerRouteShield";
 import { writeEntity } from "@/lib/writeGateway";
@@ -479,10 +481,36 @@ export async function softDeleteVoucherMoveToRecycleBin(
   voucherId: string,
   deletedByUid: string
 ): Promise<void> {
+  const reg = await getLocalCompanyById(companyId, { includeDeleted: true });
+  const fsCompanyId = String((reg as { authoritativeCompanyId?: string } | null)?.authoritativeCompanyId || companyId).trim();
+  let voucherNumber = "";
+  let voucherType = "";
+  try {
+    const vSnap = await getDoc(doc(firestore, `companies/${fsCompanyId}/vouchers`, voucherId));
+    if (vSnap.exists()) {
+      const v = vSnap.data() as Record<string, unknown>;
+      voucherNumber = String(v.voucherNumber ?? "");
+      voucherType = String(v.type ?? "");
+    }
+  } catch {
+    /* alert optional */
+  }
   await patchVoucherFields(companyId, voucherId, {
     isDeleted: true,
     deletedAt: voucherRecycleBinDeletedAt(),
     deletedBy: deletedByUid || "",
+  });
+  const u = auth.currentUser;
+  void sendRecycleBinMovedAlert(fsCompanyId, (reg as Company) ?? null, {
+    entityKind: "voucher",
+    entityId: voucherId,
+    entityName: voucherNumber || voucherId,
+    collectionPath: "vouchers",
+    voucherNumber: voucherNumber || undefined,
+    voucherType: voucherType || undefined,
+    performedByUserId: deletedByUid || u?.uid,
+    performedByEmail: u?.email ?? undefined,
+    performedByName: u?.displayName ?? undefined,
   });
 }
 

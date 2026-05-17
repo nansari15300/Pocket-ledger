@@ -14,7 +14,13 @@ import {
   type TransactionSortBy,
   type TransactionSortOrder,
 } from "@/components/vouchers/TransactionTableSortDropdown";
-import { LedgerFooterChromePill, LedgerFooterTextPill } from "@/components/vouchers/ledgerFooterChrome";
+import {
+  LedgerFooterParentPill,
+  LedgerFooterTextPill,
+  ledgerFooterIconBtnCn,
+  ledgerFooterPillBtnCn,
+  ledgerFooterRowCn,
+} from "@/components/vouchers/ledgerFooterChrome";
 import { ROWS_PER_PAGE_OPTIONS_DEFAULT } from "@/lib/rowsPerPageSelect";
 import { cn } from "@/lib/utils";
 
@@ -30,11 +36,18 @@ export type LedgerFooterPaginationBarProps = {
   onRowsPerPageChange: (value: string) => void;
   rowsPerPageOptions?: readonly number[];
   includeAllOption?: boolean;
+  /** Left (xx) — is page se pehle kitne txn (tail paging) */
+  beforeCount?: number;
+  /** Right (xx) — is page ke baad kitne txn */
+  afterCount?: number;
   totalCount: number;
   className?: string;
 };
 
-/** Sort + page label + nav + rows/page + total — har block alag chrome pill. */
+/**
+ * PC footer pagination — ek parent pill; andar chhote child controls.
+ * Tail paging: (before) << < [rows] > >> (after) Total Trxn N
+ */
 export function LedgerFooterPaginationBar({
   sortBy,
   sortOrder,
@@ -47,6 +60,8 @@ export function LedgerFooterPaginationBar({
   onRowsPerPageChange,
   rowsPerPageOptions = ROWS_PER_PAGE_OPTIONS_DEFAULT,
   includeAllOption = true,
+  beforeCount = 0,
+  afterCount = 0,
   totalCount,
   className,
 }: LedgerFooterPaginationBarProps) {
@@ -55,7 +70,8 @@ export function LedgerFooterPaginationBar({
   return (
     <div
       className={cn(
-        "flex flex-shrink-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto scrollbar-slim-dim",
+        ledgerFooterRowCn,
+        "flex-shrink-0 justify-end overflow-x-auto scrollbar-slim-dim sm:ml-auto",
         className
       )}
     >
@@ -65,35 +81,38 @@ export function LedgerFooterPaginationBar({
         onSortChange={onSortChange}
         viewMode={viewMode}
         chromePill
+        className={ledgerFooterPillBtnCn}
       />
-      <LedgerFooterTextPill>
-        Page {currentPage} of {totalPages}
-      </LedgerFooterTextPill>
-      <Button
-        type="button"
-        variant="chromePill"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={() => setCurrentPage(totalPages)}
-        disabled={currentPage === totalPages}
-        aria-label="Oldest page"
-      >
-        <ChevronsLeft className="h-4 w-4" />
-      </Button>
-      <Button
-        type="button"
-        variant="chromePill"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={() => setCurrentPage((p) => p + 1)}
-        disabled={currentPage === totalPages}
-        aria-label="Older page"
-      >
-        <ChevronLeft className="h-4 w-4" />
-      </Button>
-      <LedgerFooterChromePill className="px-1">
+      <LedgerFooterParentPill>
+        <LedgerFooterTextPill>({beforeCount})</LedgerFooterTextPill>
+        <Button
+          type="button"
+          variant="chromePill"
+          size="icon"
+          className={ledgerFooterIconBtnCn}
+          onClick={() => setCurrentPage(totalPages)}
+          disabled={currentPage === totalPages}
+          aria-label="Oldest page"
+        >
+          <ChevronsLeft className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="chromePill"
+          size="icon"
+          className={ledgerFooterIconBtnCn}
+          onClick={() => setCurrentPage((p) => p + 1)}
+          disabled={currentPage === totalPages}
+          aria-label="Older page"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </Button>
+        {/* Rows/page — parent ke andar; black box/global border mat (data-pl-footer-rows-select) */}
         <Select value={rowsPerPageSelectValue} onValueChange={onRowsPerPageChange}>
-          <SelectTrigger className="h-7 w-[64px] border-0 bg-transparent shadow-none focus:ring-0">
+          <SelectTrigger
+            data-pl-footer-rows-select
+            className="h-7 w-[52px] shrink-0 rounded-full border-0 bg-transparent px-1 text-sm font-medium tabular-nums shadow-none focus:ring-0 focus-visible:ring-0"
+          >
             <SelectValue placeholder={rowsPerPageSelectValue} />
           </SelectTrigger>
           <SelectContent side="top">
@@ -105,30 +124,31 @@ export function LedgerFooterPaginationBar({
             {includeAllOption ? <SelectItem value="0">All</SelectItem> : null}
           </SelectContent>
         </Select>
-      </LedgerFooterChromePill>
-      <Button
-        type="button"
-        variant="chromePill"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={() => setCurrentPage((p) => p - 1)}
-        disabled={currentPage === 1}
-        aria-label="Newer page"
-      >
-        <ChevronRight className="h-4 w-4" />
-      </Button>
-      <Button
-        type="button"
-        variant="chromePill"
-        size="icon"
-        className="h-8 w-8 shrink-0"
-        onClick={() => setCurrentPage(1)}
-        disabled={currentPage === 1}
-        aria-label="Newest page"
-      >
-        <ChevronsRight className="h-4 w-4" />
-      </Button>
-      <LedgerFooterTextPill>Total Trxn {totalCount}</LedgerFooterTextPill>
+        <Button
+          type="button"
+          variant="chromePill"
+          size="icon"
+          className={ledgerFooterIconBtnCn}
+          onClick={() => setCurrentPage((p) => p - 1)}
+          disabled={currentPage === 1}
+          aria-label="Newer page"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="chromePill"
+          size="icon"
+          className={ledgerFooterIconBtnCn}
+          onClick={() => setCurrentPage(1)}
+          disabled={currentPage === 1}
+          aria-label="Newest page"
+        >
+          <ChevronsRight className="h-3.5 w-3.5" />
+        </Button>
+        <LedgerFooterTextPill>({afterCount})</LedgerFooterTextPill>
+        <LedgerFooterTextPill>Total Trxn {totalCount}</LedgerFooterTextPill>
+      </LedgerFooterParentPill>
     </div>
   );
 }

@@ -44,6 +44,10 @@ import Link from "next/link";
 import { useBillingPolicyFlags } from "@/hooks/useBillingPolicyFlags";
 import { useBillingStatementWhenFormatters } from "@/hooks/useBillingStatementWhenFormatters";
 import { useDate } from "@/hooks/useDate";
+import { useBillingRegionPricing } from "@/hooks/useBillingRegionPricing";
+import { PlanPricingBreakdown, PlanPricingLineCell } from "@/components/billing/PlanPricingBreakdown";
+import { CountrySearchCombobox } from "@/components/shared/CountrySearchCombobox";
+import type { BillingRegionId } from "@/lib/billingRegions";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   Select,
@@ -90,16 +94,25 @@ import {
   parseBillingDowngradeBlockedPlanIds,
 } from "@/lib/billingFrozenPlanSnapshots";
 
-/** Per-column price line using the same gross math as server `/api/payments/initiate` + proration quotes. */
-function formatTermPriceFromKey(plan: Plan, termKey: SubscriptionTermKey): string {
-  if (plan.isFree) {
-    if (termKey === "monthly") return formatPrice(plan, "monthly", true);
-    return "Free";
-  }
-  const total = grossPriceNpr(termKey, plan.price.monthly, plan.price.yearly);
-  const suffix = plan.currency === "NPR" ? "रु" : plan.currency;
+/** Per-column price — regional amounts (admin Nepal/SAARC/International ya live FX). */
+function formatTermPriceFromKey(
+  plan: Plan,
+  termKey: SubscriptionTermKey,
+  formatPlanTermPrice: (p: Plan, t: SubscriptionTermKey) => string
+): string {
+  const line = formatPlanTermPrice(plan, termKey);
   const label = BILLING_TERM_OPTIONS.find((o) => o.value === termKey)?.label ?? termKey;
-  return `${suffix} ${total.toLocaleString("en-IN")} (${label})`;
+  if (!line || line === "Free") return plan.isFree ? "" : "Free";
+  return `${line} (${label})`;
+}
+
+/** Free plan UI — list price line-through ke liye formatted amount. */
+function formatFreePlanCrossedPrice(
+  plan: Plan,
+  termKey: SubscriptionTermKey,
+  formatPlanTermPrice: (p: Plan, t: SubscriptionTermKey) => string
+): string {
+  return formatTermPriceFromKey(plan, termKey, formatPlanTermPrice);
 }
 
 function checkoutAmountNpr(plan: Plan, termKey: SubscriptionTermKey, donationAmount: number): number {
@@ -237,6 +250,15 @@ type CheckoutFormProps = {
   userId: string;
   companyId: string;
   billingIntent: "donation" | "subscribe";
+  /** Checkout region + formatter — server `/api/payments/initiate` ke saath match. */
+  billingRegion: BillingRegionId;
+  formatPlanTermPrice: (plan: Plan, termKey: SubscriptionTermKey) => string;
+  getCheckoutForPlan: (plan: Plan, termKey: SubscriptionTermKey) => {
+    amountMinor: number;
+    currency: string;
+    gross: number;
+    symbol: string;
+  };
   /** false = subscribe/donate API disabled — user ko “back online” copy. */
   networkOnline?: boolean;
   /** Server keys miss par gateway radio band — initiate route jaisa. */
@@ -249,6 +271,9 @@ function CheckoutForm({
   userId,
   companyId,
   billingIntent,
+  billingRegion,
+  formatPlanTermPrice,
+  getCheckoutForPlan,
   networkOnline = true,
   gatewayAvailability = null,
 }: CheckoutFormProps) {
@@ -261,8 +286,11 @@ function CheckoutForm({
   const [donationAmount, setDonationAmount] = useState(100);
 
   const isFreePlan = plan.isFree;
-  const amountNpr = checkoutAmountNpr(plan, termKey, donationAmount);
-  const amountInPaisa = Math.round(amountNpr * 100);
+  const checkout = getCheckoutForPlan(plan, termKey);
+  const amountInMinor = isFreePlan
+    ? Math.round(donationAmount * 100)
+    : checkout.amountMinor;
+  const checkoutCurrency = isFreePlan ? "npr" : checkout.currency;
   const stripeOk = gatewayAvailability == null || gatewayAvailability.stripe;
   const khaltiOk = gatewayAvailability == null || gatewayAvailability.khalti;
   const esewaOk = gatewayAvailability == null || gatewayAvailability.esewa;
@@ -276,7 +304,7 @@ function CheckoutForm({
       });
       return;
     }
-    if (amountNpr <= 0) {
+    if (isFreePlan && amountInMinor <= 0) {
       toast({
         variant: "destructive",
         title: "Invalid Amount",
@@ -306,8 +334,9 @@ function CheckoutForm({
         body: JSON.stringify({
           planId: plan.id,
           gateway,
-          amount: amountInPaisa,
-          currency: plan.currency,
+          amount: amountInMinor,
+          currency: checkoutCurrency,
+          billingRegion,
           userId: userId.trim(),
           companyId: companyId.trim(),
           billingCycle: termKey === "monthly" ? "monthly" : "yearly",
@@ -465,7 +494,7 @@ function CheckoutForm({
             Processing...
           </>
         ) : isFreePlan ? (
-          `Donate ${formatPrice({ ...plan, price: { monthly: donationAmount, yearly: donationAmount } } as Plan, "monthly", true)}`
+          `Donate ${formatPlanTermPrice({ ...plan, price: { monthly: donationAmount, yearly: donationAmount } } as Plan, "monthly")}`
         ) : (
           `Pay with ${gateway.toUpperCase()}`
         )}
@@ -508,6 +537,26 @@ export default function BillingPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { companyId, company, loading: companyLoading, refreshAuthoritativePlan, allCompanies } = useCompany();
+  /** User country picker — plan amounts is currency me convert dikhenge. */
+  const [priceCountry, setPriceCountry] = useState("");
+  useEffect(() => {
+    const c = String(company?.country ?? "").trim();
+    if (c) setPriceCountry(c);
+  }, [company?.country]);
+
+  const {
+    country: billingPriceCountry,
+    region: billingRegion,
+    regionLabel,
+    displaySymbol,
+    displayCurrency,
+    formatPlanTermPrice,
+    getCheckoutForPlan,
+    formatAmount,
+    fx,
+    pricingSettings,
+    fxLoading: billingFxLoading,
+  } = useBillingRegionPricing(priceCountry || company?.country);
 
   // `/api/payments/*` + `/api/company/*` Firestore `companies/{docId}` padhte hain — restore/merge me SQLite row `id` ≠ cloud doc ho to `authoritativeCompanyId` sahi doc khulta hai.
   const billingFirestoreCompanyId = useMemo(() => {
@@ -882,7 +931,9 @@ export default function BillingPage() {
         doc.text(p.name, x, top + 16);
         doc.setFont("helvetica", "normal");
         doc.setFontSize(8.5);
-        const priceLine = p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id]);
+        const priceLine = p.isFree
+          ? formatFreePlanCrossedPrice(p, colTerms[p.id], formatPlanTermPrice) || "Free"
+          : formatTermPriceFromKey(p, colTerms[p.id], formatPlanTermPrice);
         const wrapped = doc.splitTextToSize(priceLine, planColW - 12) as string[];
         doc.text(wrapped.slice(0, 2), x, top + 30);
         doc.setFont("helvetica", "bold");
@@ -1024,6 +1075,7 @@ export default function BillingPage() {
           targetPlanId,
           term,
           gateway: prorationGateway,
+          billingRegion,
         }),
       });
       const data = await res.json();
@@ -1419,7 +1471,7 @@ export default function BillingPage() {
           {/* Pink Balance pill hide — sirf frozen Usage snapshot. */}
           <div className={PRORATION_PILL_USAGE_FROZEN_CLASS}>
             <span>
-              Usage: रु {snap.frozenUsageNpr.toFixed(2)}
+              Usage: {displaySymbol}{" "}{snap.frozenUsageNpr.toFixed(2)}
               {formatUsageLineSuffix(snap.frozenUsageNpr, y, y)}
             </span>
           </div>
@@ -1478,6 +1530,21 @@ export default function BillingPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {/* Country choose → saare plan columns converted amount + symbol */}
+          <div className="mb-4 max-w-md space-y-2">
+            <Label htmlFor="billing-price-country">View prices in country</Label>
+            <CountrySearchCombobox
+              value={billingPriceCountry}
+              onChange={setPriceCountry}
+              placeholder="Search country…"
+              symbolWithOne={false}
+            />
+            <p className="text-xs text-muted-foreground">
+              Region: <span className="font-medium text-foreground">{regionLabel}</span> ·{" "}
+              {displaySymbol} ({displayCurrency})
+              {billingFxLoading ? " — updating rates…" : null}
+            </p>
+          </div>
           {billingOfflineBlock ? (
             <div
               className={cn(
@@ -1585,7 +1652,14 @@ export default function BillingPage() {
                         {p.highlight ? <Badge>Most Popular</Badge> : null}
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">{p.tagline}</p>
-                      <p className="text-lg font-semibold mt-2">{p.isFree ? "Free" : formatTermPriceFromKey(p, colTerms[p.id])}</p>
+                      <div className="mt-2">
+                        <PlanPricingBreakdown
+                          plan={p}
+                          country={billingPriceCountry}
+                          fx={fx}
+                          pricingSettings={pricingSettings}
+                        />
+                      </div>
                       <div className="mt-3 space-y-2">
                         {allFeaturesConfig.map((feature) => {
                           const { text, enabled } = getFeatureValue(p, feature.key);
@@ -1693,7 +1767,7 @@ export default function BillingPage() {
                               <div className="flex flex-col items-center gap-1.5">
                                 <div className={PRORATION_PILL_CREDIT_CLASS}>
                                   <span>
-                                    Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                    Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
                                     <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                       {formatCreditPillDaysLeftDisplay(creditDaysPinkFromQuote)}
                                     </strong>{" "}
@@ -1702,7 +1776,7 @@ export default function BillingPage() {
                                 </div>
                                 <div className={PRORATION_PILL_USAGE_CLASS}>
                                   <span>
-                                    Usage: रु {usageNprRenewMobileCur.toFixed(2)}
+                                    Usage: {displaySymbol}{" "}{usageNprRenewMobileCur.toFixed(2)}
                                     {formatUsageLineSuffix(
                                       usageNprRenewMobileCur,
                                       curRow.price.yearly,
@@ -1916,7 +1990,7 @@ export default function BillingPage() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Balance ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                      Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} · ≈{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                         {creditDaysCarriedMob.toFixed(2)}
                                       </strong>{" "}
@@ -1925,7 +1999,7 @@ export default function BillingPage() {
                                   </div>
                                   <div className={PRORATION_PILL_USAGE_CLASS}>
                                     <span>
-                                      Usage: रु {(0).toFixed(2)}
+                                      Usage: {displaySymbol}{" "}{(0).toFixed(2)}
                                       {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
                                     </span>
                                   </div>
@@ -1935,7 +2009,7 @@ export default function BillingPage() {
                                 <div className="flex flex-col items-center gap-1.5">
                                   <div className={PRORATION_PILL_CREDIT_CLASS}>
                                     <span>
-                                      Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                      Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
                                       <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                         {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewMob)}
                                       </strong>{" "}
@@ -1944,7 +2018,7 @@ export default function BillingPage() {
                                   </div>
                                   <div className={PRORATION_PILL_USAGE_CLASS}>
                                     <span>
-                                      Usage: रु {renewLedgerMob.frozenUsageNpr.toFixed(2)}
+                                      Usage: {displaySymbol}{" "}{renewLedgerMob.frozenUsageNpr.toFixed(2)}
                                       {formatUsageLineSuffix(
                                         renewLedgerMob.frozenUsageNpr,
                                         curRow.price.yearly,
@@ -2106,20 +2180,6 @@ export default function BillingPage() {
                             {p.highlight && <Badge className="shrink-0">Most Popular</Badge>}
                           </div>
                           <p className="text-sm text-muted-foreground break-words mt-1">{p.tagline}</p>
-                          <div className="mt-4 min-w-0 break-words">
-                            {p.isFree ? (
-                              <>
-                                <p className="text-lg font-bold text-muted-foreground line-through break-words">
-                                  {formatPrice(p, colTerms[p.id] === "monthly" ? "monthly" : "yearly", true)}
-                                </p>
-                                <p className="text-3xl font-bold text-primary">Free</p>
-                              </>
-                            ) : (
-                              <div className="text-base sm:text-2xl font-bold leading-snug break-words">
-                                {formatTermPriceFromKey(p, colTerms[p.id])}
-                              </div>
-                            )}
-                          </div>
                           {isOfferValid && (
                             <Badge variant="destructive" className="mt-2 whitespace-normal text-center max-w-full break-words">
                               Offer ends {formatDateFns(offerDate, "MMM do, yyyy")}
@@ -2132,6 +2192,73 @@ export default function BillingPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
+                {/* Pricing rows — monthly / yearly / save (country-converted) */}
+                <TableRow>
+                  <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
+                    Monthly
+                  </TableCell>
+                  {plans.map((p) => (
+                    <TableCell
+                      key={`${p.id}-price-monthly`}
+                      className={cn(
+                        "min-w-0 text-center align-middle px-2 py-2",
+                        p.id === selectedPlanId && "bg-muted"
+                      )}
+                    >
+                      <PlanPricingLineCell
+                        plan={p}
+                        country={billingPriceCountry}
+                        fx={fx}
+                        pricingSettings={pricingSettings}
+                        line="monthly"
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
+                <TableRow>
+                  <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle">
+                    Yearly
+                  </TableCell>
+                  {plans.map((p) => (
+                    <TableCell
+                      key={`${p.id}-price-yearly`}
+                      className={cn(
+                        "min-w-0 text-center align-middle px-2 py-2",
+                        p.id === selectedPlanId && "bg-muted"
+                      )}
+                    >
+                      <PlanPricingLineCell
+                        plan={p}
+                        country={billingPriceCountry}
+                        fx={fx}
+                        pricingSettings={pricingSettings}
+                        line="yearly"
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
+                <TableRow>
+                  <TableCell className="min-w-0 font-medium whitespace-normal break-words px-2 py-2 align-middle text-green-700 dark:text-green-500">
+                    Save
+                  </TableCell>
+                  {plans.map((p) => (
+                    <TableCell
+                      key={`${p.id}-price-save`}
+                      className={cn(
+                        "min-w-0 text-center align-middle px-2 py-2",
+                        p.id === selectedPlanId && "bg-muted"
+                      )}
+                    >
+                      <PlanPricingLineCell
+                        plan={p}
+                        country={billingPriceCountry}
+                        fx={fx}
+                        pricingSettings={pricingSettings}
+                        line="save"
+                      />
+                    </TableCell>
+                  ))}
+                </TableRow>
                 {allFeaturesConfig.map((feature) => (
                   <TableRow key={feature.key}>
                     <TableCell className="min-w-0 max-w-[22%] font-medium whitespace-normal break-words align-middle !whitespace-normal px-2 py-2">
@@ -2250,7 +2377,7 @@ export default function BillingPage() {
                                   <div className="flex flex-col items-center gap-1.5 max-w-[280px] mx-auto">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Balance ≈ रु {q.creditNpr.toFixed(2)} · ≈{" "}
+                                        Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} · ≈{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                           {creditCarriedDesk.toFixed(2)}
                                         </strong>{" "}
@@ -2259,7 +2386,7 @@ export default function BillingPage() {
                                     </div>
                                     <div className={PRORATION_PILL_USAGE_CLASS}>
                                       <span>
-                                        Usage: रु {(0).toFixed(2)}
+                                        Usage: {displaySymbol}{" "}{(0).toFixed(2)}
                                         {formatUsageLineSuffix(0, p.price.yearly, q.grossNpr)}
                                       </span>
                                     </div>
@@ -2269,7 +2396,7 @@ export default function BillingPage() {
                                   <div className="flex flex-col items-center gap-1.5">
                                     <div className={PRORATION_PILL_CREDIT_CLASS}>
                                       <span>
-                                        Balance ≈ रु {q.creditNpr.toFixed(2)} ·{" "}
+                                        Balance ≈ {displaySymbol}{" "}{q.creditNpr.toFixed(2)} ·{" "}
                                         <strong className="font-semibold text-pink-950 dark:text-pink-50">
                                           {formatCreditPillDaysLeftDisplay(creditDaysPinkRenewDesk)}
                                         </strong>{" "}
@@ -2278,7 +2405,7 @@ export default function BillingPage() {
                                     </div>
                                     <div className={PRORATION_PILL_USAGE_CLASS}>
                                       <span>
-                                        Usage: रु {usageNprRenewDesk.toFixed(2)}
+                                        Usage: {displaySymbol}{" "}{usageNprRenewDesk.toFixed(2)}
                                         {formatUsageLineSuffix(
                                           usageNprRenewDesk,
                                           curPlanRow.price.yearly,
@@ -2646,6 +2773,9 @@ export default function BillingPage() {
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
               billingIntent={selectedPlanDetails.isFree ? "donation" : "subscribe"}
+              billingRegion={billingRegion}
+              formatPlanTermPrice={formatPlanTermPrice}
+              getCheckoutForPlan={getCheckoutForPlan}
               networkOnline={billingNavigatorOnline}
               gatewayAvailability={gatewayAvailability}
             />
@@ -2718,6 +2848,9 @@ export default function BillingPage() {
               userId={user?.uid ?? ""}
               companyId={billingFirestoreCompanyId}
               billingIntent={selectedMobilePlan.isFree ? "donation" : "subscribe"}
+              billingRegion={billingRegion}
+              formatPlanTermPrice={formatPlanTermPrice}
+              getCheckoutForPlan={getCheckoutForPlan}
               networkOnline={billingNavigatorOnline}
               gatewayAvailability={gatewayAvailability}
             />
@@ -2760,7 +2893,7 @@ export default function BillingPage() {
                               </p>
                               <div className={PRORATION_PILL_USAGE_FROZEN_CLASS}>
                                 <span>
-                                  Usage: रु {planChangeOnlyDialogPreview.leavingUsageNpr.toFixed(2)}
+                                  Usage: {displaySymbol}{" "}{planChangeOnlyDialogPreview.leavingUsageNpr.toFixed(2)}
                                   {formatUsageLineSuffix(
                                     planChangeOnlyDialogPreview.leavingUsageNpr,
                                     planChangeOnlyDialogPreview.leavingPlanYearly,

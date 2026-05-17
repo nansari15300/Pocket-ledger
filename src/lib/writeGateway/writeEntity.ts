@@ -22,6 +22,14 @@ import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWr
 import { isStaticApkLedgerTransportMode } from "@/lib/staticApkLedgerArchitecture";
 import { buildLedgerTombstoneFields } from "@/lib/ledgerTombstone";
 import { shouldForceFirestoreWritesOnStaticOrApk } from "@/lib/apkOnlineFirestoreWritePolicy";
+import type { Company } from "@/hooks/useCompany";
+import {
+  displayNameFromRecycleBinPatch,
+  inferRecycleBinEntityKind,
+  removeRecycleBinAlerts,
+  sendRecycleBinMovedAlert,
+} from "@/lib/writeGateway/legacy/recycleBinAlerts";
+import { auth } from "@/lib/firebase";
 
 export type WriteEntityOperation = "create" | "update" | "delete";
 
@@ -164,6 +172,7 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : "outbox enqueue failed" };
     }
+    void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, merged);
     return { ok: true, docId: effectiveDocId };
   }
 
@@ -192,9 +201,40 @@ export async function writeEntity(req: WriteEntityRequest): Promise<WriteEntityR
       return { ok: true, docId: effectiveDocId };
     }
     await updateDoc(docRef, req.data || {});
+    void notifyRecycleBinAlertAfterWrite(fsCompanyId, companyId, collectionName, effectiveDocId, req.data || {});
     return { ok: true, docId: effectiveDocId };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "firestore write failed" };
+  }
+}
+
+/** Master soft-delete / restore par recycle bin alert sync. */
+async function notifyRecycleBinAlertAfterWrite(
+  fsCompanyId: string,
+  localCompanyId: string,
+  collectionName: string,
+  entityId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  if (collectionName === "vouchers") return;
+  const eid = entityId.trim();
+  if (!eid) return;
+  if (patch.isDeleted === true) {
+    const reg = await getLocalCompanyById(localCompanyId, { includeDeleted: true });
+    const u = auth.currentUser;
+    void sendRecycleBinMovedAlert(fsCompanyId, (reg as Company) ?? null, {
+      entityKind: inferRecycleBinEntityKind(collectionName),
+      entityId: eid,
+      entityName: displayNameFromRecycleBinPatch(collectionName, patch),
+      collectionPath: collectionName,
+      performedByUserId: u?.uid,
+      performedByEmail: u?.email ?? undefined,
+      performedByName: u?.displayName ?? undefined,
+    });
+    return;
+  }
+  if (patch.isDeleted === false && (patch.deletedAt === null || patch.deletedAt === undefined)) {
+    void removeRecycleBinAlerts(fsCompanyId, eid);
   }
 }
 

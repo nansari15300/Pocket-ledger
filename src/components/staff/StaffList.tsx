@@ -5,6 +5,7 @@ import type { Staff } from "@/components/staff/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { useDate } from "@/hooks/useDate";
 import { useAnimationSettings } from "@/hooks/useAnimationSettings";
 import { MasterListRow } from "@/components/ui/master-list-row";
@@ -127,8 +128,9 @@ export function StaffList({
                       {/* asChild hata — motion layout + span ref merge par Radix setRef loop */}
                       <TooltipTrigger
                         type="button"
+                        data-pl-list-name=""
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="pl-master-list-row-name cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                        className={masterListNameTriggerCn}
                       >
                         {staffMember.name}
                       </TooltipTrigger>

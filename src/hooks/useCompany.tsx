@@ -124,6 +124,8 @@ export type Company = {
     showCurrencySymbol?: boolean;
     /** Currency symbol to display (e.g. "Rs.", "₹", "$"). Default "Rs." */
     currencySymbol?: string;
+    /** ISO 4217 — country se default; company profile currency dropdown se override. */
+    currencyCode?: string;
     displaySettings?: DisplaySettings;
     isApprovalEnabled?: boolean;
     isOwned?: boolean;
@@ -966,6 +968,15 @@ export const CompanyProvider = ({ children }: { children: ReactNode }) => {
       win.removeEventListener("online", onOnline);
     };
   }, [user, companyId, authLoading, refreshAuthoritativePlan]);
+
+  /** Shared company select: turant server plan → SQLite/cache (owner upgrade ke baad file limit / entitlements). */
+  useEffect(() => {
+    if (!user?.uid || !companyId?.trim() || authLoading || isLocalOnlyMode()) return;
+    const row = allCompanies.find((c) => c.id === companyId);
+    if (!row || isCurrentUserOwnerOfCompanyRow(row, { uid: user.uid, email: user.email ?? null })) return;
+    void refreshAuthoritativePlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- burst sirf company switch par
+  }, [companyId, user?.uid, authLoading]);
 
   // Local-only: turant sirf SQLite se list + selected row; defer mirror default 90s, static/APK/`build:static` par ~1.6s (shared jaldi dikhen).
   useEffect(() => {

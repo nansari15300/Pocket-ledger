@@ -4,6 +4,7 @@ import admin from "firebase-admin";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
 import {
+  getEsewaEpayV2FormUrl,
   isBillingGatewayAvailable,
   mergeGatewayKeysWithEnv,
   parseGatewayPaymentFlags,
@@ -15,7 +16,9 @@ import {
   buildMergedFrozenStateAfterPaidUpgrade,
   resolveCompanyPlanTierStartedAtMs,
 } from "@/lib/billingFrozenPlanSnapshots";
-import { getEffectivePlanPrices } from "@/lib/server/getEffectivePlanPrices";
+import { getEffectivePlanPricesForRegion } from "@/lib/server/getEffectivePlanPrices";
+import type { BillingRegionId } from "@/lib/billingRegions";
+import { billingCurrencyToGatewayCode, currencyMinorUnitFactor } from "@/lib/billingRegions";
 import { isCompanyOwner } from "@/lib/server/companyOwner";
 import {
   classifyPlanChange,
@@ -90,6 +93,7 @@ type Body = {
   term?: SubscriptionTermKey;
   /** Defaults to stripe; Khalti/eSewa use pending_plan_changes + `/api/payments/complete-plan-change-*`. */
   gateway?: ProrationGateway;
+  billingRegion?: BillingRegionId;
 };
 
 function normalizeProrationGateway(raw: unknown): ProrationGateway {
@@ -225,8 +229,14 @@ export async function POST(req: NextRequest) {
         }
       }
     }
-    const curPrices = await getEffectivePlanPrices(currentPlanId);
-    const tgtPrices = await getEffectivePlanPrices(targetPlanId);
+    const billingRegion: BillingRegionId =
+      body.billingRegion === "saarc" || body.billingRegion === "international"
+        ? body.billingRegion
+        : "nepal";
+    const curPrices = await getEffectivePlanPricesForRegion(currentPlanId, billingRegion);
+    const tgtPrices = await getEffectivePlanPricesForRegion(targetPlanId, billingRegion);
+    const checkoutCurrency = billingCurrencyToGatewayCode(tgtPrices.currency);
+    const minorFactor = currencyMinorUnitFactor(tgtPrices.currency);
 
     if (term === "plan_change_only") {
       if (currentExpiryMs == null || currentExpiryMs <= nowMs) {
@@ -348,6 +358,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, applied: true, quote, planChangeHistory });
     }
 
+    if ((gateway === "khalti" || gateway === "esewa") && billingRegion !== "nepal") {
+      return NextResponse.json(
+        { error: "Khalti and eSewa only support Nepal (NPR). Use Stripe for SAARC / International." },
+        { status: 400 }
+      );
+    }
+
     // Khalti/eSewa proration: persist server-side intent so return callbacks cannot forge company/plan/amount.
     if (gateway === "khalti" || gateway === "esewa") {
       const adminResult = await getGatewayKeysFromAdmin();
@@ -402,8 +419,7 @@ export async function POST(req: NextRequest) {
       const total_amount_in_rupees = quote.netNpr;
       const message = `total_amount=${total_amount_in_rupees},transaction_uuid=${pendingId},product_code=${product_code}`;
       const signature = crypto.createHmac("sha256", keys.esewaSecretKey).update(message).digest("base64");
-      const isTestMode = product_code === "EPAYTEST";
-      const eSewaUrl = isTestMode ? "https://uat.esewa.com.np/epay/main" : "https://epay.esewa.com.np/api/epay/main/v2/form";
+      const eSewaUrl = getEsewaEpayV2FormUrl(product_code);
 
       return NextResponse.json({
         gateway: "esewa" as const,
@@ -428,19 +444,17 @@ export async function POST(req: NextRequest) {
 
     const stripe = new Stripe(keys.stripeSecretKey, { apiVersion: "2025-12-15.clover" as any });
     const appOrigin = getPublicAppOriginForPaymentRedirects(req);
-    const currency = DEFAULT_PLANS[targetPlanId].currency.toLowerCase();
-
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
       line_items: [
         {
           price_data: {
-            currency,
+            currency: checkoutCurrency,
             product_data: {
               name: `Plan ${changeKind}: ${currentPlanId} → ${targetPlanId} (${term})`,
             },
-            unit_amount: Math.round(quote.netNpr * 100),
+            unit_amount: Math.round(quote.netNpr * minorFactor),
           },
           quantity: 1,
         },

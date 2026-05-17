@@ -27,6 +27,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { RecycleBinItem, type DeletedItem } from "@/components/recycle-bin/RecycleBinItem";
 import { Input } from "@/components/ui/input";
 import { Search, Trash2, Loader2 } from "lucide-react";
+import { AddVoucherDialog } from "@/components/vouchers/AddVoucherDialog";
+import { getCompanyDocFromBrowserDb } from "@/lib/localCompanyDocMirror";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import usePermissions, { canForRecycleBinLocalCompany } from "@/hooks/usePermissions";
@@ -36,7 +38,7 @@ import { cn } from "@/lib/utils";
 import { useVouchers } from "@/hooks/useVouchers";
 import { deleteCompanyComplete } from "@/lib/actions/deleteCompanyAction";
 import { getRecycleBinConfig, subscribeRecycleBinConfig, type RecycleBinConfig } from "@/lib/recycleBinConfig";
-import { sendTransactionAlert } from "@/lib/transactionAlerts";
+import { removeRecycleBinAlerts } from "@/lib/transactionAlerts";
 import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { numericEntitlement, type PlanId } from "@/config/plans";
 import { isLocalOnlyMode } from "@/lib/localMode";
@@ -226,6 +228,13 @@ function RecycleBinContent() {
     const [atMaxCompanies, setAtMaxCompanies] = useState(false);
     /** Local company username/password change par recycle bin buttons dobara evaluate. */
     const [localPermEpoch, setLocalPermEpoch] = useState(0);
+    /** Recycle bin voucher: read-only AddVoucherDialog + ribbon Restore. */
+    const [viewVoucherOpen, setViewVoucherOpen] = useState(false);
+    const [viewVoucherDoc, setViewVoucherDoc] = useState<Record<string, unknown> | null>(null);
+    const [viewVoucherLoading, setViewVoucherLoading] = useState(false);
+    const [viewVoucherBinItem, setViewVoucherBinItem] = useState<DeletedItem | null>(null);
+    const [viewVoucherRestored, setViewVoucherRestored] = useState(false);
+    const [viewVoucherRestoring, setViewVoucherRestoring] = useState(false);
 
     useEffect(() => {
         const onLocalAuth = () => setLocalPermEpoch((n) => n + 1);
@@ -601,6 +610,92 @@ function RecycleBinContent() {
         });
     }, [deletedItems, userNames, journalAccountNames, accountNames, localPermEpoch]);
     
+    /** Deleted voucher Firestore / SQLite se load karke read-only edit dialog. */
+    const handleViewVoucher = useCallback(
+        async (item: DeletedItem) => {
+            if (!companyId) {
+                toast({
+                    variant: "destructive",
+                    title: "Select a company",
+                    description: "Choose a company from the sidebar to view deleted vouchers.",
+                });
+                return;
+            }
+            setViewVoucherLoading(true);
+            setViewVoucherOpen(true);
+            setViewVoucherDoc(null);
+            setViewVoucherBinItem(item);
+            setViewVoucherRestored(false);
+            try {
+                const snap = await getDoc(doc(firestore, `companies/${companyId}/vouchers`, item.id));
+                let data: Record<string, unknown> | null = null;
+                if (snap.exists()) {
+                    data = { id: snap.id, ...(snap.data() as Record<string, unknown>) };
+                } else {
+                    data = await getCompanyDocFromBrowserDb(companyId, "vouchers", item.id, { includeDeleted: true });
+                }
+                if (!data) {
+                    throw new Error("Voucher not found.");
+                }
+                const rawDate = data.date as { toDate?: () => Date } | Date | string | undefined;
+                if (rawDate && typeof (rawDate as { toDate?: () => Date }).toDate === "function") {
+                    data.date = (rawDate as { toDate: () => Date }).toDate();
+                } else if (rawDate && !(rawDate instanceof Date)) {
+                    const parsed = new Date(String(rawDate));
+                    if (!Number.isNaN(parsed.getTime())) data.date = parsed;
+                }
+                setViewVoucherDoc(data);
+            } catch (e) {
+                console.error("[recycle-bin] view voucher", e);
+                setViewVoucherOpen(false);
+                toast({
+                    variant: "destructive",
+                    title: "Could not open voucher",
+                    description: e instanceof Error ? e.message : "Try again when online.",
+                });
+            } finally {
+                setViewVoucherLoading(false);
+            }
+        },
+        [companyId, toast]
+    );
+
+    /** View dialog ribbon: restore voucher then edit mode. */
+    const handleRestoreFromViewDialog = useCallback(async () => {
+        if (!viewVoucherBinItem || !companyId) return;
+        setViewVoucherRestoring(true);
+        try {
+            assertRecycleBinAction(viewVoucherBinItem, can, "delete_records", user, customUser);
+        } catch (error) {
+            if (error instanceof PermissionDeniedError) {
+                toast({ variant: "destructive", title: "Permission Denied", description: error.message });
+            } else {
+                toast({ variant: "destructive", title: "Error", description: "Failed to check permissions." });
+            }
+            setViewVoucherRestoring(false);
+            return;
+        }
+        try {
+            await updateDoc(doc(firestore, `companies/${companyId}/vouchers`, viewVoucherBinItem.id), {
+                isDeleted: false,
+                deletedAt: null,
+            });
+            removeDeletedItemFromState(viewVoucherBinItem);
+            await removeRecycleBinAlerts(companyId, viewVoucherBinItem.id);
+            setViewVoucherDoc((prev) => (prev ? { ...prev, isDeleted: false, deletedAt: null } : prev));
+            setViewVoucherRestored(true);
+            toast({
+                title: "Restored!",
+                description: `"${viewVoucherBinItem.voucherNumber || viewVoucherBinItem.name}" is restored — you can edit now.`,
+            });
+        } catch (error) {
+            console.error("[recycle-bin] restore from view", error);
+            toast({ variant: "destructive", title: "Error", description: "Failed to restore voucher." });
+        } finally {
+            setViewVoucherRestoring(false);
+        }
+    }, [viewVoucherBinItem, companyId, can, user, customUser, toast, removeDeletedItemFromState]);
+
     const handleRestore = async (item: DeletedItem) => {
         const resolvedItem = await ensureCompanyRecycleBinItemStorage(item);
         const isCompany = resolvedItem.collectionPath === "companies" || resolvedItem.isRootCollection === true;
@@ -705,6 +800,11 @@ function RecycleBinContent() {
                 });
             }
             removeDeletedItemFromState(resolvedItem);
+            if (isCompany) {
+                await removeRecycleBinAlerts(resolvedItem.id, resolvedItem.id);
+            } else if (companyId) {
+                await removeRecycleBinAlerts(companyId, resolvedItem.id);
+            }
             if (isCompany) reloadLocalCompanyRegistry();
             toast({ title: "Restored!", description: `"${resolvedItem.name}" has been restored.` });
         } catch (error) {
@@ -836,21 +936,16 @@ function RecycleBinContent() {
                     force: true,
                     notify: true,
                 });
-                if (resolvedItem.collectionPath === "vouchers" && companyId && company) {
-                  await sendTransactionAlert(companyId, company, {
-                    kind: "deleted",
-                    voucherId: resolvedItem.id,
-                    voucherNumber: (resolvedItem as any).voucherNumber || resolvedItem.name,
-                    voucherType: (resolvedItem as any).type,
-                    performedByUserId: user?.uid,
-                    performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-                    performedByEmail: user?.email ?? undefined,
-                  });
+                if (companyId) {
+                  await removeRecycleBinAlerts(companyId, resolvedItem.id);
                 }
                 removeDeletedItemFromState(resolvedItem);
                 toast({ title: "Success", description: `"${resolvedItem.name}" deleted permanently.` });
             } else {
                 await updateDoc(docRef, { movedToAdminRecycleAt: serverTimestamp() });
+                if (companyId) {
+                  await removeRecycleBinAlerts(companyId, resolvedItem.id);
+                }
                 removeDeletedItemFromState(resolvedItem);
                 toast({ title: "Deleted permanently", description: "Item has been removed from your recycle bin." });
             }
@@ -972,17 +1067,12 @@ function RecycleBinContent() {
                     }
                     await deleteDoc(docRef);
                     await deleteCompanyDocFromBrowserDb(companyId, item.collectionPath, item.id, { force: true, notify: false });
-                    if (item.collectionPath === "vouchers" && companyId && company) {
-                      await sendTransactionAlert(companyId, company, {
-                        kind: "deleted",
-                        voucherId: item.id,
-                        voucherNumber: (item as any).voucherNumber || item.name,
-                        voucherType: (item as any).type,
-                        performedByUserId: user?.uid,
-                        performedByName: (customUser?.displayName || user?.displayName) ?? undefined,
-                        performedByEmail: user?.email ?? undefined,
-                      });
+                    if (companyId) {
+                      await removeRecycleBinAlerts(companyId, item.id);
                     }
+                }
+                for (const cid of companyIds) {
+                  await removeRecycleBinAlerts(cid, cid);
                 }
                 toast({ title: "Bin Emptied", description: "All items permanently deleted from server." });
             } else {
@@ -1013,6 +1103,14 @@ function RecycleBinContent() {
                     batch.update(doc(firestore, `companies/${companyId}/${item.collectionPath}/${item.id}`), { movedToAdminRecycleAt: serverTimestamp() });
                 }
                 await batch.commit();
+                if (companyId) {
+                  for (const item of nonCompanyItems) {
+                    await removeRecycleBinAlerts(companyId, item.id);
+                  }
+                }
+                for (const cid of companyIds) {
+                  await removeRecycleBinAlerts(cid, cid);
+                }
                 toast({ title: "Deleted permanently", description: "All items have been removed from your recycle bin." });
             }
             if (companyIds.length > 0) reloadLocalCompanyRegistry();
@@ -1148,6 +1246,11 @@ function RecycleBinContent() {
                                                     item={item} 
                                                     onRestore={() => setItemToConfirm({item, action: 'restore'})} 
                                                     onDelete={() => setItemToConfirm({item, action: 'delete'})}
+                                                    onViewVoucher={
+                                                        item.collectionPath === "vouchers"
+                                                            ? handleViewVoucher
+                                                            : undefined
+                                                    }
                                                     ownerScopedCompanyActions={
                                                         item.companyStorageSource === "online" &&
                                                         isRecycleBinOwnerCompanyItem(item, user, customUser)
@@ -1257,6 +1360,37 @@ function RecycleBinContent() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            <AddVoucherDialog
+                isOpen={viewVoucherOpen}
+                onOpenChange={(open) => {
+                    setViewVoucherOpen(open);
+                    if (!open) {
+                        setViewVoucherDoc(null);
+                        setViewVoucherBinItem(null);
+                        setViewVoucherRestored(false);
+                    }
+                }}
+                voucher={viewVoucherDoc ?? undefined}
+                forceViewOnly={!viewVoucherRestored}
+                recycleBinOnRestore={viewVoucherRestored ? undefined : handleRestoreFromViewDialog}
+                recycleBinRestoring={viewVoucherRestoring}
+                onVoucherAction={() => {
+                    setViewVoucherOpen(false);
+                    setViewVoucherDoc(null);
+                    setViewVoucherBinItem(null);
+                    setViewVoucherRestored(false);
+                }}
+            />
+            {viewVoucherOpen && viewVoucherLoading && (
+                <div
+                    className="fixed inset-0 z-[200] flex items-center justify-center bg-background/60 pointer-events-none"
+                    aria-busy
+                    aria-label="Loading voucher"
+                >
+                    <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                </div>
+            )}
 
         </div>
     );

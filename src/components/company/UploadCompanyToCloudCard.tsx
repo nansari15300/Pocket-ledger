@@ -30,6 +30,7 @@ import { useLivePlans, getPlanFromPlans } from "@/hooks/useLivePlans";
 import { removeLocalCompanyMirrorFromFolder } from "@/lib/liveDataFolderMirror";
 import { assertCompanyAllowsLedgerMutations } from "@/lib/security/offlinePlanWriteGate";
 import { companyProfilePinkZone } from "@/lib/companyProfileChrome";
+import { readCloudSyncConfigFromCompany } from "@/lib/localCloudSync/companyConfig";
 
 /** Local → online confirm: company name + ` ok` (case-insensitive). */
 function buildLocalToOnlineConfirmPhrase(companyName: string): string {
@@ -59,6 +60,9 @@ export function UploadCompanyToCloudCard() {
 
   const isLocal =
     !!company && String(company.storageOption || "local").toLowerCase() === "local";
+  // Local + Drive/Dropbox cloud sync: Firestore upload alag path — duplicate/conflict na ho
+  const localCloudSyncOn =
+    isLocal && readCloudSyncConfigFromCompany(company).cloudSyncEnabled;
 
   const accountPlanId = resolveEffectiveAccountPlanId(allCompanies, user?.uid, company?.planId);
   const accountPlanLive = getPlanFromPlans(livePlans, accountPlanId);
@@ -196,6 +200,8 @@ export function UploadCompanyToCloudCard() {
   };
 
   if (!company || !companyId || !isOwner) return null;
+
+  if (localCloudSyncOn) return null;
 
   // Pehle se online: repair push — seedha click, koi type-confirm nahi
   if (!isLocal) {

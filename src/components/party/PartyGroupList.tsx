@@ -21,6 +21,7 @@ import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { isSystemParentGroup } from "@/lib/system-groups"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerCn } from "@/lib/listSelectionChrome";
 import { getAllSystemGroupNames } from "@/lib/system-group-names";
 
 type GroupWithType = Group & { groupType?: 'party' | 'tax' | 'staff' | 'account' | 'expense' | 'item' };
@@ -204,8 +205,9 @@ export function PartyGroupList({
                                     {/* asChild hata — motion layout + span ref merge par Radix setRef loop (party groups tab) */}
                                     <TooltipTrigger
                                       type="button"
+                                      data-pl-list-name=""
                                       onPointerDown={(e) => e.stopPropagation()}
-                                      className="pl-master-list-row-name min-w-0 flex-1 cursor-default truncate border-0 bg-transparent p-0 text-left text-sm font-semibold shadow-none"
+                                      className={cn(masterListNameTriggerCn, "min-w-0 flex-1 text-sm font-semibold")}
                                     >
                                       {group.name}
                                     </TooltipTrigger>

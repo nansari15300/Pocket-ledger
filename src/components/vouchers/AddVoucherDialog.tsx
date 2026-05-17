@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CalendarDays, Loader2, Settings, X } from "lucide-react";
+import { CalendarDays, Loader2, RotateCcw, Settings, X } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1165,7 +1165,21 @@ const VOUCHER_DIALOG_STORAGE_KEY = "pl-voucher-dialog-bounds";
 
 export function AddVoucherDialog(props: any) {
   /** Compare-before-sync jaisi jagah nested stack: `false` se parent non-modal Compare band hone par saath na band ho. */
-  const { children, isOpen, onOpenChange, voucher, defaultVoucherData, dialogRootModal = true, editCompanyId, ...rest } = props;
+  const {
+    children,
+    isOpen,
+    onOpenChange,
+    voucher,
+    defaultVoucherData,
+    dialogRootModal = true,
+    editCompanyId,
+    /** Recycle bin / audit: poora form read-only — Save/Copy/Delete band. */
+    forceViewOnly = false,
+    /** Recycle bin view: ribbon + Restore (parent restore ke baad `forceViewOnly` hatao). */
+    recycleBinOnRestore,
+    recycleBinRestoring = false,
+    ...rest
+  } = props;
   // Outer company context full reference: dialog-scope override provider build karne ke liye (forms ko target company dikhana hai
   // bina global app state badale).
   const outerCompanyContext = useCompany();
@@ -1916,8 +1930,16 @@ export function AddVoucherDialog(props: any) {
    */
   const isEditLockedByLinks = !!voucherForDialogChrome?.id && hasLinks;
 
+  // Recycle bin view: hamesha read-only — permission check skip
+  useEffect(() => {
+    if (forceViewOnly) {
+      setEditingDisabled(true);
+    }
+  }, [forceViewOnly, isOpen]);
+
   // Permission-based: disable edit when user cannot edit this voucher (role + ownership)
   useEffect(() => {
+    if (forceViewOnly) return;
     if (!voucherForDialogChrome?.id) {
       setEditingDisabled(false);
       return;
@@ -1951,7 +1973,10 @@ export function AddVoucherDialog(props: any) {
       }
     });
     return () => { cancelled = true; };
-  }, [voucherForDialogChrome?.id, voucherForDialogChrome?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId, allCompanies, company]);
+  }, [voucherForDialogChrome?.id, voucherForDialogChrome?.isApproved, companyId, user?.uid, vouchers, canEditRecord, ctxCompanyId, allCompanies, company, forceViewOnly]);
+
+  const voucherDialogTitle =
+    forceViewOnly && !!voucher?.id ? "View Trxn" : !!voucher?.id ? "Edit Trxn" : "New Trxn";
 
   // Block edit rule: when history full + setting "Block edit", disable Save (user must clear history first)
   // Re-run when company changes so live voucher settings (from Settings) apply immediately
@@ -1974,13 +1999,15 @@ export function AddVoucherDialog(props: any) {
   const showApproveButton =
     !!voucherForDialogChrome?.id &&
     can("approve_transactions") &&
-    !apkOfflineViewOnly;
+    !apkOfflineViewOnly &&
+    !forceViewOnly;
 
   const showSaveAndApproveOnCreate =
     !voucherForDialogChrome?.id &&
     can("approve_transactions") &&
     effectiveNotificationSettings?.approve?.on !== false &&
-    !apkOfflineViewOnly;
+    !apkOfflineViewOnly &&
+    !forceViewOnly;
 
   const handleApprove = useCallback(async () => {
     const cid = String(editCompanyId?.trim() || ctxCompanyId || "");
@@ -3137,7 +3164,7 @@ export function AddVoucherDialog(props: any) {
                 <div className="grid min-h-[2.75rem] w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3">
                   <div className="flex min-w-0 shrink flex-row flex-wrap items-center gap-x-2 gap-y-0 justify-self-start self-center pr-2">
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
-                      {!!voucher?.id ? "Edit Trxn" : "New Trxn"}
+                      {voucherDialogTitle}
                     </DialogTitle>
                     {postCopyNewFormSeed && (
                       <p className="m-0 text-[10px] md:text-xs font-semibold leading-tight text-emerald-700">
@@ -3180,7 +3207,7 @@ export function AddVoucherDialog(props: any) {
                 <div className={cn("flex w-full min-w-0 flex-nowrap items-center gap-2")}>
                   <div className="flex min-w-0 flex-1 flex-row flex-wrap items-center gap-x-2 gap-y-0">
                     <DialogTitle className="m-0 font-bold font-headline text-inherit text-xl leading-tight">
-                      {!!voucher?.id ? "Edit Trxn" : "New Trxn"}
+                      {voucherDialogTitle}
                     </DialogTitle>
                     {postCopyNewFormSeed && (
                       <p className="m-0 text-[10px] md:text-xs font-semibold leading-tight text-emerald-700">
@@ -3237,7 +3264,7 @@ export function AddVoucherDialog(props: any) {
                 )}
               >
                 <DialogTitle className="m-0 font-bold font-headline text-inherit text-base leading-tight">
-                  {!!voucher?.id ? "Edit Trxn" : "New Trxn"}
+                  {voucherDialogTitle}
                 </DialogTitle>
                 {postCopyNewFormSeed && (
                   <p className="m-0 text-[10px] font-semibold leading-tight text-emerald-700">
@@ -3289,6 +3316,31 @@ export function AddVoucherDialog(props: any) {
           </>
         )}
       </DialogHeader>
+      {forceViewOnly && typeof recycleBinOnRestore === "function" && (
+        <div
+          role="status"
+          className="relative z-20 flex shrink-0 flex-col gap-2 border-b border-amber-300/90 bg-amber-50 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="m-0 text-sm font-semibold leading-snug text-amber-950">
+            This voucher is in the recycle bin. Restore it to edit or save changes.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 rounded-full border-amber-600/50 bg-white px-3 text-amber-950 hover:bg-amber-100"
+            disabled={recycleBinRestoring}
+            onClick={() => recycleBinOnRestore()}
+          >
+            {recycleBinRestoring ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Restore
+          </Button>
+        </div>
+      )}
       {recurringEditorsEffective && (
         // White strip below ribbon only — not inside drag layer (`z-20` stack above resize hit-zones).
         <div className="relative z-20 flex shrink-0 flex-col gap-1 border-b border-indigo-200/70 bg-white px-2 py-1 text-xs text-indigo-900">
@@ -3538,7 +3590,7 @@ export function AddVoucherDialog(props: any) {
               : undefined
           }
           showHistoryButton={!!voucherForDialogChrome?.id && can("view_voucher_history")}
-          editingDisabled={editingDisabled || historyBlocksEdit || apkOfflineViewOnly}
+          editingDisabled={editingDisabled || historyBlocksEdit || apkOfflineViewOnly || forceViewOnly}
           restrictConvertWhenLinked={hasLinks}
           deleteDisabledWhenLinked={isEditLockedByLinks}
           showApproveButton={showApproveButton}
@@ -3705,7 +3757,7 @@ export function AddVoucherDialog(props: any) {
           </div>
         </DialogContent>
       )}
-      {copyButtonMountNode &&
+      {copyButtonMountNode && !forceViewOnly &&
         createPortal(
           <Button
             type="button"

@@ -126,13 +126,16 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
           aria-label="File preview mode"
           title={`${MODE_LABEL[mode]} — tap a zone to change`}
           onClick={handleTrackClick}
+          data-pl-header-preview-switch
+          data-preview-mode={mode}
           className={cn(
-            "relative w-full cursor-pointer rounded-full border shadow-sm outline-none transition-colors",
-            "border-neutral-300 bg-neutral-200",
-            mode !== "off" && "border-green-300 bg-green-100/80",
+            "relative w-full cursor-pointer rounded-full border-2 shadow-sm outline-none transition-colors",
+            /* Hamesha light green track; on/hover par thoda bold green */
+            "border-green-300 bg-green-50",
+            mode !== "off" && "border-green-400 bg-green-100",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-            "dark:border-neutral-500 dark:bg-neutral-700/70",
-            mode !== "off" && "dark:border-green-700 dark:bg-green-900/40"
+            "dark:border-green-600 dark:bg-green-950/35",
+            mode !== "off" && "dark:border-green-500 dark:bg-green-900/45"
           )}
           style={{ height: SWITCH_TRACK_H_PX }}
         >
@@ -173,17 +176,20 @@ export function GlobalFileHoverPreviewSwitch({ className }: { className?: string
           <PopoverTrigger asChild>
             <button
               type="button"
+              data-pl-header-preview-info
               className={cn(
-                "absolute top-1/2 z-[2] flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full",
-                "text-neutral-600 hover:bg-black/5 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                infoRight ? "right-0.5" : "left-0.5"
+                /* inset-y-0 — track ke andar i icon vertical center */
+                "absolute inset-y-0 z-[2] flex w-5 items-center justify-center rounded-full border-0 bg-transparent shadow-none",
+                "text-sky-400 hover:bg-sky-100/50 hover:text-sky-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300",
+                infoRight ? "right-0" : "left-0"
               )}
               aria-label="File preview modes — details"
               title="File preview help"
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <Info className="h-3.5 w-3.5" strokeWidth={2.25} />
+              {/* Lucide Info optical low hota hai — 1px upar se track me center dikhe */}
+              <Info className="size-3.5 shrink-0 -translate-y-0.5" strokeWidth={2.25} />
             </button>
           </PopoverTrigger>
           <PopoverContent

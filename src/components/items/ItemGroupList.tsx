@@ -20,6 +20,7 @@ import Link from "next/link";
 import AnimatedNumber from "../ui/AnimatedNumber";
 import { isSystemParentGroup } from "@/lib/system-groups"
 import { masterListShellCn, masterListRowUnselectedCn } from "@/lib/masterListChrome";
+import { masterListNameTriggerStrongCn } from "@/lib/listSelectionChrome";
 
 export function ItemGroupList({
   groups,
@@ -90,8 +91,9 @@ export function ItemGroupList({
                           {/* asChild hata — motion layout + span ref merge par Radix/ScrollArea setRef loop */}
                           <TooltipTrigger
                             type="button"
+                            data-pl-list-name=""
                             onPointerDown={(e) => e.stopPropagation()}
-                            className="pl-master-list-row-name-strong cursor-default block w-full truncate border-0 bg-transparent p-0 text-left shadow-none"
+                            className={masterListNameTriggerStrongCn}
                           >
                             {group.name}
                           </TooltipTrigger>

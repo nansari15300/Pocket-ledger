@@ -119,7 +119,9 @@ type VoucherProjectionRow = {
 export async function getCompanyDocFromBrowserDb(
   companyId: string,
   collectionName: string,
-  docId: string
+  docId: string,
+  /** Recycle bin view: deleted rows bhi SQLite mirror se padh sakte hain. */
+  opts?: { includeDeleted?: boolean }
 ): Promise<Record<string, unknown> | null> {
   if (!shouldMirrorToBrowserDb() || typeof window === "undefined" || !companyId || !collectionName || !docId) return null;
   try {
@@ -131,7 +133,7 @@ export async function getCompanyDocFromBrowserDb(
     if (!row?.data) return null;
     const parsed = JSON.parse(row.data) as Record<string, unknown>;
     const data = deserializeLocalDbValue(parsed) as Record<string, unknown>;
-    if (data.isDeleted === true) return null;
+    if (!opts?.includeDeleted && data.isDeleted === true) return null;
     return { ...data, id: row.id };
   } catch {
     return null;

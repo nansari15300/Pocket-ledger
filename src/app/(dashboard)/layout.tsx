@@ -30,7 +30,7 @@ import {
 } from "@/hooks/useMobileEdgeSwipe";
 import { AlarmPopup } from "@/components/messages/AlarmPopup";
 import { DeviceLimitProvider, useDeviceLimitContext } from "@/contexts/DeviceLimitContext";
-import { resolveEffectiveAccountPlanId } from "@/lib/accountPlanForOwner";
+import { resolvePlanIdForActiveCompany } from "@/lib/accountPlanForOwner";
 import { DEFAULT_PLANS, type PlanId } from "@/config/plans";
 import { getPlanFromPlans, useLivePlans } from "@/hooks/useLivePlans";
 import { useMarkMessagesDelivered } from "@/hooks/useMarkMessagesDelivered";
@@ -159,9 +159,9 @@ function DeviceLimitOverlay() {
   const deviceOverlayAccountPlanId = useMemo(
     () =>
       user?.uid && company
-        ? resolveEffectiveAccountPlanId(allCompanies, user.uid, company.planId)
+        ? resolvePlanIdForActiveCompany(company, allCompanies, user.uid, user.email)
         : ("basic" as PlanId),
-    [allCompanies, user?.uid, company?.planId, company]
+    [allCompanies, user?.uid, user?.email, company?.planId, company]
   );
   const deviceOverlayPlan = useMemo(
     () => getPlanFromPlans(livePlansForDeviceUi, deviceOverlayAccountPlanId),

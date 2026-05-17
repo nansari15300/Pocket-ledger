@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type ComponentProps } from "react";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
 import { firestore } from "@/lib/firebase";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from '@/components/ui/card'
@@ -17,10 +17,34 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useBillingCatalogBase } from "@/hooks/useBillingCatalogBase";
+import { BILLING_REGION_IDS, BILLING_REGIONS, type BillingRegionId } from "@/lib/billingRegions";
+import {
+    getNepalMarkupBaseAmounts,
+    regionalPriceWithMarkup,
+    type RegionalPlanPrice,
+} from "@/lib/billingRegionalPricing";
+import { convertWithFxRates, roundMoneyForCurrency } from "@/lib/liveFxRates";
 
 interface PlanDetailsProps {
     plan: Plan;
     onSave: (updatedPlan: Plan) => Promise<boolean>;
+}
+
+/** Amount input — catalog base country ka symbol prefix. */
+function AmountInput({
+    symbol,
+    className,
+    ...props
+}: ComponentProps<typeof Input> & { symbol: string }) {
+    return (
+        <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground pointer-events-none">
+                {symbol}
+            </span>
+            <Input className={cn("pl-9", className)} {...props} />
+        </div>
+    );
 }
 
 const entitlementLabels: Partial<Record<EntitlementKey, string>> = {
@@ -33,10 +57,20 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
     const [isUpdating, setIsUpdating] = useState(false);
     const { toast } = useToast();
     const [editablePlan, setEditablePlan] = useState<Plan>(plan);
+    const { baseCountry, symbol: catalogSymbol, currencyCode: catalogCurrency } =
+        useBillingCatalogBase();
 
     useEffect(() => {
         setEditablePlan(plan);
     }, [plan]);
+
+    // Catalog amounts = billing default region currency (Regional billing upar se)
+    useEffect(() => {
+        if (!catalogCurrency) return;
+        setEditablePlan((prev) =>
+            prev.currency === catalogCurrency ? prev : { ...prev, currency: catalogCurrency }
+        );
+    }, [catalogCurrency]);
 
     useEffect(() => {
         const monthly = editablePlan.price.monthly || 0;
@@ -55,6 +89,37 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
             }));
         }
     }, [editablePlan.price.monthly, editablePlan.price.yearly]);
+
+    // Nepal / plan base badle to SAARC/International % dubara calculate
+    useEffect(() => {
+        setEditablePlan((prev) => {
+            let touched = false;
+            const regionalPrices = { ...(prev.regionalPrices ?? {}) };
+            const base = getNepalMarkupBaseAmounts(prev);
+            for (const id of ["saarc", "international"] as const) {
+                const row = regionalPrices[id];
+                const pct = row?.markupPercent;
+                if (pct == null || !Number.isFinite(Number(pct))) continue;
+                const monthly = regionalPriceWithMarkup(base.monthly, pct);
+                const yearly = regionalPriceWithMarkup(base.yearly, pct);
+                if (row?.monthly === monthly && row?.yearly === yearly) continue;
+                regionalPrices[id] = {
+                    ...row,
+                    monthly,
+                    yearly,
+                    markupPercent: pct,
+                    currency: BILLING_REGIONS[id].defaultCurrency,
+                };
+                touched = true;
+            }
+            return touched ? { ...prev, regionalPrices } : prev;
+        });
+    }, [
+        editablePlan.price.monthly,
+        editablePlan.price.yearly,
+        editablePlan.regionalPrices?.nepal?.monthly,
+        editablePlan.regionalPrices?.nepal?.yearly,
+    ]);
 
     const handleSave = async () => {
         setIsUpdating(true);
@@ -90,6 +155,83 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
             }
         }));
     }
+
+    /** Nepal / SAARC / International — admin alag monthly & yearly rate. */
+    const handleRegionalPriceChange = (
+        region: BillingRegionId,
+        field: keyof RegionalPlanPrice,
+        value: string
+    ) => {
+        setEditablePlan((prev) => {
+            const cur = prev.regionalPrices?.[region] ?? {
+                monthly: 0,
+                yearly: 0,
+                currency: BILLING_REGIONS[region].defaultCurrency,
+            };
+            const nextRow: RegionalPlanPrice = { ...cur };
+            nextRow[field] = value === "" ? 0 : Number(value);
+            return {
+                ...prev,
+                regionalPrices: { ...prev.regionalPrices, [region]: nextRow },
+            };
+        });
+    };
+
+    /** SAARC / International — Nepal amount + markup % → monthly & yearly fill. */
+    const handleRegionalMarkupChange = (region: "saarc" | "international", value: string) => {
+        const pct = value === "" ? 0 : Number(value);
+        setEditablePlan((prev) => {
+            const base = getNepalMarkupBaseAmounts(prev);
+            return {
+                ...prev,
+                regionalPrices: {
+                    ...prev.regionalPrices,
+                    [region]: {
+                        monthly: regionalPriceWithMarkup(base.monthly, pct),
+                        yearly: regionalPriceWithMarkup(base.yearly, pct),
+                        markupPercent: pct,
+                        currency: BILLING_REGIONS[region].defaultCurrency,
+                    },
+                },
+            };
+        });
+    };
+
+    const applyLiveFxToRegional = async () => {
+        try {
+            const base = String(editablePlan.currency || "NPR").toUpperCase();
+            const res = await fetch(`/api/billing/fx-rates?base=${encodeURIComponent(base)}`);
+            const data = await res.json();
+            if (!res.ok || !data.rates) throw new Error(data.error || "FX failed");
+            const rates = data.rates as Record<string, number>;
+            const fxBase = data.base as string;
+            setEditablePlan((prev) => {
+                const regionalPrices = { ...prev.regionalPrices } as NonNullable<Plan["regionalPrices"]>;
+                for (const id of BILLING_REGION_IDS) {
+                    const target = BILLING_REGIONS[id].defaultCurrency;
+                    regionalPrices[id] = {
+                        monthly: roundMoneyForCurrency(
+                            convertWithFxRates(prev.price.monthly, base, target, fxBase, rates),
+                            target
+                        ),
+                        yearly: roundMoneyForCurrency(
+                            convertWithFxRates(prev.price.yearly, base, target, fxBase, rates),
+                            target
+                        ),
+                        currency: target,
+                    };
+                }
+                return { ...prev, regionalPrices };
+            });
+            toast({ title: "Applied", description: "Regional prices filled from today's FX." });
+        } catch (e: unknown) {
+            toast({
+                variant: "destructive",
+                title: "FX apply failed",
+                description: e instanceof Error ? e.message : String(e),
+            });
+        }
+    };
 
     // Har numeric cap do fields: online (Firestore) + local (SQLite / storageOption local) — admin alag se set kar sake.
     const pairedNumericEntitlements: { online: EntitlementKey; local: EntitlementKey; label: string }[] = [
@@ -139,20 +281,34 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
             <ScrollArea className="flex-1 min-h-0">
                 <CardContent className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 items-end">
+                        <div className="space-y-2 md:col-span-2 xl:col-span-5">
+                            <Label>Base country (catalog)</Label>
+                            <div
+                                className="flex h-10 w-full items-center rounded-md border border-input bg-muted/60 px-3 py-2 text-sm font-medium"
+                                aria-readonly="true"
+                            >
+                                {baseCountry} · {catalogSymbol}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                Set in <strong>Default billing region</strong> above — all amounts use {catalogSymbol}.
+                            </p>
+                        </div>
                         <div className="space-y-2">
-                            <Label>Monthly Price (NPR)</Label>
-                            <Input 
-                                type="number" 
-                                value={editablePlan.price.monthly} 
-                                onChange={e => handlePriceChange('monthly', e.target.value)}
+                            <Label>Monthly Price ({catalogSymbol})</Label>
+                            <AmountInput
+                                symbol={catalogSymbol}
+                                type="number"
+                                value={editablePlan.price.monthly}
+                                onChange={(e) => handlePriceChange("monthly", e.target.value)}
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label>Yearly Price (NPR)</Label>
-                            <Input 
-                                type="number" 
-                                value={editablePlan.price.yearly} 
-                                onChange={e => handlePriceChange('yearly', e.target.value)} 
+                            <Label>Yearly Price ({catalogSymbol})</Label>
+                            <AmountInput
+                                symbol={catalogSymbol}
+                                type="number"
+                                value={editablePlan.price.yearly}
+                                onChange={(e) => handlePriceChange("yearly", e.target.value)}
                             />
                         </div>
                         <div className="space-y-2">
@@ -196,6 +352,82 @@ export function PlanDetails({ plan, onSave }: PlanDetailsProps) {
                                 onCheckedChange={(checked) => handleTopLevelChange('isFree', checked)}
                             />
                             <Label htmlFor={`isFree-${plan.id}`}>Mark as Free Plan</Label>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3 rounded-lg border border-black p-4 bg-muted/30">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h3 className="font-semibold text-sm">
+                                Regional prices (Nepal · SAARC · International) — {catalogSymbol}
+                            </h3>
+                            <Button type="button" variant="outline" size="sm" onClick={() => void applyLiveFxToRegional()}>
+                                Apply today&apos;s FX to all 3
+                            </Button>
+                        </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                            {BILLING_REGION_IDS.map((regionId) => {
+                                const row = editablePlan.regionalPrices?.[regionId];
+                                const meta = BILLING_REGIONS[regionId];
+                                const isMarkupRegion =
+                                    regionId === "saarc" || regionId === "international";
+                                return (
+                                    <div key={regionId} className="space-y-2 rounded-md border border-black/40 bg-background p-3">
+                                        <Label className="font-semibold">{meta.label}</Label>
+                                        {isMarkupRegion && (
+                                            <div className="space-y-1">
+                                                <Label className="text-xs">Markup %</Label>
+                                                <div className="relative">
+                                                    <Input
+                                                        type="number"
+                                                        className="pr-8"
+                                                        placeholder="0"
+                                                        value={row?.markupPercent ?? ""}
+                                                        onChange={(e) =>
+                                                            handleRegionalMarkupChange(
+                                                                regionId,
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                    />
+                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
+                                                        %
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">Monthly ({catalogSymbol})</Label>
+                                            <AmountInput
+                                                symbol={catalogSymbol}
+                                                type="number"
+                                                readOnly={isMarkupRegion}
+                                                className={isMarkupRegion ? "bg-muted cursor-default" : undefined}
+                                                value={row?.monthly ?? ""}
+                                                onChange={(e) => {
+                                                    if (!isMarkupRegion) {
+                                                        handleRegionalPriceChange(regionId, "monthly", e.target.value);
+                                                    }
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">Yearly ({catalogSymbol})</Label>
+                                            <AmountInput
+                                                symbol={catalogSymbol}
+                                                type="number"
+                                                readOnly={isMarkupRegion}
+                                                className={isMarkupRegion ? "bg-muted cursor-default" : undefined}
+                                                value={row?.yearly ?? ""}
+                                                onChange={(e) => {
+                                                    if (!isMarkupRegion) {
+                                                        handleRegionalPriceChange(regionId, "yearly", e.target.value);
+                                                    }
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
 

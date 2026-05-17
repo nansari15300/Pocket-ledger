@@ -17,6 +17,7 @@ import type { StockView, Item } from "@/components/items/types";
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Filter, MoreVertical } from "lucide-react";
+import { txnTableIconBtnCn } from "@/lib/listSelectionChrome";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -277,7 +278,7 @@ export function BillwiseTransactionTable({
                 onOpenChange={(open) => setActiveFilter && setActiveFilter(open ? key : null)}
               >
                 <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" className={cn("h-6 w-6", isNumeric ? "ml-1" : "ml-0")}>
+                  <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-6 w-6", isNumeric ? "ml-1" : "ml-0")}>
                     <Filter className={cn("h-4 w-4", isFiltered && "text-red-600")} />
                   </Button>
                 </PopoverTrigger>
@@ -372,7 +373,8 @@ export function BillwiseTransactionTable({
                         <Button
                           variant="ghost"
                           size="icon"
-                          className={cn("h-6 w-6 ml-1", statusFilterAllChecked === false && "text-red-600")}
+                          data-pl-txn-icon-btn=""
+                          className={cn(txnTableIconBtnCn, "h-6 w-6 ml-1", statusFilterAllChecked === false && "text-red-600")}
                         >
                           <Filter className={cn("h-4 w-4", statusFilterAllChecked === false && "text-red-600")} />
                         </Button>
@@ -475,7 +477,7 @@ export function BillwiseTransactionTable({
                   ) : (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                        <Button variant="ghost" size="icon" data-pl-txn-icon-btn="" className={cn(txnTableIconBtnCn, "h-8 w-8 shrink-0")}>
                           <MoreVertical className="h-4 w-4 text-muted-foreground" />
                         </Button>
                       </DropdownMenuTrigger>
